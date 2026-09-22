@@ -150,9 +150,13 @@ export function materializeLedger(input) {
   }
   validateCorrectiveReviews(reviews);
   for (const source of requiredSources) {
-    if (!implementationReviews.some((review) => review.source === source
-      && review.target.headSha === candidate.headSha && review.verdict === 'approved')) {
+    const exactHeadReviews = implementationReviews.filter((review) => review.source === source
+      && review.target.headSha === candidate.headSha);
+    if (!exactHeadReviews.some((review) => review.verdict === 'approved')) {
       throw new Error(`missing required exact-head approval from: ${source}`);
+    }
+    if (exactHeadReviews.some((review) => review.verdict === 'rejected')) {
+      throw new Error(`required review source ${source} has a conflicting exact-head rejection`);
     }
   }
   const validations = input.validations.map((entry, index) => validateValidationEvidence(entry, candidate, `validations[${index}]`));

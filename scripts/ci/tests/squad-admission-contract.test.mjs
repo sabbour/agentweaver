@@ -27,6 +27,7 @@ test('admission is external-state owned and squash-only', () => {
   assert.match(contract, /while the PR is still draft/u);
   assert.match(contract, /--team-root <absolute-team-root>\s+--state-backend <backend>/u);
   assert.match(ledger, /explicit same-backend atomic adapter/u);
+  assert.match(evidence, /buildSpawnPlan/u);
   assert.match(evidence, /CWD does not match expected worktree/u);
   assert.doesNotMatch(evidence, /process\.chdir|git\(\[['"](?:checkout|pull|reset|stash|clean|rm)/u);
   const policy = read('.github/agents/squad.agent.md');

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { access, realpath } from 'node:fs/promises';
-import { delimiter, extname, isAbsolute, join, resolve } from 'node:path';
+import { realpath } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { buildSpawnPlan } from '../azure/lib/exec.mjs';
 
 const SHA = /^[0-9a-f]{40}$/iu;
 
@@ -17,41 +18,10 @@ async function git(args, cwd, run = spawnCommand) {
   return result.stdout.trim();
 }
 
-async function resolveWindowsCommand(command) {
-  if (isAbsolute(command)) return command;
-  const extensions = extname(command) ? [''] : (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';');
-  for (const directory of (process.env.PATH ?? '').split(delimiter)) {
-    for (const extension of extensions) {
-      const candidate = join(directory, `${command}${extension}`);
-      try {
-        await access(candidate);
-        return candidate;
-      } catch {}
-    }
-  }
-  return command;
-}
-
-function quoteCmd(value) {
-  if (/[\r\n\0]/u.test(value)) throw new Error('Windows command arguments cannot contain control characters');
-  return `"${value.replace(/(["^&|<>()%])/gu, '^$1')}"`;
-}
-
-async function spawnCommand(argv, cwd) {
-  let executable = argv[0];
-  let args = argv.slice(1);
-  let windowsVerbatimArguments = false;
-  if (process.platform === 'win32') {
-    executable = await resolveWindowsCommand(executable);
-    if (/\.(?:cmd|bat)$/iu.test(executable)) {
-      const commandLine = [executable, ...args].map(quoteCmd).join(' ');
-      executable = process.env.ComSpec ?? 'cmd.exe';
-      args = ['/d', '/s', '/c', `"${commandLine}"`];
-      windowsVerbatimArguments = true;
-    }
-  }
+function spawnCommand(argv, cwd) {
+  const plan = buildSpawnPlan(argv[0], argv.slice(1));
   return new Promise((resolveResult, reject) => {
-    const child = spawn(executable, args, { cwd, shell: false, windowsHide: true, windowsVerbatimArguments });
+    const child = spawn(plan.file, plan.spawnArgs, { ...plan.spawnOpts, cwd, windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });

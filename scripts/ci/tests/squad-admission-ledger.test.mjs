@@ -173,3 +173,17 @@ test('rejects conflicting corrective results for one finding', () => {
     ],
   })), /conflicting results/u);
 });
+
+test('rejects conflicting exact-head outcomes from one required source', () => {
+  assert.throws(() => materializeLedger(input({
+    reviews: [
+      review('code-review'),
+      review('code-review', {
+        verdict: 'rejected',
+        findings: [{ id: 'F-ADVISORY', policy: 'advisory', summary: 'Still rejected.' }],
+      }),
+      review('security-review'),
+      review('ponytail-review'),
+    ],
+  })), /conflicting exact-head rejection/u);
+});
