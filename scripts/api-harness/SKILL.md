@@ -60,7 +60,7 @@ expired token rather than return it.
 
 Two traps make this easy to misdiagnose:
 
-- `GET /api/version` and `/openapi/v1.yaml` are **unauthenticated**. Fetching
+- `GET /api/version` and `/openapi/v1.json` are **unauthenticated**. Fetching
   either successfully proves nothing about auth. Probe an authenticated endpoint
   such as `GET /api/blueprints` and require a non-`401`.
 - An expired token is **not a blocker**. Refresh it yourself and continue:
@@ -144,14 +144,17 @@ console.log(await response.text());
 # ...append the real request+response as a JSON line to $transcript, then repeat...
 ```
 
-The live OpenAPI spec (prefer `/openapi/v1.yaml` — more compact/token-efficient
-for an LLM to read than the equivalent JSON; `/openapi/v1.json` is a fine
-fallback) is how PersonaActor learns what endpoints/shapes exist instead of
-guessing — including approval/steer/confirmation-type actions, which are just
-more endpoints it discovers the same way, not special named commands. There is
-no code-enforced default-defer wrapper for approvals anymore; PersonaActor is
-explicitly instructed (in its own agent file) to never blind-approve a gate and
-to ground every approval decision in real observed content.
+PersonaActor first fetches `/openapi/v1.json` to print a compact
+method/path/tags/summary/operationId index, which is how it learns what
+endpoints exist instead of guessing. For each next action, it selects an
+operation from that index based on the persona goal and latest real response,
+then fetches the JSON document again to print only the selected operation's
+parameters and recursively resolved local request-schema references. This
+includes approval/steer/confirmation-type actions: they are more endpoints it
+discovers the same way, not special named commands. There is no code-enforced
+default-defer wrapper for approvals anymore; PersonaActor is explicitly
+instructed (in its own agent file) to never blind-approve a gate and to ground
+every approval decision in real observed content.
 
 **The OpenAPI spec is incomplete — do not treat it as exhaustive.** It lists only
 the top-level paths and omits the parameterized run endpoints. `/api/runs/{id}/children`,

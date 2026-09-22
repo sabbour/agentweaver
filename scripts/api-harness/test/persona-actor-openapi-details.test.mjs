@@ -3,9 +3,15 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 const actorPath = new URL('../../../.github/agents/persona-actor.agent.md', import.meta.url);
+const harnessPath = new URL('../../../.github/agents/harness.agent.md', import.meta.url);
+const skillPath = new URL('../SKILL.md', import.meta.url);
 
-test('PersonaActor discovers a compact index before resolving only the selected operation', async () => {
-  const actor = await readFile(actorPath, 'utf8');
+test('API harness guidance discovers a compact index before resolving only the selected operation', async () => {
+  const [actor, harness, skill] = await Promise.all([
+    readFile(actorPath, 'utf8'),
+    readFile(harnessPath, 'utf8'),
+    readFile(skillPath, 'utf8'),
+  ]);
 
   assert.match(actor, /openapi\/v1\.json/);
   assert.match(actor, /compact operation index/i);
@@ -16,4 +22,12 @@ test('PersonaActor discovers a compact index before resolving only the selected 
   assert.match(actor, /nested local `\$ref` values/i);
   assert.match(actor, /latest live response changes the next action/i);
   assert.match(actor, /Do not guess a path, method, parameter, or request shape/i);
+
+  for (const guidance of [harness, skill]) {
+    assert.match(guidance, /openapi\/v1\.json/);
+    assert.match(guidance, /compact.*(?:method\/path|method,? ?path).*tags.*summary.*operationId/is);
+    assert.match(guidance, /selects?\s+an\s+operation.*(?:latest real response|persona goal)/is);
+    assert.match(guidance, /(?:only|selected operation's).*parameters.*(?:resolved local|request-schema)/is);
+    assert.doesNotMatch(guidance, /openapi\/v1\.yaml/);
+  }
 });
