@@ -1226,9 +1226,8 @@ public sealed class CoordinatorOrchestratorExecutor
                 NoTeamException.ErrorCode, ct).ConfigureAwait(false))
             return;
 
-        var entry = _streamStore.Get(runId);
-        entry?.RecordNext(EventTypes.RunFailed, failurePayload);
-        _streamStore.Complete(runId);
+        await scope.ServiceProvider.GetRequiredService<TerminalOutcomeProjector>()
+            .ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
     }
 
     /// <summary>

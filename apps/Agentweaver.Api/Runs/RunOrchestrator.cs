@@ -1363,6 +1363,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 return;
             }
 
+            _ = _streamStore.Get(runId) ?? _streamStore.Create(runId, reserved.SubmittingUser);
+
             var outcome = TerminalRunOutcome.Create(
                 RunStatus.Failed,
                 EventTypes.RunFailed,

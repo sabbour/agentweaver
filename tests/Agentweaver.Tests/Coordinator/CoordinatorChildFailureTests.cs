@@ -81,8 +81,8 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         fetched!.Status.Should().Be(RunStatus.Failed);
         fetched.EndedAt.Should().NotBeNull();
         fetched.Result.Should().Contain("worktree creation failed");
-        (await _runStore.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle()
-            .Which.Outcome.EventType.Should().Be(EventTypes.RunFailed);
+        (await _runStore.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty(
+            "the canonical outcome is projected before the child stream completes");
 
         // The execution log is non-empty: a RunFailed event was recorded on the stream...
         var runId = childRun.Id.ToString();

@@ -1036,6 +1036,15 @@ public sealed class CoordinatorSteeringService
                     childRunId);
             }
 
+            // A stop is immediately observable on this replica. This steering marker is distinct
+            // from the typed failed outcome below, which remains the durable terminal winner.
+            var childEntry = _streamStore.Get(childRunId);
+            if (childEntry is not null && !childEntry.IsCompleted)
+            {
+                childEntry.RecordNext(EventTypes.RunCancelled, new { reason = "steering_stop", directiveId });
+                _streamStore.Complete(childRunId);
+            }
+
             // Terminalize the child run row even when the request landed on a non-owner replica.
             // The owning watch loop polls this durable marker and abandons its local token.
             if (_runStore is not null && RunId.TryParse(childRunId, out var childId))
