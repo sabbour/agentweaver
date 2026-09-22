@@ -7,11 +7,13 @@ and keep quality high all the way to a real preview" instinct into a full projec
 coordinator journey on whatever concrete product task she is given at invocation time.
 
 This adapter is intentionally about **intent**, not a fixed route table. At each major
-decision point, consult the live OpenAPI spec and prefer the YAML form the server
-exposes. Use the real spec's tags, summaries, and descriptions — plus the actual
-responses and state returned by live calls — to infer what operation to call next. The
-actor should resolve the concrete path live from what she observes instead of following
-any prewritten model of the product.
+decision point, fetch `/openapi/v1.json` to print the compact
+method/path/tags/summary/operationId index, then select an operation from that index
+based on the persona goal and latest real response and print only its parameters and
+resolved local request-schema references. Use the real spec's tags, summaries, and
+descriptions — plus the actual responses and state returned by live calls — to infer
+what operation to call next. The actor should resolve the concrete path live from what
+she observes instead of following any prewritten model of the product.
 
 ## Intent mapping
 
@@ -30,11 +32,12 @@ any prewritten model of the product.
 
 Use only real returned content and state as the basis for praise, concern, steering,
 review, or revision. Poll while work is happening instead of narrating imaginary
-progress. Re-fetch the live YAML spec whenever you need to choose the next operation.
-When preparing AI execution context, select `operation` from that request schema's
-published enum and use the action required by the guarded endpoint's OpenAPI
-description. Do not invent a fallback action: if an advertised action is rejected,
-record the contract divergence and stop the affected flow safely.
+progress. Return to the compact JSON index whenever you need to choose the next
+operation, then inspect only the selected operation's details. When preparing AI
+execution context, select `operation` from that request schema's published enum and
+use the action required by the guarded endpoint's OpenAPI description. Do not invent a fallback action:
+if an advertised action is rejected, record the contract divergence and stop the
+affected flow safely.
 Do not call a preview "validated" until you have fetched the returned preview content
 yourself.
 Record every request and response verbatim; the driver acts as Oracle, not as the final
