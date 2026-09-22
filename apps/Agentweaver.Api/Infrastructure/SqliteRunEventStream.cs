@@ -176,30 +176,29 @@ public sealed class SqliteRunEventStream : IRunEventStream
             """
             INSERT INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
             SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
-            FROM "RunEvents" WHERE "RunId" = $runId;
+            FROM "RunEvents" WHERE "RunId" = $runId
+            RETURNING "Sequence";
             """;
         append.Parameters.AddWithValue("$runId", runId);
         append.Parameters.AddWithValue("$type", evt.Type);
         append.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
         append.Parameters.AddWithValue("$createdAt",
             evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
-        append.ExecuteNonQuery();
+        var terminalSequence = Convert.ToInt32(append.ExecuteScalar(), CultureInfo.InvariantCulture);
         using var projected = connection.CreateCommand();
         projected.Transaction = tx;
         projected.CommandText =
             """
             UPDATE terminal_run_outcome_projections
-               SET event_sequence = (SELECT MAX("Sequence") FROM "RunEvents" WHERE "RunId" = $runId)
+               SET event_sequence = $sequence
              WHERE run_id = $runId AND lifecycle_generation = $generation;
             """;
         projected.Parameters.AddWithValue("$runId", runId);
         projected.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        projected.Parameters.AddWithValue("$sequence", terminalSequence);
         projected.ExecuteNonQuery();
         tx.Commit();
-        using var sequence = connection.CreateCommand();
-        sequence.CommandText = """SELECT MAX("Sequence") FROM "RunEvents" WHERE "RunId" = $runId;""";
-        sequence.Parameters.AddWithValue("$runId", runId);
-        var persisted = evt with { Sequence = Convert.ToInt32(sequence.ExecuteScalar(), CultureInfo.InvariantCulture) };
+        var persisted = evt with { Sequence = terminalSequence };
         PublishDurableEvent(runId, persisted);
         return Task.FromResult(persisted);
     }

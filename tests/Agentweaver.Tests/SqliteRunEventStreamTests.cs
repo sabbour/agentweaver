@@ -184,6 +184,24 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         command.ExecuteNonQuery();
     }
 
+    private void CreatePostTerminalAppendTrigger()
+    {
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(_dir, "memory.db")}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            CREATE TRIGGER append_after_terminal_projection
+            AFTER INSERT ON "RunEvents"
+            WHEN NEW."EventType" = 'run.completed'
+            BEGIN
+                INSERT INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
+                VALUES (NEW."RunId", NEW."Sequence" + 1, 'race.post-claim-append', '{}', NEW."CreatedAt");
+            END;
+            """;
+        command.ExecuteNonQuery();
+    }
+
     private void UpdateRunRow(string runId, string status, int generation)
     {
         using var connection = new SqliteConnection($"Data Source={Path.Combine(_dir, "agentweaver.db")}");
@@ -331,6 +349,34 @@ public sealed class SqliteRunEventStreamTests : IDisposable
 
         var events = await new SqliteRunEventStream(_config).GetPersistedEventsAsync(runId);
         events.Where(evt => evt.Type == EventTypes.RunFailed).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task AppendTerminalOutcome_PostClaimAppend_PublishesClaimedTerminalSequenceToTail()
+    {
+        const string runId = "run-terminal-projection-sequence";
+        CreateRunRow(runId, "completed", 1);
+        var stream = new SqliteRunEventStream(_config);
+        CreatePostTerminalAppendTrigger();
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var subscription = stream.SubscribeAsync(runId, ct: cancellation.Token)
+            .GetAsyncEnumerator(cancellation.Token);
+        var next = subscription.MoveNextAsync().AsTask();
+
+        var published = await stream.AppendTerminalOutcomeAsync(runId, TerminalRunOutcome.Create(
+            RunStatus.Completed, EventTypes.RunCompleted, new { result = "done" }, DateTimeOffset.UtcNow, 1));
+        (await next).Should().BeTrue();
+
+        var persisted = await stream.GetPersistedEventsAsync(runId);
+        var terminal = persisted.Should().ContainSingle(evt => evt.Type == EventTypes.RunCompleted).Subject;
+        terminal.Sequence.Should().Be(1);
+        persisted.Should().ContainSingle(evt => evt.Type == "race.post-claim-append").Which.Sequence.Should().Be(2);
+        published.Sequence.Should().Be(terminal.Sequence);
+        subscription.Current.Type.Should().Be(EventTypes.RunCompleted);
+        subscription.Current.Sequence.Should().Be(terminal.Sequence);
+        (await subscription.MoveNextAsync()).Should().BeFalse(
+            "the tail must stop at the exact current-generation terminal winner");
     }
 
     [Fact]
