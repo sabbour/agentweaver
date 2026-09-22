@@ -347,11 +347,6 @@ public sealed class WorkflowRestartService
     {
         var runId = run.Id.ToString();
         var entry = _streamStore.Get(runId);
-        if (entry?.HasEventType(EventTypes.RunFailed) == true)
-        {
-            _streamStore.Complete(runId);
-            return;
-        }
 
         var stream = _eventStream;
         if (stream is null)
@@ -364,20 +359,27 @@ public sealed class WorkflowRestartService
         {
             try
             {
-                var persisted = await stream.GetPersistedEventsAsync(runId, 0, ct).ConfigureAwait(false);
-                var terminal = persisted.FirstOrDefault(e => e.Type == EventTypes.RunFailed);
-                if (terminal is not null)
-                {
-                    entry ??= _streamStore.Create(runId, run.SubmittingUser);
+                var terminal = await stream.EnsureTerminalFailureAsync(
+                    runId,
+                    new RunEvent(0, EventTypes.RunFailed,
+                        new { reason = run.Result ?? "recovered_missing_terminal_event", retryable = false, recovered = true }),
+                    ct).ConfigureAwait(false);
+                entry ??= _streamStore.Create(runId, run.SubmittingUser);
+                if (!entry.HasEventType(EventTypes.RunFailed))
                     entry.Record(terminal);
-                    _streamStore.Complete(runId);
-                    return;
-                }
+                _streamStore.Complete(runId);
+                return;
             }
             catch (NotSupportedException)
             {
                 // Lightweight streams fall back to the local entry path below.
             }
+        }
+
+        if (entry?.HasEventType(EventTypes.RunFailed) == true)
+        {
+            _streamStore.Complete(runId);
+            return;
         }
 
         entry ??= _streamStore.Create(runId, run.SubmittingUser);

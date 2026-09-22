@@ -87,6 +87,54 @@ public sealed class EfRunEventStream : IRunEventStream
         return sequence;
     }
 
+    public async Task<RunEvent> EnsureTerminalFailureAsync(string runId, RunEvent failure, CancellationToken ct = default)
+    {
+        failure = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(failure));
+        if (failure.Type != EventTypes.RunFailed)
+            throw new ArgumentException("Only run.failed can be atomically reconciled.", nameof(failure));
+
+        for (var attempt = 1; attempt <= MaxWriteAttempts; attempt++)
+        {
+            await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+            await using var tx = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct).ConfigureAwait(false);
+            try
+            {
+                await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
+                var existing = await db.RunEvents.AsNoTracking()
+                    .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+                    .OrderBy(e => e.Sequence)
+                    .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+                if (existing is not null)
+                {
+                    await tx.CommitAsync(ct).ConfigureAwait(false);
+                    return new RunEvent(existing.Sequence, existing.EventType,
+                        DeserializePayload(runId, existing.Sequence, existing.EventType, existing.PayloadJson),
+                        new DateTimeOffset(DateTime.SpecifyKind(existing.CreatedAt, DateTimeKind.Utc)));
+                }
+
+                var sequence = (await db.RunEvents.Where(e => e.RunId == runId)
+                    .Select(e => (int?)e.Sequence).MaxAsync(ct).ConfigureAwait(false)) ?? 0;
+                var recorded = failure with { Sequence = sequence + 1 };
+                db.RunEvents.Add(new RunEventRecord
+                {
+                    RunId = runId, Sequence = recorded.Sequence, EventType = recorded.Type,
+                    PayloadJson = JsonSerializer.Serialize(recorded.Payload),
+                    CreatedAt = recorded.TimestampUtc.UtcDateTime,
+                });
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+                return recorded;
+            }
+            catch (Exception ex) when (ShouldRetryWrite(ex, attempt, out _))
+            {
+                await tx.RollbackAsync(ct).ConfigureAwait(false);
+                await Task.Delay(ComputeRetryDelay(attempt), ct).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException($"Failed to atomically reconcile run.failed for run '{runId}'.");
+    }
+
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {

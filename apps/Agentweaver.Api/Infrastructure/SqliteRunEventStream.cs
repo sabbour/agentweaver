@@ -119,6 +119,43 @@ public sealed class SqliteRunEventStream : IRunEventStream
         return ValueTask.FromResult(sequence);
     }
 
+    public Task<RunEvent> EnsureTerminalFailureAsync(string runId, RunEvent failure, CancellationToken ct = default)
+    {
+        failure = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(failure));
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var transaction = connection.BeginTransaction(System.Data.IsolationLevel.Serializable);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT "Sequence", "EventType", "PayloadJson", "CreatedAt" FROM "RunEvents"
+            WHERE "RunId" = $runId AND "EventType" = $type ORDER BY "Sequence" LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$runId", runId);
+        command.Parameters.AddWithValue("$type", EventTypes.RunFailed);
+        using var reader = command.ExecuteReader();
+        if (reader.Read())
+        {
+            var evt = new RunEvent(reader.GetInt32(0), reader.GetString(1),
+                DeserializePayload(runId, reader.GetInt32(0), reader.GetString(1), reader.GetString(2)),
+                new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc)));
+            reader.Close();
+            transaction.Commit();
+            return Task.FromResult(evt);
+        }
+        reader.Close();
+        command.CommandText = """
+            INSERT INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
+            SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
+            FROM "RunEvents" WHERE "RunId" = $runId RETURNING "Sequence";
+            """;
+        command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(failure.Payload));
+        command.Parameters.AddWithValue("$createdAt", failure.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+        var recorded = failure with { Sequence = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) };
+        transaction.Commit();
+        return Task.FromResult(recorded);
+    }
+
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {

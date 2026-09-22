@@ -23,6 +23,13 @@ public interface IRunEventStream
     ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
 
     /// <summary>
+    /// Atomically returns the durable <c>run.failed</c> event for a run, appending
+    /// <paramref name="failure"/> only when no such terminal event exists.
+    /// </summary>
+    Task<RunEvent> EnsureTerminalFailureAsync(string runId, RunEvent failure, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support atomic terminal failure reconciliation.");
+
+    /// <summary>
     /// Appends a batch with assigned sequences only if the durable run is still non-terminal.
     /// The status decision and the entire batch are protected against run-store transitions.
     /// Returns the committed events, or an empty list if terminalization won. Unsupported stores
