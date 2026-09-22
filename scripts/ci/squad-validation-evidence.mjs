@@ -40,16 +40,18 @@ function quoteCmd(value) {
 async function spawnCommand(argv, cwd) {
   let executable = argv[0];
   let args = argv.slice(1);
+  let windowsVerbatimArguments = false;
   if (process.platform === 'win32') {
     executable = await resolveWindowsCommand(executable);
     if (/\.(?:cmd|bat)$/iu.test(executable)) {
       const commandLine = [executable, ...args].map(quoteCmd).join(' ');
       executable = process.env.ComSpec ?? 'cmd.exe';
       args = ['/d', '/s', '/c', commandLine];
+      windowsVerbatimArguments = true;
     }
   }
   return new Promise((resolveResult, reject) => {
-    const child = spawn(executable, args, { cwd, shell: false, windowsHide: true });
+    const child = spawn(executable, args, { cwd, shell: false, windowsHide: true, windowsVerbatimArguments });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
