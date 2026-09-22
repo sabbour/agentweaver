@@ -1588,7 +1588,11 @@ public sealed class CoordinatorSteeringService
 
         // Un-terminalize the coordinator run so the project runs list/detail show it live again.
         if (runIsTerminalRecoverable)
-            await runStore.UpdateStatusAsync(runId, RunStatus.InProgress, endedAt: null, ct).ConfigureAwait(false);
+        {
+            if (!await runStore.TryReopenTerminalToInProgressAsync(runId, ct).ConfigureAwait(false))
+                throw new InvalidOperationException(
+                    $"Coordinator run {coordinatorRunId} was no longer terminally recoverable.");
+        }
 
         // Re-open the coordinator stream IN PLACE (assembly's block had completed it) so the resumed
         // dispatch/assembly loops emit onto a live entry again. Reopening (issue #388) clears the

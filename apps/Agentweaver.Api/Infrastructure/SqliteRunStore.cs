@@ -215,6 +215,19 @@ public sealed class SqliteRunStore : IRunStore
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return rows > 0;
     }
+
+    public async Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET status = 'in_progress', ended_at = NULL, lifecycle_generation = lifecycle_generation + 1
+             WHERE run_id = $runId AND status IN ('failed', 'merge_failed');
+            """,
+            cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()),
+            ct).ConfigureAwait(false);
+        return rows > 0;
+    }
     /// Returns true if the transition was applied (exactly one row updated), false if a
     /// concurrent request already changed the status. This single-row conditional UPDATE
     /// is the idempotency and concurrency guard for the review endpoint (design issue #4).

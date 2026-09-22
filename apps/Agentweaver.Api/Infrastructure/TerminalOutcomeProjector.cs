@@ -10,7 +10,8 @@ namespace Agentweaver.Api.Infrastructure;
 public sealed class TerminalOutcomeProjector(
     IRunStore runStore,
     IRunEventStream eventStream,
-    ILogger<TerminalOutcomeProjector> logger)
+    ILogger<TerminalOutcomeProjector> logger,
+    RunStreamStore? streamStore = null)
 {
     public async Task ProjectPendingAsync(CancellationToken ct = default)
     {
@@ -60,8 +61,9 @@ public sealed class TerminalOutcomeProjector(
             return;
         }
 
-        await eventStream.AppendTerminalOutcomeAsync(pending.RunId.ToString(), pending.Outcome, ct)
+        var persisted = await eventStream.AppendTerminalOutcomeAsync(pending.RunId.ToString(), pending.Outcome, ct)
             .ConfigureAwait(false);
+        streamStore?.RecordDurableEvent(pending.RunId.ToString(), persisted);
 
         await runStore.MarkTerminalOutcomeProjectedAsync(
             pending.RunId, pending.LifecycleGeneration, ct).ConfigureAwait(false);

@@ -2,6 +2,8 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Api;
@@ -321,6 +323,71 @@ public sealed class TerminalRunOutcomeStoreTests
         (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task AssembleReady_ProjectsCanonicalPayloadOnce_AcrossStreamRestart()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var directory = Path.Combine(Path.GetTempPath(), "aw-terminal-outcome-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Database:Path"] = Path.Combine(directory, "agentweaver.db"),
+            }).Build();
+            CreateRunEventsTable(Path.Combine(directory, "memory.db"));
+            var stream = new SqliteRunEventStream(config);
+            var live = new RunStreamStore(stream);
+            var entry = live.Create(run.ToString(), "test");
+
+            (await store.SetAssembleReadyAsync(
+                run, "tree-winner", "agent/assembly", "winner diff", 3, DateTimeOffset.UtcNow)).Should().BeTrue();
+            await new TerminalOutcomeProjector(
+                store, stream, NullLogger<TerminalOutcomeProjector>.Instance, live).ProjectPendingAsync();
+            await new TerminalOutcomeProjector(
+                store, new SqliteRunEventStream(config), NullLogger<TerminalOutcomeProjector>.Instance, live)
+                .ProjectPendingAsync();
+
+            var persisted = await new SqliteRunEventStream(config).GetPersistedEventsAsync(run.ToString());
+            var terminal = persisted.Where(evt => evt.Type == EventTypes.RunAssembleReady)
+                .Should().ContainSingle().Subject;
+            var payload = System.Text.Json.JsonSerializer.SerializeToElement(terminal.Payload);
+            payload.GetProperty("treeHash").GetString().Should().Be("tree-winner");
+            payload.GetProperty("worktreeBranch").GetString().Should().Be("agent/assembly");
+            payload.GetProperty("diff").GetString().Should().Be("winner diff");
+            payload.GetProperty("stepCount").GetInt32().Should().Be(3);
+            var liveEvent = entry.GetSnapshotSince(0).Events.Should().ContainSingle().Subject;
+            System.Text.Json.JsonSerializer.Serialize(liveEvent.Payload)
+                .Should().Be(System.Text.Json.JsonSerializer.Serialize(terminal.Payload));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void CreateRunEventsTable(string memoryDbPath)
+    {
+        using var connection = new SqliteConnection($"Data Source={memoryDbPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE "RunEvents" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_RunEvents" PRIMARY KEY AUTOINCREMENT,
+                "RunId" TEXT NOT NULL,
+                "Sequence" INTEGER NOT NULL,
+                "EventType" TEXT NOT NULL,
+                "PayloadJson" TEXT NOT NULL,
+                "CreatedAt" TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX "IX_RunEvents_RunId_Sequence" ON "RunEvents" ("RunId", "Sequence");
+            """;
+        command.ExecuteNonQuery();
+    }
+
     private static async Task<RunId> InsertInProgressAsync(SqliteRunStore store)
     {
         var run = RunId.New();
@@ -353,7 +420,7 @@ public sealed class TerminalRunOutcomeStoreTests
             return ValueTask.FromResult(persisted.Sequence);
         }
 
-        public Task AppendTerminalOutcomeAsync(
+        public Task<RunEvent> AppendTerminalOutcomeAsync(
             string runId,
             TerminalRunOutcome outcome,
             CancellationToken ct = default)
@@ -366,7 +433,7 @@ public sealed class TerminalRunOutcomeStoreTests
                 if (ThrowAfterAppend)
                     throw new InvalidOperationException("simulated failure after durable append");
             }
-            return Task.CompletedTask;
+            return Task.FromResult(Events.Last());
         }
 
         public async IAsyncEnumerable<RunEvent> SubscribeAsync(

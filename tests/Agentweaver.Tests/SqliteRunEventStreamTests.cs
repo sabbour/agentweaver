@@ -161,6 +161,22 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task AppendTerminalOutcome_IdenticalPayloadAcrossGenerations_PersistsOnePerGeneration()
+    {
+        var runId = "run-sqlite-reopened-identical-payload";
+        var stream = new SqliteRunEventStream(_config);
+        var payload = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "retriable_failure" }, DateTimeOffset.UtcNow, 1);
+
+        await stream.AppendTerminalOutcomeAsync(runId, payload);
+        await stream.AppendTerminalOutcomeAsync(runId, payload with { ExpectedLifecycleGeneration = 2 });
+        await stream.AppendTerminalOutcomeAsync(runId, payload with { ExpectedLifecycleGeneration = 2 });
+
+        var events = await new SqliteRunEventStream(_config).GetPersistedEventsAsync(runId);
+        events.Where(evt => evt.Type == EventTypes.RunFailed).Should().HaveCount(2);
+    }
+
+    [Fact]
     public async Task AppendAsync_ConcurrentSameRunAcrossInstances_AssignsUniqueContiguousSequences()
     {
         var runId = "run-sqlite-concurrency";

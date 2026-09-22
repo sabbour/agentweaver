@@ -15,14 +15,9 @@ using Agentweaver.Tests.Helpers;
 namespace Agentweaver.Tests.Coordinator;
 
 /// <summary>
-/// Unit tests for <see cref="RunOrchestrator.MarkChildRunFailedAsync"/> (Feature 008 Defect B). When
-/// <c>StartChildRunAsync</c> throws BEFORE it can persist the child run row (e.g. worktree creation
-/// fails), the dispatched subtask would otherwise carry a childRunId that <c>GET /api/runs/{id}</c>
-/// cannot find — an empty execution log. This method must leave a retrievable terminal FAILED run row
-/// and a non-empty execution log (a persisted RunFailed event).
-///
-/// Real stores, no mocks (Principle VII): a real <see cref="SqliteRunStore"/> for the run row and a
-/// real EF <see cref="MemoryDbContext"/> (in-memory SQLite) for the persisted events.
+/// Unit tests for <see cref="RunOrchestrator.MarkChildRunFailedAsync"/>. A child launch reserves
+/// its row before worktree setup, so a pre-start failure terminalizes that reservation with a typed
+/// outcome rather than manufacturing a placeholder run after the failure.
 /// </summary>
 public sealed class CoordinatorChildFailureTests : IAsyncDisposable
 {
@@ -65,11 +60,10 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task PreStartFailure_PersistsRetrievableFailedRun_AndRunFailedEvent()
+    public async Task PreStartFailure_TerminalizesReservedChild_WithTypedOutcome()
     {
         var childRun = NewChildRun();
-
-        // Simulate StartChildRunAsync throwing during worktree creation (before any InsertAsync).
+        await _runStore.InsertAsync(childRun);
         await _orchestrator.MarkChildRunFailedAsync(
             childRun, new InvalidOperationException("worktree creation failed"), default);
 
@@ -79,6 +73,8 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         fetched!.Status.Should().Be(RunStatus.Failed);
         fetched.EndedAt.Should().NotBeNull();
         fetched.Result.Should().Contain("worktree creation failed");
+        (await _runStore.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle()
+            .Which.Outcome.EventType.Should().Be(EventTypes.RunFailed);
 
         // The execution log is non-empty: a RunFailed event was recorded on the stream...
         var runId = childRun.Id.ToString();

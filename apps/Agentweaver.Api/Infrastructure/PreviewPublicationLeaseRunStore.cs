@@ -212,6 +212,9 @@ public sealed class PreviewPublicationLeaseRunStore(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
 
+    public Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
+        Inner.TryReopenTerminalToInProgressAsync(runId, ct);
+
     public Task<bool> TryTransitionToCommittingAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryTransitionToCommittingAsync(runId, ct, now);

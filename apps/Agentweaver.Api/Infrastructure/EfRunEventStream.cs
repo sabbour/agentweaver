@@ -87,7 +87,7 @@ public sealed class EfRunEventStream : IRunEventStream
         return sequence;
     }
 
-    public async Task AppendTerminalOutcomeAsync(
+    public async Task<RunEvent> AppendTerminalOutcomeAsync(
         string runId,
         TerminalRunOutcome outcome,
         CancellationToken ct = default)
@@ -99,11 +99,18 @@ public sealed class EfRunEventStream : IRunEventStream
         var exists = await db.TerminalRunOutcomeProjections.AnyAsync(
             x => x.RunId == runId && x.LifecycleGeneration == outcome.ExpectedLifecycleGeneration, ct)
             .ConfigureAwait(false);
-        var alreadyPersisted = await db.RunEvents.AnyAsync(
-            x => x.RunId == runId && x.EventType == outcome.EventType && x.PayloadJson == payloadJson, ct)
-            .ConfigureAwait(false);
-        if (exists || alreadyPersisted)
-            return;
+        if (exists)
+        {
+            var existing = await db.RunEvents
+                .Where(x => x.RunId == runId && x.EventType == outcome.EventType && x.PayloadJson == payloadJson)
+                .OrderByDescending(x => x.Sequence)
+                .Select(x => new { x.Sequence, x.CreatedAt })
+                .FirstOrDefaultAsync(ct).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"Terminal outcome projection claim exists without its event for run {runId} generation {outcome.ExpectedLifecycleGeneration}.");
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+            return new RunEvent(existing.Sequence, outcome.EventType, outcome.Payload, new DateTimeOffset(existing.CreatedAt, TimeSpan.Zero));
+        }
 
         var sequence = (await db.RunEvents.Where(x => x.RunId == runId)
             .Select(x => (int?)x.Sequence).MaxAsync(ct).ConfigureAwait(false) ?? 0) + 1;
@@ -122,6 +129,7 @@ public sealed class EfRunEventStream : IRunEventStream
         });
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
+        return outcome.ToRunEvent(sequence);
     }
 
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(

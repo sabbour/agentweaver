@@ -77,6 +77,9 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
 
+    public Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
+        inner.TryReopenTerminalToInProgressAsync(runId, ct);
+
     public async Task<bool> TryTransitionReviewAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default)
     {

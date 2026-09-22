@@ -120,7 +120,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
         return ValueTask.FromResult(sequence);
     }
 
-    public Task AppendTerminalOutcomeAsync(
+    public Task<RunEvent> AppendTerminalOutcomeAsync(
         string runId,
         TerminalRunOutcome outcome,
         CancellationToken ct = default)
@@ -130,24 +130,34 @@ public sealed class SqliteRunEventStream : IRunEventStream
         using var connection = new SqliteConnection(_connectionString);
         connection.Open();
         using var tx = connection.BeginTransaction();
-        using var existing = connection.CreateCommand();
-        existing.Transaction = tx;
-        existing.CommandText =
-            """SELECT 1 FROM "RunEvents" WHERE "RunId" = $runId AND "EventType" = $type AND "PayloadJson" = $payload LIMIT 1;""";
-        existing.Parameters.AddWithValue("$runId", runId);
-        existing.Parameters.AddWithValue("$type", outcome.EventType);
-        existing.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
-        var alreadyPersisted = existing.ExecuteScalar() is not null;
         using var claim = connection.CreateCommand();
         claim.Transaction = tx;
         claim.CommandText =
             "INSERT OR IGNORE INTO terminal_run_outcome_projections (run_id, lifecycle_generation) VALUES ($runId, $generation);";
         claim.Parameters.AddWithValue("$runId", runId);
         claim.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
-        if (claim.ExecuteNonQuery() == 0 || alreadyPersisted)
+        if (claim.ExecuteNonQuery() == 0)
         {
+            using var existing = connection.CreateCommand();
+            existing.Transaction = tx;
+            existing.CommandText =
+                """
+                SELECT "Sequence", "CreatedAt"
+                  FROM "RunEvents"
+                 WHERE "RunId" = $runId AND "EventType" = $type AND "PayloadJson" = $payload
+                 ORDER BY "Sequence" DESC LIMIT 1;
+                """;
+            existing.Parameters.AddWithValue("$runId", runId);
+            existing.Parameters.AddWithValue("$type", outcome.EventType);
+            existing.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
+            using var reader = existing.ExecuteReader();
+            if (!reader.Read())
+                throw new InvalidOperationException(
+                    $"Terminal outcome projection claim exists without its event for run {runId} generation {outcome.ExpectedLifecycleGeneration}.");
             tx.Commit();
-            return Task.CompletedTask;
+            return Task.FromResult(new RunEvent(
+                reader.GetInt32(0), evt.Type, evt.Payload,
+                DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)));
         }
 
         using var append = connection.CreateCommand();
@@ -165,7 +175,10 @@ public sealed class SqliteRunEventStream : IRunEventStream
             evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
         append.ExecuteNonQuery();
         tx.Commit();
-        return Task.CompletedTask;
+        using var sequence = connection.CreateCommand();
+        sequence.CommandText = """SELECT MAX("Sequence") FROM "RunEvents" WHERE "RunId" = $runId;""";
+        sequence.Parameters.AddWithValue("$runId", runId);
+        return Task.FromResult(evt with { Sequence = Convert.ToInt32(sequence.ExecuteScalar(), CultureInfo.InvariantCulture) });
     }
 
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(

@@ -27,12 +27,13 @@ public interface IRunEventStream
     /// streams persist the uniqueness claim with the event; the default keeps simple test streams
     /// compatible while production callers never fall back to a read-then-append sequence.
     /// </summary>
-    async Task AppendTerminalOutcomeAsync(
+    async Task<RunEvent> AppendTerminalOutcomeAsync(
         string runId,
         TerminalRunOutcome outcome,
         CancellationToken ct = default)
     {
-        await AppendAsync(runId, outcome.ToRunEvent(), ct).ConfigureAwait(false);
+        var sequence = await AppendAsync(runId, outcome.ToRunEvent(), ct).ConfigureAwait(false);
+        return outcome.ToRunEvent(sequence);
     }
 
     /// <summary>

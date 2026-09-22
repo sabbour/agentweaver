@@ -18,6 +18,8 @@ public interface IRunStore
         Task.CompletedTask;
     Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not implement terminal reopen.");
     Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default);
     Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryRevertCommittingAsync(RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null);

@@ -126,6 +126,19 @@ public sealed class EfRunStore : IRunStore
         return true;
     }
 
+    public async Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default)
+    {
+        var terminalStatuses = new[] { RunStatus.Failed.ToApiString(), RunStatus.MergeFailed.ToApiString() };
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rows = await db.Runs
+            .Where(r => r.RunId == runId.ToString() && terminalStatuses.Contains(r.Status))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, RunStatus.InProgress.ToApiString())
+                .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
+        return rows > 0;
+    }
+
     public async Task<bool> TryTransitionReviewAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result,
         string? reviewer = null, CancellationToken ct = default)

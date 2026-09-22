@@ -90,6 +90,22 @@ public sealed class TerminalRunOutcomePostgresTests(PostgresFixture pg)
         (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
     }
 
+    [PostgresFact]
+    public async Task TerminalProjection_IdenticalPayloadAcrossReopenedGenerations_PersistsOnePerGeneration()
+    {
+        var runId = $"run-postgres-reopened-{Guid.NewGuid():N}";
+        var stream = new EfRunEventStream(pg.Factory);
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "retriable_failure" }, DateTimeOffset.UtcNow, 1);
+
+        await stream.AppendTerminalOutcomeAsync(runId, outcome);
+        await stream.AppendTerminalOutcomeAsync(runId, outcome with { ExpectedLifecycleGeneration = 2 });
+        await stream.AppendTerminalOutcomeAsync(runId, outcome with { ExpectedLifecycleGeneration = 2 });
+
+        var events = await new EfRunEventStream(pg.Factory).GetPersistedEventsAsync(runId);
+        events.Where(evt => evt.Type == EventTypes.RunFailed).Should().HaveCount(2);
+    }
+
     private static async Task<RunId> InsertInProgressAsync(EfRunStore store)
     {
         var run = RunId.New();

@@ -573,6 +573,29 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RetryResume_ReopensGenerationBeforeSecondTerminalOutcome()
+    {
+        var coord = RunId.New().ToString();
+        await SeedTerminalCoordinatorRunAsync(coord, RunStatus.Failed, "assembly_blocked: subtask_failed");
+        await SeedPlanAsync(coord, WorkPlanStatus.AssemblyFailed, new[] { SubtaskStatus.Failed });
+        _streamStore.Create(coord, "owner");
+        _dispatch.Active = false;
+
+        (await _sut.TryResumeFailedCoordinatorRunForRetryAsync(coord, "owner", default)).Should().BeTrue();
+        var reopened = (await _runStore.GetAsync(RunId.Parse(coord)))!;
+        reopened.LifecycleGeneration.Should().Be(2);
+        (await _runStore.TrySetTerminalOutcomeAsync(
+            reopened.Id,
+            TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted,
+                new { result = "recovered" }, DateTimeOffset.UtcNow, reopened.LifecycleGeneration),
+            "recovered")).Should().BeTrue();
+
+        var outcomes = await _runStore.GetUnprojectedTerminalOutcomesAsync();
+        outcomes.Select(outcome => outcome.LifecycleGeneration).Should().Equal(1, 2);
+        (await _runStore.GetAsync(reopened.Id))!.Status.Should().Be(RunStatus.Completed);
+    }
+
+    [Fact]
     public async Task RetryResume_OnFailedCoordinator_WithNoWorkPlan_ReturnsFalse_ForFreshRestart()
     {
         // Failed before any work plan existed (e.g. at/before outcome-spec drafting). There is nothing
@@ -628,7 +651,16 @@ public sealed class CoordinatorSteeringRecoveryTests : IAsyncDisposable
         };
         await _runStore.InsertAsync(run);
         if (status != RunStatus.InProgress)
-            await _runStore.UpdateResultAsync(run.Id, status, result, DateTimeOffset.UtcNow);
+        {
+            var eventType = status == RunStatus.MergeFailed
+                ? EventTypes.MergeFailed
+                : EventTypes.RunFailed;
+            (await _runStore.TrySetTerminalOutcomeAsync(
+                run.Id,
+                TerminalRunOutcome.Create(status, eventType, new { reason = result },
+                    DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                result)).Should().BeTrue();
+        }
     }
 
     private async Task SeedChildRunAsync(string childRunId, string coordinatorRunId, int subtaskId)

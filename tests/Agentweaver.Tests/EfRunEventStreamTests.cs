@@ -226,6 +226,23 @@ public sealed class EfRunEventStreamTests : IDisposable
             EventTypes.RunAssembleReady, EventTypes.CoordinatorAssemblyFailed);
     }
 
+    [Fact]
+    public async Task AppendTerminalOutcome_IdenticalPayloadAcrossGenerations_PersistsOnePerGeneration()
+    {
+        var runId = "run-ef-reopened-identical-payload";
+        var stream = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "retriable_failure" }, DateTimeOffset.UtcNow, 1);
+
+        await stream.AppendTerminalOutcomeAsync(runId, outcome);
+        await stream.AppendTerminalOutcomeAsync(runId, outcome with { ExpectedLifecycleGeneration = 2 });
+        await stream.AppendTerminalOutcomeAsync(runId, outcome with { ExpectedLifecycleGeneration = 2 });
+
+        var events = await new EfRunEventStream(new TestMemoryDbContextFactory(_options))
+            .GetPersistedEventsAsync(runId);
+        events.Where(evt => evt.Type == EventTypes.RunFailed).Should().HaveCount(2);
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_dir, recursive: true); } catch { }

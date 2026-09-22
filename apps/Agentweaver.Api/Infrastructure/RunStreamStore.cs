@@ -121,6 +121,18 @@ public sealed class RunStreamEntry
         return RecordNext(type, _ => payload);
     }
 
+    internal void RecordDurable(RunEvent evt)
+    {
+        TaskCompletionSource previous;
+        lock (_lock)
+        {
+            TryInsertOrValidateLocked(evt);
+            previous = Interlocked.Exchange(ref _eventSignal,
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        }
+        previous.TrySetResult();
+    }
+
     internal async Task<bool> TryRecordPreviewReadyAsync(object payload, IRunStore runStore, CancellationToken ct)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, CompletionToken);
@@ -435,6 +447,9 @@ public sealed class RunStreamStore
 
     public RunStreamEntry? Get(string runId) =>
         _entries.TryGetValue(runId, out var pair) ? pair.Entry : null;
+
+    internal void RecordDurableEvent(string runId, RunEvent evt) =>
+        Get(runId)?.RecordDurable(evt);
 
     internal async Task<bool> TryRecordPreviewReadyAsync(
         string runId, object payload, IRunStore runStore, CancellationToken ct)

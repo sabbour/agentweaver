@@ -39,6 +39,7 @@ public sealed class RunWatchLoopService
     // Pod-per-run lifecycle — null when AgentExecutionMode=in-api or not in Kubernetes.
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
+    private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
 
     public RunWatchLoopService(
         IRunStore runStore,
@@ -53,7 +54,8 @@ public sealed class RunWatchLoopService
         IRunLeaseStore leaseStore,
         ILogger<RunWatchLoopService> logger,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
+        TerminalOutcomeProjector? terminalOutcomeProjector = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -68,6 +70,7 @@ public sealed class RunWatchLoopService
         _watchLoopTimeout = ResolveWatchLoopTimeout(configuration);
         _podLifecycle = podLifecycle;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
+        _terminalOutcomeProjector = terminalOutcomeProjector;
     }
 
     /// <summary>
@@ -712,25 +715,23 @@ public sealed class RunWatchLoopService
                 now,
                 CancellationToken.None).ConfigureAwait(false);
             EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
-
-            var child = await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false);
-            entry.RecordNext(EventTypes.RunAssembleReady, new
-            {
-                runId,
-                subtaskId = child?.SubtaskId,
-                parentRunId = child?.ParentRunId,
-                worktreeBranch = assembleReady.WorktreeBranch,
-                treeHash = assembleReady.TreeHash,
-                hasChanges = assembleReady.HasChanges,
-                stepCount = assembleReady.StepCount,
-                raiSafetyFlagged = assembleReady.RaiSafetyFlagged,
-            });
+            if (changed && _terminalOutcomeProjector is not null)
+                await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None).ConfigureAwait(false);
+            else if (changed)
+                entry.RecordNext(EventTypes.RunAssembleReady, new
+                {
+                    treeHash = assembleReady.TreeHash ?? string.Empty,
+                    worktreeBranch = assembleReady.WorktreeBranch ?? string.Empty,
+                    diff = assembleReady.Diff ?? string.Empty,
+                    stepCount = assembleReady.StepCount,
+                });
 
             // Emit an explicit no-changes signal when the worker produced nothing so the coordinator
             // and the UI can surface it clearly (the reviewer must not be sent to an empty diff with
             // no explanation — they need to know this subtask wrote no files to the repository).
             if (!assembleReady.HasChanges)
             {
+                var child = await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false);
                 entry.RecordNext(EventTypes.RunNoChangesProduced, new
                 {
                     runId,
