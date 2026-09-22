@@ -63,6 +63,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     // Entities migrated from agentweaver.db (spec-018 P2)
     public DbSet<RunRecord> Runs => Set<RunRecord>();
     public DbSet<TerminalRunOutcomeRecord> TerminalRunOutcomes => Set<TerminalRunOutcomeRecord>();
+    public DbSet<TerminalRunOutcomeProjectionRecord> TerminalRunOutcomeProjections => Set<TerminalRunOutcomeProjectionRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
     public DbSet<ProjectRoleAssignmentRecord> ProjectRoleAssignments => Set<ProjectRoleAssignmentRecord>();
@@ -127,6 +128,13 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
         model.Entity<RunEventRecord>().HasIndex(e => e.RunId);
         model.Entity<RunEventRecord>().HasIndex(e => new { e.RunId, e.Sequence }).IsUnique();
+        model.Entity<TerminalRunOutcomeProjectionRecord>(entity =>
+        {
+            entity.ToTable("terminal_run_outcome_projections");
+            entity.HasKey(x => new { x.RunId, x.LifecycleGeneration });
+            entity.Property(x => x.RunId).HasColumnName("run_id");
+            entity.Property(x => x.LifecycleGeneration).HasColumnName("lifecycle_generation");
+        });
         model.Entity<OutcomeSpec>().HasIndex(o => new { o.ProjectId, o.CoordinatorRunId });
 
         model.Entity<WorkPlan>().HasIndex(w => w.CoordinatorRunId);

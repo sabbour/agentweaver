@@ -364,8 +364,11 @@ public sealed class WorkflowRestartService
         bool retryable = false)
     {
         var runId = run.Id.ToString();
-        var changed = await _runStore.TrySetTerminalStatusAsync(
-            run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, reason, ct).ConfigureAwait(false);
+        var changed = await _runStore.TrySetTerminalOutcomeAsync(
+            run.Id,
+            TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason, retryable }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+            reason,
+            ct).ConfigureAwait(false);
         if (!changed)
         {
             _logger.LogWarning(

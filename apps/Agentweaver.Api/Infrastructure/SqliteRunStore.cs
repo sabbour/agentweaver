@@ -109,6 +109,7 @@ public sealed class SqliteRunStore : IRunStore
 
     public async Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default)
     {
+        RejectTerminalStatus(status);
         var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
@@ -128,6 +129,7 @@ public sealed class SqliteRunStore : IRunStore
 
     public async Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default)
     {
+        RejectTerminalStatus(status);
         var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
@@ -372,14 +374,8 @@ public sealed class SqliteRunStore : IRunStore
     public async Task<bool> TrySetTerminalStatusAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
     {
-        var run = await GetAsync(runId, ct).ConfigureAwait(false);
-        if (run is null)
-            return false;
-        return await TrySetTerminalOutcomeAsync(
-            runId,
-            TerminalRunOutcome.FromLegacyStatus(toStatus, result, endedAt, run.LifecycleGeneration),
-            result,
-            ct).ConfigureAwait(false);
+        throw new NotSupportedException(
+            "Status-only terminal mutations are not supported; persist a typed TerminalRunOutcome instead.");
     }
 
     public async Task<bool> TrySetTerminalOutcomeAsync(
@@ -851,6 +847,13 @@ public sealed class SqliteRunStore : IRunStore
     {
         if (rows == 0)
             _logger?.LogWarning("Run transition no-op while attempting to {Operation} for run {RunId}", operation, runId);
+    }
+
+    private static void RejectTerminalStatus(RunStatus status)
+    {
+        if (TerminalRunOutcome.IsTerminal(status))
+            throw new InvalidOperationException(
+                $"Terminal status '{status}' requires TrySetTerminalOutcomeAsync or a typed terminal mutation.");
     }
 
     /// <summary>

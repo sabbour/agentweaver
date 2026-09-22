@@ -618,8 +618,10 @@ public sealed class RunWatchLoopService
             if (mergeOutput.Status == "merged")
             {
                 // Guardrail 3: conditional update — skip if already terminal.
-                var changed = await _runStore.TrySetTerminalStatusAsync(
-                    parsedRunId, RunStatus.Merged, now, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
+                var changed = await SetTerminalOutcomeAsync(
+                    parsedRunId, currentRun, RunStatus.Merged, EventTypes.MergeCompleted,
+                    new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode },
+                    mergeOutput.MergeResult, now).ConfigureAwait(false);
 
                 EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
                 entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
@@ -645,8 +647,10 @@ public sealed class RunWatchLoopService
 
             if (mergeOutput.Status == "completed")
             {
-                var changed = await _runStore.TrySetTerminalStatusAsync(
-                    parsedRunId, RunStatus.Completed, now, mergeOutput.MergeResult ?? "completed", CancellationToken.None).ConfigureAwait(false);
+                var completedResult = mergeOutput.MergeResult ?? "completed";
+                var changed = await SetTerminalOutcomeAsync(
+                    parsedRunId, currentRun, RunStatus.Completed, EventTypes.RunCompleted,
+                    new { result = completedResult }, completedResult, now).ConfigureAwait(false);
 
                 EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
                 entry.RecordNext(EventTypes.RunCompleted, new { result = mergeOutput.MergeResult ?? "completed" });
@@ -658,8 +662,9 @@ public sealed class RunWatchLoopService
             }
 
             // merge_failed (conflict, lock failure, internal error)
-            var mergeFailedChanged = await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.MergeFailed, now, mergeOutput.MergeResult, CancellationToken.None).ConfigureAwait(false);
+            var mergeFailedChanged = await SetTerminalOutcomeAsync(
+                parsedRunId, currentRun, RunStatus.MergeFailed, EventTypes.MergeFailed,
+                new { reason = mergeOutput.MergeResult }, mergeOutput.MergeResult, now).ConfigureAwait(false);
 
             EmitTerminalMetrics(currentRun, now, "failed", "merge_failed", mergeFailedChanged);
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
@@ -678,8 +683,9 @@ public sealed class RunWatchLoopService
             // Cleanup before status update ensures pollers see a clean directory.
             await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
-            var changed = await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.Completed, now, "no_changes", CancellationToken.None).ConfigureAwait(false);
+            var changed = await SetTerminalOutcomeAsync(
+                parsedRunId, currentRun, RunStatus.Completed, EventTypes.RunCompleted,
+                new { result = "no_changes" }, "no_changes", now).ConfigureAwait(false);
 
             EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
             entry.RecordNext(EventTypes.RunCompleted, new { result = "no_changes" });
@@ -743,19 +749,21 @@ public sealed class RunWatchLoopService
         // by AgentTurnExecutor instead of falling through to the generic stream-ended fallback.
         if (woe.Is<AgentTurnFailedOutput>(out var turnFailed))
         {
-            var changed = await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.Failed, now, turnFailed.Reason, CancellationToken.None).ConfigureAwait(false);
+            var failedPayload = new
+            {
+                reason = turnFailed.Reason,
+                errorCode = turnFailed.Reason,
+                message = turnFailed.Message,
+                evidence = turnFailed.Evidence,
+                retryable = turnFailed.Retryable,
+            };
+            var changed = await SetTerminalOutcomeAsync(
+                parsedRunId, currentRun, RunStatus.Failed, EventTypes.RunFailed,
+                failedPayload, turnFailed.Reason, now).ConfigureAwait(false);
 
             if (!entry.HasEventType(EventTypes.RunFailed))
             {
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = turnFailed.Reason,
-                    errorCode = turnFailed.Reason,
-                    message = turnFailed.Message,
-                    evidence = turnFailed.Evidence,
-                    retryable = turnFailed.Retryable,
-                });
+                entry.RecordNext(EventTypes.RunFailed, failedPayload);
             }
             EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
 
@@ -769,19 +777,21 @@ public sealed class RunWatchLoopService
         // never collapses them to child_executor_failed:agent-turn or stream-ended-without-terminal.
         if (woe.Is<ChildTurnFailedOutput>(out var childFailed))
         {
-            var changed = await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.Failed, now, childFailed.Reason, CancellationToken.None).ConfigureAwait(false);
+            var failedPayload = new
+            {
+                reason = childFailed.Reason,
+                errorCode = childFailed.Reason,
+                message = childFailed.Message,
+                evidence = childFailed.Evidence,
+                retryable = childFailed.Retryable,
+            };
+            var changed = await SetTerminalOutcomeAsync(
+                parsedRunId, currentRun, RunStatus.Failed, EventTypes.RunFailed,
+                failedPayload, childFailed.Reason, now).ConfigureAwait(false);
 
             if (!entry.HasEventType(EventTypes.RunFailed))
             {
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = childFailed.Reason,
-                    errorCode = childFailed.Reason,
-                    message = childFailed.Message,
-                    evidence = childFailed.Evidence,
-                    retryable = childFailed.Retryable,
-                });
+                entry.RecordNext(EventTypes.RunFailed, failedPayload);
             }
             EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
 
@@ -792,8 +802,9 @@ public sealed class RunWatchLoopService
 
         if (woe.Is<DeclinedOutput>())
         {
-            var changed = await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.Declined, now, null, CancellationToken.None).ConfigureAwait(false);
+            var changed = await SetTerminalOutcomeAsync(
+                parsedRunId, currentRun, RunStatus.Declined, EventTypes.ReviewDeclined,
+                new { }, null, now).ConfigureAwait(false);
 
             EmitTerminalMetrics(currentRun, now, "failed", "declined", changed);
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "declined", label = "Review", timestamp_utc = now.ToString("O") });
@@ -813,8 +824,9 @@ public sealed class RunWatchLoopService
             // that detects the terminal status observes a clean worktree directory.
             await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
-            var changed = await _runStore.TrySetTerminalStatusAsync(
-                parsedRunId, RunStatus.Failed, now, "content_safety", CancellationToken.None).ConfigureAwait(false);
+            var changed = await SetTerminalOutcomeAsync(
+                parsedRunId, currentRun, RunStatus.Failed, EventTypes.RunFailed,
+                new { reason = "content_safety" }, "content_safety", now).ConfigureAwait(false);
 
             EmitTerminalMetrics(currentRun, now, "failed", "content_safety", changed);
             entry.RecordNext(EventTypes.RunFailed, new { reason = "content_safety" });
@@ -896,8 +908,9 @@ public sealed class RunWatchLoopService
         {
             var failedAt = DateTimeOffset.UtcNow;
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
-            var changed = await _runStore.TrySetTerminalStatusAsync(
-                RunId.Parse(runId), RunStatus.Failed, failedAt, reason, CancellationToken.None).ConfigureAwait(false);
+            var changed = await SetTerminalOutcomeAsync(
+                RunId.Parse(runId), run, RunStatus.Failed, EventTypes.RunFailed,
+                new { reason }, reason, failedAt).ConfigureAwait(false);
 
             EmitTerminalMetrics(run, failedAt, "failed", reason, changed);
             if (!entry.HasEventType(EventTypes.RunFailed))
@@ -907,6 +920,7 @@ public sealed class RunWatchLoopService
             _ = FirePostRunScribeAsync(runId);
             await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
         }
+
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to transition run {RunId} to Failed state", runId);
@@ -924,6 +938,22 @@ public sealed class RunWatchLoopService
             _factory.ClearRunExecutorMeta(runId);
         }
     }
+
+    private Task<bool> SetTerminalOutcomeAsync(
+        RunId runId,
+        Agentweaver.Domain.Run? run,
+        RunStatus status,
+        string eventType,
+        object payload,
+        string? result,
+        DateTimeOffset occurredAt) =>
+        run is null
+            ? Task.FromResult(false)
+            : _runStore.TrySetTerminalOutcomeAsync(
+                runId,
+                TerminalRunOutcome.Create(status, eventType, payload, occurredAt, run.LifecycleGeneration),
+                result,
+                CancellationToken.None);
 
     /// <summary>
     /// Releases the AgentHost pod for a run transitioning to a terminal Cancelled/Failed state

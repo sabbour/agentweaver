@@ -87,6 +87,43 @@ public sealed class EfRunEventStream : IRunEventStream
         return sequence;
     }
 
+    public async Task AppendTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
+        var payloadJson = outcome.Payload.GetRawText();
+        var exists = await db.TerminalRunOutcomeProjections.AnyAsync(
+            x => x.RunId == runId && x.LifecycleGeneration == outcome.ExpectedLifecycleGeneration, ct)
+            .ConfigureAwait(false);
+        var alreadyPersisted = await db.RunEvents.AnyAsync(
+            x => x.RunId == runId && x.EventType == outcome.EventType && x.PayloadJson == payloadJson, ct)
+            .ConfigureAwait(false);
+        if (exists || alreadyPersisted)
+            return;
+
+        var sequence = (await db.RunEvents.Where(x => x.RunId == runId)
+            .Select(x => (int?)x.Sequence).MaxAsync(ct).ConfigureAwait(false) ?? 0) + 1;
+        db.TerminalRunOutcomeProjections.Add(new TerminalRunOutcomeProjectionRecord
+        {
+            RunId = runId,
+            LifecycleGeneration = outcome.ExpectedLifecycleGeneration,
+        });
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = sequence,
+            EventType = outcome.EventType,
+            PayloadJson = payloadJson,
+            CreatedAt = outcome.OccurredAt.UtcDateTime,
+        });
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {

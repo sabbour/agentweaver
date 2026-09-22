@@ -1213,18 +1213,19 @@ public sealed class CoordinatorOrchestratorExecutor
             "Coordinator orchestrate: run {RunId} has no dispatchable team; failing with {Reason}",
             runId, NoTeamException.ErrorCode);
 
-        var entry = _streamStore.Get(runId);
-        entry?.RecordNext(EventTypes.RunFailed, new
+        var failurePayload = new
         {
             reason = NoTeamException.ErrorCode,
             message = NoTeamException.DefaultMessage,
-        });
+        };
+        var entry = _streamStore.Get(runId);
+        entry?.RecordNext(EventTypes.RunFailed, failurePayload);
 
         using var scope = _scopeFactory.CreateScope();
         var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
         if (RunId.TryParse(runId, out var id))
-            await runStore.TrySetTerminalStatusAsync(
-                id, RunStatus.Failed, DateTimeOffset.UtcNow, NoTeamException.ErrorCode, ct)
+            await runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                id, RunStatus.Failed, EventTypes.RunFailed, failurePayload, DateTimeOffset.UtcNow, NoTeamException.ErrorCode, ct)
                 .ConfigureAwait(false);
 
         _streamStore.Complete(runId);

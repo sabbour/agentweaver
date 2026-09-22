@@ -1038,8 +1038,8 @@ public sealed class CoordinatorSteeringService
             // Terminalize the child run row even when the request landed on a non-owner replica.
             // The owning watch loop polls this durable marker and abandons its local token.
             if (_runStore is not null && RunId.TryParse(childRunId, out var childId))
-                await _runStore.TrySetTerminalStatusAsync(
-                    childId, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", CancellationToken.None).ConfigureAwait(false);
+                await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                    childId, RunStatus.Failed, EventTypes.RunFailed, new { reason = "steering_stop" }, DateTimeOffset.UtcNow, "steering_stop", CancellationToken.None).ConfigureAwait(false);
 
             // #350: cancelling the local CancellationTokenSource above has NO effect on the remote
             // AgentHost pod — reliably stop the actual process so a detached turn cannot keep
@@ -1057,7 +1057,7 @@ public sealed class CoordinatorSteeringService
         // For a broadcast stop (no specific child target) also terminalize the coordinator run itself.
         // Without this the coordinator's dispatch loop continues, dead-ends at assembly_blocked, and
         // the run stays InProgress — there is no clean cancellation path. StopCoordinatorRunAsync
-        // uses the same TrySetTerminalStatusAsync CAS used by the assembly service for its terminal states.
+        // uses the same TrySetTerminalOutcomeAsync generation fence used by the assembly service for its terminal states.
         if (targetChildRunId is null)
             await StopCoordinatorRunAsync(coordinatorRunId, ct).ConfigureAwait(false);
 
@@ -1333,7 +1333,8 @@ public sealed class CoordinatorSteeringService
     {
         if (_runStore is null || !RunId.TryParse(coordinatorRunId, out var id))
             return;
-        await _runStore.TrySetTerminalStatusAsync(id, RunStatus.Failed, DateTimeOffset.UtcNow, "steering_stop", ct)
+        await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+            id, RunStatus.Failed, EventTypes.RunFailed, new { reason = "steering_stop" }, DateTimeOffset.UtcNow, "steering_stop", ct)
             .ConfigureAwait(false);
         // #350: the coordinator's own AgentHost pod (when pod-per-run) also needs reliable teardown —
         // mirrors the child-release call in ApplyStopAsync above.

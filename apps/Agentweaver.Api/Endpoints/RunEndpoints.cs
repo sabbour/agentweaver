@@ -1061,8 +1061,8 @@ app.MapPost("/api/runs/{id}/review", async (
         var failedEntry = streamStore.Get(id);
         try
         {
-            await runStore.TrySetTerminalStatusAsync(
-                runId, RunStatus.Failed, DateTimeOffset.UtcNow, "send_response_failed", CancellationToken.None)
+            await runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                runId, RunStatus.Failed, EventTypes.RunFailed, new { reason = "send_response_failed" }, DateTimeOffset.UtcNow, "send_response_failed", CancellationToken.None)
                 .ConfigureAwait(false);
             if (failedEntry is not null)
                 failedEntry.RecordNext(EventTypes.RunFailed, new { reason = "send_response_failed" });
@@ -1409,7 +1409,11 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to insert revision audit row for run {RunId} — not starting revision", id);
-        await runStore.TrySetTerminalStatusAsync(runId, RunStatus.Failed, DateTimeOffset.UtcNow, "audit_insert_failed", CancellationToken.None).ConfigureAwait(false);
+        await runStore.TrySetTerminalOutcomeAsync(
+            runId,
+            TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "audit_insert_failed" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+            "audit_insert_failed",
+            CancellationToken.None).ConfigureAwait(false);
         streamEntry?.RecordNext(EventTypes.RunFailed, new { reason = "audit_insert_failed" });
         if (streamEntry is not null) streamStore.Complete(id);
         return Results.Problem("Failed to record revision audit; revision not started.", statusCode: 500);
@@ -1437,7 +1441,11 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to start revision workflow for run {RunId}", id);
-        await runStore.TrySetTerminalStatusAsync(runId, RunStatus.Failed, DateTimeOffset.UtcNow, "revision_start_failed", CancellationToken.None).ConfigureAwait(false);
+        await runStore.TrySetTerminalOutcomeAsync(
+            runId,
+            TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "revision_start_failed" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+            "revision_start_failed",
+            CancellationToken.None).ConfigureAwait(false);
         streamEntry?.RecordNext(EventTypes.RunFailed, new { reason = "revision_start_failed" });
         if (streamEntry is not null) streamStore.Complete(id);
         return Results.Problem("Failed to start revision workflow.", statusCode: 500);

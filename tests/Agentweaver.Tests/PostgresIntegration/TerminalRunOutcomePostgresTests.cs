@@ -2,6 +2,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Domain;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.PostgresIntegration;
 
@@ -58,6 +59,35 @@ public sealed class TerminalRunOutcomePostgresTests(PostgresFixture pg)
         persisted.Status.Should().Be(RunStatus.InProgress);
         persisted.LifecycleGeneration.Should().Be(2);
         (await second.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [PostgresFact]
+    public async Task IndependentProjectors_RaceToOneDurableTerminalProjection()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var run = await InsertInProgressAsync(store);
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed,
+            EventTypes.RunFailed,
+            new { reason = "rich_failure", retryable = true },
+            DateTimeOffset.UtcNow,
+            1);
+        (await store.TrySetTerminalOutcomeAsync(run, outcome, "rich_failure")).Should().BeTrue();
+
+        var first = new TerminalOutcomeProjector(
+            new EfRunStore(pg.Factory),
+            new EfRunEventStream(pg.Factory),
+            NullLogger<TerminalOutcomeProjector>.Instance);
+        var second = new TerminalOutcomeProjector(
+            new EfRunStore(pg.Factory),
+            new EfRunEventStream(pg.Factory),
+            NullLogger<TerminalOutcomeProjector>.Instance);
+
+        await Task.WhenAll(first.ProjectPendingAsync(), second.ProjectPendingAsync());
+
+        var events = await new EfRunEventStream(pg.Factory).GetPersistedEventsAsync(run.ToString());
+        events.Where(evt => evt.Type == EventTypes.RunFailed).Should().ContainSingle();
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
     }
 
     private static async Task<RunId> InsertInProgressAsync(EfRunStore store)

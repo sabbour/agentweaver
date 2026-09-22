@@ -14,6 +14,9 @@ public sealed record TerminalRunOutcome(
     DateTimeOffset OccurredAt,
     int ExpectedLifecycleGeneration)
 {
+    public static bool IsTerminal(RunStatus status) =>
+        Endpoints.EndpointHelpers.IsTerminal(status) || status == RunStatus.AssembleReady;
+
     public static TerminalRunOutcome Create(
         RunStatus status,
         string eventType,
@@ -25,36 +28,6 @@ public sealed record TerminalRunOutcome(
     public RunEvent ToRunEvent(int sequence = 0) =>
         new(sequence, EventType, Payload, OccurredAt);
 
-    /// <summary>
-    /// Compatibility bridge for legacy status-only terminal writers. New writers must pass their
-    /// richer event payload explicitly; this preserves a typed taxonomy while they are migrated.
-    /// </summary>
-    public static TerminalRunOutcome FromLegacyStatus(
-        RunStatus status,
-        string? result,
-        DateTimeOffset occurredAt,
-        int expectedLifecycleGeneration)
-    {
-        var eventType = status switch
-        {
-            RunStatus.Merged => EventTypes.MergeCompleted,
-            RunStatus.MergeFailed => EventTypes.MergeFailed,
-            RunStatus.Declined => EventTypes.ReviewDeclined,
-            RunStatus.AssembleReady => EventTypes.RunAssembleReady,
-            RunStatus.Failed => EventTypes.RunFailed,
-            _ => EventTypes.RunCompleted,
-        };
-        object payload = status switch
-        {
-            RunStatus.Merged => new { result },
-            RunStatus.MergeFailed => new { reason = result },
-            RunStatus.Declined => new { reason = result },
-            RunStatus.AssembleReady => new { result },
-            RunStatus.Failed => new { reason = result },
-            _ => new { result },
-        };
-        return Create(status, eventType, payload, occurredAt, expectedLifecycleGeneration);
-    }
 }
 
 /// <summary>Stored run-database outbox row. Projection is deliberately post-commit.</summary>

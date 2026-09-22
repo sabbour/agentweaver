@@ -40,11 +40,26 @@ public partial class AddTerminalRunOutcomes : Migration
             name: "IX_terminal_run_outcomes_unprojected",
             table: "terminal_run_outcomes",
             columns: new[] { "projected_at", "occurred_at" });
+
+        migrationBuilder.CreateTable(
+            name: "terminal_run_outcome_projections",
+            columns: table => new
+            {
+                run_id = table.Column<string>(type: "text", nullable: false),
+                lifecycle_generation = table.Column<int>(type: "integer", nullable: false),
+            },
+            constraints: table =>
+            {
+                table.PrimaryKey(
+                    "PK_terminal_run_outcome_projections",
+                    x => new { x.run_id, x.lifecycle_generation });
+            });
     }
 
     /// <inheritdoc />
     protected override void Down(MigrationBuilder migrationBuilder)
     {
+        migrationBuilder.DropTable(name: "terminal_run_outcome_projections");
         migrationBuilder.DropTable(name: "terminal_run_outcomes");
         migrationBuilder.DropColumn(name: "lifecycle_generation", table: "runs");
     }

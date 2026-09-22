@@ -60,20 +60,13 @@ public sealed class TerminalOutcomeProjector(
             return;
         }
 
-        var persisted = await eventStream.GetPersistedEventsAsync(pending.RunId.ToString(), 0, ct)
+        await eventStream.AppendTerminalOutcomeAsync(pending.RunId.ToString(), pending.Outcome, ct)
             .ConfigureAwait(false);
-        if (!persisted.Any(evt => Matches(evt, pending.Outcome)))
-            await eventStream.AppendAsync(pending.RunId.ToString(), pending.Outcome.ToRunEvent(), ct)
-                .ConfigureAwait(false);
 
         await runStore.MarkTerminalOutcomeProjectedAsync(
             pending.RunId, pending.LifecycleGeneration, ct).ConfigureAwait(false);
         await eventStream.CompleteAsync(pending.RunId.ToString(), ct).ConfigureAwait(false);
     }
-
-    private static bool Matches(RunEvent candidate, TerminalRunOutcome outcome) =>
-        string.Equals(candidate.Type, outcome.EventType, StringComparison.Ordinal)
-        && JsonSerializer.Serialize(candidate.Payload) == outcome.Payload.GetRawText();
 
     private static readonly RunStatus[] TerminalStatuses =
     [

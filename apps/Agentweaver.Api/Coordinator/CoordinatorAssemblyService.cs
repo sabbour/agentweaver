@@ -1867,13 +1867,19 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     workPlanId,
                     reason = failureReason,
                 });
-                await _runStore.TrySetTerminalStatusAsync(
-                    scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, failureReason, ct).ConfigureAwait(false);
+                await _runStore.TrySetTerminalOutcomeAsync(
+                    scribeRun.Id,
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = failureReason }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                    failureReason,
+                    ct).ConfigureAwait(false);
                 return;
             }
 
-            await _runStore.TrySetTerminalStatusAsync(
-                scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, terminalStatus, ct).ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeAsync(
+                scribeRun.Id,
+                TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted, new { result = terminalStatus }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                terminalStatus,
+                ct).ConfigureAwait(false);
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
         }
         finally
@@ -1937,14 +1943,20 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 ByokProviderFingerprint: scribeProvider.ByokProviderFingerprint),
                 ct).ConfigureAwait(false);
 
-            await _runStore.TrySetTerminalStatusAsync(
-                scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, coordinatorRun.Result, ct).ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeAsync(
+                scribeRun.Id,
+                TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted, new { result = coordinatorRun.Result }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                coordinatorRun.Result,
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Coordinator final scribe failed for run {RunId} (non-fatal)", coordinatorRun.Id);
-            await _runStore.TrySetTerminalStatusAsync(
-                scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ex.Message, ct).ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeAsync(
+                scribeRun.Id,
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = ex.Message }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                ex.Message,
+                ct).ConfigureAwait(false);
         }
     }
 
@@ -3962,7 +3974,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     }
     /// list and run detail surface why assembly ended (instead of leaving the run InProgress, which a
     /// later restart would sweep to a bare "Failed"). A no-op when the run row is absent or already
-    /// terminal (the CAS guard in <see cref="SqliteRunStore.TrySetTerminalStatusAsync"/>). Resource
+    /// terminal (the CAS guard in <see cref="IRunStore.TrySetTerminalOutcomeAsync"/>). Resource
     /// cleanup is intentionally deferred to <see cref="RunCoordinatorScribeAsync"/> so the shared
     /// per-run AgentHost pod remains available for the final A2A Scribe turn.
     /// </summary>
@@ -3971,8 +3983,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         if (RunId.TryParse(coordinatorRunId, out var id))
         {
-            await _runStore.TrySetTerminalStatusAsync(id, status, DateTimeOffset.UtcNow, result, ct)
-                .ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                id,
+                status,
+                status == RunStatus.Failed ? EventTypes.RunFailed : EventTypes.RunCompleted,
+                status == RunStatus.Failed ? new { reason = result } : new { result },
+                DateTimeOffset.UtcNow,
+                result,
+                ct).ConfigureAwait(false);
         }
     }
 

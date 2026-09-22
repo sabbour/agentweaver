@@ -1484,8 +1484,11 @@ public sealed class CoordinatorRunService
             var result = delegated ? "delegated_to_backlog" : spec?.Status ?? "confirmed";
             var terminal = spec?.Status == "declined" ? RunStatus.Declined : RunStatus.Completed;
             var entry0 = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
-            await _runStore.TrySetTerminalStatusAsync(
-                run.Id, terminal, DateTimeOffset.UtcNow, result, ct).ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeAsync(
+                run.Id,
+                TerminalRunOutcome.Create(terminal, EventTypes.RunCompleted, new { result }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                result,
+                ct).ConfigureAwait(false);
             entry0.RecordNext(EventTypes.RunCompleted, new { result });
             _streamStore.Complete(runId);
             _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
@@ -1534,7 +1537,11 @@ public sealed class CoordinatorRunService
             // (f) The plan reached a terminal/parked state but the coordinator run row was never flipped
             // off InProgress (a crash between the plan write and the run finalize). Settle the run row.
             case CoordinatorRecoveryAction.SettleComplete:
-                await _runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Completed, DateTimeOffset.UtcNow, "complete", ct).ConfigureAwait(false);
+                await _runStore.TrySetTerminalOutcomeAsync(
+                    run.Id,
+                    TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted, new { result = "complete" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    "complete",
+                    ct).ConfigureAwait(false);
                 entry.RecordNext(EventTypes.RunCompleted, new { result = "complete" });
                 _streamStore.Complete(runId);
                 _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
@@ -1547,8 +1554,11 @@ public sealed class CoordinatorRunService
                 break;
 
             case CoordinatorRecoveryAction.SettleFailed:
-                await _runStore.TrySetTerminalStatusAsync(
-                    run.Id, RunStatus.Failed, DateTimeOffset.UtcNow, run.Result ?? planState.Status, ct).ConfigureAwait(false);
+                await _runStore.TrySetTerminalOutcomeAsync(
+                    run.Id,
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = run.Result ?? planState.Status }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    run.Result ?? planState.Status,
+                    ct).ConfigureAwait(false);
                 entry.RecordNext(EventTypes.RunFailed, new { reason = run.Result ?? planState.Status });
                 _streamStore.Complete(runId);
                 _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
@@ -1986,8 +1996,8 @@ public sealed class CoordinatorRunService
         if (outcome.Status == "confirmed" && await IsDelegatedPlanAsync(runId).ConfigureAwait(false))
             result = "delegated_to_backlog";
 
-        await _runStore.TrySetTerminalStatusAsync(
-            parsedRunId, status, DateTimeOffset.UtcNow, result, CancellationToken.None).ConfigureAwait(false);
+        await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+            parsedRunId, status, EventTypes.RunCompleted, new { result }, DateTimeOffset.UtcNow, result, CancellationToken.None).ConfigureAwait(false);
 
         entry.RecordNext(EventTypes.RunCompleted, new { result });
         _streamStore.Complete(runId);
@@ -2022,33 +2032,15 @@ public sealed class CoordinatorRunService
     {
         try
         {
-            var changed = await _runStore.TrySetTerminalStatusAsync(
-                RunId.Parse(runId), RunStatus.Failed, DateTimeOffset.UtcNow, reason, CancellationToken.None)
-                .ConfigureAwait(false);
-            if (!changed)
-            {
-                // Another replica already transitioned this run to a terminal status (concurrent
-                // startup recovery race). The losing pod must not write RunEvents — doing so causes
-                // Postgres 40001 serialization failures. Mirror WorkflowRestartService.FailRecoveredRunAsync.
-                _logger.LogWarning(
-                    "Recovery failure transition skipped for coordinator run {RunId}; " +
-                    "status already terminal or changed concurrently — not writing RunEvents",
-                    runId);
-                return;
-            }
             var correlationId = Guid.NewGuid().ToString("n");
-            if (entry.HasEventType(EventTypes.RunFailed))
+            object terminalPayload;
+            string? errorCode = null;
+            if (providerFailure is null)
             {
-                _logger.LogInformation(
-                    "Coordinator run {RunId} already has a terminal failure event; skipping duplicate emission",
-                    runId);
-            }
-            else if (providerFailure is null)
-            {
-                var errorCode = reason == "coordinator_executor_failed:coordinator-direct"
+                errorCode = reason == "coordinator_executor_failed:coordinator-direct"
                     ? "coordinator_direct_execution_failed"
                     : "coordinator_execution_failed";
-                entry.RecordNext(EventTypes.RunFailed, new
+                terminalPayload = new
                 {
                     reason,
                     errorCode,
@@ -2057,14 +2049,11 @@ public sealed class CoordinatorRunService
                     correlationId,
                     traceId = Activity.Current?.TraceId.ToHexString(),
                     causeChain = BuildSafeCauseChain(reason, failurePhase, failure),
-                });
-                _logger.LogError(
-                    "Coordinator terminal failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
-                    runId, errorCode, correlationId);
+                };
             }
             else
             {
-                entry.RecordNext(EventTypes.RunFailed, new
+                terminalPayload = new
                 {
                     reason = providerFailure.ErrorCode,
                     errorCode = providerFailure.ErrorCode,
@@ -2074,10 +2063,49 @@ public sealed class CoordinatorRunService
                     correlationId,
                     traceId = Activity.Current?.TraceId.ToHexString(),
                     causeChain = BuildSafeCauseChain(reason, failurePhase, providerFailure),
-                });
-                _logger.LogError(
-                    "Coordinator provider failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
-                    runId, providerFailure.ErrorCode, correlationId);
+                };
+            }
+
+            var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                RunId.Parse(runId),
+                RunStatus.Failed,
+                EventTypes.RunFailed,
+                terminalPayload,
+                DateTimeOffset.UtcNow,
+                reason,
+                CancellationToken.None).ConfigureAwait(false);
+            if (!changed)
+            {
+                // Another replica already transitioned this run to a terminal status (concurrent
+                // startup recovery race). The losing pod must not write RunEvents � doing so causes
+                // Postgres 40001 serialization failures. Mirror WorkflowRestartService.FailRecoveredRunAsync.
+                _logger.LogWarning(
+                    "Recovery failure transition skipped for coordinator run {RunId}; " +
+                    "status already terminal or changed concurrently � not writing RunEvents",
+                    runId);
+                return;
+            }
+            if (entry.HasEventType(EventTypes.RunFailed))
+            {
+                _logger.LogInformation(
+                    "Coordinator run {RunId} already has a terminal failure event; skipping duplicate emission",
+                    runId);
+            }
+            else
+            {
+                entry.RecordNext(EventTypes.RunFailed, terminalPayload);
+                if (providerFailure is null)
+                {
+                    _logger.LogError(
+                        "Coordinator terminal failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
+                        runId, errorCode, correlationId);
+                }
+                else
+                {
+                    _logger.LogError(
+                        "Coordinator provider failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
+                        runId, providerFailure.ErrorCode, correlationId);
+                }
             }
             _streamStore.Complete(runId);
             _ = _runWorkflowFactory.PersistRunEventsAsync(runId);

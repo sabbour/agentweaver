@@ -1647,8 +1647,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         {
             try
             {
-                await _runStore.TrySetTerminalStatusAsync(
-                    stalledRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "agent_stall_timeout", ct)
+                await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                    stalledRunId, RunStatus.Failed, EventTypes.RunFailed, new { reason = "agent_stall_timeout" }, DateTimeOffset.UtcNow, "agent_stall_timeout", ct)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -1719,8 +1719,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         {
             try
             {
-                await _runStore.TrySetTerminalStatusAsync(
-                    stalledRunId, RunStatus.Failed, DateTimeOffset.UtcNow, "agent_stall_timeout", ct)
+                await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                    stalledRunId, RunStatus.Failed, EventTypes.RunFailed, new { reason = "agent_stall_timeout" }, DateTimeOffset.UtcNow, "agent_stall_timeout", ct)
                     .ConfigureAwait(false);
             }
             catch (Exception ex)

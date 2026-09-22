@@ -23,6 +23,19 @@ public interface IRunEventStream
     ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
 
     /// <summary>
+    /// Appends a terminal-outcome winner exactly once for its lifecycle generation. Production
+    /// streams persist the uniqueness claim with the event; the default keeps simple test streams
+    /// compatible while production callers never fall back to a read-then-append sequence.
+    /// </summary>
+    async Task AppendTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default)
+    {
+        await AppendAsync(runId, outcome.ToRunEvent(), ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Appends a batch with assigned sequences only if the durable run is still non-terminal.
     /// The status decision and the entire batch are protected against run-store transitions.
     /// Returns the committed events, or an empty list if terminalization won. Unsupported stores

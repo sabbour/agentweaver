@@ -73,18 +73,32 @@ public sealed class TerminalRunOutcomeStoreTests
     }
 
     [Fact]
-    public async Task LegacyTerminalStatusWriter_RoutesThroughTypedOutbox()
+    public async Task LegacyTerminalStatusWriter_IsRejected()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var run = await InsertInProgressAsync(store);
 
-        (await store.TrySetTerminalStatusAsync(
-            run, RunStatus.Failed, DateTimeOffset.UtcNow, "workflow_start_failed")).Should().BeTrue();
+        var act = () => store.TrySetTerminalStatusAsync(
+            run, RunStatus.Failed, DateTimeOffset.UtcNow, "workflow_start_failed");
 
-        var winner = (await store.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle().Subject;
-        winner.Outcome.EventType.Should().Be(EventTypes.RunFailed);
-        winner.Outcome.Payload.GetProperty("reason").GetString().Should().Be("workflow_start_failed");
+        await act.Should().ThrowAsync<NotSupportedException>();
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenericStatusApis_RejectTerminalTransitions()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+
+        var updateStatus = () => store.UpdateStatusAsync(run, RunStatus.Failed, DateTimeOffset.UtcNow);
+        var updateResult = () => store.UpdateResultAsync(run, RunStatus.Completed, "done", DateTimeOffset.UtcNow);
+
+        await updateStatus.Should().ThrowAsync<InvalidOperationException>();
+        await updateResult.Should().ThrowAsync<InvalidOperationException>();
+        (await store.GetAsync(run))!.Status.Should().Be(RunStatus.InProgress);
     }
 
     [Fact]
@@ -193,6 +207,54 @@ public sealed class TerminalRunOutcomeStoreTests
     }
 
     [Fact]
+    public async Task Projectors_RacingProjection_AppendTheStoredWinnerOnce()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Completed, EventTypes.RunCompleted, new { result = "done" },
+            DateTimeOffset.UtcNow, 1);
+        (await store.TrySetTerminalOutcomeAsync(run, outcome, "done")).Should().BeTrue();
+
+        var stream = new RecordingEventStream();
+        var first = new TerminalOutcomeProjector(store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
+        var second = new TerminalOutcomeProjector(store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
+
+        await Task.WhenAll(first.ProjectPendingAsync(), second.ProjectPendingAsync());
+
+        stream.Events.Should().ContainSingle().Which.Type.Should().Be(EventTypes.RunCompleted);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Projector_RestartReusesExistingRichTerminalEvent()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var payload = new
+        {
+            reason = "workflow_start_failed",
+            detail = "binding failed",
+            retryable = true,
+        };
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, payload, DateTimeOffset.UtcNow, 1);
+        (await store.TrySetTerminalOutcomeAsync(run, outcome, "workflow_start_failed")).Should().BeTrue();
+
+        var stream = new RecordingEventStream();
+        await stream.AppendAsync(run.ToString(), outcome.ToRunEvent());
+        var restartedProjector = new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
+
+        await restartedProjector.ProjectPendingAsync();
+
+        stream.Events.Should().ContainSingle().Which.Payload.Should().BeEquivalentTo(outcome.Payload);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Projector_AdoptsOnlyCompatibleLegacyTerminalEvent()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
@@ -289,6 +351,22 @@ public sealed class TerminalRunOutcomeStoreTests
             if (ThrowAfterAppend)
                 throw new InvalidOperationException("simulated failure after durable append");
             return ValueTask.FromResult(persisted.Sequence);
+        }
+
+        public Task AppendTerminalOutcomeAsync(
+            string runId,
+            TerminalRunOutcome outcome,
+            CancellationToken ct = default)
+        {
+            if (!Events.Any(evt => evt.Type == outcome.EventType
+                && System.Text.Json.JsonSerializer.Serialize(evt.Payload) == outcome.Payload.GetRawText()))
+            {
+                var persisted = outcome.ToRunEvent(Events.Count + 1);
+                Events.Add(persisted);
+                if (ThrowAfterAppend)
+                    throw new InvalidOperationException("simulated failure after durable append");
+            }
+            return Task.CompletedTask;
         }
 
         public async IAsyncEnumerable<RunEvent> SubscribeAsync(

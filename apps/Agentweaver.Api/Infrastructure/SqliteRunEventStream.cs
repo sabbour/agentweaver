@@ -73,6 +73,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
             Cache = SqliteCacheMode.Shared,
             Pooling = true,
         }.ToString();
+        EnsureTerminalOutcomeProjectionTable();
     }
 
     /// <inheritdoc />
@@ -117,6 +118,54 @@ public sealed class SqliteRunEventStream : IRunEventStream
         }
 
         return ValueTask.FromResult(sequence);
+    }
+
+    public Task AppendTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        var evt = StampTimestamp(outcome.ToRunEvent());
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var tx = connection.BeginTransaction();
+        using var existing = connection.CreateCommand();
+        existing.Transaction = tx;
+        existing.CommandText =
+            """SELECT 1 FROM "RunEvents" WHERE "RunId" = $runId AND "EventType" = $type AND "PayloadJson" = $payload LIMIT 1;""";
+        existing.Parameters.AddWithValue("$runId", runId);
+        existing.Parameters.AddWithValue("$type", outcome.EventType);
+        existing.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
+        var alreadyPersisted = existing.ExecuteScalar() is not null;
+        using var claim = connection.CreateCommand();
+        claim.Transaction = tx;
+        claim.CommandText =
+            "INSERT OR IGNORE INTO terminal_run_outcome_projections (run_id, lifecycle_generation) VALUES ($runId, $generation);";
+        claim.Parameters.AddWithValue("$runId", runId);
+        claim.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        if (claim.ExecuteNonQuery() == 0 || alreadyPersisted)
+        {
+            tx.Commit();
+            return Task.CompletedTask;
+        }
+
+        using var append = connection.CreateCommand();
+        append.Transaction = tx;
+        append.CommandText =
+            """
+            INSERT INTO "RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
+            SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
+            FROM "RunEvents" WHERE "RunId" = $runId;
+            """;
+        append.Parameters.AddWithValue("$runId", runId);
+        append.Parameters.AddWithValue("$type", evt.Type);
+        append.Parameters.AddWithValue("$payload", outcome.Payload.GetRawText());
+        append.Parameters.AddWithValue("$createdAt",
+            evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+        append.ExecuteNonQuery();
+        tx.Commit();
+        return Task.CompletedTask;
     }
 
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
@@ -282,6 +331,22 @@ public sealed class SqliteRunEventStream : IRunEventStream
             SingleReader = false,
             SingleWriter = false,
         });
+
+    private void EnsureTerminalOutcomeProjectionTable()
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS terminal_run_outcome_projections (
+                run_id TEXT NOT NULL,
+                lifecycle_generation INTEGER NOT NULL,
+                PRIMARY KEY (run_id, lifecycle_generation)
+            );
+            """;
+        command.ExecuteNonQuery();
+    }
 
     /// <summary>
     /// Synchronous durable insert into the RunEvents table. Returns the sequence assigned to the

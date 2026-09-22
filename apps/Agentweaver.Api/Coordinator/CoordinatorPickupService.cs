@@ -220,9 +220,11 @@ public sealed class CoordinatorPickupService
             var invocationService = scope.ServiceProvider.GetRequiredService<IAutomationInvocationService>();
             if (!await invocationService.TryPrepareRunAsync(project.Id, task.Id, runId.ToString(), ct).ConfigureAwait(false))
             {
-                await _runStore.TrySetTerminalStatusAsync(
-                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, "automation_invocation_unavailable", ct)
-                    .ConfigureAwait(false);
+                await _runStore.TrySetTerminalOutcomeAsync(
+                    runId,
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "automation_invocation_unavailable" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    "automation_invocation_unavailable",
+                    ct).ConfigureAwait(false);
                 _logger.LogWarning("Pickup refused unavailable automation invocation for task {TaskId} and run {RunId}", task.Id, runId);
                 return;
             }
@@ -248,9 +250,11 @@ public sealed class CoordinatorPickupService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Pickup: coordinator start failed for run {RunId}", runId);
-            var terminalized = await _runStore.TrySetTerminalStatusAsync(
-                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, "coordinator_start_failed", CancellationToken.None)
-                .ConfigureAwait(false);
+            var terminalized = await _runStore.TrySetTerminalOutcomeAsync(
+                    runId,
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "coordinator_start_failed" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    "coordinator_start_failed",
+                    CancellationToken.None).ConfigureAwait(false);
             if (!terminalized)
             {
                 _logger.LogWarning(
