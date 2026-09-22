@@ -67,13 +67,13 @@ test('materializes only explicit structured review and validation evidence', () 
 test('rejects missing reviews and validation provenance mismatches', () => {
   assert.throws(() => materializeLedger(input({
     reviews: [review('code-review'), review('security-review')],
-  })), /missing required implementation review source: ponytail-review/u);
+  })), /missing required exact-head review from: ponytail-review/u);
   assert.throws(() => materializeLedger(input({
     validations: [validation({ headSha: 'b'.repeat(40) })],
   })), /candidate SHA/u);
   assert.throws(() => materializeLedger(input({
     reviews: [review('code-review', { target: { ...target, branch: 'dev' } }), review('security-review'), review('ponytail-review')],
-  })), /candidate provenance/u);
+  })), /candidate worktree lineage/u);
 });
 
 test('design review targets its artifact and requires no implementation evidence', () => {
@@ -94,7 +94,11 @@ test('design review targets its artifact and requires no implementation evidence
 
 test('corrective re-review preserves finding ID, phase, source, and target type', () => {
   const finding = { id: 'F-1', policy: 'required', summary: 'Ledger is not materialized.' };
-  const initial = review('code-review', { verdict: 'rejected', findings: [finding] });
+  const initial = review('code-review', {
+    verdict: 'rejected',
+    target: { ...target, headSha: 'b'.repeat(40) },
+    findings: [finding],
+  });
   const corrective = review('code-review', { correctiveOf: 'F-1', findings: [finding] });
   assert.doesNotThrow(() => materializeLedger(input({
     reviews: [initial, corrective, review('security-review'), review('ponytail-review')],
@@ -107,6 +111,14 @@ test('corrective re-review preserves finding ID, phase, source, and target type'
       review('ponytail-review'),
     ],
   })), /does not match its original phase, source, and target/u);
+  assert.throws(() => materializeLedger(input({
+    reviews: [
+      initial,
+      { ...corrective, target: { ...target, headSha: 'c'.repeat(40) } },
+      review('security-review'),
+      review('ponytail-review'),
+    ],
+  })), /approval does not match the candidate SHA/u);
 });
 
 test('writes atomically and validates by reading from the same backend', async () => {

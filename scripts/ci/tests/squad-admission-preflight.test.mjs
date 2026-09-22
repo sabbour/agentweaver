@@ -84,6 +84,21 @@ test('blocks provenance mismatches and unresolved required findings', () => {
   }), { ...expected, headSha }), /unresolved/u);
 });
 
+test('admits an older rejection only after corrective approval at the final head', () => {
+  const finding = { id: 'F-1', policy: 'required', summary: 'Exact-head review failed.' };
+  const reviews = [
+    review('code-review', {
+      verdict: 'rejected',
+      target: { ...target, headSha: 'b'.repeat(40) },
+      findings: [finding],
+    }),
+    review('code-review', { correctiveOf: 'F-1', findings: [finding] }),
+    review('security-review'),
+    review('ponytail-review'),
+  ];
+  assert.equal(validateAdmissionPreflight(ledger({ reviews }), { ...expected, headSha }).admitted, true);
+});
+
 test('preserves advisory and explicit waiver behavior', () => {
   const reviews = [
     review('code-review', {

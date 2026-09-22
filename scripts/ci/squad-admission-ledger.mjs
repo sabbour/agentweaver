@@ -30,10 +30,10 @@ function absolute(value, field) {
   return value;
 }
 
-function targetIdentity(target) {
+function targetLineage(target) {
   return target.type === 'artifact'
-    ? `${target.type}:${target.artifact}:${target.digest}`
-    : `${target.type}:${target.worktree}:${target.branch}:${target.headSha}`;
+    ? `${target.type}:${target.artifact}`
+    : `${target.type}:${target.worktree}:${target.branch}`;
 }
 
 export function validateReviewOutput(review, field = 'review') {
@@ -103,13 +103,13 @@ function validateCorrectiveReviews(reviews) {
   const initialFindings = new Map();
   for (const review of reviews.filter((entry) => entry.correctiveOf === undefined)) {
     for (const finding of review.findings) {
-      const key = `${review.phase}:${review.source}:${targetIdentity(review.target)}:${finding.id}`;
+      const key = `${review.phase}:${review.source}:${targetLineage(review.target)}:${finding.id}`;
       if (initialFindings.has(key)) throw new Error(`duplicate initial finding ${finding.id} from ${review.source}`);
       initialFindings.set(key, { review, finding });
     }
   }
   for (const review of reviews.filter((entry) => entry.correctiveOf !== undefined)) {
-    const key = `${review.phase}:${review.source}:${targetIdentity(review.target)}:${review.correctiveOf}`;
+    const key = `${review.phase}:${review.source}:${targetLineage(review.target)}:${review.correctiveOf}`;
     if (!initialFindings.has(key)) throw new Error(`corrective re-review ${review.correctiveOf} does not match its original phase, source, and target`);
   }
 }
@@ -135,16 +135,20 @@ export function materializeLedger(input) {
   const reviews = input.reviews.map((review, index) => validateReviewOutput(review, `reviews[${index}]`));
   const implementationReviews = reviews.filter((review) => review.phase === 'implementation');
   for (const [index, review] of implementationReviews.entries()) {
-    if (review.target.worktree !== candidate.worktree || review.target.branch !== candidate.branch || review.target.headSha !== candidate.headSha) {
-      throw new Error(`implementation review ${index} does not match the candidate provenance`);
+    if (review.target.worktree !== candidate.worktree || review.target.branch !== candidate.branch) {
+      throw new Error(`implementation review ${index} does not match the candidate worktree lineage`);
     }
-  }
-  for (const source of requiredSources) {
-    if (!implementationReviews.some((review) => review.source === source && review.correctiveOf === undefined)) {
-      throw new Error(`missing required implementation review source: ${source}`);
+    if ((review.verdict === 'approved' || review.correctiveOf !== undefined) && review.target.headSha !== candidate.headSha) {
+      throw new Error(`implementation review ${index} approval does not match the candidate SHA`);
     }
   }
   validateCorrectiveReviews(reviews);
+  for (const source of requiredSources) {
+    if (!implementationReviews.some((review) => review.source === source
+      && review.target.headSha === candidate.headSha)) {
+      throw new Error(`missing required exact-head review from: ${source}`);
+    }
+  }
   const validations = input.validations.map((entry, index) => validateValidationEvidence(entry, candidate, `validations[${index}]`));
 
   return {
@@ -174,7 +178,8 @@ export function validateAdmissionLedger(ledger, expected) {
         && finding.waiver === undefined
         && !materialized.reviews.some((entry) => entry.correctiveOf === finding.id
           && entry.phase === review.phase && entry.source === review.source
-          && targetIdentity(entry.target) === targetIdentity(review.target) && entry.verdict === 'approved'));
+          && targetLineage(entry.target) === targetLineage(review.target)
+          && entry.target.headSha === materialized.headSha && entry.verdict === 'approved'));
       if (unresolved) throw new Error(`required finding from ${review.source} is unresolved`);
     }
   }
