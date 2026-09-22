@@ -49,6 +49,15 @@ public sealed class RunOrchestratorChildRevisionHandoffTests : IAsyncDisposable
         _memoryConn.Open();
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["MemoryContext:MaxTokens"] = "1",
+            })
+            .Build();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddScoped(sp => new MemoryContextCompiler(
+            sp.GetRequiredService<MemoryDbContext>(), configuration));
         var secrets = new InMemorySecretStore();
         services.AddSingleton<ISecretStore>(secrets);
         services.AddScoped<GitHubConnectionsPersistenceStore>();
@@ -197,6 +206,63 @@ public sealed class RunOrchestratorChildRevisionHandoffTests : IAsyncDisposable
         var handoff = events.Should().ContainSingle(e => e.Type == "coordinator.child_revision_handoff").Subject;
         System.Text.Json.JsonSerializer.Serialize(handoff.Payload)
             .Should().Contain("fresh_from_prior_branch");
+    }
+
+    [Fact]
+    public async Task Handoff_MandatoryContextBudgetFailure_TerminalizesReplacementChild()
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = BuildOrchestrator(manager);
+        var projectId = ProjectId.New();
+        var priorChild = NewChildRun("morpheus") with
+        {
+            RepositoryPath = repoPath,
+            OriginatingBranch = "main",
+            WorktreePath = Path.Combine(worktreesBase, "missing-prior-worktree"),
+            WorktreeBranch = "main",
+        };
+        var replacement = NewChildRun("trinity") with
+        {
+            RepositoryPath = repoPath,
+            OriginatingBranch = "main",
+            ProjectId = projectId,
+        };
+        var feedback = new AccumulatedReviewFeedback(
+            "7", "Fix the rejected work.", [], "main", "REVIEW-GUIDANCE");
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Decisions.Add(new Decision
+            {
+                ProjectId = projectId.ToString(),
+                AgentName = replacement.AgentName!,
+                Type = "architectural",
+                Status = "active",
+                Title = "Mandatory boundary",
+                Content = new string('d', 128),
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Run,
+                SourceIdentity = "run:handoff-context-budget",
+                ApprovedBy = "human:alice",
+                ApprovedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await Assert.ThrowsAsync<MandatoryContextBudgetExceededException>(() =>
+            orchestrator.StartChildRevisionHandoffAsync(replacement, priorChild, feedback, default));
+
+        (await _runStore.GetAsync(replacement.Id))!.Status.Should().Be(RunStatus.Failed);
+        var entry = _streamStore.Get(replacement.Id.ToString())!;
+        entry.IsCompleted.Should().BeTrue();
+        entry.GetSnapshotSince(0).Events.Should().ContainSingle(e =>
+            e.Type == EventTypes.RunFailed
+            && System.Text.Json.JsonSerializer.Serialize(e.Payload)
+                .Contains("mandatory_context_budget_exceeded", StringComparison.Ordinal));
     }
 
     private RunOrchestrator BuildOrchestrator(WorktreeManager manager) => new(
