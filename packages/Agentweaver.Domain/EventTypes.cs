@@ -58,6 +58,13 @@ public static class EventTypes
     public const string AgentMessage      = "agent.message";
     public const string AgentMessageDelta = "agent.message.delta";
     /// <summary>
+    /// Durable metadata-only evidence describing the system-prompt composition used for a turn.
+    /// The payload contains the bounded <see cref="AgentRuntimeContext"/> measurements plus
+    /// callableMemoryGuidanceIncluded; it never contains prompt text, hashes, tool details, task
+    /// text, skill or charter content, credentials, PII, or extension fields.
+    /// </summary>
+    public const string AgentSystemPrompt = "agent.system_prompt";
+    /// <summary>
     /// Bounded, redacted context-composition measurements for a turn. Payload contains stable run
     /// and project correlation, scalar section sizes, a fixed skill-delivery mode, and a derived
     /// token estimate; it deliberately excludes prompt/task text, tool declarations, and secrets.

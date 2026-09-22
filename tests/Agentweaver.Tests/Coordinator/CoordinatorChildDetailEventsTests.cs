@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
@@ -103,6 +104,20 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
         var entry = streamStore.Create(childRunId, CoordinatorWebApplicationFactory.OwnerUser);
         entry.RecordNext(EventTypes.RunStarted, new { runId = childRunId });
         entry.RecordNext("agent.task", new { task = "legacy prompt text must not replay" });
+        entry.RecordNext(EventTypes.AgentSystemPrompt, new AgentSystemPromptMetadata(
+            "copilot",
+            childRunId,
+            null,
+            100,
+            20,
+            10,
+            4,
+            30,
+            40,
+            "inline",
+            204,
+            51,
+            true));
         entry.RecordNext(EventTypes.AgentMessage, new { messageId = "m1", content = "child agent did the subtask" });
         entry.RecordNext(EventTypes.ToolResult, new { callId = "tool-1", durationMs = 12.5 });
         entry.RecordNext(EventTypes.RunAssembleReady, new { runId = childRunId, parentRunId, subtaskId = "3" });
@@ -127,10 +142,81 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
         var legacyTask = events.Single(e => e.Type == "agent.task");
         legacyTask.Payload.TryGetProperty("task", out _).Should().BeFalse(
             "historical prompt/task payloads remain compatible as events but are redacted at the API boundary");
+        var systemPrompt = events.Single(e => e.Type == EventTypes.AgentSystemPrompt);
+        systemPrompt.Payload.GetProperty("callableMemoryGuidanceIncluded").GetBoolean().Should().BeTrue();
+        systemPrompt.Payload.EnumerateObject().Select(property => property.Name).Should().BeEquivalentTo(
+            "provider", "runId", "baseCharacters", "runContextCharacters", "skillCharacters",
+            "separatorCharacters", "taskCharacters", "toolDeclarationCharacters", "skillDeliveryMode",
+            "totalCharacters", "estimatedTokens", "callableMemoryGuidanceIncluded", "timestamp_utc");
         events.Select(e => e.Type).Should().NotContain(EventTypes.RaiVerdict,
             "child runs no longer launch a per-child RAI sub-stream");
         events.Select(e => e.Type).Should().Contain(EventTypes.RunAssembleReady,
             "the persisted log must include the child's assemble-ready terminal");
+    }
+
+    [Fact]
+    public async Task GetEvents_SystemPromptProjection_OmitsLegacyCanariesAndMalformedFields()
+    {
+        const string canary = "raw-prompt-secret-canary";
+        var childRunId = await InsertChildRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunId.New().ToString(), "4");
+        var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
+        var workflowFactory = _factory.Services.GetRequiredService<RunWorkflowFactory>();
+        var entry = streamStore.Create(childRunId, CoordinatorWebApplicationFactory.OwnerUser);
+        entry.RecordNext(EventTypes.AgentSystemPrompt, new
+        {
+            provider = "copilot",
+            runId = childRunId,
+            projectId = Guid.NewGuid().ToString("D"),
+            baseCharacters = 100,
+            runContextCharacters = 20,
+            skillCharacters = 0,
+            separatorCharacters = 2,
+            taskCharacters = 10,
+            toolDeclarationCharacters = 30,
+            skillDeliveryMode = "none",
+            totalCharacters = 162,
+            estimatedTokens = 41,
+            callableMemoryGuidanceIncluded = false,
+            prompt = canary,
+            content = canary,
+            promptHash = canary,
+            tools = new[] { canary },
+            task = canary,
+            skills = canary,
+            charter = canary,
+            credential = canary,
+            email = $"person@{canary}.example",
+            durationMs = 1499,
+            duration_ms = "1499",
+            unknown = new { nested = canary },
+        });
+        entry.RecordNext(EventTypes.AgentSystemPrompt, new
+        {
+            provider = "copilot",
+            runId = childRunId,
+            baseCharacters = -1,
+            runContextCharacters = "20",
+            callableMemoryGuidanceIncluded = "false",
+            prompt = canary,
+        });
+        entry.RecordNext(EventTypes.AgentSystemPrompt, new { prompt = canary });
+        streamStore.Complete(childRunId);
+        await workflowFactory.PersistRunEventsAsync(childRunId);
+
+        var response = await _owner.GetAsync($"/api/runs/{childRunId}/events");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var events = await response.Content.ReadFromJsonAsync<List<EventDto>>();
+        var prompts = events!.Where(e => e.Type == EventTypes.AgentSystemPrompt).ToList();
+
+        prompts.Should().HaveCount(3);
+        prompts.Should().OnlyContain(prompt => prompt.DurationMs == null);
+        prompts[0].Payload.GetProperty("callableMemoryGuidanceIncluded").GetBoolean().Should().BeFalse();
+        prompts[0].Payload.GetRawText().Should().NotContain(canary);
+        prompts[1].Payload.EnumerateObject().Select(property => property.Name).Should().BeEquivalentTo(
+            "provider", "runId", "timestamp_utc");
+        prompts[2].Payload.EnumerateObject().Select(property => property.Name).Should().Equal("timestamp_utc");
+        JsonSerializer.Serialize(prompts).Should().NotContain(canary);
     }
 
     [Fact]

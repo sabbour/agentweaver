@@ -1,5 +1,10 @@
 namespace Agentweaver.AgentRuntime;
 
+internal sealed record AgentPromptComposition(
+    string Content,
+    int BaseCharacters,
+    bool CallableMemoryGuidanceIncluded);
+
 /// <summary>
 /// Minimal base system prompt injected for every agent run.
 /// Covers only the universal runtime contract — report_intent/report_outcome tooling,
@@ -87,31 +92,32 @@ internal static class AgentBasePrompt
         Do not install tools that are already present — check the manifest first.
         """;
 
-    internal static string Build(IEnumerable<string> registeredToolNames)
+    internal static AgentPromptComposition Compose(
+        string? systemPromptContext,
+        IEnumerable<string> registeredToolNames)
     {
         var memoryTools = registeredToolNames
             .Where(AgentweaverApiTools.ToolNames.Contains)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
-        if (memoryTools.Length == 0)
-            return Base;
+        var callableMemoryGuidanceIncluded = memoryTools.Length > 0;
+        var basePrompt = callableMemoryGuidanceIncluded
+            ? Base + $$"""
 
-        return Base + $$"""
+            ## Project memory and coordination
+            The callable project-memory tools for this turn are: {{string.Join(", ", memoryTools)}}.
+            Use them only for significant reusable facts or cross-cutting decisions, not routine
+            progress. Consult available project context before making a notable implementation choice,
+            and follow each tool declaration for its required arguments and scope.
+            """
+            : Base;
 
-        ## Project memory and coordination
-        The callable project-memory tools for this turn are: {{string.Join(", ", memoryTools)}}.
-        Use them only for significant reusable facts or cross-cutting decisions, not routine
-        progress. Consult available project context before making a notable implementation choice,
-        and follow each tool declaration for its required arguments and scope.
-        """;
-    }
-
-    internal static string Compose(string? systemPromptContext, IEnumerable<string> registeredToolNames)
-    {
-        var prompt = Build(registeredToolNames);
-        return string.IsNullOrEmpty(systemPromptContext)
-            ? prompt
-            : prompt + "\n\n" + systemPromptContext;
+        return new AgentPromptComposition(
+            string.IsNullOrEmpty(systemPromptContext)
+                ? basePrompt
+                : basePrompt + "\n\n" + systemPromptContext,
+            basePrompt.Length,
+            callableMemoryGuidanceIncluded);
     }
 }

@@ -18,6 +18,40 @@ internal sealed record AgentRuntimeContextMetrics(
     int TotalCharacters,
     int EstimatedTokens);
 
+internal sealed record AgentSystemPromptMetadata(
+    string Provider,
+    string RunId,
+    string? ProjectId,
+    int BaseCharacters,
+    int RunContextCharacters,
+    int SkillCharacters,
+    int SeparatorCharacters,
+    int TaskCharacters,
+    int ToolDeclarationCharacters,
+    string SkillDeliveryMode,
+    int TotalCharacters,
+    int EstimatedTokens,
+    bool CallableMemoryGuidanceIncluded)
+{
+    internal static AgentSystemPromptMetadata From(
+        AgentRuntimeContextMetrics metrics,
+        bool callableMemoryGuidanceIncluded) =>
+        new(
+            metrics.Provider,
+            metrics.RunId,
+            metrics.ProjectId,
+            metrics.BaseCharacters,
+            metrics.RunContextCharacters,
+            metrics.SkillCharacters,
+            metrics.SeparatorCharacters,
+            metrics.TaskCharacters,
+            metrics.ToolDeclarationCharacters,
+            metrics.SkillDeliveryMode,
+            metrics.TotalCharacters,
+            metrics.EstimatedTokens,
+            callableMemoryGuidanceIncluded);
+}
+
 internal static class AgentRuntimeContextMetricsComposer
 {
     private const string ContextSeparator = "\n\n";
@@ -29,24 +63,23 @@ internal static class AgentRuntimeContextMetricsComposer
         string? projectId,
         string task,
         string? systemPromptContext,
-        IReadOnlyList<string> registeredToolNames,
+        AgentPromptComposition promptComposition,
         IReadOnlyList<AIFunctionDeclaration> toolDeclarations)
     {
-        var baseCharacters = AgentBasePrompt.Build(registeredToolNames).Length;
         var (runContextCharacters, skillCharacters, skillSeparatorCharacters, skillDeliveryMode) =
             MeasureRunContext(systemPromptContext);
         var contextSeparatorCharacters = string.IsNullOrEmpty(systemPromptContext) ? 0 : ContextSeparator.Length;
         var taskCharacters = task.Length;
         var toolDeclarationCharacters = JsonSerializer.Serialize(toolDeclarations).Length;
         var separatorCharacters = contextSeparatorCharacters + skillSeparatorCharacters;
-        var totalCharacters = baseCharacters + runContextCharacters + skillCharacters + separatorCharacters +
+        var totalCharacters = promptComposition.BaseCharacters + runContextCharacters + skillCharacters + separatorCharacters +
                               taskCharacters + toolDeclarationCharacters;
 
         return new AgentRuntimeContextMetrics(
             provider,
             runId,
             projectId,
-            baseCharacters,
+            promptComposition.BaseCharacters,
             runContextCharacters,
             skillCharacters,
             separatorCharacters,

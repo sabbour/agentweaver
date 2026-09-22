@@ -45,8 +45,11 @@ The **Events** tab lists persisted run events using their actual sequence number
 newly persisted event has a server-side UTC append timestamp. The API projects that as
 `timestamp_utc` at the event level (and reports event status and an existing duration when
 available). For legacy rows with no trustworthy timestamp, the fields remain absent instead of
-being synthesized at read time. Historical `agent.system_prompt` and `agent.task` payloads are
-also withheld while their event sequence/type/time remain visible. Expand a payload only when its
+being synthesized at read time. Historical `agent.task` payloads are withheld while their event sequence/type/time remain visible.
+`agent.system_prompt` exposes only strict composition metadata: bounded character counts, correlation,
+the fixed skill-delivery mode, a planning estimate, and whether callable-memory guidance was included.
+Raw prompts and hashes, tool/task/skill/charter content, credentials, PII, malformed values, and
+unknown fields are omitted for both current and historical rows. Expand a payload only when its
 recorded fields are needed.
 
 For an **Execute Tool** span, the detail panel also shows the tool's **Input** and **Output**. These

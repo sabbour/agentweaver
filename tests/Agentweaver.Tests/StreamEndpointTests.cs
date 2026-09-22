@@ -129,6 +129,55 @@ public sealed class StreamEndpointTests : IClassFixture<AgentweaverWebApplicatio
     }
 
     [Fact]
+    public async Task PersistedSystemPromptReplay_ProjectsMetadataWithoutRawPromptCanary()
+    {
+        const string canary = "historical-system-prompt-canary";
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var eventStream = _factory.Services.GetRequiredService<IRunEventStream>();
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = Path.GetTempPath(),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "replay prompt metadata",
+            SubmittingUser = AgentweaverWebApplicationFactory.TestUser,
+            Status = RunStatus.Completed,
+            StartedAt = DateTimeOffset.UtcNow,
+            EndedAt = DateTimeOffset.UtcNow,
+        });
+        await eventStream.AppendAsync(runId.ToString(), new RunEvent(0, EventTypes.AgentSystemPrompt, new
+        {
+            provider = "copilot",
+            runId = runId.ToString(),
+            baseCharacters = 100,
+            runContextCharacters = 0,
+            skillCharacters = 0,
+            separatorCharacters = 0,
+            taskCharacters = 10,
+            toolDeclarationCharacters = 20,
+            skillDeliveryMode = "none",
+            totalCharacters = 130,
+            estimatedTokens = 33,
+            callableMemoryGuidanceIncluded = false,
+            prompt = canary,
+            unknown = canary,
+        }));
+        await eventStream.AppendAsync(runId.ToString(),
+            new RunEvent(0, EventTypes.RunCompleted, new { result = "done" }));
+
+        var response = await _ownerClient.GetAsync($"/api/runs/{runId}/stream");
+        var body = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().Contain(EventTypes.AgentSystemPrompt)
+            .And.Contain("\"callableMemoryGuidanceIncluded\":false")
+            .And.NotContain(canary)
+            .And.NotContain("\"prompt\"");
+    }
+
+    [Fact]
     public async Task NonexistentRun_Returns404()
     {
         var response = await _ownerClient.GetAsync($"/api/runs/{Guid.NewGuid()}/stream");

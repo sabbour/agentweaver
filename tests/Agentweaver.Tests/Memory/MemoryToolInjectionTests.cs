@@ -137,8 +137,8 @@ public sealed class MemoryToolInjectionTests : IDisposable
 
     private static string ComposeFinalPrompt(string path, string? context, IEnumerable<AIFunction> tools) =>
         path == "CopilotAIAgent"
-            ? CopilotAIAgent.ComposeFinalPrompt(context, tools.Select(tool => tool.Name))
-            : GitHubCopilotAgentRunner.ComposeFinalPrompt(context, tools.Select(tool => tool.Name));
+            ? CopilotAIAgent.ComposePrompt(context, tools.Select(tool => tool.Name)).Content
+            : GitHubCopilotAgentRunner.ComposePrompt(context, tools.Select(tool => tool.Name)).Content;
 
     private static string ContextFor(string executionPath) =>
         executionPath switch
