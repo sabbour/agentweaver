@@ -5,54 +5,40 @@ namespace Agentweaver.Tests.Coordinator;
 
 /// <summary>
 /// Unit tests for <see cref="RunOrchestrator.ComposeChildSystemPrompt"/> (Feature 008 Defect C). A
-/// coordinator child must receive a LEAN prompt: its charter EXACTLY ONCE plus an explicit
-/// working-directory sandbox boundary, and it must ALWAYS get the boundary (never null) so it does
-/// not try to write artifacts outside its worktree (the stall that hung child 6694939a).
+/// coordinator child must receive a LEAN prompt: its charter EXACTLY ONCE and a child-only
+/// deliverable-capture rule. The universal runtime prompt supplies the one workspace boundary.
 /// </summary>
 public sealed class ComposeChildSystemPromptTests
 {
     private const string Charter = "# Morpheus Charter\nYou are the backend dev. Be surgical.";
 
     [Fact]
-    public void WithCharter_IncludesCharterExactlyOnce_AndBoundary()
+    public void WithCharter_IncludesCharterExactlyOnce_AndDeliverableCapture()
     {
         var prompt = RunOrchestrator.ComposeChildSystemPrompt(Charter);
 
         prompt.Should().NotBeNull();
         CountOccurrences(prompt, Charter).Should().Be(1, "the child charter must appear exactly once");
 
-        // The sandbox boundary instruction must be present and explicit about the worktree limits.
+        prompt.Should().ContainEquivalentOf("deliverable");
         prompt.Should().ContainEquivalentOf("working directory");
-        prompt.Should().ContainEquivalentOf("session-state");
-        prompt.Should().ContainEquivalentOf(".copilot");
-        prompt.Should().ContainEquivalentOf("temp");
-        prompt.Should().ContainEquivalentOf("AGENTWEAVER_SCRATCH",
-            "the boundary must surface the dedicated out-of-worktree scratch location");
-        prompt.Should().ContainEquivalentOf("non-deliverable",
-            "the boundary must reserve scratch for ephemeral working files");
-        prompt.Should().ContainEquivalentOf("adapt",
-            "a rejected write must instruct the child to adapt to the worktree-or-scratch split");
+        prompt.Should().NotContain("## Working-directory sandbox boundary");
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void WithoutCharter_ReturnsBoundaryAndDeliverableCapture_NeverNull(string? charter)
+    public void WithoutCharter_ReturnsDeliverableCapture_NeverNull(string? charter)
     {
         var prompt = RunOrchestrator.ComposeChildSystemPrompt(charter);
 
-        prompt.Should().NotBeNull("a child must ALWAYS receive the sandbox boundary");
+        prompt.Should().NotBeNull("a child must ALWAYS receive deliverable capture");
         prompt.Should().NotBeEmpty();
         prompt.Should().ContainEquivalentOf("working directory");
-        prompt.Should().ContainEquivalentOf("session-state");
-        // Without a charter there is a boundary + deliverable-capture section (separator between them).
-        prompt.Should().Contain("---",
-            "boundary and deliverable-capture sections are always separated by a divider");
         prompt.Should().ContainEquivalentOf("deliverable",
-            "the deliverable capture instruction must always be present");
+            "the child deliverable-capture instruction must always be present");
         prompt.Should().ContainEquivalentOf("committed",
             "the prompt must explain that files are committed when the turn ends");
-        prompt.Should().ContainEquivalentOf("AGENTWEAVER_SCRATCH");
     }
 
     [Fact]
@@ -69,17 +55,17 @@ public sealed class ComposeChildSystemPromptTests
             "active decisions must be injected into the child worker prompt");
         prompt.Should().Contain("All persistence uses Postgres.");
 
-        // Order: charter, then decisions, then the sandbox boundary.
+        // Order: charter, then decisions, then child deliverable capture.
         prompt.IndexOf(Charter, StringComparison.Ordinal)
             .Should().BeLessThan(prompt.IndexOf("## Boundaries and Decisions", StringComparison.Ordinal));
         prompt.IndexOf("## Boundaries and Decisions", StringComparison.Ordinal)
-            .Should().BeLessThan(prompt.IndexOf("Working-directory sandbox boundary", StringComparison.Ordinal));
+            .Should().BeLessThan(prompt.IndexOf("## Deliverable files", StringComparison.Ordinal));
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public void WithoutDecisions_OmitsDecisionsBlock_StillHasBoundary(string? decisions)
+    public void WithoutDecisions_OmitsDecisionsBlock_StillHasDeliverableCapture(string? decisions)
     {
         var prompt = RunOrchestrator.ComposeChildSystemPrompt(Charter, decisions);
 
