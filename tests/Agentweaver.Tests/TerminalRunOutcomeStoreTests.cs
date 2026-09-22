@@ -246,13 +246,44 @@ public sealed class TerminalRunOutcomeStoreTests
         (await store.TrySetTerminalOutcomeAsync(run, outcome, "workflow_start_failed")).Should().BeTrue();
 
         var stream = new RecordingEventStream();
-        await stream.AppendAsync(run.ToString(), outcome.ToRunEvent());
+        await stream.AppendTerminalOutcomeAsync(run.ToString(), outcome);
         var restartedProjector = new TerminalOutcomeProjector(
             store, stream, NullLogger<TerminalOutcomeProjector>.Instance);
 
         await restartedProjector.ProjectPendingAsync();
 
         stream.Events.Should().ContainSingle().Which.Payload.Should().BeEquivalentTo(outcome.Payload);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Projector_ReopenedSameStatus_AppendsTheCurrentGenerationWinner()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var first = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "retriable_failure" },
+            DateTimeOffset.UtcNow, 1);
+        (await store.TrySetTerminalOutcomeAsync(run, first, "retriable_failure")).Should().BeTrue();
+
+        var stream = new RecordingEventStream();
+        await stream.AppendTerminalOutcomeAsync(run.ToString(), first);
+        await store.MarkTerminalOutcomeProjectedAsync(run, 1);
+        (await store.TryReopenTerminalToInProgressAsync(run)).Should().BeTrue();
+
+        var current = (await store.GetAsync(run))!;
+        var second = first with
+        {
+            OccurredAt = DateTimeOffset.UtcNow,
+            ExpectedLifecycleGeneration = current.LifecycleGeneration,
+        };
+        (await store.TrySetTerminalOutcomeAsync(run, second, "retriable_failure")).Should().BeTrue();
+
+        await new TerminalOutcomeProjector(
+            store, stream, NullLogger<TerminalOutcomeProjector>.Instance).ProjectPendingAsync();
+
+        stream.Events.Where(evt => evt.Type == EventTypes.RunFailed).Should().HaveCount(2);
         (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
     }
 
@@ -453,6 +484,7 @@ public sealed class TerminalRunOutcomeStoreTests
         public bool ThrowAfterAppend { get; set; }
         public TaskCompletionSource? TerminalAppendStarted { get; init; }
         public TaskCompletionSource? ContinueTerminalAppend { get; init; }
+        private readonly Dictionary<(string RunId, int Generation), RunEvent> _terminalOutcomes = [];
 
         public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
         {
@@ -471,15 +503,16 @@ public sealed class TerminalRunOutcomeStoreTests
             TerminalAppendStarted?.TrySetResult();
             if (ContinueTerminalAppend is not null)
                 await ContinueTerminalAppend.Task.WaitAsync(ct);
-            if (!Events.Any(evt => evt.Type == outcome.EventType
-                && System.Text.Json.JsonSerializer.Serialize(evt.Payload) == outcome.Payload.GetRawText()))
-            {
-                var persisted = outcome.ToRunEvent(Events.Count + 1);
-                Events.Add(persisted);
-                if (ThrowAfterAppend)
-                    throw new InvalidOperationException("simulated failure after durable append");
-            }
-            return Events.Last();
+            var key = (runId, outcome.ExpectedLifecycleGeneration);
+            if (_terminalOutcomes.TryGetValue(key, out var existing))
+                return existing;
+
+            var persisted = outcome.ToRunEvent(Events.Count + 1);
+            Events.Add(persisted);
+            _terminalOutcomes.Add(key, persisted);
+            if (ThrowAfterAppend)
+                throw new InvalidOperationException("simulated failure after durable append");
+            return persisted;
         }
 
         public async IAsyncEnumerable<RunEvent> SubscribeAsync(

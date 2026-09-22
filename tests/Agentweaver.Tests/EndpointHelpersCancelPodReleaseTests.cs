@@ -47,10 +47,11 @@ public sealed class EndpointHelpersCancelPodReleaseTests
         var streamStore = new RunStreamStore();
         streamStore.Create(runId.ToString(), "alice");
         var registry = new RunWorkflowRegistry();
+        var runStore = new NoOpRunStore();
 
         await EndpointHelpers.CancelRunWorkAsync(
             run,
-            new NoOpRunStore(),
+            runStore,
             streamStore,
             registry,
             new NoOpWorktreeOperations(),
@@ -61,6 +62,10 @@ public sealed class EndpointHelpersCancelPodReleaseTests
 
         lifecycle.ReleasedRunIds.Should().Contain(runId.ToString(),
             "cancelling a run (via DELETE or /cancel) must reliably tear down the remote AgentHost pod, not just the local token");
+        runStore.TerminalOutcome.Should().Match<TerminalRunOutcome>(outcome =>
+            outcome.Status == RunStatus.Failed
+            && outcome.EventType == EventTypes.RunFailed
+            && outcome.Payload.GetProperty("reason").GetString() == "abandoned");
     }
 
     [Fact]
@@ -149,7 +154,7 @@ public sealed class EndpointHelpersCancelPodReleaseTests
 
         public Task<bool> TrySetTerminalStatusAsync(
             RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
-            => Task.FromResult(true);
+            => throw new NotSupportedException("Cancellation must persist a typed terminal outcome.");
 
         public Task<bool> TrySetTerminalOutcomeAsync(
             RunId runId, TerminalRunOutcome outcome, string? result, CancellationToken ct = default)

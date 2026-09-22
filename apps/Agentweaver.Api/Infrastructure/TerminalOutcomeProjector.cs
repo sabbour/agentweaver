@@ -66,13 +66,9 @@ public sealed class TerminalOutcomeProjector(
             return;
         }
 
-        var historicalTerminal = (await eventStream
-                .GetPersistedEventsAsync(pending.RunId.ToString(), 0, ct)
-                .ConfigureAwait(false))
-            .LastOrDefault(evt => IsCompatible(pending.Outcome.Status, evt.Type));
-        var persisted = historicalTerminal
-            ?? await eventStream.AppendTerminalOutcomeAsync(pending.RunId.ToString(), pending.Outcome, ct)
-                .ConfigureAwait(false);
+        var persisted = await eventStream
+            .AppendTerminalOutcomeAsync(pending.RunId.ToString(), pending.Outcome, ct)
+            .ConfigureAwait(false);
 
         current = await runStore.GetAsync(pending.RunId, ct).ConfigureAwait(false);
         if (current is null || current.LifecycleGeneration != pending.LifecycleGeneration)

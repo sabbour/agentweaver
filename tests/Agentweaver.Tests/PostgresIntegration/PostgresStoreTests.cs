@@ -377,23 +377,22 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     }
 
     [PostgresFact]
-    public async Task TrySetTerminalStatus_OnMergingRun_Succeeds()
+    public async Task TrySetTerminalStatus_OnMergingRun_IsRejected()
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
         await store.TryStartMergingAsync(runId);
 
-        var recovered = await store.TrySetTerminalStatusAsync(
+        var act = () => store.TrySetTerminalStatusAsync(
             runId, RunStatus.Failed, DateTimeOffset.UtcNow, "send_response_failed");
-        recovered.Should().BeTrue("TrySetTerminalStatus must succeed on a non-terminal (Merging) run");
+        await act.Should().ThrowAsync<NotSupportedException>();
 
         var run = await store.GetAsync(runId);
-        run!.Status.Should().Be(RunStatus.Failed);
-        run.Result.Should().Be("send_response_failed");
+        run!.Status.Should().Be(RunStatus.Merging);
     }
 
     [PostgresFact]
-    public async Task TrySetTerminalStatus_OnAlreadyTerminalRun_ReturnsFalse()
+    public async Task TrySetTerminalStatus_OnAlreadyTerminalRun_IsRejected()
     {
         var store = new EfRunStore(pg.Factory);
         var runId = RunId.New();
@@ -411,10 +410,9 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         };
         await store.InsertAsync(run);
 
-        // Attempt to transition an already-terminal run — should affect 0 rows (CAS guard)
-        var result = await store.TrySetTerminalStatusAsync(
+        var act = () => store.TrySetTerminalStatusAsync(
             runId, RunStatus.Failed, DateTimeOffset.UtcNow, "should-not-overwrite");
-        result.Should().BeFalse("CAS must reject a transition on an already-terminal run");
+        await act.Should().ThrowAsync<NotSupportedException>();
 
         var after = await store.GetAsync(runId);
         after!.Status.Should().Be(RunStatus.Merged, "terminal status must not be overwritten");

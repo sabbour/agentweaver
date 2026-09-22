@@ -492,8 +492,6 @@ app.MapGet("/api/runs/{id}/stream", async (
                 {
                     await EndpointHelpers.WriteSseEventAsync(httpContext.Response, evt, ct);
                     replayedAny = true;
-                    if (IsCanonicalTerminalEventType(evt.Type))
-                        break;
                 }
             }
             catch (OperationCanceledException) { /* client disconnected */ }
@@ -3554,14 +3552,6 @@ private static bool IsTerminalApprovalState(string state) =>
     string.Equals(state, "approved", StringComparison.OrdinalIgnoreCase)
     || string.Equals(state, "denied", StringComparison.OrdinalIgnoreCase)
     || string.Equals(state, "expired", StringComparison.OrdinalIgnoreCase);
-
-private static bool IsCanonicalTerminalEventType(string eventType) => eventType is
-    EventTypes.RunCompleted or
-    EventTypes.RunFailed or
-    EventTypes.MergeCompleted or
-    EventTypes.ReviewDeclined or
-    EventTypes.MergeFailed or
-    EventTypes.RunAssembleReady;
 
 private static void EmitAgentHostApprovalResolved(
     RunStreamStore streamStore,
