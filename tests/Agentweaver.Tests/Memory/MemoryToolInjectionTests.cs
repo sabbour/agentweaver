@@ -85,12 +85,16 @@ public sealed class MemoryToolInjectionTests : IDisposable
     }
 
     [Theory]
-    [InlineData("CopilotAIAgent")]
-    [InlineData("GitHubCopilotAgentRunner")]
-    public void FinalPrompt_WithoutMemoryTools_OmitsMemorySection(string path)
+    [InlineData("direct", "CopilotAIAgent")]
+    [InlineData("child", "CopilotAIAgent")]
+    [InlineData("revision", "CopilotAIAgent")]
+    [InlineData("remote", "GitHubCopilotAgentRunner")]
+    public void FinalPrompt_WithoutMemoryTools_OmitsMemorySection(
+        string executionPath,
+        string runner)
     {
         var tools = GitHubCopilotAgentRunner.BuildSessionConfigTools(BuildContext());
-        var prompt = ComposeFinalPrompt(path, "child context", tools);
+        var prompt = ComposeFinalPrompt(runner, ContextFor(executionPath), tools);
 
         prompt.Should().NotContain("## Project memory and coordination");
         prompt.Should().NotContainAny(AgentweaverApiTools.ToolNames);
@@ -98,36 +102,23 @@ public sealed class MemoryToolInjectionTests : IDisposable
     }
 
     [Theory]
-    [InlineData("direct")]
-    [InlineData("child")]
-    [InlineData("revision")]
-    [InlineData("remote")]
-    public void CopilotFinalPrompt_WithCompleteMemoryTools_NamesOnlyRegisteredTools_AndOneBoundary(string executionPath)
+    [InlineData("direct", "CopilotAIAgent")]
+    [InlineData("child", "CopilotAIAgent")]
+    [InlineData("revision", "CopilotAIAgent")]
+    [InlineData("remote", "GitHubCopilotAgentRunner")]
+    public void FinalPrompt_WithCompleteMemoryTools_NamesOnlyRegisteredTools_AndOneBoundary(
+        string executionPath,
+        string runner)
     {
         var tools = CopilotAIAgent.BuildSessionConfigTools(
             BuildContext(), "project-1239", "Morpheus", "http://127.0.0.1:5000", "test-key");
-        var context = executionPath == "child"
-            ? RunOrchestrator.ComposeChildSystemPrompt("Charter")
-            : "Charter";
-        var prompt = CopilotAIAgent.ComposeFinalPrompt(context, tools.Select(tool => tool.Name));
+        var prompt = ComposeFinalPrompt(runner, ContextFor(executionPath), tools);
 
         prompt.Should().Contain("## Project memory and coordination");
         AssertMemoryNamesMatchCallableTools(prompt, tools);
         CountOccurrences(prompt, "WORKSPACE BOUNDARY").Should().Be(1);
-        if (executionPath == "child")
+        if (executionPath is "child" or "revision")
             prompt.Should().Contain("## Deliverable files");
-    }
-
-    [Fact]
-    public void GitHubCopilotRunnerFinalPrompt_WithCompleteMemoryTools_NamesOnlyRegisteredTools()
-    {
-        var tools = CopilotAIAgent.BuildSessionConfigTools(
-            BuildContext(), "project-1239", "Morpheus", "http://127.0.0.1:5000", "test-key");
-        var prompt = GitHubCopilotAgentRunner.ComposeFinalPrompt("Charter", tools.Select(tool => tool.Name));
-
-        prompt.Should().Contain("## Project memory and coordination");
-        AssertMemoryNamesMatchCallableTools(prompt, tools);
-        CountOccurrences(prompt, "WORKSPACE BOUNDARY").Should().Be(1);
     }
 
     [Theory]
@@ -148,6 +139,16 @@ public sealed class MemoryToolInjectionTests : IDisposable
         path == "CopilotAIAgent"
             ? CopilotAIAgent.ComposeFinalPrompt(context, tools.Select(tool => tool.Name))
             : GitHubCopilotAgentRunner.ComposeFinalPrompt(context, tools.Select(tool => tool.Name));
+
+    private static string ContextFor(string executionPath) =>
+        executionPath switch
+        {
+            "child" => RunOrchestrator.ComposeChildSystemPrompt("Child charter"),
+            "revision" => RunOrchestrator.ComposeChildSystemPrompt(
+                "Child charter",
+                "## Revision guidance\nAddress the review feedback before reporting completion."),
+            _ => "Direct or remote charter",
+        };
 
     private static void AssertMemoryNamesMatchCallableTools(string prompt, IEnumerable<AIFunction> tools)
     {
