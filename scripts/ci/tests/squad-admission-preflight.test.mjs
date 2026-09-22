@@ -24,6 +24,35 @@ test('blocks unknown policies and incomplete required findings', () => {
   assert.throws(() => validateAdmissionPreflight(ledger(headSha, [{ id: 'F-1', policy: 'required', transitions: [] }]), { ...expected, headSha }), /incomplete/u);
 });
 
+test('blocks stale evidence in every required-finding lifecycle transition', () => {
+  const headSha = 'a'.repeat(40);
+  const staleHeadSha = 'b'.repeat(40);
+  const transitions = (remediation = 'corrected') => [
+    event('recorded', headSha),
+    event('owned', headSha, { owner: 'neo', action: 'fix validator' }),
+    event(remediation, headSha, remediation === 'waived' ? { rationale: 'accepted risk' } : {}),
+    event('revalidated', headSha, { validation: 'node --test focused suite' }),
+    event('resolved', headSha),
+  ];
+
+  for (const [index, state, remediation] of [
+    [0, 'recorded'],
+    [1, 'owned'],
+    [2, 'corrected', 'corrected'],
+    [2, 'waived', 'waived'],
+    [3, 'revalidated'],
+    [4, 'resolved'],
+  ]) {
+    const findingTransitions = transitions(remediation);
+    findingTransitions[index] = { ...findingTransitions[index], headSha: staleHeadSha };
+    assert.throws(
+      () => validateAdmissionPreflight(ledger(headSha, [{ id: `F-${state}`, policy: 'required', transitions: findingTransitions }]), { ...expected, headSha }),
+      new RegExp(`transitions\\[${index}\\]\\.headSha is stale`, 'u'),
+      `${state} evidence must match the live PR head`,
+    );
+  }
+});
+
 test('reads the declared external state directory and rejects stale ledger evidence', async () => {
   const headSha = 'a'.repeat(40);
   const result = await runAdmissionPreflight('sabbour/agentweaver', 1489, {
