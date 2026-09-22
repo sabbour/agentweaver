@@ -2015,6 +2015,16 @@ public sealed class CoordinatorRunService
         if (!changed)
             return;
 
+        if (entry.HasEventType(eventType))
+        {
+            var run = await _runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false);
+            if (run is not null)
+                await _runStore.MarkTerminalOutcomeProjectedAsync(
+                    run.Id, run.LifecycleGeneration, ct).ConfigureAwait(false);
+            _streamStore.Complete(runId);
+            return;
+        }
+
         if (_terminalOutcomeProjector is not null)
         {
             await _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);

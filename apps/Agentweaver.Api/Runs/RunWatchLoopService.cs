@@ -919,6 +919,16 @@ public sealed class RunWatchLoopService
         if (!changed)
             return;
 
+        if (entry.HasEventType(eventType))
+        {
+            var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+            if (run is not null)
+                await _runStore.MarkTerminalOutcomeProjectedAsync(
+                    run.Id, run.LifecycleGeneration, CancellationToken.None).ConfigureAwait(false);
+            _streamStore.Complete(runId);
+            return;
+        }
+
         if (_terminalOutcomeProjector is not null)
         {
             await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None, _streamStore).ConfigureAwait(false);

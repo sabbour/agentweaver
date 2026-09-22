@@ -78,7 +78,9 @@ public sealed class TerminalRunOutcomePostgresTests(PostgresFixture pg)
 
         var persisted = (await second.GetAsync(run))!;
         persisted.Status.Should().Be(RunStatus.AssembleReady);
-        var winner = (await second.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle().Subject;
+        var winner = (await second.GetUnprojectedTerminalOutcomesAsync())
+            .Where(outcome => outcome.RunId == run)
+            .Should().ContainSingle().Subject;
         winner.Outcome.EventType.Should().Be(EventTypes.RunAssembleReady);
     }
 

@@ -224,8 +224,9 @@ public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
             DbCommand command, CommandEventData eventData, InterceptionResult<int> result,
             CancellationToken cancellationToken = default)
         {
-            if (command.CommandText.Contains("UPDATE", StringComparison.OrdinalIgnoreCase)
-                && command.CommandText.Contains("runs", StringComparison.OrdinalIgnoreCase))
+            if (command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.OrdinalIgnoreCase)
+                || (command.CommandText.Contains("UPDATE", StringComparison.OrdinalIgnoreCase)
+                    && command.CommandText.Contains("runs", StringComparison.OrdinalIgnoreCase)))
                 Entered.TrySetResult();
             return ValueTask.FromResult(result);
         }
