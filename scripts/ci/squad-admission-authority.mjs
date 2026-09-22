@@ -88,7 +88,15 @@ export async function resolveAdmissionReviewPolicy({
     throw new Error('candidate SHA must be a 40-character SHA');
   }
   const run = dependencies.run ?? runGit;
-  const result = await run(['diff', '--name-status', '-z', '-M', '-C', `${baseRef}...${headSha}`], cwd);
+  const result = await run([
+    'diff',
+    '--name-status',
+    '-z',
+    '-M',
+    '-C',
+    '--find-copies-harder',
+    `${baseRef}...${headSha}`,
+  ], cwd);
   if (result.exitCode !== 0) throw new Error(`unable to resolve admission review policy: ${result.stderr.trim()}`);
   const tokens = result.stdout.split('\0').filter(Boolean);
   const changedFiles = [];

@@ -129,7 +129,15 @@ test('includes deleted and type-changed paths when resolving reviewer policy', a
     },
   });
   assert.equal(sources.length, 3);
-  assert.deepEqual(calls[0], ['diff', '--name-status', '-z', '-M', '-C', 'origin/dev...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']);
+  assert.deepEqual(calls[0], [
+    'diff',
+    '--name-status',
+    '-z',
+    '-M',
+    '-C',
+    '--find-copies-harder',
+    'origin/dev...aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  ]);
 });
 
 test('requires distinct reviewers for each configured reviewer class', () => {
