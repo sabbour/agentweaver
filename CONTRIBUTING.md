@@ -73,6 +73,8 @@ they are not Agentweaver sign-in providers.
      transition. Immediately before merge, Ralph repeats the preflight against the fresh
      live head, records the returned `<validated-sha>`, and merges manually with
      `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
+     Non-local backends add `--state-adapter <runtime-adapter-module>`; they never fall
+     back to repository or TEAM_ROOT filesystem access.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion

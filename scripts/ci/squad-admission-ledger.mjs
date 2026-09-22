@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
@@ -207,6 +207,18 @@ function localAdapter(teamRoot) {
   };
 }
 
+export async function loadStateAdapter(modulePath, context) {
+  const adapterPath = absolute(modulePath, 'state adapter module');
+  const imported = await import(pathToFileURL(resolve(adapterPath)).href);
+  const candidate = imported.createStateAdapter
+    ? await imported.createStateAdapter(context)
+    : imported.default;
+  if (!candidate || typeof candidate.read !== 'function') {
+    throw new Error('state adapter module must provide read(key)');
+  }
+  return candidate;
+}
+
 export async function materializeAdmissionLedger(input, {
   teamRoot,
   stateBackend,
@@ -237,12 +249,16 @@ function parseCli(args) {
 async function main() {
   const options = parseCli(process.argv.slice(2));
   if (!options['--input'] || !options['--team-root'] || !options['--state-backend']) {
-    throw new Error('usage: squad-admission-ledger.mjs --input <json-file> --team-root <absolute-path> --state-backend <backend>');
+    throw new Error('usage: squad-admission-ledger.mjs --input <json-file> --team-root <absolute-path> --state-backend <backend> [--state-adapter <module>]');
   }
   const input = JSON.parse(await readFile(options['--input'], 'utf8'));
+  const context = { teamRoot: options['--team-root'], stateBackend: options['--state-backend'] };
+  const stateAdapter = options['--state-adapter']
+    ? await loadStateAdapter(options['--state-adapter'], context)
+    : undefined;
   console.log(JSON.stringify(await materializeAdmissionLedger(input, {
-    teamRoot: options['--team-root'],
-    stateBackend: options['--state-backend'],
+    ...context,
+    stateAdapter,
   })));
 }
 

@@ -64,6 +64,8 @@ Examples:
    the coordinator-owned v2 findings ledger. Missing, legacy, incomplete, or provenance-
    mismatched evidence blocks admission. Ralph records the returned
    `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
+   passes `--state-adapter <runtime-adapter-module>` for non-local backends; no filesystem
+   fallback is permitted.
    and authoritative external Squad state are trusted operational components; GitHub is
    evidence and CI only, and repository code is not an adversarially immutable boundary.
    Confirm the PR reports `MERGED`, `mergedAt`, and merge SHA before dispatching
