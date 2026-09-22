@@ -218,7 +218,7 @@ public sealed class EfRunEventStream : IRunEventStream
         var terminalIndex = -1;
         for (var i = 0; i < events.Count; i++)
         {
-            if (TerminalTypes.Contains(events[i].Type))
+            if (RunEventTerminality.IsTerminal(events[i]))
                 terminalIndex = i;
         }
 

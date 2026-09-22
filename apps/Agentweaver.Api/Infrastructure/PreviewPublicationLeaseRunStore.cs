@@ -143,8 +143,32 @@ public sealed class PreviewPublicationLeaseRunStore(
         string? result,
         CancellationToken ct = default)
     {
-        await AwaitPreviewPublicationAsync(runId, ct).ConfigureAwait(false);
-        return await Inner.TrySetTerminalOutcomeAsync(runId, outcome, result, ct).ConfigureAwait(false);
+        return await TryAfterPreviewPublicationAsync(
+            runId, () => Inner.TrySetTerminalOutcomeAsync(runId, outcome, result, ct), ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryMutateTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunMutation mutation,
+        CancellationToken ct = default)
+    {
+        return await TryAfterPreviewPublicationAsync(
+            runId, () => Inner.TryMutateTerminalOutcomeAsync(runId, mutation, ct), ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> TryAfterPreviewPublicationAsync(
+        RunId runId, Func<Task<bool>> transition, CancellationToken ct)
+    {
+        while (true)
+        {
+            await AwaitPreviewPublicationAsync(runId, ct).ConfigureAwait(false);
+            if (await transition().ConfigureAwait(false))
+                return true;
+
+            var leaseUntil = await Inner.GetPreviewPublicationLeaseAsync(runId, ct).ConfigureAwait(false);
+            if (leaseUntil is null || leaseUntil <= _time.GetUtcNow())
+                return false;
+        }
     }
 
     public Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(

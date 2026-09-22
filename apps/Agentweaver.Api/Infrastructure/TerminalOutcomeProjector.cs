@@ -121,14 +121,35 @@ public sealed class TerminalOutcomeProjector(
     };
 }
 
-/// <summary>Runs legacy adoption and unprojected-outbox recovery during application startup.</summary>
-public sealed class TerminalOutcomeRecoveryService(TerminalOutcomeProjector projector) : IHostedService
+/// <summary>Continuously recovers durable terminal-outbox rows that could not be projected.</summary>
+public sealed class TerminalOutcomeRecoveryService(
+    TerminalOutcomeProjector projector,
+    ILogger<TerminalOutcomeRecoveryService> logger) : BackgroundService
 {
-    public async Task StartAsync(CancellationToken cancellationToken)
+    internal static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(5);
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await projector.AdoptCompatibleLegacyOutcomesAsync(cancellationToken).ConfigureAwait(false);
-        await projector.ProjectPendingAsync(cancellationToken).ConfigureAwait(false);
+        await RecoverAsync(stoppingToken).ConfigureAwait(false);
+        using var timer = new PeriodicTimer(RetryInterval);
+        while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+            await RecoverAsync(stoppingToken).ConfigureAwait(false);
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    private async Task RecoverAsync(CancellationToken ct)
+    {
+        try
+        {
+            await projector.AdoptCompatibleLegacyOutcomesAsync(ct).ConfigureAwait(false);
+            await projector.ProjectPendingAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            // Keep the committed winner unprojected so the next lease-coordinated scan retries it.
+            logger.LogWarning(ex, "Terminal outcome recovery scan failed; pending projections will retry");
+        }
+    }
 }

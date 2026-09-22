@@ -417,6 +417,8 @@ public sealed class SqliteRunStore : IRunStore
                        CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
              WHERE run_id = $runId
                AND lifecycle_generation = $generation
+               AND (preview_publication_lease_until IS NULL
+                    OR preview_publication_lease_until <= $now)
                AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
             """;
         update.Parameters.AddWithValue("$status", outcome.Status.ToApiString());
@@ -424,6 +426,7 @@ public sealed class SqliteRunStore : IRunStore
         update.Parameters.AddWithValue("$result", (object?)result ?? DBNull.Value);
         update.Parameters.AddWithValue("$runId", runId.ToString());
         update.Parameters.AddWithValue("$generation", outcome.ExpectedLifecycleGeneration);
+        update.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
         if (await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0)
             return false;
 
@@ -469,6 +472,8 @@ public sealed class SqliteRunStore : IRunStore
               diff=COALESCE($diff, diff)
              WHERE run_id=$runId AND lifecycle_generation=$generation
                AND ($expectedStatus IS NULL OR status=$expectedStatus)
+               AND (preview_publication_lease_until IS NULL
+                    OR preview_publication_lease_until <= $now)
                AND status NOT IN ('merged','declined','failed','completed','merge_failed','assemble_ready','cancelled');
             """;
         update.Parameters.AddWithValue("$status", mutation.Outcome.Status.ToApiString());
@@ -483,6 +488,7 @@ public sealed class SqliteRunStore : IRunStore
         update.Parameters.AddWithValue("$runId", runId.ToString());
         update.Parameters.AddWithValue("$generation", mutation.Outcome.ExpectedLifecycleGeneration);
         update.Parameters.AddWithValue("$expectedStatus", expected is null ? DBNull.Value : expected.Value.ToApiString());
+        update.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
         if (await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0) return false;
         await using var insert = connection.CreateCommand();
         insert.Transaction = tx;

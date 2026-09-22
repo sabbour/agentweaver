@@ -268,7 +268,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
                 continue;
             yield return evt;
             lastReplayed = evt.Sequence;
-            if (TerminalTypes.Contains(evt.Type))
+            if (RunEventTerminality.IsTerminal(evt))
                 yield break;
         }
     }
@@ -278,7 +278,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
         var terminalIndex = -1;
         for (var i = 0; i < events.Count; i++)
         {
-            if (TerminalTypes.Contains(events[i].Type))
+            if (RunEventTerminality.IsTerminal(events[i]))
                 terminalIndex = i;
         }
 

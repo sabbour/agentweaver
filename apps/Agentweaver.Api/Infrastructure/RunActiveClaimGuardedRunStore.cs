@@ -151,6 +151,15 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         return await inner.TrySetTerminalOutcomeAsync(runId, outcome, result, ct).ConfigureAwait(false);
     }
 
+    public async Task<bool> TryMutateTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunMutation mutation,
+        CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        return await inner.TryMutateTerminalOutcomeAsync(runId, mutation, ct).ConfigureAwait(false);
+    }
+
     public Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(
         CancellationToken ct = default) =>
         inner.GetUnprojectedTerminalOutcomesAsync(ct);

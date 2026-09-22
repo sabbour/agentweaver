@@ -1218,16 +1218,16 @@ public sealed class CoordinatorOrchestratorExecutor
             reason = NoTeamException.ErrorCode,
             message = NoTeamException.DefaultMessage,
         };
-        var entry = _streamStore.Get(runId);
-        entry?.RecordNext(EventTypes.RunFailed, failurePayload);
-
         using var scope = _scopeFactory.CreateScope();
         var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
-        if (RunId.TryParse(runId, out var id))
-            await runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                id, RunStatus.Failed, EventTypes.RunFailed, failurePayload, DateTimeOffset.UtcNow, NoTeamException.ErrorCode, ct)
-                .ConfigureAwait(false);
+        if (!RunId.TryParse(runId, out var id)
+            || !await runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                id, RunStatus.Failed, EventTypes.RunFailed, failurePayload, DateTimeOffset.UtcNow,
+                NoTeamException.ErrorCode, ct).ConfigureAwait(false))
+            return;
 
+        var entry = _streamStore.Get(runId);
+        entry?.RecordNext(EventTypes.RunFailed, failurePayload);
         _streamStore.Complete(runId);
     }
 

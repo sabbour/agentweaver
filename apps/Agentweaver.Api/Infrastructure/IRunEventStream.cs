@@ -1,4 +1,5 @@
 using Agentweaver.Domain;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Infrastructure;
 
@@ -106,9 +107,8 @@ public interface IRunEventStream
             DateTimeOffset? latest = null;
             foreach (var evt in events)
             {
-                if (evt.TimestampUtc == default)
-                    continue;
-                if (latest is null || evt.TimestampUtc > latest.Value)
+                if (evt.TimestampUtc != default
+                    && (latest is null || evt.TimestampUtc > latest.Value))
                     latest = evt.TimestampUtc;
             }
 
@@ -118,5 +118,32 @@ public interface IRunEventStream
         {
             return null;
         }
+    }
+}
+
+internal static class RunEventTerminality
+{
+    private static readonly HashSet<string> TerminalTypes = new(StringComparer.Ordinal)
+    {
+        EventTypes.RunCompleted,
+        EventTypes.RunFailed,
+        EventTypes.RunCancelled,
+        EventTypes.MergeCompleted,
+        EventTypes.MergeFailed,
+        EventTypes.ReviewDeclined,
+        EventTypes.RunAssembleReady,
+        EventTypes.CoordinatorAssemblyFailed,
+    };
+
+    public static bool IsTerminal(RunEvent evt)
+    {
+        if (!TerminalTypes.Contains(evt.Type))
+            return false;
+        if (evt.Type != EventTypes.RunCancelled)
+            return true;
+
+        var payload = JsonSerializer.SerializeToElement(evt.Payload);
+        return !payload.TryGetProperty("reason", out var reason)
+            || !string.Equals(reason.GetString(), "steering_redirect", StringComparison.Ordinal);
     }
 }

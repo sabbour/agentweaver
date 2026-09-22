@@ -288,6 +288,9 @@ public sealed class EfRunStore : IRunStore
         if (record.LifecycleGeneration != mutation.Outcome.ExpectedLifecycleGeneration
             || TerminalRunOutcome.IsTerminal(RunStatusExtensions.ParseStatus(record.Status)))
             return false;
+        if (record.PreviewPublicationLeaseUntil is { } leaseUntil
+            && leaseUntil > DateTimeOffset.UtcNow)
+            return false;
         if (mutation.ExpectedStatuses is { Count: > 0 }
             && !mutation.ExpectedStatuses.Contains(RunStatusExtensions.ParseStatus(record.Status)))
             return false;
