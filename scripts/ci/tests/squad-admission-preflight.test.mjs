@@ -16,11 +16,16 @@ const worktree = 'C:\\Users\\agent\\src\\agentweaver\\.worktrees\\issue-1502';
 const branch = 'squad/1502-evidence-admission';
 const headSha = 'a'.repeat(40);
 const target = { type: 'worktree', worktree, branch, headSha };
+const reviewers = {
+  'code-review': 'smith',
+  'security-review': 'seraph',
+  'ponytail-review': 'ponytail-reviewer',
+};
 const review = (source, extra = {}) => ({
   kind: REVIEW_KIND,
   phase: 'implementation',
   source,
-  reviewer: `${source}-reviewer`,
+  reviewer: reviewers[source],
   verdict: 'approved',
   target,
   findings: [],

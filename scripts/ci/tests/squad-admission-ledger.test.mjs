@@ -21,11 +21,16 @@ const worktree = 'C:\\src\\agentweaver\\.worktrees\\issue-1502';
 const branch = 'squad/1502-evidence-admission';
 const headSha = 'a'.repeat(40);
 const target = { type: 'worktree', worktree, branch, headSha };
+const reviewers = {
+  'code-review': 'smith',
+  'security-review': 'seraph',
+  'ponytail-review': 'ponytail-reviewer',
+};
 const review = (source, extra = {}) => ({
   kind: REVIEW_KIND,
   phase: 'implementation',
   source,
-  reviewer: `${source}-reviewer`,
+  reviewer: reviewers[source],
   verdict: 'approved',
   target,
   findings: [],
@@ -126,7 +131,13 @@ test('requires distinct reviewers for each configured reviewer class', () => {
       review('security-review', { reviewer: 'same-reviewer' }),
       review('ponytail-review'),
     ],
-  })), /independently issued/u);
+  }), {
+    reviewerIdentities: {
+      'code-review': ['same-reviewer'],
+      'security-review': ['same-reviewer'],
+      'ponytail-review': ['ponytail-reviewer'],
+    },
+  }), /independently issued/u);
 });
 
 test('rejects invented reviewer and waiver identities', () => {
