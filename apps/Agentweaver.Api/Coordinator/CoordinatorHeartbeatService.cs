@@ -18,12 +18,12 @@ namespace Agentweaver.Api.Coordinator;
 /// project is eligible when <c>State == Active</c> AND its workspace is available. Ineligible
 /// projects leave their Ready tasks untouched (priority preserved) for a later tick.</para>
 ///
-/// <para>Error isolation is two-level (per project, per task) so one bad task or project never
-/// stalls the tick; only an <see cref="OperationCanceledException"/> from the stopping token
-/// propagates out to stop the service cleanly. The per-heartbeat cap is enforced by reading at most
-/// <c>project.MaxReadyPerHeartbeat</c> candidates per tick; exactly-once is enforced by the atomic
-/// claim inside the pickup transaction, so an overlapping tick or a second instance simply loses the
-/// claim.</para>
+/// <para>Error isolation is applied at the tick, project, and task levels so one transient dependency,
+/// bad project, or bad task never stops the service; only an <see cref="OperationCanceledException"/>
+/// from the stopping token propagates out to stop the service cleanly. The per-heartbeat cap is
+/// enforced by reading at most <c>project.MaxReadyPerHeartbeat</c> candidates per tick; exactly-once
+/// is enforced by the atomic claim inside the pickup transaction, so an overlapping tick or a second
+/// instance simply loses the claim.</para>
 /// </summary>
 public sealed class CoordinatorHeartbeatService : BackgroundService
 {
@@ -75,7 +75,36 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
         using var timer = new PeriodicTimer(_interval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
+            await RunTickSafelyAsync(stoppingToken).ConfigureAwait(false);
+        }
+    }
+
+    internal async Task RunTickSafelyAsync(CancellationToken stoppingToken)
+    {
+        var tickStart = DateTimeOffset.UtcNow;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
             await RunTickAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            var error = $"Coordinator heartbeat tick failed ({ex.GetType().Name}).";
+            _logger.LogWarning(
+                "Heartbeat: top-level tick failed with {ExceptionType}; retrying on the next interval",
+                ex.GetType().Name);
+            _statusStore.RecordTickOutcome(
+                tickStart,
+                "Coordinator Heartbeat",
+                actedCount: 0,
+                errorCount: 1,
+                sw.Elapsed.TotalMilliseconds,
+                error);
         }
     }
 
@@ -90,60 +119,64 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var sp = scope.ServiceProvider;
         var projectStore = sp.GetRequiredService<IProjectStore>();
-        var backlogStore = sp.GetRequiredService<IBacklogTaskStore>();
-        var workspaceProvider = sp.GetRequiredService<IProjectWorkspaceProvider>();
-        var pickupService = sp.GetRequiredService<CoordinatorPickupService>();
 
         IReadOnlyList<Project> projects = await projectStore.ListAsync(stoppingToken).ConfigureAwait(false);
-        foreach (var project in projects)
+        if (projects.Count > 0)
         {
-            stoppingToken.ThrowIfCancellationRequested();
-            if (project.State != ProjectState.Active)
-                continue;
+            var backlogStore = sp.GetRequiredService<IBacklogTaskStore>();
+            var workspaceProvider = sp.GetRequiredService<IProjectWorkspaceProvider>();
+            var pickupService = sp.GetRequiredService<CoordinatorPickupService>();
 
-            try
+            foreach (var project in projects)
             {
-                // FR-011: a project whose workspace is missing keeps its Ready tasks for a later tick.
-                if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
+                stoppingToken.ThrowIfCancellationRequested();
+                if (project.State != ProjectState.Active)
                     continue;
 
-                // FR-008a + deterministic top-N: read at most MaxReadyPerHeartbeat candidates, which is
-                // exactly how the per-heartbeat cap is enforced.
-                var candidates = await backlogStore
-                    .ListReadyForClaimAsync(project.Id, project.MaxReadyPerHeartbeat, stoppingToken)
-                    .ConfigureAwait(false);
-
-                foreach (var task in candidates)
+                try
                 {
-                    stoppingToken.ThrowIfCancellationRequested();
-                    try
+                    // FR-011: a project whose workspace is missing keeps its Ready tasks for a later tick.
+                    if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
+                        continue;
+
+                    // FR-008a + deterministic top-N: read at most MaxReadyPerHeartbeat candidates, which is
+                    // exactly how the per-heartbeat cap is enforced.
+                    var candidates = await backlogStore
+                        .ListReadyForClaimAsync(project.Id, project.MaxReadyPerHeartbeat, stoppingToken)
+                        .ConfigureAwait(false);
+
+                    foreach (var task in candidates)
                     {
-                        await pickupService.TryPickupAsync(project, task, stoppingToken).ConfigureAwait(false);
-                        actedCount++;
-                    }
-                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                    {
-                        throw;   // shutdown — stop the service cleanly
-                    }
-                    catch (Exception exTask)
-                    {
-                        errorCount++;
-                        lastError = exTask.Message;
-                        _logger.LogError(exTask, "Heartbeat: pickup failed for task {TaskId}", task.Id);
-                        // Isolated; sibling tasks still processed.
+                        stoppingToken.ThrowIfCancellationRequested();
+                        try
+                        {
+                            await pickupService.TryPickupAsync(project, task, stoppingToken).ConfigureAwait(false);
+                            actedCount++;
+                        }
+                        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                        {
+                            throw;   // shutdown — stop the service cleanly
+                        }
+                        catch (Exception exTask)
+                        {
+                            errorCount++;
+                            lastError = exTask.Message;
+                            _logger.LogError(exTask, "Heartbeat: pickup failed for task {TaskId}", task.Id);
+                            // Isolated; sibling tasks still processed.
+                        }
                     }
                 }
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                throw;   // shutdown — stop the service cleanly
-            }
-            catch (Exception exProject)
-            {
-                errorCount++;
-                lastError = exProject.Message;
-                _logger.LogError(exProject, "Heartbeat: project {ProjectId} tick failed", project.Id);
-                // Isolated; next project still processed.
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    throw;   // shutdown — stop the service cleanly
+                }
+                catch (Exception exProject)
+                {
+                    errorCount++;
+                    lastError = exProject.Message;
+                    _logger.LogError(exProject, "Heartbeat: project {ProjectId} tick failed", project.Id);
+                    // Isolated; next project still processed.
+                }
             }
         }
 
