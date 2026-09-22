@@ -432,8 +432,7 @@ describe('TransactionTracePanel trace detail', () => {
     const toolSpan = screen.getAllByTestId('trace-span').find((span) => span.getAttribute('data-span-key') === 'tool');
     fireEvent.click(toolSpan!);
 
-    await waitFor(() => expect(screen.getByText('Input')).toBeTruthy());
-    expect(screen.getByText(/"pattern": "trace"/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/"pattern": "trace"/)).toBeTruthy());
     expect(screen.getByText(/"matches": \[/)).toBeTruthy();
     expect(screen.getByText(/"src\/trace.ts"/)).toBeTruthy();
   });

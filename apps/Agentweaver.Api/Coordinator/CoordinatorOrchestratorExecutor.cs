@@ -588,7 +588,7 @@ public sealed class CoordinatorOrchestratorExecutor
     // Decomposition (real model turn + deterministic fallback)
     // -----------------------------------------------------------------------
 
-    private async Task<List<SubtaskDraft>?> DecomposeWithModelAsync(
+    internal async Task<List<SubtaskDraft>?> DecomposeWithModelAsync(
         CoordinatorDraftInput input, OutcomeSpec spec, WorkflowDefinition? selectedWorkflow, CancellationToken ct)
     {
         IWorkflowTurnAgent? agent = null;
@@ -885,7 +885,8 @@ public sealed class CoordinatorOrchestratorExecutor
         Regex.Replace(json, @",\s*(\]|\})", "$1");
 
     internal static bool CanUseModelFallback(Exception exception) =>
-        exception is not ModelProviderConnectionRequiredException;
+        exception is not ModelProviderConnectionRequiredException
+            and not MandatoryContextBudgetExceededException;
 
     /// <summary>
     /// Deterministic, never-failing decomposition used when the model is unavailable or returns
@@ -1206,27 +1207,27 @@ public sealed class CoordinatorOrchestratorExecutor
         }
     }
 
-    private async Task FailNoTeamAsync(string runId, CancellationToken ct)
+    internal async Task FailNoTeamAsync(string runId, CancellationToken ct)
     {
         _logger.LogWarning(
             "Coordinator orchestrate: run {RunId} has no dispatchable team; failing with {Reason}",
             runId, NoTeamException.ErrorCode);
 
-        var entry = _streamStore.Get(runId);
-        entry?.RecordNext(EventTypes.RunFailed, new
+        var failurePayload = new
         {
             reason = NoTeamException.ErrorCode,
             message = NoTeamException.DefaultMessage,
-        });
-
+        };
         using var scope = _scopeFactory.CreateScope();
         var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
-        if (RunId.TryParse(runId, out var id))
-            await runStore.TrySetTerminalStatusAsync(
-                id, RunStatus.Failed, DateTimeOffset.UtcNow, NoTeamException.ErrorCode, ct)
-                .ConfigureAwait(false);
+        if (!RunId.TryParse(runId, out var id)
+            || !await runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                id, RunStatus.Failed, EventTypes.RunFailed, failurePayload, DateTimeOffset.UtcNow,
+                NoTeamException.ErrorCode, ct).ConfigureAwait(false))
+            return;
 
-        _streamStore.Complete(runId);
+        await scope.ServiceProvider.GetRequiredService<TerminalOutcomeProjector>()
+            .ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1409,61 +1410,36 @@ public sealed class CoordinatorOrchestratorExecutor
             || kind is NodeKind.Rai or NodeKind.Rubberduck or NodeKind.HumanReview or NodeKind.Merge or NodeKind.Scribe;
     }
 
-    private async Task<string?> BuildCoordinatorSystemContextAsync(
+    internal async Task<string?> BuildCoordinatorSystemContextAsync(
         string projectId, string runId, CancellationToken ct)
     {
         try
         {
             using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var decisions = (await db.Decisions
-                .Where(d => d.ProjectId == projectId
-                         && d.Status == "active"
-                         && (d.Type == "architectural" || d.Type == "scope"))
-                .ToListAsync(ct).ConfigureAwait(false))
-                .OrderBy(d => d.CreatedAt)
-                .ToList();
-
             var compiler = scope.ServiceProvider.GetService<MemoryContextCompiler>();
-            var memorySummary = compiler is null
+            var compilation = compiler is null
                 ? null
                 : await compiler.CompileAsync(projectId, CoordinatorAgentName, ct).ConfigureAwait(false);
-
-            if (decisions.Count == 0 && string.IsNullOrWhiteSpace(memorySummary))
-                return null;
-
-            var sb = new StringBuilder();
-            sb.AppendLine("Current architectural decisions:");
-            if (decisions.Count == 0)
-            {
-                sb.AppendLine("- (none recorded)");
-            }
-            else
-            {
-                foreach (var d in decisions)
-                {
-                    sb.Append("- ").Append(d.Title).Append(" [").Append(d.Type).Append("]: ")
-                        .AppendLine(CompactForPrompt(d.Content, 900));
-                    if (!string.IsNullOrWhiteSpace(d.Rationale))
-                        sb.Append("  Rationale: ").AppendLine(CompactForPrompt(d.Rationale, 300));
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(memorySummary))
-            {
-                sb.AppendLine();
-                sb.AppendLine("Current session memory summary:");
-                sb.AppendLine(memorySummary.Trim());
-            }
-
-            return sb.ToString();
+            EmitMemoryContextComposition(runId, compilation);
+            return compilation?.Text;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not MandatoryContextBudgetExceededException)
         {
             _logger.LogWarning(ex,
                 "Coordinator decomposition: failed to load memory/decision context for run {RunId}", runId);
             return null;
         }
+    }
+
+    private void EmitMemoryContextComposition(string runId, MemoryContextCompilation? compilation)
+    {
+        _streamStore.Get(runId)?.RecordNext(EventTypes.MemoryContextComposition, new
+        {
+            included = compilation?.Text is not null,
+            omittedMemoryCount = compilation?.OmittedMemoryCount ?? 0,
+            omittedSessionCount = compilation?.OmittedSessionCount ?? 0,
+            omissionCauses = compilation?.OmissionCauses ?? [],
+        });
     }
 
     private string ApplyDecompositionPromptBudget(
@@ -1481,28 +1457,37 @@ public sealed class CoordinatorOrchestratorExecutor
         if (estimatedTokens <= budgetTokens)
             return fullCharter;
 
-        var budgetChars = Math.Max(0, (budgetTokens * 4) - baseCharter.Length - taskPrompt.Length - 64);
+        if (ContainsMandatoryDecisions(contextSection))
+        {
+            throw new MandatoryContextBudgetExceededException(
+                budgetTokens * 4,
+                estimatedTokens * 4);
+        }
+
         _logger.LogWarning(
-            "Coordinator decomposition prompt for run {RunId} estimated at {Tokens} tokens, over budget {Budget}; truncating memory/decisions context",
+            "Coordinator decomposition prompt for run {RunId} estimated at {Tokens} tokens, over budget {Budget}; omitting structured context",
             runId, estimatedTokens, budgetTokens);
+        return baseCharter + "\n\n[Project context omitted: prompt context window budget exceeded.]";
+    }
 
-        if (budgetChars <= 0)
-            return baseCharter + "\n\nCurrent architectural decisions:\n- (omitted: prompt context window budget exceeded)";
+    private static bool ContainsMandatoryDecisions(string contextSection)
+    {
+        const string begin = "BEGIN_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON";
+        const string end = "END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON";
+        var payloadStart = contextSection.IndexOf(begin, StringComparison.Ordinal);
+        var payloadEnd = contextSection.IndexOf(end, StringComparison.Ordinal);
+        if (payloadStart < 0 || payloadEnd <= payloadStart)
+            return false;
 
-        var truncated = contextSection.Length <= budgetChars
-            ? contextSection
-            : contextSection[..budgetChars] + "\n\n[Context truncated to fit the decomposition model window.]";
-        return baseCharter + "\n\n" + truncated.Trim();
+        var json = contextSection[(payloadStart + begin.Length)..payloadEnd].Trim();
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.TryGetProperty("decisions", out var decisions)
+            && decisions.ValueKind == JsonValueKind.Array
+            && decisions.GetArrayLength() > 0;
     }
 
     private static int EstimateTokens(string text) =>
         (int)Math.Ceiling((text?.Length ?? 0) / 4.0);
-
-    private static string CompactForPrompt(string text, int maxChars)
-    {
-        var compact = Regex.Replace(text, @"\s+", " ").Trim();
-        return compact.Length <= maxChars ? compact : compact[..maxChars] + "…";
-    }
 
     // -----------------------------------------------------------------------
     // DAG validation + persistence

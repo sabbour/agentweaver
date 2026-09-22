@@ -18,6 +18,11 @@ public sealed record Run
     /// are bound to this lifecycle generation so they cannot become valid after recovery.
     /// </summary>
     public int ApprovalGeneration { get; init; } = 1;
+    /// <summary>
+    /// Fences terminal writers and subscriber closure across reopened generations of this run.
+    /// A terminal winner belongs to exactly one value of this generation.
+    /// </summary>
+    public int LifecycleGeneration { get; init; } = 1;
     public required DateTimeOffset StartedAt { get; init; }
     public DateTimeOffset? EndedAt { get; init; }
     public string? Result { get; init; }

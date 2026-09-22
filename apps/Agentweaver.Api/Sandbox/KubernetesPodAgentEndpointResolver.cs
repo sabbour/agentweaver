@@ -282,8 +282,8 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
 
         try
         {
-            await _runStore.TrySetTerminalStatusAsync(
-                parsed, RunStatus.Failed, DateTimeOffset.UtcNow, reason, CancellationToken.None)
+            await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                parsed, RunStatus.Failed, EventTypes.RunFailed, new { reason }, DateTimeOffset.UtcNow, reason, CancellationToken.None)
                 .ConfigureAwait(false);
         }
         catch (Exception ex)

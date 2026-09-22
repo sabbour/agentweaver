@@ -787,9 +787,9 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
 
         // Park the run at a terminal blocked assembly: run Failed + reason, work plan assembly_blocked.
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
-        await runStore.UpdateResultAsync(
+        (await runStore.TerminalizeForTestAsync(
             RunId.Parse(runId), RunStatus.Failed, "assembly_blocked: integration_conflict",
-            DateTimeOffset.UtcNow, CancellationToken.None);
+            ct: CancellationToken.None)).Should().BeTrue();
         await SeedWorkPlanAsync(runId, "assembly_blocked");
 
         var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
@@ -830,9 +830,9 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         const string reason = "assembly_merge_failed: merge_error";
 
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
-        await runStore.UpdateResultAsync(
+        (await runStore.TerminalizeForTestAsync(
             RunId.Parse(runId), RunStatus.MergeFailed, reason,
-            DateTimeOffset.UtcNow, CancellationToken.None);
+            ct: CancellationToken.None)).Should().BeTrue();
         await SeedWorkPlanAsync(
             runId,
             "assembly_failed",

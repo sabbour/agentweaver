@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
@@ -52,7 +52,27 @@ const useStyles = makeStyles({
     alignItems: 'center',
     flexWrap: 'wrap',
   },
+  promptBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: tokens.spacingVerticalXS,
+    minWidth: 0,
+  },
+  promptBody: {
+    maxWidth: '100%',
+    color: tokens.colorNeutralForeground2,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+  },
+  promptToggle: {
+    minWidth: 0,
+    paddingLeft: 0,
+    paddingRight: 0,
+  },
 });
+
+const TRACE_PROMPT_COLLAPSED_LINES = 2;
 
 function formatError(error: unknown): string {
   return error instanceof ApiError
@@ -90,6 +110,78 @@ function TracePreview({ runId, roleByAgent }: { runId: string; roleByAgent: Reco
       roleByAgent={roleByAgent}
       subtitle="Recent trace preview. Expand the tree and click a span to inspect its Generative AI properties."
     />
+  );
+}
+
+function TraceCardPrompt({ prompt, runId }: { prompt: string; runId: string }) {
+  const styles = useStyles();
+  const [expandedPrompt, setExpandedPrompt] = useState<string>();
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [measuredPrompt, setMeasuredPrompt] = useState<string>();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const expanded = expandedPrompt === prompt;
+  const isMeasuring = measuredPrompt !== prompt;
+  const bodyId = `trace-prompt-${runId}`;
+  const measureOverflow = useCallback(() => {
+    const body = bodyRef.current;
+    setIsOverflowing(Boolean(body && body.scrollHeight > body.clientHeight));
+    setMeasuredPrompt(prompt);
+  }, [prompt]);
+  const clampStyle: CSSProperties | undefined = !expanded && (isMeasuring || isOverflowing)
+    ? {
+        display: '-webkit-box',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: TRACE_PROMPT_COLLAPSED_LINES,
+        overflow: 'hidden',
+      }
+    : undefined;
+
+  useLayoutEffect(() => {
+    if (!expanded && isMeasuring) measureOverflow();
+  }, [expanded, isMeasuring, measureOverflow]);
+
+  useEffect(() => {
+    if (expanded) return;
+    const remeasure = () => setMeasuredPrompt(undefined);
+    const observer = typeof ResizeObserver === 'undefined'
+      ? undefined
+      : new ResizeObserver(remeasure);
+
+    if (bodyRef.current) observer?.observe(bodyRef.current);
+    window.addEventListener('resize', remeasure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', remeasure);
+    };
+  }, [expanded]);
+
+  return (
+    <div className={styles.promptBlock} data-testid={`trace-prompt-${runId}`}>
+      <div
+        ref={bodyRef}
+        id={bodyId}
+        className={styles.promptBody}
+        data-testid={`trace-prompt-body-${runId}`}
+        data-expanded={expanded ? 'true' : 'false'}
+        data-collapsed-lines={isOverflowing && !expanded ? TRACE_PROMPT_COLLAPSED_LINES : undefined}
+        style={clampStyle}
+      >
+        <Body as="div">{prompt}</Body>
+      </div>
+      {isOverflowing && (
+        <Button
+          appearance="transparent"
+          size="small"
+          className={styles.promptToggle}
+          onClick={() => setExpandedPrompt(expanded ? undefined : prompt)}
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          aria-label={expanded ? 'Show less trace prompt' : 'Show more trace prompt'}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -306,7 +398,7 @@ export function ObservabilityTracesPage() {
                     <div className={styles.rowHead}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
                         <Body as="span" style={{ fontWeight: tokens.fontWeightSemibold }}>
-                          {run.task ?? '(no task description)'}
+                          Coordinator trace
                         </Body>
                         <div className={styles.runMeta}>
                           <Label as="span" tone="quiet">Started {new Date(run.started_at).toLocaleString()}</Label>
@@ -326,6 +418,7 @@ export function ObservabilityTracesPage() {
                         {expandedRunId === runId ? 'Hide trace' : 'Preview trace'}
                       </Button>
                     </div>
+                    <TraceCardPrompt prompt={run.task ?? '(no task description)'} runId={runId} />
                     {/(failed|declined|blocked)/i.test(status) && (
                       <FailureDiagnosticPanel key={runId} projectId={projectId} runId={runId} />
                     )}

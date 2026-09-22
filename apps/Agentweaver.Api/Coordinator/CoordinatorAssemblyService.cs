@@ -986,6 +986,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // cleanup wiring). Skipped for empty-diff assemblies: the reviewers early-return approved
         // without touching a worktree, matching the HasChanges guard here.
         var reviewerWorktreePath = string.Empty;
+        var buildTestCompleted = false;
         if (integration.HasChanges)
         {
             reviewerWorktreePath = _pipeline.PrepareReviewerWorktree(
@@ -1098,6 +1099,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                         ct).ConfigureAwait(false))
                     return;
 
+                buildTestCompleted = true;
+                Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyBuildTestCompleted, new
+                {
+                    workPlanId,
+                    gateId = gate.Id,
+                    treeHash = aggregateTreeHash,
+                });
+                await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
                 continue;
             }
 
@@ -1107,16 +1116,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiStarted, new { workPlanId, integrationBranch, gateId = gate.Id });
 
-                var rai = await _pipeline.RunRaiAsync(
-                    new CollectiveRaiRequest(
-                        context.CoordinatorRunId,
-                        context.RepositoryPath,
-                        aggregateDiff,
-                        context.SubmittingUser,
-                        reviewerWorktreePath,
-                        assemblyProvider.ModelSource,
-                        assemblyProvider.ByokProviderFingerprint),
-                    ct)
+                var raiRequest = new CollectiveRaiRequest(
+                    context.CoordinatorRunId,
+                    context.RepositoryPath,
+                    aggregateDiff,
+                    context.SubmittingUser,
+                    reviewerWorktreePath,
+                    assemblyProvider.ModelSource,
+                    assemblyProvider.ByokProviderFingerprint);
+                var rai = await RunRaiWithPreservedAggregateAsync(
+                    context, aggregateTreeHash, raiRequest, workPlanId, gate.Id, buildTestCompleted, ct)
                     .ConfigureAwait(false);
 
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiCompleted, new
@@ -1858,13 +1867,19 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     workPlanId,
                     reason = failureReason,
                 });
-                await _runStore.TrySetTerminalStatusAsync(
-                    scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, failureReason, ct).ConfigureAwait(false);
+                await _runStore.TrySetTerminalOutcomeAsync(
+                    scribeRun.Id,
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = failureReason }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                    failureReason,
+                    ct).ConfigureAwait(false);
                 return;
             }
 
-            await _runStore.TrySetTerminalStatusAsync(
-                scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, terminalStatus, ct).ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeAsync(
+                scribeRun.Id,
+                TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted, new { result = terminalStatus }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                terminalStatus,
+                ct).ConfigureAwait(false);
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyScribeCompleted, new { workPlanId });
         }
         finally
@@ -1928,14 +1943,20 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 ByokProviderFingerprint: scribeProvider.ByokProviderFingerprint),
                 ct).ConfigureAwait(false);
 
-            await _runStore.TrySetTerminalStatusAsync(
-                scribeRun.Id, RunStatus.Completed, DateTimeOffset.UtcNow, coordinatorRun.Result, ct).ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeAsync(
+                scribeRun.Id,
+                TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted, new { result = coordinatorRun.Result }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                coordinatorRun.Result,
+                ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Coordinator final scribe failed for run {RunId} (non-fatal)", coordinatorRun.Id);
-            await _runStore.TrySetTerminalStatusAsync(
-                scribeRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, ex.Message, ct).ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeAsync(
+                scribeRun.Id,
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = ex.Message }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                ex.Message,
+                ct).ConfigureAwait(false);
         }
     }
 
@@ -3156,9 +3177,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             // back to InProgress (same runId — never restarted), and inject the feedback as a revision
             // turn. (directiveId, attempt) thread through so the decorated checkpoint manager confirms
             // the per-child effect marker on the resumed workflow's first superstep.
-            _streamStore.Reopen(subtask.ChildRunId!);
-            await _runStore.UpdateStatusAsync(childRunId, RunStatus.InProgress, null, ct)
-                .ConfigureAwait(false);
+            if (!await _runStore.TryReopenTerminalToInProgressAsync(childRunId, ct).ConfigureAwait(false))
+                throw new InvalidOperationException($"Child run {subtask.ChildRunId} could not be reopened.");
+            var reopenedChildRun = (await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false))!;
+            _streamStore.Reopen(subtask.ChildRunId!, reopenedChildRun.LifecycleGeneration);
             await orchestrator.StartRevisionAsync(
                 childRun, guidance, ct, isChild: true,
                 steeringDirectiveId: directiveId, steeringAttempt: attempt).ConfigureAwait(false);
@@ -3681,6 +3703,85 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             $"Assembly integration branch build failed after {MaxAttempts} attempts for run {context.CoordinatorRunId}.");
     }
 
+    private async Task<CollectiveRaiResult> RunRaiWithPreservedAggregateAsync(
+        CoordinatorDispatchContext context,
+        string aggregateTreeHash,
+        CollectiveRaiRequest request,
+        int workPlanId,
+        string gateId,
+        bool buildTestCompleted,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await _pipeline.RunRaiAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (CollectiveRaiInfrastructureException ex) when (ex.Retryable)
+        {
+            var persisted = await _runStore.GetAsync(RunId.Parse(context.CoordinatorRunId), ct).ConfigureAwait(false);
+            if (persisted?.TreeHash != aggregateTreeHash
+                || persisted.Diff != request.AggregateDiff)
+            {
+                throw new InvalidOperationException(
+                    $"RAI retry refused because the persisted aggregate changed for run {context.CoordinatorRunId}.", ex);
+            }
+            if (buildTestCompleted
+                && !await HasPersistedBuildTestEvidenceAsync(
+                    context.CoordinatorRunId, aggregateTreeHash, ct).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    $"RAI retry refused because completed Build/Test evidence is not durable for run {context.CoordinatorRunId}.", ex);
+            }
+            if (!_pipeline.ReviewerWorktreeMatchesAggregate(request.WorktreePath, aggregateTreeHash))
+            {
+                throw new InvalidOperationException(
+                    $"RAI retry refused because the reviewer artifact changed for run {context.CoordinatorRunId}.", ex);
+            }
+
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyRaiRetry, new
+            {
+                workPlanId,
+                gateId,
+                attempt = 2,
+                retryOfAttempt = 1,
+                reason = ex.Reason,
+                treeHash = aggregateTreeHash,
+            });
+            // The retry lineage must outlive a subsequent human-review wait or process restart.
+            await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+            return await _pipeline.RunRaiAsync(request, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<bool> HasPersistedBuildTestEvidenceAsync(
+        string coordinatorRunId,
+        string aggregateTreeHash,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var evidence = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == coordinatorRunId
+                && e.EventType == EventTypes.CoordinatorAssemblyBuildTestCompleted)
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => e.PayloadJson)
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (evidence is null)
+            return false;
+
+        try
+        {
+            using var payload = JsonDocument.Parse(evidence);
+            return payload.RootElement.TryGetProperty("treeHash", out var treeHash)
+                && string.Equals(treeHash.GetString(), aggregateTreeHash, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private async Task BlockAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
@@ -3874,7 +3975,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     }
     /// list and run detail surface why assembly ended (instead of leaving the run InProgress, which a
     /// later restart would sweep to a bare "Failed"). A no-op when the run row is absent or already
-    /// terminal (the CAS guard in <see cref="SqliteRunStore.TrySetTerminalStatusAsync"/>). Resource
+    /// terminal (the CAS guard in <see cref="IRunStore.TrySetTerminalOutcomeAsync"/>). Resource
     /// cleanup is intentionally deferred to <see cref="RunCoordinatorScribeAsync"/> so the shared
     /// per-run AgentHost pod remains available for the final A2A Scribe turn.
     /// </summary>
@@ -3883,8 +3984,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         if (RunId.TryParse(coordinatorRunId, out var id))
         {
-            await _runStore.TrySetTerminalStatusAsync(id, status, DateTimeOffset.UtcNow, result, ct)
-                .ConfigureAwait(false);
+            await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                id,
+                status,
+                status == RunStatus.Failed ? EventTypes.RunFailed : EventTypes.RunCompleted,
+                status == RunStatus.Failed ? new { reason = result } : new { result },
+                DateTimeOffset.UtcNow,
+                result,
+                ct).ConfigureAwait(false);
         }
     }
 

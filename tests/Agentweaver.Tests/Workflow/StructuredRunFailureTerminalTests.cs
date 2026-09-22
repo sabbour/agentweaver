@@ -15,6 +15,13 @@ public sealed class StructuredRunFailureTerminalTests
         StructuredRunFailureTerminal.NormalizeErrorCode(errorCode).Should().Be(errorCode);
     }
 
+    [Fact]
+    public void NormalizeErrorCode_PreservesMandatoryContextBudgetFailure()
+    {
+        StructuredRunFailureTerminal.NormalizeErrorCode("mandatory_context_budget_exceeded")
+        .Should().Be("mandatory_context_budget_exceeded");
+    }
+
     [Theory]
     [InlineData("agent_turn_access_token_secret_123")]
     [InlineData("a2a_bearer_eyJhbGciOiJIUzI1NiJ9")]

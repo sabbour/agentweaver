@@ -58,11 +58,17 @@ public static class EventTypes
     public const string AgentMessage      = "agent.message";
     public const string AgentMessageDelta = "agent.message.delta";
     /// <summary>
-    /// Bounded runtime configuration for a turn. Payload deliberately excludes the task,
-    /// system prompt, and arbitrary tool names: { provider, memoryContextIncluded,
-    /// skillsContextIncluded, registeredToolCount }.
+    /// Bounded, redacted context-composition measurements for a turn. Payload contains stable run
+    /// and project correlation, scalar section sizes, a fixed skill-delivery mode, and a derived
+    /// token estimate; it deliberately excludes prompt/task text, tool declarations, and secrets.
     /// </summary>
     public const string AgentRuntimeContext = "agent.runtime_context";
+    /// <summary>
+    /// Redacted structured-context selection result. Payload contains only whether a context block
+    /// was included, omission counts, and bounded cause labels; it never includes stored records,
+    /// identifiers, prompt text, or size measurements.
+    /// </summary>
+    public const string MemoryContextComposition = "memory.context_composition";
     public const string AgentIntent       = "agent.intent";
     /// <summary>
     /// Emitted when the agent calls report_outcome at the end of a run.
@@ -418,6 +424,8 @@ public static class EventTypes
     /// <summary>Collective RAI review of the aggregate diff finished (advisory; never hard-blocks).
     /// Payload: { workPlanId, raiSafetyFlagged }.</summary>
     public const string CoordinatorAssemblyRaiCompleted = "coordinator.assembly_rai_completed";
+    public const string CoordinatorAssemblyRaiRetry = "coordinator.assembly_rai_retry";
+    public const string CoordinatorAssemblyBuildTestCompleted = "coordinator.assembly_build_test_completed";
 
     /// <summary>The ONE collective human-review gate was armed and is awaiting a decision.
     /// Payload: { workPlanId, integrationBranch, treeHash, raiSafetyFlagged }.</summary>

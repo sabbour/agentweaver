@@ -162,7 +162,7 @@ public sealed class DurableRunControlStateTests : IDisposable
         gate.IsAutoApproved(siblingId, "web_fetch", "https://before-failure.test").Should().BeTrue(
             "an active coordinator propagates its child's session policy to active siblings");
 
-        await _runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await _runStore.TerminalizeForTestAsync(parent.Id, RunStatus.Failed)).Should().BeTrue();
 
         gate.IsAutoApproved(childId, "web_fetch", "https://approving-child-after-failure.test").Should().BeFalse(
             "the approving child must not retain its local copy of a run scope after its coordinator fails");
@@ -195,7 +195,7 @@ public sealed class DurableRunControlStateTests : IDisposable
         gate.IsAutoApproved(recoveredChild.Id.ToString(), "web_fetch", "https://active.test").Should().BeTrue(
             "an active coordinator's session policy is inherited by newly dispatched children");
 
-        await _runStore.UpdateStatusAsync(parent.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await _runStore.TerminalizeForTestAsync(parent.Id, RunStatus.Failed)).Should().BeTrue();
         await _runStore.UpdateStatusAsync(parent.Id, RunStatus.InProgress, endedAt: null);
 
         var postRecoveryChild = await InsertOwnedRunAsync("owner");

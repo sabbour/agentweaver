@@ -83,7 +83,7 @@ from its exact matching section; do not run another changelog generator.
 
    CI enforces this rule on `release/*` pull requests into `main`.
 6. Promote the prepared branch to `main` through a green PR, merged with
-   **"Rebase and merge"** (not squash — see note below).
+   **"Squash and merge"**.
 7. Reconcile the milestones against what the release actually consumed. Merge order
    decides the real contents, so a milestone set before the cut can name the wrong
    release. `release:prepare` consumes the changeset fragments it shipped. Map each
@@ -107,13 +107,13 @@ from its exact matching section; do not run another changelog generator.
    See [CONTRIBUTING.md → Target release
    milestone](CONTRIBUTING.md#target-release-milestone) for the contributor side.
 
-> **Promotion history is not release identity.** The operating recommendation above
-> uses "Rebase and merge," but rebasing rewrites commits; it does not preserve the
-> original release-branch commits or guarantee that later promotions are conflict-free.
-> A merge commit preserves both parent histories when repository policy permits it.
-> Inspect the actual merge base and review every conflict resolution; do not treat
-> `-X ours` as proof that conflicts are cosmetic. Regardless of merge method,
-> `release:publish` requires the exact fetched `origin/main` SHA.
+> **Promotion history is not release identity.** Squash merging creates a new `main`
+> commit; it does not preserve the release branch's individual commits or guarantee
+> that later promotions are conflict-free. The `release:prepare` ancestry merge remains
+> the mechanism that incorporates `origin/main` into the release branch before release
+> metadata changes. Inspect the actual merge base and review every conflict resolution;
+> do not treat `-X ours` as proof that conflicts are cosmetic. `release:publish`
+> requires the exact fetched `origin/main` SHA.
 
 > `release:prepare` runs from a normal dev checkout — you do **not** need to
 > delete `node_modules/` or build output first (the script itself invokes the
@@ -196,8 +196,8 @@ npm run release:sync-dev -- <release-preparation-sha>
 
 ## Published container images
 
-Alongside the Azure/ACR deployment path, every stage of the branch topology also
-publishes container images to GitHub's container/artifact registry via the
+Alongside the Azure/ACR deployment path, eligible branch and release-flow triggers
+publish container images to GitHub's container/artifact registry via the
 [`Publish images` workflow](.github/workflows/publish-images.yml):
 
 | Trigger | Tags applied to each `ghcr.io/<owner>/agentweaver-*` image |
@@ -214,10 +214,16 @@ by its selected ref, not forced into a commit-only channel. The checked-in workf
 skips docs/specs/Markdown-only **pushes**. Manual runs have their own trigger.
 These are repository facts, not evidence that a specific image or release exists.
 
+Routine pull requests do not trigger image builds; the `CI` workflow performs PR
+validation. Release images are built and published through the `vX.Y.Z` tag flow.
+
 Release images are published from the `vX.Y.Z` tag push. The `release:publish`
 command waits for that image workflow before it creates the GitHub Release.
 As a result, the tag, the GitHub Release, and the `vX.Y.Z` images all describe
-the same exact `main` SHA. Image publication is independent of deployment.
+the same exact `main` SHA. The tag push builds with `IMAGE_TAG=vX.Y.Z` even
+when a `sha-<short>` image for that commit already exists; copying the SHA
+image manifest would preserve its non-release runtime identity. Image
+publication is independent of deployment.
 `azure:deploy-from-release` imports these images by default. Add
 `--image-source acr-build` to build and ship them into the configured Azure
 environment from source instead.

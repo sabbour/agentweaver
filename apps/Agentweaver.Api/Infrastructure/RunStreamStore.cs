@@ -28,6 +28,7 @@ public sealed class RunStreamEntry
     private readonly List<RunEvent> _history = [];
     private bool _isCompleted;
     private bool _isAwaitingReview;
+    private int _lifecycleGeneration = 1;
     private readonly Lock _lock = new();
     private CancellationTokenSource _completionCancellation = new();
     private volatile TaskCompletionSource _completionSignal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -87,7 +88,7 @@ public sealed class RunStreamEntry
     /// Callers MUST use this instead of removing + recreating the stream entry — recreating
     /// loses every event recorded before the reopen (issue #388).
     /// </summary>
-    public void Reopen()
+    public void Reopen(int lifecycleGeneration)
     {
         lock (_lock)
         {
@@ -95,8 +96,32 @@ public sealed class RunStreamEntry
                 _completionCancellation = new CancellationTokenSource();
             _isCompleted = false;
             _isAwaitingReview = false;
+            _lifecycleGeneration = lifecycleGeneration;
             Interlocked.Exchange(ref _completionSignal, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
         }
+    }
+
+    internal bool TryRecordDurableTerminalAndComplete(RunEvent evt, int lifecycleGeneration)
+    {
+        CancellationTokenSource? cancellation = null;
+        TaskCompletionSource? completion = null;
+        TaskCompletionSource? events = null;
+        lock (_lock)
+        {
+            if (_lifecycleGeneration != lifecycleGeneration)
+                return false;
+
+            if (TryInsertOrValidateLocked(evt))
+                events = Interlocked.Exchange(ref _eventSignal,
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+            _isCompleted = true;
+            cancellation = _completionCancellation;
+            completion = _completionSignal;
+        }
+        events?.TrySetResult();
+        completion.TrySetResult();
+        cancellation.Cancel();
+        return true;
     }
 
     /// <summary>
@@ -119,6 +144,18 @@ public sealed class RunStreamEntry
     public int RecordNext(string type, object payload)
     {
         return RecordNext(type, _ => payload);
+    }
+
+    internal void RecordDurable(RunEvent evt)
+    {
+        TaskCompletionSource previous;
+        lock (_lock)
+        {
+            TryInsertOrValidateLocked(evt);
+            previous = Interlocked.Exchange(ref _eventSignal,
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        }
+        previous.TrySetResult();
     }
 
     internal async Task<bool> TryRecordPreviewReadyAsync(object payload, IRunStore runStore, CancellationToken ct)
@@ -312,6 +349,15 @@ public sealed class RunStreamEntry
             return _history.Any(e => string.Equals(e.Type, type, StringComparison.Ordinal));
     }
 
+    internal bool TryGetLatestEvent(string type, out RunEvent? evt)
+    {
+        lock (_lock)
+        {
+            evt = _history.LastOrDefault(e => string.Equals(e.Type, type, StringComparison.Ordinal));
+            return evt is not null;
+        }
+    }
+
     public void MarkCompleted()
     {
         CancellationTokenSource cancellation;
@@ -436,6 +482,12 @@ public sealed class RunStreamStore
     public RunStreamEntry? Get(string runId) =>
         _entries.TryGetValue(runId, out var pair) ? pair.Entry : null;
 
+    internal bool TryRecordDurableTerminalAndComplete(
+        string runId,
+        int lifecycleGeneration,
+        RunEvent evt) =>
+        Get(runId)?.TryRecordDurableTerminalAndComplete(evt, lifecycleGeneration) ?? true;
+
     internal async Task<bool> TryRecordPreviewReadyAsync(
         string runId, object payload, IRunStore runStore, CancellationToken ct)
     {
@@ -460,10 +512,10 @@ public sealed class RunStreamStore
     /// (the caller's subsequent <see cref="Create"/> then starts a fresh — necessarily empty —
     /// entry, which is the correct fallback when the entry was evicted/never existed).
     /// </summary>
-    public RunStreamEntry? Reopen(string runId)
+    public RunStreamEntry? Reopen(string runId, int lifecycleGeneration = 1)
     {
         var entry = Get(runId);
-        entry?.Reopen();
+        entry?.Reopen(lifecycleGeneration);
         return entry;
     }
 

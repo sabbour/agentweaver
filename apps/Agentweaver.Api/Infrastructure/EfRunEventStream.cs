@@ -87,6 +87,83 @@ public sealed class EfRunEventStream : IRunEventStream
         return sequence;
     }
 
+    public async Task<RunEvent> AppendTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
+        var payloadJson = outcome.Payload.GetRawText();
+        var existingProjection = await db.TerminalRunOutcomeProjections.AsNoTracking()
+            .Where(x => x.RunId == runId && x.LifecycleGeneration == outcome.ExpectedLifecycleGeneration)
+            .Select(x => new { x.EventSequence })
+            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+        if (existingProjection is not null)
+        {
+            var existing = await db.RunEvents
+                .Where(x => x.RunId == runId
+                    && x.Sequence == existingProjection.EventSequence
+                    && x.EventType == outcome.EventType)
+                .Select(x => new { x.Sequence, x.CreatedAt })
+                .SingleOrDefaultAsync(ct).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"Terminal outcome projection claim exists without its event for run {runId} generation {outcome.ExpectedLifecycleGeneration}.");
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+            return new RunEvent(existing.Sequence, outcome.EventType, outcome.Payload, new DateTimeOffset(existing.CreatedAt, TimeSpan.Zero));
+        }
+
+        var sequence = (await db.RunEvents.Where(x => x.RunId == runId)
+            .Select(x => (int?)x.Sequence).MaxAsync(ct).ConfigureAwait(false) ?? 0) + 1;
+        db.TerminalRunOutcomeProjections.Add(new TerminalRunOutcomeProjectionRecord
+        {
+            RunId = runId,
+            LifecycleGeneration = outcome.ExpectedLifecycleGeneration,
+            EventSequence = sequence,
+        });
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = runId,
+            Sequence = sequence,
+            EventType = outcome.EventType,
+            PayloadJson = payloadJson,
+            CreatedAt = outcome.OccurredAt.UtcDateTime,
+        });
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return outcome.ToRunEvent(sequence);
+    }
+
+    public async Task<bool> TryLinkTerminalOutcomeAsync(
+        string runId,
+        TerminalRunOutcome outcome,
+        RunEvent canonicalEvent,
+        CancellationToken ct = default)
+    {
+        if (canonicalEvent.Sequence <= 0 || canonicalEvent.Type != outcome.EventType)
+            return false;
+
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
+        var projected = await (
+            from projection in db.TerminalRunOutcomeProjections
+            join @event in db.RunEvents
+                on new { RunId = projection.RunId, Sequence = projection.EventSequence }
+                equals new { @event.RunId, @event.Sequence }
+            where projection.RunId == runId
+                && projection.LifecycleGeneration == outcome.ExpectedLifecycleGeneration
+                && projection.EventSequence == canonicalEvent.Sequence
+                && @event.EventType == canonicalEvent.Type
+            select projection).AnyAsync(ct).ConfigureAwait(false);
+        if (!projected)
+            return false;
+
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
     {
@@ -157,7 +234,7 @@ public sealed class EfRunEventStream : IRunEventStream
                 lastSeen = evt.Sequence;
             }
 
-            if (ShouldStopAfterReplayBatch(batch))
+            if (await ShouldStopAfterReplayBatchAsync(runId, batch, lastSeen, ct).ConfigureAwait(false))
                 yield break;
 
             if (batch.Count == 0 && _completedRuns.ContainsKey(runId))
@@ -168,12 +245,43 @@ public sealed class EfRunEventStream : IRunEventStream
         }
     }
 
-    private static bool ShouldStopAfterReplayBatch(IReadOnlyList<RunEvent> events)
+    private async Task<bool> ShouldStopAfterReplayBatchAsync(
+        string runId, IReadOnlyList<RunEvent> events, int lastDeliveredSequence, CancellationToken ct)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        if (db.Model.FindEntityType(typeof(RunRecord)) is null)
+            return ContainsTerminalEvent(events);
+
+        var currentLifecycle = await db.Runs.AsNoTracking()
+            .Where(run => run.RunId == runId)
+            .Select(run => new { run.Status, run.LifecycleGeneration })
+            .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+        if (currentLifecycle is not null
+            && currentLifecycle.Status is not ("merged" or "declined" or "failed" or "completed"
+            or "merge_failed" or "assemble_ready" or "cancelled"))
+        {
+            return false;
+        }
+
+        if (currentLifecycle is not null)
+        {
+            var eventSequence = await db.TerminalRunOutcomeProjections.AsNoTracking()
+                .Where(projection => projection.RunId == runId
+                    && projection.LifecycleGeneration == currentLifecycle.LifecycleGeneration)
+                .Select(projection => (int?)projection.EventSequence)
+                .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+            return eventSequence is > 0 && lastDeliveredSequence >= eventSequence;
+        }
+
+        return ContainsTerminalEvent(events);
+    }
+
+    private static bool ContainsTerminalEvent(IReadOnlyList<RunEvent> events)
     {
         var terminalIndex = -1;
         for (var i = 0; i < events.Count; i++)
         {
-            if (TerminalTypes.Contains(events[i].Type))
+            if (RunEventTerminality.IsTerminal(events[i]))
                 terminalIndex = i;
         }
 

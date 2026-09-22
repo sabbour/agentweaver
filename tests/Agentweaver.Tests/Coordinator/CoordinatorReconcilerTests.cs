@@ -308,7 +308,7 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         (await reconciler.SweepAsync(default)).Should().Be(1,
             "a genuinely interrupted non-terminal coordinator still recovers");
         await SetSubtaskStatusAsync(subtaskIds[0], SubtaskStatus.Completed);
-        await _runStore.UpdateStatusAsync(RunId.Parse(coord), RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await _runStore.TerminalizeForTestAsync(RunId.Parse(coord), RunStatus.Failed)).Should().BeTrue();
 
         (await reconciler.SweepAsync(default)).Should().Be(0);
 
@@ -699,7 +699,12 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
         };
         await _runStore.InsertAsync(run);
         if (status != RunStatus.InProgress)
-            await _runStore.UpdateStatusAsync(id, status, DateTimeOffset.UtcNow);
+        {
+            if (TerminalRunOutcome.IsTerminal(status))
+                (await _runStore.TerminalizeForTestAsync(id, status)).Should().BeTrue();
+            else
+                await _runStore.UpdateStatusAsync(id, status, DateTimeOffset.UtcNow);
+        }
         return id.ToString();
     }
 

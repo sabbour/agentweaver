@@ -376,8 +376,8 @@ public sealed class PreviewStep
                 using var ownershipCheck = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 try
                 {
-                    shouldStopProcess = await _runStore.IsPreviewPublicationOwnerAsync(
-                        parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
+                    shouldStopProcess = await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
+                        _runStore, parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {

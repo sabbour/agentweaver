@@ -30,6 +30,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     private readonly IConfiguration _configuration;
     private readonly IRunAgentHostContextResolver? _runAgentHostContextResolver;
     private readonly IRunEventStream? _eventStream;
+    private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
     private readonly AiExecutionPlanAccessor? _executionPlanAccessor;
     private readonly RunModelProviderSnapshotStore? _providerSnapshots;
     private readonly ILogger<RunOrchestrator> _logger;
@@ -39,25 +40,6 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// creates the orchestration worktree; all subsequent children reuse the stored path.
     /// </summary>
     private readonly SemaphoreSlim _orchestrationWorktreeLock = new(1, 1);
-
-    /// <summary>
-    /// Concise "Memory Protocol" appended to every worker (and coordinator child) system prompt so
-    /// agents actually turn the memory flywheel: record reusable learnings and submit notable
-    /// decisions. Deliberately short so it stays non-spammy. Never appended to the Scribe, which has
-    /// its own post-run memory note.
-    /// </summary>
-    internal const string WorkerMemoryProtocol =
-        """
-        ## Memory Protocol
-
-        You have native memory tools. Use them for SIGNIFICANT, reusable items only (not routine steps):
-        - record_memory(type: "learning" | "pattern", importance, content, tags) for a non-obvious
-          discovery, gotcha, or reusable pattern a teammate would want to know next time.
-        - submit_decision(slug, type, title, content, rationale) for a notable design, architecture,
-          or scope choice. Use type "architectural" or "scope" for team boundaries.
-
-        Record at most a few high-value items per run. Skip trivia and step-by-step progress.
-        """;
 
     /// <summary>
     /// Assertive, imperative "Browser Preview" mandate, injected at the TOP of worker/child system
@@ -127,7 +109,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             configuration,
             logger,
             runAgentHostContextResolver: null,
-            eventStream: eventStream)
+            eventStream: eventStream,
+            terminalOutcomeProjector: null)
     {
     }
 
@@ -144,7 +127,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         IRunAgentHostContextResolver? runAgentHostContextResolver,
         IRunEventStream? eventStream = null,
         AiExecutionPlanAccessor? executionPlanAccessor = null,
-        RunModelProviderSnapshotStore? providerSnapshots = null)
+        RunModelProviderSnapshotStore? providerSnapshots = null,
+        TerminalOutcomeProjector? terminalOutcomeProjector = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -156,6 +140,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         _configuration = configuration;
         _runAgentHostContextResolver = runAgentHostContextResolver;
         _eventStream = eventStream;
+        _terminalOutcomeProjector = terminalOutcomeProjector;
         _executionPlanAccessor = executionPlanAccessor;
         _providerSnapshots = providerSnapshots;
         _logger = logger;
@@ -229,11 +214,20 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                         EffectiveModelProviderProvenance.ScopeProject));
             }
 
-            var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+            (string TaskWithHarvest, string? SystemPromptContext) context;
+            try
+            {
+                context = await BuildContextAsync(started, ct).ConfigureAwait(false);
+            }
+            catch (MandatoryContextBudgetExceededException ex)
+            {
+                await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
+                throw;
+            }
 
             var input = new AgentTurnInput(
                 run.Id.ToString(),
-                taskWithHarvest,
+                context.TaskWithHarvest,
                 worktreeInfo.WorktreePath,
                 worktreeInfo.BranchName,
                 run.RepositoryPath,
@@ -241,7 +235,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 run.ModelSource.ToApiString(),
                 run.ModelId,
                 run.SubmittingUser,
-                systemPromptContext,
+                context.SystemPromptContext,
                 run.ProjectId?.ToString(),
                 run.AgentName,
                 started.StartedAt,
@@ -289,6 +283,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
 
+        // Reserve the canonical child row before resolving providers or creating a worktree. Every
+        // fallible launch path can now terminalize this generation instead of manufacturing a
+        // placeholder failed row after the fact.
+        var reserved = run with
+        {
+            Status = RunStatus.Pending,
+            StartedAt = run.StartedAt == default ? DateTimeOffset.UtcNow : run.StartedAt,
+            EndedAt = null,
+            Result = null,
+        };
+        await _runStore.InsertAsync(reserved, ct).ConfigureAwait(false);
+
         var childProvider = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
         await PrepareGitHubCapabilitySnapshotsAsync(
             run,
@@ -326,7 +332,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         var launchCompleted = false;
         try
         {
-            await _runStore.InsertAsync(started, ct).ConfigureAwait(false);
+            await _runStore.UpdateToInProgressAsync(
+                started.Id, started.WorktreePath!, started.WorktreeBranch!, started.StartedAt, ct).ConfigureAwait(false);
             EmitRunStartedMetrics(started);
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
             entry.RecordNext(
@@ -336,11 +343,20 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     run.ModelId,
                     EffectiveModelProviderProvenance.ScopeProject));
 
-            var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+            (string TaskWithHarvest, string? SystemPromptContext) context;
+            try
+            {
+                context = await BuildContextAsync(started, ct).ConfigureAwait(false);
+            }
+            catch (MandatoryContextBudgetExceededException ex)
+            {
+                await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
+                throw;
+            }
 
             var input = new AgentTurnInput(
                 run.Id.ToString(),
-                taskWithHarvest,
+                context.TaskWithHarvest,
                 worktreeInfo.WorktreePath,
                 worktreeInfo.BranchName,
                 run.RepositoryPath,
@@ -348,7 +364,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 run.ModelSource.ToApiString(),
                 run.ModelId,
                 run.SubmittingUser,
-                systemPromptContext,
+                context.SystemPromptContext,
                 run.ProjectId?.ToString(),
                 run.AgentName,
                 started.StartedAt,
@@ -441,11 +457,20 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     run.ModelId,
                     EffectiveModelProviderProvenance.ScopeProject));
 
-            var (taskWithHarvest2, systemPromptContext2) = await BuildContextAsync(started, ct);
+            (string TaskWithHarvest, string? SystemPromptContext) context;
+            try
+            {
+                context = await BuildContextAsync(started, ct).ConfigureAwait(false);
+            }
+            catch (MandatoryContextBudgetExceededException ex)
+            {
+                await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
+                throw;
+            }
 
             var input = new AgentTurnInput(
                 run.Id.ToString(),
-                taskWithHarvest2,
+                context.TaskWithHarvest,
                 worktreeInfo.WorktreePath,
                 worktreeInfo.BranchName,
                 run.RepositoryPath,
@@ -453,7 +478,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 run.ModelSource.ToApiString(),
                 run.ModelId,
                 run.SubmittingUser,
-                systemPromptContext2,
+                context.SystemPromptContext,
                 run.ProjectId?.ToString(),
                 run.AgentName,
                 started.StartedAt,
@@ -523,8 +548,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 run.ModelId,
                 EffectiveModelProviderProvenance.ScopeProject));
 
-        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
-            run with { Task = revisedTask }, ct);
+        string taskWithHarvest;
+        string? systemPromptContext;
+        try
+        {
+            (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
+                run with { Task = revisedTask }, ct);
+        }
+        catch (MandatoryContextBudgetExceededException ex)
+        {
+            await FailPreWorkflowLaunchAsync(run.Id, entry, ex).ConfigureAwait(false);
+            throw;
+        }
 
         var input = new AgentTurnInput(
             run.Id.ToString(),
@@ -697,7 +732,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     EffectiveModelProviderProvenance.ScopeProject));
             entry.RecordNext("coordinator.child_revision_handoff", evidence);
 
-            var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+            string taskWithHarvest;
+            string? systemPromptContext;
+            try
+            {
+                (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+            }
+            catch (MandatoryContextBudgetExceededException ex)
+            {
+                await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
+                throw;
+            }
 
             // BLOCKING #1 (lockout correctness): IsRevision:false → CreateSessionAsync mints a FRESH
             // SDK session under agentweaver-run-{newAgentRun.Id}. The new agent does NOT resume — and
@@ -959,22 +1004,27 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
         }
+
         catch (WorkflowBindException ex)
         {
             _logger.LogError(ex, "Workflow binding failed for run {RunId}; transitioning to failed", runId);
             var result = $"workflow_bind_failed: {ex.Message}";
             try
             {
-                var changed = await _runStore.TrySetTerminalStatusAsync(
-                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, result, CancellationToken.None)
-                    .ConfigureAwait(false);
+                var payload = new { reason = "workflow_bind_failed", detail = ex.Message };
+                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                    runId,
+                    RunStatus.Failed,
+                    EventTypes.RunFailed,
+                    payload,
+                    DateTimeOffset.UtcNow,
+                    result,
+                    CancellationToken.None).ConfigureAwait(false);
                 if (changed)
                     EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = "workflow_bind_failed",
-                    detail = ex.Message,
-                });
+                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
+                if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                    entry.RecordNext(EventTypes.RunFailed, payload);
                 _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally
@@ -990,16 +1040,20 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             var detail = RedactFailureReason(ex);
             try
             {
-                var changed = await _runStore.TrySetTerminalStatusAsync(
-                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, detail, CancellationToken.None)
-                    .ConfigureAwait(false);
+                var payload = new { reason = "workflow_start_failed", detail };
+                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                    runId,
+                    RunStatus.Failed,
+                    EventTypes.RunFailed,
+                    payload,
+                    DateTimeOffset.UtcNow,
+                    detail,
+                    CancellationToken.None).ConfigureAwait(false);
                 if (changed)
                     EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = "workflow_start_failed",
-                    detail,
-                });
+                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
+                if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                    entry.RecordNext(EventTypes.RunFailed, payload);
                 _ = FirePostRunScribeAsync(runId.ToString());
             }
             finally
@@ -1008,6 +1062,43 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             }
 
             throw;
+        }
+    }
+
+    private async Task FailPreWorkflowLaunchAsync(
+        RunId runId,
+        RunStreamEntry entry,
+        MandatoryContextBudgetExceededException exception)
+    {
+        var detail = RedactFailureReason(exception);
+        try
+        {
+            var payload = new
+            {
+                errorCode = "mandatory_context_budget_exceeded",
+                retryable = false,
+                detail,
+            };
+            var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                runId,
+                RunStatus.Failed,
+                EventTypes.RunFailed,
+                payload,
+                DateTimeOffset.UtcNow,
+                detail,
+                CancellationToken.None)
+                .ConfigureAwait(false);
+            if (changed)
+                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false),
+                    "mandatory_context_budget_exceeded");
+            await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
+            if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                entry.RecordNext(EventTypes.RunFailed, payload);
+            _ = FirePostRunScribeAsync(runId.ToString());
+        }
+        finally
+        {
+            _streamStore.Complete(runId.ToString());
         }
     }
 
@@ -1063,10 +1154,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 {
                     using var scope = _scopeFactory.CreateScope();
                     var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
-                    childDecisions = await memoryCompiler.CompileDecisionsAsync(
-                        run.ProjectId.Value.ToString(), ct);
+                    childDecisions = (await memoryCompiler.CompileDecisionsAsync(
+                        run.ProjectId.Value.ToString(), ct))?.Text;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not MandatoryContextBudgetExceededException)
                 {
                     _logger.LogWarning(ex, "Decision compilation failed for child run {RunId} — proceeding without", run.Id);
                 }
@@ -1077,7 +1168,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             // and do the actual work, so their assigned skills must reach them too. Child runs carry
             // AgentName/ProjectId/WorktreePath — everything the composer needs.
             childPrompt = await AppendAssignedSkillsAsync(run, childPrompt, ct);
-            return (run.Task, AppendCapabilities(AppendMemoryProtocol(childPrompt), run));
+            return (run.Task, AppendCapabilities(childPrompt ?? "", run));
         }
 
         // Compile memory context (progressive disclosure — layer 1-4)
@@ -1088,10 +1179,12 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             {
                 using var scope = _scopeFactory.CreateScope();
                 var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
-                systemPromptContext = await memoryCompiler.CompileAsync(
+                var compilation = await memoryCompiler.CompileAsync(
                     run.ProjectId.Value.ToString(), run.AgentName, ct);
+                systemPromptContext = compilation?.Text;
+                EmitMemoryContextComposition(run.Id.ToString(), compilation);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not MandatoryContextBudgetExceededException)
             {
                 _logger.LogWarning(ex, "Memory context compilation failed for run {RunId} — proceeding without", run.Id);
             }
@@ -1125,7 +1218,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             systemPromptContext = await AppendAssignedSkillsAsync(run, systemPromptContext, ct);
         }
 
-        return (run.Task, AppendCapabilities(AppendMemoryProtocol(systemPromptContext), run));
+        return (run.Task, AppendCapabilities(systemPromptContext ?? "", run));
+    }
+
+    private void EmitMemoryContextComposition(string runId, MemoryContextCompilation? compilation)
+    {
+        _streamStore.Get(runId)?.RecordNext(EventTypes.MemoryContextComposition, new
+        {
+            included = compilation?.Text is not null,
+            omittedMemoryCount = compilation?.OmittedMemoryCount ?? 0,
+            omittedSessionCount = compilation?.OmittedSessionCount ?? 0,
+            omissionCauses = compilation?.OmissionCauses ?? [],
+        });
     }
 
     /// <summary>
@@ -1221,16 +1325,6 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             : BrowserPreviewCapability + "\n\n---\n\n" + systemPromptContext;
     }
 
-    /// <summary>
-    /// Appends the <see cref="WorkerMemoryProtocol"/> to a worker/child system prompt so the agent is
-    /// instructed to use its memory tools. Safe when <paramref name="systemPromptContext"/> is null
-    /// (the protocol then becomes the whole prompt context).
-    /// </summary>
-    internal static string AppendMemoryProtocol(string? systemPromptContext) =>
-        string.IsNullOrEmpty(systemPromptContext)
-            ? WorkerMemoryProtocol
-            : systemPromptContext + "\n\n---\n\n" + WorkerMemoryProtocol;
-
     private static void EmitRunStartedMetrics(Run run)
     {
         var tags = BuildRunTags(run);
@@ -1286,18 +1380,6 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// </summary>
     internal static string ComposeChildSystemPrompt(string? charter, string? decisions = null)
     {
-        const string boundary =
-            "## Working-directory sandbox boundary\n" +
-            "You are running inside an isolated git worktree. ALL file reads and writes MUST stay " +
-            "within your current working directory (this worktree) for deliverables. The ONLY " +
-            "approved location outside the worktree is the run-scoped scratch directory exposed in " +
-            "$AGENTWEAVER_SCRATCH, which you may access through shell commands for non-deliverable " +
-            "working files only. You must NEVER write to any other path outside the working " +
-            "directory — including session-state, .copilot, the home directory, or other temp " +
-            "directories. If a write is rejected because it targets a path outside the sandbox, do " +
-            "not retry the same path: adapt and write deliverables in the worktree or ephemeral " +
-            "scratch output in $AGENTWEAVER_SCRATCH instead.";
-
         const string deliverableCapture =
             "## Deliverable files\n" +
             "All deliverables produced by this task — documents, drafts, reports, code, " +
@@ -1313,7 +1395,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             sb.Append(charter).Append("\n\n---\n\n");
         if (!string.IsNullOrEmpty(decisions))
             sb.Append(decisions.TrimEnd()).Append("\n\n---\n\n");
-        sb.Append(boundary).Append("\n\n---\n\n").Append(deliverableCapture);
+        sb.Append(deliverableCapture);
         return sb.ToString();
     }
 
@@ -1335,43 +1417,36 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             var now = DateTimeOffset.UtcNow;
 
-            // Insert the FAILED row first; if another launcher already inserted the row, atomically
-            // fall back to the terminal CAS update. This avoids a racy SELECT-then-INSERT window.
-            var failedRow = run with
+            var reserved = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
+            if (reserved is null)
             {
-                Status = RunStatus.Failed,
-                StartedAt = run.StartedAt == default ? now : run.StartedAt,
-                EndedAt = now,
-                Result = reason,
-            };
-
-            try
-            {
-                await _runStore.InsertAsync(failedRow, ct).ConfigureAwait(false);
-                EmitCompletedMetric(failedRow, "failed");
-                EmitErrorMetric(failedRow, "child_launch_failed");
-            }
-            catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
-            {
-                var changed = await _runStore.TrySetTerminalStatusAsync(run.Id, RunStatus.Failed, now, reason, ct)
-                    .ConfigureAwait(false);
-                if (changed)
-                {
-                    var stored = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
-                    EmitCompletedMetric(stored ?? failedRow, "failed");
-                    EmitErrorMetric(stored ?? failedRow, "child_launch_failed");
-                }
+                _logger.LogError(
+                    "Cannot terminalize unreserved child run {RunId}; launch reservation did not persist",
+                    runId);
+                return;
             }
 
-            // Ensure a stream entry exists so the RunFailed event has somewhere to land, then record it
-            // and close the stream — exactly the store/stream/event pattern RunWatchLoopService uses.
-            var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
-            entry.RecordNext(EventTypes.RunFailed, new { reason });
-            _streamStore.Complete(runId);
+            _ = _streamStore.Get(runId) ?? _streamStore.Create(runId, reserved.SubmittingUser);
+
+            var outcome = TerminalRunOutcome.Create(
+                RunStatus.Failed,
+                EventTypes.RunFailed,
+                new { reason },
+                now,
+                reserved.LifecycleGeneration);
+            var changed = await _runStore.TrySetTerminalOutcomeAsync(run.Id, outcome, reason, ct)
+                .ConfigureAwait(false);
+            if (changed)
+            {
+                var stored = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
+                EmitCompletedMetric(stored ?? reserved, "failed");
+                EmitErrorMetric(stored ?? reserved, "child_launch_failed");
+            }
+
+            await ProjectTerminalOutcomeAsync(changed, ct).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
-
-            await PersistFailedRunEventsAsync(runId, entry, ct).ConfigureAwait(false);
         }
+
         catch (Exception ex)
         {
             // Never propagate: the dispatch loop must keep finalizing the subtask regardless.
@@ -1380,6 +1455,11 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 runId);
         }
     }
+
+    private Task ProjectTerminalOutcomeAsync(bool changed, CancellationToken ct = default) =>
+        changed && _terminalOutcomeProjector is not null
+            ? _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore)
+            : Task.CompletedTask;
 
     /// <summary>
     /// Normalizes an exception into a durable, user-visible failure reason that is safe to persist

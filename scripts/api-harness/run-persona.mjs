@@ -34,7 +34,7 @@
 
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
-import { readdir, writeFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 
 import { AgentweaverClient } from './lib/client.mjs';
 import {
@@ -49,6 +49,14 @@ import { adaptApiEvidence } from '../harness-judge/adapters/api.mjs';
 import { judgeEvidence } from '../harness-judge/core.mjs';
 import { networkTargetEvidence, validateNetworkTarget } from '../harness-shared/target-guard.mjs';
 import { redact } from '../harness-shared/redaction.mjs';
+import {
+  judgeLifecycleEvidence,
+  lifecycleExitCode,
+  loadLifecyclePersona,
+  parseLifecycleArgs,
+  runLifecycleCli,
+  writeLifecycleJson,
+} from '../harness-shared/persona-lifecycle.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -68,25 +76,19 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const NO_PERSONA_VERSION_SENTINEL = 'unknown';
 
 export function parseArgs(argv) {
-  const out = { keep: false, rung: 'scoping' };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--keep') out.keep = true;
-    else if (a === '--scenario') out.scenario = argv[++i];
-    else if (a === '--base-url' || a === '--target') out.baseUrl = argv[++i];
-    else if (a === '--persona') out.persona = argv[++i];
-    else if (a === '--seed') out.seed = argv[++i];
-    else if (a === '--batch-id') out.batchId = argv[++i];
-    else if (a === '--target-revision') out.targetRevision = argv[++i];
-    else if (a === '--rung') out.rung = argv[++i];
-    else if (a === '--out') out.out = argv[++i];
-    else if (a === '--auth-provider') out.authProvider = argv[++i];
-    else if (a === '--recorder-auth-root') out.recorderAuthRoot = argv[++i];
-    else if (a === '--timeout') out.timeoutMs = Number(argv[++i]) * 1000;
-    else if (a === '--list') out.list = true;
-    else throw new Error(`unknown option: ${a.split('=', 1)[0]}`);
-  }
-  return out;
+  const args = parseLifecycleArgs(argv, {
+    initial: { keep: false, rung: 'scoping' },
+    options: {
+      '--keep': true, '--list': true, '--scenario': 'scenario', '--base-url': 'baseUrl',
+      '--target': 'baseUrl', '--persona': 'persona', '--seed': 'seed', '--batch-id': 'batchId',
+      '--target-revision': 'targetRevision', '--rung': 'rung', '--out': 'out',
+      '--auth-provider': 'authProvider', '--recorder-auth-root': 'recorderAuthRoot',
+      '--timeout': 'timeoutSeconds',
+    },
+  });
+  if (args.timeoutSeconds !== undefined) args.timeoutMs = Number(args.timeoutSeconds) * 1000;
+  delete args.timeoutSeconds;
+  return args;
 }
 
 export function resolveTargetRevision(explicitTargetRevision, deployment) {
@@ -172,7 +174,7 @@ async function main() {
   }
 
   const personaId = args.persona ?? scenario.personaFile?.replace(/\.md$/, '') ?? scenario.id.split('-')[0];
-  const sharedPersona = await loadPersona(personaId, 'api').catch(() => null);
+  const sharedPersona = await loadLifecyclePersona(loadPersona, personaId, 'api', { optional: true });
   const personaTitle = sharedPersona?.name ?? scenario.personaScenario ?? scenario.title;
 
   console.log(`Driving "${scenario.title}"`);
@@ -335,11 +337,11 @@ async function main() {
     attachments: [{ kind: 'finding', evidence: JSON.stringify(finding.evidence) }],
     summary: `API harness ${scenario.id}`,
   });
-  const judged = await judgeEvidence(normalizedEvidence, {
+  const judged = await judgeLifecycleEvidence(normalizedEvidence, judgeEvidence, {
     timeoutMs: args.timeoutMs,
   });
   const verdictPath = args.out ?? join(HERE, 'verdicts', `${scenario.id}-${stamp}.json`);
-  await writeFile(verdictPath, `${JSON.stringify(judged.verdict, null, 2)}\n`, 'utf8');
+  await writeLifecycleJson(verdictPath, judged.verdict);
 
   printReport(finding);
   console.log(`Finding written: ${outPath.replace(join(HERE, '..', '..') + '\\', '')}`);
@@ -347,8 +349,7 @@ async function main() {
 
     // Exit 3 = inconclusive (e.g. the generator's model provider was unavailable, so the
     // seam couldn't be assessed) — distinct from a real structural FAIL (exit 1).
-    if (inconclusive && platformPass) return 3;
-    return platformPass ? 0 : 1;
+    return lifecycleExitCode({ failed: !platformPass, inconclusive });
   } catch (error) {
     primaryError = error;
     throw error;
@@ -373,10 +374,5 @@ async function main() {
 // Only run the CLI when executed directly — importing this module (e.g. from
 // tests, to reuse checkInsecureAllowed) must not trigger main() or process.exit.
 if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main()
-    .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(redact(String(err?.stack ?? err?.message ?? err)));
-      process.exit(2);
-    });
+  runLifecycleCli(main, { redact });
 }

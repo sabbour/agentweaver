@@ -322,6 +322,7 @@ export function WorkflowsPage() {
   // Generate-workflow dialog state (US10).
   const [generateOpen, setGenerateOpen] = useState(false);
   const [generateDescription, setGenerateDescription] = useState('');
+  const [generateContentOnly, setGenerateContentOnly] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
 
@@ -560,6 +561,7 @@ export function WorkflowsPage() {
 
   const handleOpenGenerate = useCallback(() => {
     setGenerateDescription('');
+    setGenerateContentOnly(false);
     setGenerateError(null);
     setGenerateOpen(true);
   }, []);
@@ -573,6 +575,7 @@ export function WorkflowsPage() {
         projectId,
         generateDescription.trim(),
         generationContext.providerKey,
+        generateContentOnly,
       );
       generationContext.applyCompletedContext(result.ai_execution_context);
       setGenerateOpen(false);
@@ -590,6 +593,7 @@ export function WorkflowsPage() {
       setGenerating(false);
     }
   }, [
+    generateContentOnly,
     generateDescription,
     generationContext,
     projectId,
@@ -971,6 +975,7 @@ export function WorkflowsPage() {
                 disabled={generating}
               />
             </Field>
+            <Checkbox label="Content-only workflow" checked={generateContentOnly} onChange={(_, data) => setGenerateContentOnly(data.checked === true)} disabled={generating} />
             {generateError && (
               <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
                 <MessageBarBody>{generateError}</MessageBarBody>

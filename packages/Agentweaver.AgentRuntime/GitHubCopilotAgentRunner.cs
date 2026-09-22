@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
@@ -318,14 +319,6 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
-        // Persist bounded operational context, never prompt/task text or arbitrary tool names.
-        Emit(EventTypes.AgentRuntimeContext, new
-        {
-            provider = "copilot",
-            memoryContextIncluded = !string.IsNullOrEmpty(systemPromptContext),
-            skillsContextIncluded = Agentweaver.Domain.Skills.SkillPromptMarkers.ContainsSkillContext(systemPromptContext),
-            registeredToolCount = 9,
-        });
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
@@ -370,6 +363,9 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             ScratchDirectory: Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
                 ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR"));
 
+        var sessionTools = BuildSessionConfigTools(toolContext);
+        var toolDeclarations = sessionTools.Cast<AIFunctionDeclaration>().ToList();
+        var registeredToolNames = sessionTools.Select(tool => tool.Name).ToList();
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit, ct),
@@ -384,16 +380,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             // SandboxToolRegistry is NOT registered wholesale — that would conflict with native tools
             // and bypass governance. Native shell is denied in the permission handler; run_command is
             // the only shell path (ISandboxExecutor-backed).
-            Tools = BuildSessionConfigTools(toolContext).Cast<AIFunctionDeclaration>().ToList(),
+            Tools = toolDeclarations,
             // Append workflow instructions as a system message so the model receives them
             // before any user turn. SystemMessageMode.Append preserves Copilot's built-in
             // guardrails and tool-use guidance while layering our scaffold instructions on top.
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = string.IsNullOrEmpty(systemPromptContext)
-                    ? AgentBasePrompt.Base
-                    : AgentBasePrompt.Base + "\n\n" + systemPromptContext,
+                Content = ComposeFinalPrompt(systemPromptContext, registeredToolNames),
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
             Model = byokProvider?.Model ?? modelId,
@@ -404,6 +398,15 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             EnableSessionStore = false,
             InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
         };
+
+        EmitRuntimeContext(
+            Emit,
+            runId,
+            projectId,
+            task,
+            systemPromptContext,
+            registeredToolNames,
+            toolDeclarations);
 
         AIAgent? agent = null;
         AgentSession session;
@@ -1002,6 +1005,11 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         return tools;
     }
 
+    internal static string ComposeFinalPrompt(
+        string? systemPromptContext,
+        IEnumerable<string> registeredToolNames) =>
+        AgentBasePrompt.Compose(systemPromptContext, registeredToolNames);
+
     /// <summary>
     /// Strips userinfo credentials from a URL and caps its length at 200 characters.
     /// Falls back to truncation if the input is not a valid absolute URI.
@@ -1051,6 +1059,23 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
         return sb.ToString();
     }
+
+    internal static void EmitRuntimeContext(
+        Action<string, object> emit,
+        string runId,
+        string? projectId,
+        string task,
+        string? systemPromptContext,
+        IReadOnlyList<string> registeredToolNames,
+        IReadOnlyList<AIFunctionDeclaration> toolDeclarations) =>
+        emit(EventTypes.AgentRuntimeContext, AgentRuntimeContextMetricsComposer.Compose(
+            provider: "copilot",
+            runId,
+            projectId,
+            task,
+            systemPromptContext,
+            registeredToolNames,
+            toolDeclarations));
 
     /// <summary>
     /// Extracts the full assistant message text from the SDK <see cref="AssistantMessageEvent"/>

@@ -1856,6 +1856,25 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("SubtaskDependencies");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.TerminalRunOutcomeProjectionRecord", b =>
+                {
+                    b.Property<string>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<int>("LifecycleGeneration")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("lifecycle_generation");
+
+                    b.Property<int>("EventSequence")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("event_sequence");
+
+                    b.HasKey("RunId", "LifecycleGeneration");
+
+                    b.ToTable("terminal_run_outcome_projections", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.UserCopilotBindingRecord", b =>
                 {
                     b.Property<string>("Id")

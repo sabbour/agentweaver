@@ -676,7 +676,8 @@ public static class WorkflowDefinitionEndpoints
                         BaseWorkflowId: baseWorkflowId,
                         BaseWorkflowYaml: baseYaml,
                         BaseWorkflowIsBuiltIn: baseWorkflowIsBuiltIn,
-                        GenerationModel: generationOptions.Value.ResolveWorkflowModel(project!.WorkflowGenerationModel)),
+                        GenerationModel: generationOptions.Value.ResolveWorkflowModel(project!.WorkflowGenerationModel),
+                        ContentOnly: request.ContentOnly),
                     ct);
 
                 return Results.Ok(new GenerateWorkflowResponse

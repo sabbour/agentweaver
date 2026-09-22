@@ -70,11 +70,12 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     public async Task<string> WorkflowGenerateAsync(
         [Description("Project ID")] string project_id,
         [Description("Natural language description of the workflow to generate")] string description,
-        CancellationToken ct)
+        [Description("Explicitly exempt a pure content workflow from mandatory software delivery gates")] bool content_only = false,
+        CancellationToken ct = default)
     {
         try
         {
-            var body = new { description };
+            var body = new { description, content_only };
             var result = await api.PostAiAsync<GenerateWorkflowResponse>(
                 $"/api/projects/{Uri.EscapeDataString(project_id)}/workflows/generate",
                 body,

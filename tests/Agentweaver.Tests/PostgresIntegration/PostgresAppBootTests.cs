@@ -2,6 +2,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -126,7 +127,8 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         inProgress.Select(r => r.Id).Should().Contain(runId,
             "GetByStatusAsync must return the freshly inserted run from Postgres");
 
-        await runStore.UpdateStatusAsync(runId, RunStatus.Failed, DateTimeOffset.UtcNow, CancellationToken.None);
+        (await runStore.TerminalizeForTestAsync(
+            runId, RunStatus.Failed, ct: CancellationToken.None)).Should().BeTrue();
 
         var afterUpdate = await runStore.GetByStatusAsync(RunStatus.InProgress);
         afterUpdate.Select(r => r.Id).Should().NotContain(runId,

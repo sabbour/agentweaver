@@ -77,6 +77,9 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
 
+    public Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
+        inner.TryReopenTerminalToInProgressAsync(runId, ct);
+
     public async Task<bool> TryTransitionReviewAsync(
         RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default)
     {
@@ -137,6 +140,41 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
         return await inner.TrySetTerminalStatusAsync(runId, toStatus, endedAt, result, ct).ConfigureAwait(false);
     }
+
+    public async Task<bool> TrySetTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        string? result,
+        CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        return await inner.TrySetTerminalOutcomeAsync(runId, outcome, result, ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryMutateTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunMutation mutation,
+        CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        return await inner.TryMutateTerminalOutcomeAsync(runId, mutation, ct).ConfigureAwait(false);
+    }
+
+    public Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(
+        CancellationToken ct = default) =>
+        inner.GetUnprojectedTerminalOutcomesAsync(ct);
+
+    public Task MarkTerminalOutcomeProjectedAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        inner.MarkTerminalOutcomeProjectedAsync(runId, lifecycleGeneration, ct);
+
+    public Task<bool> TryAdoptLegacyTerminalOutcomeAsync(
+        RunId runId,
+        TerminalRunOutcome outcome,
+        CancellationToken ct = default) =>
+        inner.TryAdoptLegacyTerminalOutcomeAsync(runId, outcome, ct);
 
     public async Task<bool> TryTransitionToIdleAsync(RunId runId, CancellationToken ct = default)
     {

@@ -61,15 +61,15 @@ public sealed class McpMemoryToolsTests : IClassFixture<ProjectsWebApplicationFa
     }
 
     [Fact]
-    public async Task DecisionList_UnknownProject_ReturnsErrorStringWithoutThrowing()
+    public async Task DecisionList_UnknownProject_ThrowsMcpApiException()
     {
         var tools = CreateTools();
         var act = () => tools.DecisionListAsync(Guid.NewGuid().ToString("N"), ct: CancellationToken.None);
 
-        await act.Should().NotThrowAsync();
-        var result = await act();
-        result.Should().Contain("decision_list failed:");
-        result.Should().Contain("404");
+        var error = await act.Should().ThrowAsync<McpApiException>();
+        error.Which.StatusCode.Should().Be(404);
+        error.Which.Message.Should().Contain("\"error\"");
+        error.Which.Message.Should().Contain("\"hint\"");
     }
 
     [Fact]
@@ -95,15 +95,15 @@ public sealed class McpMemoryToolsTests : IClassFixture<ProjectsWebApplicationFa
     }
 
     [Fact]
-    public async Task MemoryGet_MissingEntry_ReturnsErrorStringWithoutThrowing()
+    public async Task MemoryGet_MissingEntry_ThrowsMcpApiException()
     {
         var projectId = await CreateProjectAsync();
         var tools = CreateTools();
         var act = () => tools.MemoryGetAsync(projectId, "morpheus", "99999", CancellationToken.None);
 
-        await act.Should().NotThrowAsync();
-        var result = await act();
-        result.Should().Contain("memory_get failed:");
-        result.Should().Contain("404");
+        var error = await act.Should().ThrowAsync<McpApiException>();
+        error.Which.StatusCode.Should().Be(404);
+        error.Which.Message.Should().Contain("\"error\"");
+        error.Which.Message.Should().Contain("\"hint\"");
     }
 }

@@ -58,10 +58,17 @@ they are not Agentweaver sign-in providers.
    - Before merge, the branch must be current with `dev` and all blocking CI must rerun
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
-   - **Squash-merge** so `dev` keeps **one commit per logical change**. GitHub
-     automatically deletes the source branch after merge.
+   - Before ready and immediately before merge, Ralph fetches `origin/dev`, gets the
+     live PR `headRefOid`, and runs the external-state preflight with that SHA:
+     `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
+     --head-sha <live-head-sha>`. The preflight resolves the declared external Squad
+     state with the pinned Squad SDK and validates its coordinator-owned findings ledger.
+     Ralph records the returned `<validated-sha>` and merges manually with
+     `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
+     GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
-     soaked release promotion or an audited emergency hotfix only.
+     soaked release promotion or an audited emergency hotfix only. A release promotion
+     may use a merge commit when repository policy permits it.
    - Do **not** create a long-lived local `integration`/`staging` branch as a private
      promotion pipeline. A disposable merge-test branch or worktree is fine, but delete
      it after validation.
@@ -91,8 +98,8 @@ Bad: “feat: add export.” It repeats a commit title without explaining the us
 The active topology is `dev → release/vX.Y.Z → main`:
 
 - **`dev`** is the default, protected integration branch. Normal PRs target it and use
-  required PRs, blocking CI, up-to-date-before-merge, squash merge, and automatic source
-  branch deletion.
+  required PRs, blocking CI, an external-state exact-head admission preflight, manual squash merge,
+  and automatic source branch deletion.
 - **`release/vX.Y.Z`** is an ephemeral release-candidate/soak branch cut from a green
   `dev` SHA. Stabilization fixes land there by PR and are immediately forward-ported to
   `dev`.
@@ -206,9 +213,13 @@ The repository policy requires the seven named .NET shard jobs plus the Node too
 web, docs, and changeset jobs on a branch that is up to date with `dev`. Path-conditional
 non-.NET jobs count as passing when skipped; the named .NET shard jobs intentionally run
 on every `dev` PR so GitHub emits each required context. The GitHub ruleset described in
-[`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) is **active**, so
-admission is mechanical: direct pushes to `dev` are rejected and merges are blocked until
-the branch is current and the required checks are green.
+[`.github/dev-branch-protection.md`](.github/dev-branch-protection.md) provides ordinary
+branch and CI protection. **Squad/Ralph external-state preflight owns admission**:
+the Coordinator/Ralph process and authoritative external Squad state are trusted
+operational components, while GitHub supplies PR evidence and CI only. Repository code
+does not create an adversarially immutable execution boundary. The coordinator must
+validate the closed findings policy and ledger state at the live head before manual
+squash merge.
 `Changeset advisory` now fails the build (not just a warning) when a release-relevant
 change has no changeset and no `changeset:not-required` exemption.
 
@@ -233,11 +244,14 @@ toolchain's single source of truth) through
 - push to `dev` → `:sha-<short>` and `:dev`
 - push to `release/vX.Y.Z` → `:sha-<short>` and `:rc-X.Y.Z`
 - push to `main` → `:sha-<short>` and `:main`
-- pull request paths that can affect images → build only, no push
 - tag push `vX.Y.Z` → `:sha-<short>`, `:X.Y.Z`, `:vX.Y.Z`, and `:latest`
 - manual `workflow_dispatch` → `:sha-<short>` plus the selected ref's channel tag
   for `dev`, `main`, or `release/vX.Y.Z`; other refs receive only `:sha-<short>`.
   An optional build-only dry run skips the push
+
+Pull requests do not trigger image builds; ordinary PR validation is provided by the
+[`CI` workflow](.github/workflows/ci.yml). Release images are built and published by the
+`vX.Y.Z` tag push that `npm run release:publish` creates.
 
 Every build publishes the immutable `sha-<short>` tag, so any image is addressable by
 the exact commit it was built from — the same identifier model
@@ -254,10 +268,10 @@ to build the tag images before it creates the GitHub Release.
   any live/deploy verification for runtime changes).
 - **Make sure the blocking CI jobs are green** and that you have not introduced new lint
   findings before asking for review.
-- **Update, retest, then squash-merge.** If another PR reaches `dev` first,
-  GitHub marks yours out of date. Update from `origin/dev`, resolve conflicts,
-  rerun relevant tests/CI, and merge only after all required checks are green
-  on the updated branch.
+- **Update, retest, then merge manually:** If another PR reaches `dev` first,
+  update from `origin/dev`, resolve conflicts, rerun relevant tests/CI and the
+  external-state preflight, then use
+  `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
 
 ### Target release milestone
 
@@ -302,7 +316,8 @@ Rules:
 Fork the repository on GitHub, clone **your fork**, add the canonical repository as
 the `upstream` remote, and create your short-lived branch from an up-to-date
 `upstream/dev`. Open the PR from that branch to `dev`; it follows the same CI,
-up-to-date, review, and squash-merge rules as every other contribution.
+up-to-date, review, external-state preflight, and manual squash-merge rules as every
+other contribution.
 
 Fork PRs do not receive repository secrets: CI uses the `pull_request` trigger (not
 `pull_request_target`) and its jobs do not use `secrets.*`. `CODEOWNERS` and a required
@@ -375,7 +390,7 @@ developed with **Squad**, a team of named agents (Trinity, Tank, Morpheus, Smith
 Seraph, Scribe, Ralph, Rai, and others), and can optionally route work to GitHub's
 `@copilot` coding agent when it is on the roster. This section documents how that
 agent-driven flow works. It does **not** replace the human workflow above — human
-contributors follow the same branch → up-to-date PR → squash-merge path in
+contributors follow the same branch → up-to-date PR → manual squash-merge path in
 [Making a change](#making-a-change) and can skip this section.
 
 **Issue-driven lifecycle.** Agent work is anchored to a GitHub issue and follows
@@ -398,23 +413,28 @@ to request Squad routing. Triage is a lightweight operating norm rather than a h
 handle P0 reports the same business day and route other new Squad issues within a few
 business days.
 
-The assigned agent branches as `squad/{issue-number}-{slug}`, commits with a
-conventional-commit message that references the issue (`Closes #{number}`, including the
-`Co-authored-by: Copilot` trailer), pushes, and opens a PR with `gh pr create` against
-`dev`. The full lifecycle, spawn context, and merge commands live in
+Before implementation dispatch, the Coordinator prepares the issue branch
+`squad/{issue-number}-{slug}` and a dedicated clean worktree, verifies that worktree's
+branch and CWD, and passes the absolute CWD to the assigned agent. The repository root is
+coordination-only when it is dirty or diverged: do not dispatch implementation from it.
+An agent commits the completed issue work on that branch before accepting another issue.
+After bounded independent review, it pushes and opens a draft PR with `gh pr create`
+against `dev`. Every delivery status reports the PR number (or no PR), branch, exact SHA,
+validation, and any blocker. The full lifecycle, spawn context, and merge commands live in
 [`.squad/templates/issue-lifecycle.md`](.squad/templates/issue-lifecycle.md); the
 orchestration rules live in [`.github/agents/squad.agent.md`](.github/agents/squad.agent.md).
 Agent PRs are gated by the same [CI](#continuous-integration) as everyone else's.
 
 **Branches vs. worktrees.** A **locally run** Squad agent (including a Copilot CLI agent)
-must use one dedicated git worktree per issue under [`.worktrees/`](.worktrees/), reusing it
-when collaborating on that issue. This prevents concurrent local agents from sharing a
-working tree or index. A **hosted** agent (such as GitHub's `@copilot` coding agent) uses the
-platform's isolated branch and environment instead — no local worktree applies. **Human
-contributors** may use a worktree as a convenience, but a plain short-lived branch in the
-main checkout is supported. The creation, reuse, dependency, team-root, and cleanup
-mechanics live in [`.squad/templates/worktree-reference.md`](.squad/templates/worktree-reference.md);
-do not duplicate them here.
+must use one dedicated clean git worktree per issue under [`.worktrees/`](.worktrees/),
+reusing it when collaborating on that issue. Parallel implementation is permitted only
+when every participating worktree is clean, prepared, and on its assigned issue branch.
+A **hosted** agent (such as GitHub's `@copilot` coding agent) uses the platform's isolated
+branch and environment instead — no local worktree applies. **Human contributors** may use
+a worktree as a convenience, but a plain short-lived branch in the main checkout is
+supported. The creation, reuse, dependency, team-root, and cleanup mechanics live in
+[`.squad/templates/worktree-reference.md`](.squad/templates/worktree-reference.md); do not
+duplicate them here.
 
 **New feature workflow.** Proposing a new feature or capability (agent or human):
 
@@ -457,15 +477,15 @@ mechanically blocks a spec-less feature PR. Reviewers are responsible for catchi
 
 **Peer review and the reviewer-rejection protocol.** **Changes requested** is ordinary
 review feedback: the original author may revise the same PR normally, with no lockout.
-Lockout occurs only when a Reviewer (Tester, Code Reviewer, Lead, or Rai for Responsible AI)
-explicitly declares **Rejected / independent rewrite required** — for example, with the
-exact PR comment marker `REJECTED — requires independent rewrite`. Then the original author
-is **locked out** of the next revision, a different agent must produce it, and the Reviewer
-chooses whether to reassign or escalate. The Coordinator enforces that rule mechanically.
-The rejection marker must remain on the PR so the author rotation is auditable on GitHub
-without Coordinator session history; a `status:locked-out` PR label may additionally be
-used when the repository creates it. The full rules are in the "Reviewer Rejection Protocol"
-section of `squad.agent.md`.
+When a Reviewer (Tester, Code Reviewer, Lead, or Rai for Responsible AI) rejects an
+artifact, they provide evidence and a defined corrective scope for one bounded pass. The
+Coordinator uses one fresh agent context, which may use the original author's named agent
+and charter; it must not impose an original-author lockout or rotate charters as theater.
+The stated finding and its evidence are re-reviewed after the pass. The Coordinator
+posts a new revalidation comment under the
+[PR Comment Writing Policy](.github/agents/squad.agent.md#pr-comment-writing-policy).
+The Coordinator escalates only when concrete design or safety risks remain unresolved.
+The full rules are in the "Reviewer Rejection Protocol" section of `squad.agent.md`.
 
 **Rubber-ducking.** Before a non-trivial or risky change ships, the Coordinator can invoke a
 `rubber-duck` review pass — a dedicated critical-feedback agent whose only job is to hunt for

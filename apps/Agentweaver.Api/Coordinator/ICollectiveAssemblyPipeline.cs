@@ -42,6 +42,11 @@ public interface ICollectiveAssemblyPipeline
     /// </summary>
     string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch);
 
+    /// <summary>Verifies that the reviewer worktree still represents the reviewed aggregate.</summary>
+    bool ReviewerWorktreeMatchesAggregate(
+        string reviewerWorktreePath,
+        string aggregateTreeHash);
+
     /// <summary>Releases any coordinator-scoped Build/Test pod and detached worktree.</summary>
     Task CleanupBuildTestResourcesAsync(
         string coordinatorRunId,
@@ -88,6 +93,27 @@ public sealed record CollectiveRaiResult(
     bool SafetyFlagged,
     bool RevisionRequested = false,
     string? Feedback = null);
+
+/// <summary>
+/// A typed, trusted failure while invoking the collective RAI provider. Only retryable instances
+/// qualify for the coordinator's one gate-only retry.
+/// </summary>
+public sealed class CollectiveRaiInfrastructureException : Exception
+{
+    public string Reason { get; }
+    public bool Retryable { get; }
+
+    public CollectiveRaiInfrastructureException(
+        string reason,
+        string message,
+        bool retryable,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Reason = string.IsNullOrWhiteSpace(reason) ? "rai_infrastructure_failure" : reason;
+        Retryable = retryable;
+    }
+}
 
 /// <summary>Inputs to the collective rubber-duck review of the aggregate diff.</summary>
 /// <param name="WorktreePath">

@@ -1,0 +1,233 @@
+---
+name: "git-workflow"
+description: "Squad branching model: dev-first workflow with insiders preview channel"
+domain: "version-control"
+confidence: "high"
+source: "team-decision"
+---
+
+## Context
+
+Squad uses a three-branch model. **All feature work starts from `dev`, not `main`.**
+
+| Branch | Purpose | Publishes |
+|--------|---------|-----------|
+| `main` | Released, tagged, in-npm code only | `npm publish` on tag |
+| `dev` | Integration branch — all feature work lands here | `npm publish --tag preview` on merge |
+| `insiders` | Early-access channel — synced from dev | `npm publish --tag insiders` on sync |
+
+## Branch Naming Convention
+
+Issue branches MUST use: `squad/{issue-number}-{kebab-case-slug}`
+
+Examples:
+- `squad/195-fix-version-stamp-bug`
+- `squad/42-add-profile-api`
+
+## Workflow for Issue Work
+
+1. **Prepare a clean issue worktree and branch from dev before dispatching implementation:**
+   ```bash
+   git fetch origin dev
+   git worktree add .worktrees/{issue-number} -b squad/{issue-number}-{slug} origin/dev
+   git -C .worktrees/{issue-number} status --short --branch
+   ```
+   Confirm the worktree is clean, on the assigned branch, and pass its absolute path as the
+   agent's explicit CWD. A dirty or diverged root is coordination-only, never an
+   implementation CWD.
+
+2. **Mark issue in-progress:**
+   ```bash
+   gh issue edit {number} --add-label "status:in-progress"
+   ```
+
+3. **Do the work.** Make changes, write tests, and commit the completed issue on its own
+   branch before accepting another issue.
+
+4. **Run bounded independent review, then push and open a draft PR:**
+   ```bash
+   git push -u origin squad/{issue-number}-{slug}
+   gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
+   ```
+   Mark the PR ready only after required validation and independent review/admission have
+   completed with no unresolved blocker:
+   ```bash
+   gh pr ready <number>
+   gh pr merge <number> --squash --match-head-commit <validated-sha>
+   ```
+   Before ready and immediately before this command, Ralph fetches `origin/dev`, gets
+   the live PR head SHA, and runs
+   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha>`.
+   The preflight uses the pinned Squad SDK to resolve declared external state and checks
+   the coordinator-owned findings ledger. Ralph records the returned
+   `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
+   and authoritative external Squad state are trusted operational components; GitHub is
+   evidence and CI only, and repository code is not an adversarially immutable boundary.
+   Confirm the PR reports `MERGED`, `mergedAt`, and merge SHA before dispatching
+   dependent work.
+
+5. **Report delivery status:** PR number (or no PR), branch, exact commit SHA, validation
+   run, and any blocker.
+
+6. **After confirmed merge to dev, clean up non-destructively:** First verify the PR is
+   merged and verify no unmerged or blocked dependent needs the local worktree. Then remove
+   the worktree and delete only the fully merged local branch:
+   ```bash
+   gh pr view <number> --json state,mergedAt
+   git worktree remove .worktrees/{issue-number}
+   git worktree prune
+   git branch -d squad/{issue-number}-{slug}
+   ```
+   Do not use `-D`, do not remove a worktree for an unmerged or blocked dependency, and do
+   not delete a remote branch that GitHub already removed after the confirmed merge.
+
+## Parallel Multi-Issue Work (Worktrees)
+
+When the coordinator routes multiple issues simultaneously (e.g., "fix bugs X, Y, and Z"),
+use `git worktree` to give each agent an isolated working directory. Parallel implementation
+is allowed only after every worktree is clean, prepared, and verified on its assigned issue
+branch. No filesystem collisions, no branch-switching overhead.
+
+### When to Use Worktrees vs Sequential
+
+| Scenario | Strategy |
+|----------|----------|
+| Single issue | Standard workflow above — one clean, dedicated issue worktree; implementation never runs in the main checkout |
+| 2+ simultaneous issues in same repo | Worktrees — one per issue |
+| Work spanning multiple repos | Separate clones as siblings (see Multi-Repo below) |
+
+### Setup
+
+From the main clone (must be on dev or any branch):
+
+```bash
+# Ensure dev is current
+git fetch origin dev
+
+# Create a worktree per issue — siblings to the main clone
+git worktree add ../squad-195 -b squad/195-fix-stamp-bug origin/dev
+git worktree add ../squad-193 -b squad/193-refactor-loader origin/dev
+```
+
+**Naming convention:** `../{repo-name}-{issue-number}` (e.g., `../squad-195`, `../squad-pr-42`).
+
+Each worktree:
+- Has its own working directory and index
+- Is on its own `squad/{issue-number}-{slug}` branch from dev
+- Shares the same `.git` object store (disk-efficient)
+
+### Per-Worktree Agent Workflow
+
+Each agent operates inside its worktree exactly like the single-issue workflow:
+
+```bash
+cd ../squad-195
+
+# Work normally — commits, tests, pushes
+git add -A && git commit -m "fix: stamp bug (#195)"
+git push -u origin squad/195-fix-stamp-bug
+
+# Create PR targeting dev
+gh pr create --base dev --title "fix: stamp bug" --body "Closes #195" --draft
+```
+
+All PRs target `dev` independently. Agents never interfere with each other's filesystem.
+
+The same isolation is mandatory for a single issue: prepare the dedicated issue worktree in the first workflow step and make it the agent's only implementation CWD. The main clone remains coordination-only.
+
+### .squad/ State in Worktrees
+
+The `.squad/` directory exists in each worktree as a copy. This is safe because:
+- `.gitattributes` declares `merge=union` on append-only files (history.md, decisions.md, logs)
+- Each agent appends to its own section; union merge reconciles on PR merge to dev
+- **Rule:** Never rewrite or reorder `.squad/` files in a worktree — append only
+
+### Cleanup After Merge
+
+After a worktree's PR is confirmed merged to dev and no unmerged or blocked dependent
+requires it, use the same non-destructive cleanup checkpoint:
+
+```bash
+# From the main clone
+gh pr view <number> --json state,mergedAt
+git worktree remove ../squad-195
+git worktree prune          # clean stale metadata
+git branch -d squad/195-fix-stamp-bug
+```
+
+If a worktree was deleted manually (rm -rf), `git worktree prune` recovers the state.
+Never use `git branch -D` or remove the worktree of an unmerged/blocked dependency.
+
+---
+
+## Multi-Repo Downstream Scenarios
+
+When work spans multiple repositories (e.g., squad-cli changes need squad-sdk changes, or a user's app depends on squad):
+
+### Setup
+
+Clone downstream repos as siblings to the main repo:
+
+```
+~/work/
+  squad-pr/          # main repo
+  squad-sdk/         # downstream dependency
+  user-app/          # consumer project
+```
+
+Each repo gets its own issue branch following its own naming convention. If the downstream repo also uses Squad conventions, use `squad/{issue-number}-{slug}`.
+
+### Coordinated PRs
+
+- Create PRs in each repo independently
+- Link them in PR descriptions:
+  ```
+  Closes #42
+
+  **Depends on:** squad-sdk PR #17 (squad-sdk changes required for this feature)
+  ```
+- Merge order: dependencies first (e.g., squad-sdk), then dependents (e.g., squad-cli)
+
+### Local Linking for Testing
+
+Before pushing, verify cross-repo changes work together:
+
+```bash
+# Node.js / npm
+cd ../squad-sdk && npm link
+cd ../squad-pr && npm link squad-sdk
+
+# Go
+# Use replace directive in go.mod:
+# replace github.com/org/squad-sdk => ../squad-sdk
+
+# Python
+cd ../squad-sdk && pip install -e .
+```
+
+**Important:** Remove local links before committing. `npm link` and `go replace` are dev-only — CI must use published packages or PR-specific refs.
+
+### Worktrees + Multi-Repo
+
+These compose naturally. You can have:
+- Multiple worktrees in the main repo (parallel issues)
+- Separate clones for downstream repos
+- Each combination operates independently
+
+---
+
+## Anti-Patterns
+
+- ❌ Branching from main (branch from dev)
+- ❌ PR targeting main directly (target dev)
+- ❌ Non-conforming branch names (must be squad/{number}-{slug})
+- ❌ Committing directly to main or dev (use PRs)
+- ❌ Switching branches in the main clone while worktrees are active (use worktrees instead)
+- ❌ Using worktrees for cross-repo work (use separate clones)
+- ❌ Leaving stale worktrees after PR merge (clean up immediately)
+
+## Promotion Pipeline
+
+- dev → insiders: Automated sync on green build
+- dev → main: Manual merge when ready for stable release, then tag
+- Hotfixes: Branch from main as `hotfix/{slug}`, PR to dev, cherry-pick to main if urgent

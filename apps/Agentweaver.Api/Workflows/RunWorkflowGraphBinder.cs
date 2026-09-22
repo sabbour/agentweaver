@@ -187,7 +187,7 @@ internal static class RunWorkflowGraphBinder
                     $"Cannot bind node '{node.Id}' (type='{node.Type}'): non-terminal nodes must have at least one outgoing edge.");
             }
 
-            if (node.Type == WorkflowNodeType.Check && NormalizeDeclaredGateKind(node.GateKind) is null)
+            if (node.Type == WorkflowNodeType.Check && NodeClassifier.NormalizeGateKind(node) is null)
             {
                 var gate = string.IsNullOrWhiteSpace(node.GateKind) ? "(missing)" : node.GateKind;
                 errors.Add(
@@ -529,12 +529,17 @@ internal static class RunWorkflowGraphBinder
                 return true;
             }
 
-            // RAI cleared (has a diff) -> AI peer-review verdict gate.
+            // RAI cleared -> AI peer-review verdict gate. Software safety gates use approved/pass
+            // to enter build_test directly; catalog RAI gates retain their review verdict behavior.
+            case (NodeKind.Rai, NodeKind.PeerReview, "approved"):
+            case (NodeKind.Rai, NodeKind.PeerReview, "pass"):
             case (NodeKind.Rai, NodeKind.PeerReview, "review"):
             {
                 var storer = s.StoreAgentOutputAdapter(edge);
                 g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), storer,
-                    output => output is not null && !output.RaiRevisionRequired && !string.IsNullOrEmpty(output.Diff))
+                    output => output is not null && !output.RaiRevisionRequired &&
+                        !output.ContentSafetyFlagged &&
+                        (edge.When is "approved" or "pass" || !string.IsNullOrEmpty(output.Diff)))
                  .AddEdge(storer, s.ResolvePeerReviewNode(toNode));
                 return true;
             }
@@ -765,18 +770,6 @@ internal static class RunWorkflowGraphBinder
         def.Edges.Any(e => string.Equals(e.From, node.Id, StringComparison.Ordinal)
             && e.When is not null && VerdictWhens.Contains(e.When));
 
-    private static string? NormalizeDeclaredGateKind(string? gateKind)
-    {
-        if (string.IsNullOrWhiteSpace(gateKind)) return null;
-        return gateKind.Trim().Replace('_', '-').Replace(' ', '-').ToLowerInvariant() switch
-        {
-            "rai" => "rai",
-            "review" or "human-review" => "human-review",
-            "rubberduck" or "rubber-duck" => "rubberduck",
-            _ => null,
-        };
-    }
-
     private static bool CanBindTransition(
         WorkflowDefinition definition,
         WorkflowEdge edge,
@@ -814,7 +807,7 @@ internal static class RunWorkflowGraphBinder
             (NodeKind.OpenPullRequest, NodeKind.Scribe, null) => true,
             (NodeKind.Rai, NodeKind.Merge, "review") => true,
             (NodeKind.Rai, NodeKind.Agent, "review") => true,
-            (NodeKind.Rai, NodeKind.PeerReview, "review") => true,
+            (NodeKind.Rai, NodeKind.PeerReview, "approved" or "pass" or "review") => true,
             (NodeKind.Rai, NodeKind.Rubberduck, "review") => true,
             (NodeKind.PeerReview, NodeKind.Merge, "approved" or "pass") => true,
             (NodeKind.PeerReview, NodeKind.PeerReview, "approved" or "pass") => true,

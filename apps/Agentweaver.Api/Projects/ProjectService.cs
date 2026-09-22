@@ -326,10 +326,9 @@ public sealed class ProjectService
         foreach (var run in activeRuns)
         {
             workflowRegistry.Abandon(run.Id.ToString());
-            await runStore.TrySetTerminalStatusAsync(
+            await runStore.TrySetTerminalOutcomeAsync(
                 run.Id,
-                RunStatus.Failed,
-                DateTimeOffset.UtcNow,
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "cancelled: project deleted" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
                 "cancelled: project deleted",
                 ct).ConfigureAwait(false);
             _logger.LogInformation(

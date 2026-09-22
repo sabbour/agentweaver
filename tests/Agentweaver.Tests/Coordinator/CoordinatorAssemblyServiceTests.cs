@@ -20,6 +20,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Tests.Helpers;
 using Agentweaver.Domain;
@@ -3081,6 +3082,94 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await assembly;
     }
 
+    [Fact]
+    public async Task RunAssembly_RetryableRaiFailure_RerunsOnlyRaiAgainstPersistedAggregate()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var childRunId = RunId.New();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedChildRunAsync(childRunId, "child-branch", "child diff", coordinatorRunId);
+        await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new[] { childRunId.ToString() });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.RaiFailuresRemaining = 1;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var assembly = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitUntilArmedAsync(coordinatorRunId);
+
+        _pipeline.IntegrationBuilds.Should().Be(1);
+        _pipeline.RaiAttempts.Should().Be(2);
+        var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId));
+        persisted!.TreeHash.Should().Be("agg-tree");
+        persisted.Diff.Should().Be("aggregate diff");
+        (await _runStore.GetRunsByParentAsync(coordinatorRunId))
+            .Select(child => child.Id).Should().ContainSingle().Which.Should().Be(childRunId);
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyRaiRetry);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var retry = await db.RunEvents.SingleAsync(e =>
+                e.RunId == coordinatorRunId && e.EventType == EventTypes.CoordinatorAssemblyRaiRetry);
+            using var payload = JsonDocument.Parse(retry.PayloadJson);
+            payload.RootElement.GetProperty("attempt").GetInt32().Should().Be(2);
+            payload.RootElement.GetProperty("retryOfAttempt").GetInt32().Should().Be(1);
+        }
+
+        cts.Cancel();
+        await assembly;
+    }
+
+    [Fact]
+    public async Task RunAssembly_RetryableRaiFailure_RefusesRetryWhenReviewerArtifactChanged()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.RaiFailuresRemaining = 1;
+        _pipeline.ReviewerWorktreeMatches = false;
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.RaiAttempts.Should().Be(1);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.Status.Should().Be(RunStatus.Failed);
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyRaiRetry);
+    }
+
+    [Fact]
+    public void RaiAgentTurnInternalError_IsRecognizedAsTrustedRetryableInfrastructureFailure()
+    {
+        var agentTurnFailure = new AgentProviderException(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.ProviderUnavailable,
+            "agent_turn_internal_error",
+            "The agent turn ended unexpectedly.",
+            isRetryable: true);
+
+        var result = CollectiveAssemblyPipeline.ToCollectiveRaiInfrastructureException(agentTurnFailure);
+
+        result.Reason.Should().Be("agent_turn_internal_error");
+        result.Retryable.Should().BeTrue();
+        result.InnerException.Should().BeSameAs(agentTurnFailure);
+    }
+
+    [Fact]
+    public async Task RunAssembly_UntypedRaiFailure_DoesNotRetry()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.RaiThrowsUntyped = true;
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.RaiAttempts.Should().Be(1);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.Status.Should().Be(RunStatus.Failed);
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyRaiRetry);
+    }
+
     // ── coordinator decision promotion ──────────────────────────────────────────────────────────
 
     [Fact]
@@ -3707,11 +3796,16 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         });
     }
 
-    private async Task SeedChildRunAsync(RunId runId, string worktreeBranch, string diff)
+    private async Task SeedChildRunAsync(
+        RunId runId,
+        string worktreeBranch,
+        string diff,
+        string? parentRunId = null)
     {
         await _runStore.InsertAsync(new Run
         {
             Id = runId,
+            ParentRunId = parentRunId,
             RepositoryPath = "repo",
             OriginatingBranch = "main",
             ModelSource = ModelSource.GitHubCopilot,
@@ -3804,6 +3898,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public int IntegrationBuildThrowsRemaining;
         public CollectiveGateDecision? BuildTestDecision;
         public CollectiveRaiResult? RaiResult;
+        public int RaiAttempts;
+        public int RaiFailuresRemaining;
+        public bool RaiThrowsUntyped;
+        public bool ReviewerWorktreeMatches = true;
         public Action<CollectiveBuildTestRequest>? OnBuildTest;
         public Action? OnCleanupBuildTestResources;
         public Func<CollectiveScribeRequest, CancellationToken, Task>? OnScribe;
@@ -3836,7 +3934,15 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         public Task<CollectiveRaiResult> RunRaiAsync(CollectiveRaiRequest request, CancellationToken ct)
         {
+            RaiAttempts++;
             LastRaiRequest = request;
+            if (RaiThrowsUntyped)
+                throw new InvalidOperationException("untrusted RAI failure");
+            if (RaiFailuresRemaining-- > 0)
+            {
+                throw new CollectiveRaiInfrastructureException(
+                    "github_copilot_rate_limited", "temporary RAI provider failure", retryable: true);
+            }
             return Task.FromResult(RaiResult ?? new CollectiveRaiResult(SafetyFlagged: false));
         }
 
@@ -3866,6 +3972,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         public string GetBuildTestWorktreePath(string coordinatorRunId) =>
             $"/workspace/assembly-build-test-{coordinatorRunId}";
+
+        public bool ReviewerWorktreeMatchesAggregate(string reviewerWorktreePath, string aggregateTreeHash) =>
+            ReviewerWorktreeMatches;
 
         public int ReviewerWorktreePreparations;
         public string? LastReviewerWorktreeIntegrationBranch;

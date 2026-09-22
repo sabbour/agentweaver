@@ -19,7 +19,6 @@ name: Publish images
 #   push to dev              -> :sha-<short>, :dev
 #   push to release/vX.Y.Z   -> :sha-<short>, :rc-X.Y.Z
 #   push to main             -> :sha-<short>, :main
-#   pull request             -> build only, no push
 #   push tag vX.Y.Z          -> :sha-<short>, :X.Y.Z, :vX.Y.Z, :latest
 #   workflow_dispatch        -> :sha-<short> plus the selected ref channel tag
 #
@@ -33,16 +32,6 @@ name: Publish images
 # it publishes images to GitHub, it does not deploy to any cluster.
 
 on:
-  pull_request:
-    paths:
-      - 'apps/web/**'
-      - 'apps/Agentweaver.*/**'
-      - 'packages/**'
-      - 'Directory.Build.props'
-      - '**/Dockerfile'
-      - '.github/workflows/publish-images.yml'
-      - 'scripts/azure/image-spec.mjs'
-      - 'scripts/ci/ghcr-plan.mjs'
   push:
     branches:
       - dev
@@ -114,7 +103,7 @@ jobs:
   #
   # Runs unconditionally so that `build` (which needs this job) is never
   # skipped due to a skipped dependency. The filter step runs on branch pushes
-  # and pull request events. It does not run on tag pushes.
+  # events. It does not run on tag pushes.
   changes:
     name: Detect changed images
     runs-on: ubuntu-latest
@@ -125,11 +114,11 @@ jobs:
       agentweaver-agent-host: ${{ steps.filter.outputs.agentweaver-agent-host }}
     steps:
       - uses: actions/checkout@v4
-        if: (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request'
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
 
       - uses: dorny/paths-filter@v3
         id: filter
-        if: (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) || github.event_name == 'pull_request'
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
         with:
           filters: |
             agentweaver-api:
@@ -187,10 +176,6 @@ jobs:
     # Always run the job so the matrix can expand; per-image path filtering
     # is enforced at the build step level (where matrix context is valid).
     # Tag and workflow_dispatch events do not use changed-image outputs.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event_name == 'pull_request' ||
-      github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -225,66 +210,36 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push)
+        if: github.event_name != 'workflow_dispatch' || inputs.push
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # A `vX.Y.Z` tag push runs against the exact commit that
-      # `npm run release:publish` validated as HEAD of `main`. The `sha-<short>`
-      # image was normally built by the `push`-to-`main` run. Retagging the
-      # already-published digest with `imagetools create` is a manifest-only
-      # operation. It produces the same image under the release version tags.
-      - name: Check for already-published sha image (release retag fast path)
-        id: existing
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          set -euo pipefail
-          SHA_TAG=$(printf '%s\n' "${{ matrix.tags }}" | grep ':sha-' | head -n1)
-          if [ -z "$SHA_TAG" ]; then
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "sha_tag=$SHA_TAG" >> "$GITHUB_OUTPUT"
-          if docker buildx imagetools inspect "$SHA_TAG" >/dev/null 2>&1; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Retag already-published image for this release (skip rebuild)
-        if: startsWith(github.ref, 'refs/tags/v') && steps.existing.outputs.found == 'true'
-        run: |
-          set -euo pipefail
-          args=()
-          while IFS= read -r t; do
-            [ -n "$t" ] && args+=(--tag "$t")
-          done <<< "${{ matrix.tags }}"
-          docker buildx imagetools create "${args[@]}" "${{ steps.existing.outputs.sha_tag }}"
-
       # IMAGE_TAG/GIT_SHA feed the org.opencontainers.image.version/revision
       # labels and the runtime provenance env vars every Dockerfile declares,
       # so a running container can always report the exact build it came from.
+      # Release tag pushes must build with their semver primary tag even when
+      # the same commit already has a sha-* image: manifest retagging cannot
+      # replace the IMAGE_TAG baked into the existing image.
       # The GitHub Actions layer cache keeps unchanged images (notably the
       # heavy agent-host) cheap on the runs where they do build.
       # `matrix` context is available in step-level `if` (not job-level), so
       # the path-filter guard lives here. Main, tag, and dispatch events build
-      # all images. Pull requests and non-main pushes build changed images.
+      # all images. Other eligible branch pushes build changed images.
       - name: Build and push ${{ matrix.name }}
         if: >-
           (github.event_name == 'workflow_dispatch' ||
            startsWith(github.ref, 'refs/tags/v') ||
            github.ref == 'refs/heads/main' ||
-           needs.changes.outputs[matrix.name] == 'true') &&
-          !(startsWith(github.ref, 'refs/tags/v') && steps.existing.outputs.found == 'true')
+           needs.changes.outputs[matrix.name] == 'true')
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.push) }}
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push }}
           tags: ${{ matrix.tags }}
           build-args: |
             IMAGE_TAG=${{ needs.plan.outputs.primary_tag }}

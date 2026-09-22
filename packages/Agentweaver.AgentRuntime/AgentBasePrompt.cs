@@ -46,9 +46,6 @@ internal static class AgentBasePrompt
           use it through shell commands only, because file tools remain restricted to the workspace.
         - Report findings, verdicts, and your self-assessment by calling report_outcome(achieved,
           reason); the outcome is captured in the run record and surfaced in the UI — no file needed.
-        - Persist durable project facts with record_memory, and cross-cutting decisions with
-          submit_decision, instead of writing them to files.
-
         SHELL COMMANDS — ALWAYS USE run_command
         Run EVERY shell/terminal command through the run_command tool. This runtime's native
         shell/bash tool is permanently disabled: every call to a built-in bash/sh/shell tool is
@@ -90,25 +87,31 @@ internal static class AgentBasePrompt
         Do not install tools that are already present — check the manifest first.
         """;
 
-    /// <summary>
-    /// Team-coordination guidance for list_decisions/get_memory/list_inbox/submit_decision.
-    /// These tools only exist in the session's tool list when Agentweaver API tools were built
-    /// (i.e. projectId and agentName were both supplied — see
-    /// <see cref="CopilotAIAgent.BuildSessionConfigTools"/>). Appending this section
-    /// unconditionally caused agents in tool-less sessions to hallucinate calls to these tool
-    /// names (#268); callers must only include it when those tools are actually registered.
-    /// </summary>
-    internal const string TeamCoordination =
-        """
+    internal static string Build(IEnumerable<string> registeredToolNames)
+    {
+        var memoryTools = registeredToolNames
+            .Where(AgentweaverApiTools.ToolNames.Contains)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
-        TEAM COORDINATION — READ BEFORE YOU DECIDE, WRITE WHEN YOU DECIDE
-        Before committing to any notable cross-cutting implementation choice (API shape, tech
-        selection, file layout, integration pattern), call list_decisions, get_memory, and
-        list_inbox to check what peers have already decided or are proposing. This prevents
-        conflicting choices from landing in parallel runs.
-        When you make a significant cross-cutting decision of your own, call submit_decision
-        so other agents can see it before they make dependent choices. Namespace your slug by
-        topic and agent (e.g. 'api-shape--yourname') so peer decisions on the same topic can
-        coexist in the inbox without collision.
+        if (memoryTools.Length == 0)
+            return Base;
+
+        return Base + $$"""
+
+        ## Project memory and coordination
+        The callable project-memory tools for this turn are: {{string.Join(", ", memoryTools)}}.
+        Use them only for significant reusable facts or cross-cutting decisions, not routine
+        progress. Consult available project context before making a notable implementation choice,
+        and follow each tool declaration for its required arguments and scope.
         """;
+    }
+
+    internal static string Compose(string? systemPromptContext, IEnumerable<string> registeredToolNames)
+    {
+        var prompt = Build(registeredToolNames);
+        return string.IsNullOrEmpty(systemPromptContext)
+            ? prompt
+            : prompt + "\n\n" + systemPromptContext;
+    }
 }

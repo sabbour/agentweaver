@@ -73,6 +73,99 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task Draft_MandatoryDecisionContextOverBudget_ThrowsBeforeCallingDrafter()
+    {
+        using var budgetFactory = CoordinatorWebApplicationFactory.CreateWithMemoryContextMaxTokens(1);
+        var projectId = $"project-{Guid.NewGuid():N}";
+        await using (var scope = budgetFactory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Decisions.Add(new Decision
+            {
+                ProjectId = projectId,
+                AgentName = "Coordinator",
+                Type = "architectural",
+                Status = "active",
+                Title = "Mandatory boundary",
+                Content = new string('d', 128),
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Run,
+                SourceIdentity = "run:coordinator",
+                ApprovedBy = CoordinatorWebApplicationFactory.OwnerUser,
+                ApprovedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var drafter = budgetFactory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var coordinator = budgetFactory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        var input = new CoordinatorDraftInput(
+            "run-oversized-mandatory-context",
+            projectId,
+            "Draft an outcome spec without dropping mandatory decisions.",
+            CoordinatorWebApplicationFactory.OwnerUser,
+            budgetFactory.NewWorkingDirectory(),
+            null);
+
+        var act = () => coordinator.DraftAndPersistAsync(input, CancellationToken.None);
+
+        await act.Should().ThrowAsync<MandatoryContextBudgetExceededException>();
+        drafter.LastInput.Should().BeNull(
+            "mandatory decisions must not be dropped before outcome-spec drafting starts");
+    }
+
+    [Fact]
+    public async Task Start_MandatoryDecisionContextOverBudget_EmitsTypedTerminalFailure()
+    {
+        var projectId = await CreateProjectAsync();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Decisions.Add(new Decision
+            {
+                ProjectId = projectId,
+                AgentName = "Coordinator",
+                Type = "architectural",
+                Status = "active",
+                Title = "Mandatory boundary",
+                Content = new string('d', 100_000),
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Run,
+                SourceIdentity = "run:coordinator",
+                ApprovedBy = CoordinatorWebApplicationFactory.OwnerUser,
+                ApprovedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var runId = await StartOrchestrationAsync(
+            projectId, "Fail visibly when mandatory coordinator context exceeds its budget.");
+
+        JsonElement[]? events = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            var response = await _owner.GetAsync($"/api/runs/{runId}/events");
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            events = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+            if (events?.Any(e => e.GetProperty("type").GetString() == EventTypes.RunFailed) == true)
+                break;
+            await Task.Delay(50);
+        }
+
+        var failed = events.Should().NotBeNull().And.Subject
+            .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
+        var payload = failed.GetProperty("payload");
+        payload.GetProperty("errorCode").GetString().Should().Be("mandatory_context_budget_exceeded");
+        payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Start_DraftsSpec_PersistsAwaitingConfirmation_EmitsEvent_SuspendsAtGate()
     {
         var projectId = await CreateProjectAsync();

@@ -707,9 +707,11 @@ public sealed class ToolApprovalEndpointTests
         await secretStore.SetSecretAsync(
             PreviewRunnerCredential.SecretKey(runId.ToString()),
             "pod-approval-credential");
-        agentHost.Terminalize = () => runStore.TrySetTerminalStatusAsync(
+        agentHost.Terminalize = () => runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
             runId,
             RunStatus.Failed,
+            EventTypes.RunFailed,
+            new { reason = "terminal-race" },
             DateTimeOffset.UtcNow,
             "terminal-race",
             CancellationToken.None);
@@ -1697,9 +1699,11 @@ public sealed class ToolApprovalEndpointTests
             string? url,
             ApprovalScope scope)
         {
-            await runStore.TrySetTerminalStatusAsync(
+            await runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
                 RunId.Parse(runId),
                 RunStatus.Failed,
+                EventTypes.RunFailed,
+                new { reason = "terminal-race" },
                 DateTimeOffset.UtcNow,
                 "terminal-race",
                 CancellationToken.None);
