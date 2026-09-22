@@ -22,10 +22,18 @@ const branch = 'squad/1502-evidence-admission';
 const headSha = 'a'.repeat(40);
 const baseSha = 'b'.repeat(40);
 const trustedRuntime = {
-  kind: 'agentweaver.squad-admission-runtime/v1',
+  kind: 'agentweaver.squad-admission-runtime/v2',
   source: { ref: 'refs/remotes/origin/dev', commit: 'c'.repeat(40) },
-  launcherDigest: `sha256:${'d'.repeat(64)}`,
-  policyDigest: `sha256:${'e'.repeat(64)}`,
+  files: Object.fromEntries([
+    'scripts/ci/squad-admission-launcher.mjs',
+    'scripts/ci/squad-admission-authority.mjs',
+    'scripts/ci/squad-admission-ledger.mjs',
+    'scripts/ci/squad-admission-preflight.mjs',
+  ].map((path, index) => [path, {
+    objectId: String(index + 1).repeat(40),
+    digest: `sha256:${String.fromCharCode(97 + index).repeat(64)}`,
+  }])),
+  aggregateDigest: `sha256:${'f'.repeat(64)}`,
 };
 const target = { type: 'worktree', worktree, branch, headSha };
 const reviewers = {

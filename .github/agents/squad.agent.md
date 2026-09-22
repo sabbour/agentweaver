@@ -403,9 +403,10 @@ validation evidence.
   The helper runs one exact argv command only when the current absolute CWD, git top-level,
   branch, and HEAD match the assigned worktree and candidate SHA before and after execution.
   It never switches or repairs repository state.
-- Candidate repository bytes are evidence only. Materialize
-  `agentweaver.squad-admission-findings/v3` only through the external runtime-owned
-  admission installation from structured exact-head review outputs and validation
+- Candidate repository bytes are evidence only. After all candidate validation commands
+  finish, materialize `agentweaver.squad-admission-findings/v3` only through launcher and
+  policy bytes extracted by Git object ID from a freshly fetched exact `origin/dev`
+  commit, using structured exact-head review outputs and validation
   evidence. Never infer an approval, finding, correction, or missing evidence. Write
   atomically, then read and validate through the same configured state backend. Non-local
   state requires its runtime adapter and never falls back to filesystem writes.
@@ -414,12 +415,14 @@ validation evidence.
   or provenance-mismatched evidence blocks `gh pr ready <number>`. Ralph runs a fresh
   preflight again immediately before
   `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph fetches
-  `origin/dev`, gets the live PR head and base SHAs, and runs the absolute external
-  `<team-root>/admission/runtime/squad-admission-launcher.mjs` with its adjacent runtime
-  manifest, repository, PR number, absolute worktree, head SHA, base SHA, team root, and
-  backend. Never execute the candidate checkout's admission launcher, policy, ledger, or
-  preflight modules. The external launcher verifies its digest and all installed policy
-  digests, and records those digests plus the exact trusted source ref/commit and base SHA.
+  `origin/dev`, gets the live PR head and base SHAs, extracts
+  `scripts/ci/squad-admission-launcher.mjs` from that base commit into a private temporary
+  directory, and runs the exact PowerShell 7 `materialize`/`preflight` procedure documented
+  in `CONTRIBUTING.md`. Never execute the candidate checkout's admission launcher, policy,
+  ledger, or preflight modules. The launcher refetches and binds the base, verifies its
+  fetched blob, extracts and verifies the policy modules by Git object ID, records all
+  object IDs/digests plus the aggregate digest and exact source ref/commit/base SHA, and
+  removes ephemeral files on success or failure.
   The preflight resolves the authoritative root and backend
   from the primary-checkout Squad configuration and rejects mismatched, unconfigured, or
   non-canonical caller values. It derives the applicable post-implementation reviewer
@@ -429,17 +432,18 @@ validation evidence.
   declared review source, exact-head validation, and resolved required finding or explicit
   waiver. For non-local backends, call the exported functions with the runtime-owned
   adapter; never fall back to filesystem state. Coordinator/Ralph and authoritative
-  external Squad state are
-  trusted operational components; GitHub is evidence and CI only, and repository code
-  does not provide an adversarially immutable execution boundary. PR comments preserve
+  external Squad   state, the host, Git, and the configured remote are trusted operational components;
+  GitHub is evidence and CI only, and repository code does not provide an adversarially
+  immutable execution boundary. Concurrent same-user modification of Git objects or
+  trusted temporary files is a compromised host outside this claim. PR comments preserve
   evidence but do not enforce admission. Confirm the PR is actually merged before
   dependents proceed.
 - **V3 bootstrap:** PR #1504 may use only the pre-existing v1/manual exact-head admission
   procedure because its candidate source cannot approve itself. After its squash merge is
-  on an exact fetched `origin/dev` commit, Coordinator/Ralph installs the four runtime
-  files from that commit into external state, records source identity and SHA-256 digests
-  in the manifest, and atomically activates it. Every later PR must use that installation;
-  v1/manual fallback and candidate execution are forbidden.
+  on an exact fetched `origin/dev` commit, every materialize/preflight invocation extracts
+  and uses those trusted base bytes. There is no install step or persistent runtime
+  authorization directory. Every later PR must use this path; v1/manual fallback and
+  candidate execution are forbidden.
 - **Merged-work cleanup checkpoint:** after the merge is confirmed, use the non-destructive
   cleanup procedure in the `git-workflow` skill for that issue worktree and branch. First
   verify the PR merged and that no unmerged or blocked dependent still needs the worktree;

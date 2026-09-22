@@ -85,11 +85,13 @@ the versioned finding ledger at `admission/findings/<repository>/<pr>.json` in
 authoritative external Squad state. The coordinator hands Ralph the PR number, live
 `headRefOid`, required review findings, ceremony evidence, and any RFD decision that
 governed the change. Before ready and immediately before manual squash merge, Ralph fetches `origin/dev`,
-gets the live head and base SHAs, and runs the external runtime-owned launcher:
+gets the live head and base SHAs, extracts the launcher from that base commit, and runs it
+from a private temporary directory:
 
 ```bash
-node <team-root>/admission/runtime/squad-admission-launcher.mjs preflight \
-  --runtime-manifest <team-root>/admission/runtime/squad-admission-runtime.json \
+node <ephemeral>/scripts/ci/squad-admission-launcher.mjs preflight \
+  --launcher-path <ephemeral>/scripts/ci/squad-admission-launcher.mjs \
+  --base-ref refs/remotes/origin/dev \
   --repository <owner/repository> --pr-number <number> \
   --worktree <absolute-worktree> --head-sha <live-head-sha> \
   --base-sha <trusted-live-base-sha> --team-root <absolute-team-root> \
@@ -97,17 +99,22 @@ node <team-root>/admission/runtime/squad-admission-launcher.mjs preflight \
 gh pr merge <number> --squash --match-head-commit <validated-sha>
 ```
 
-Never execute admission code from the candidate checkout. The external launcher verifies
-its own digest and the installed policy digest, records those values with the exact trusted
+Before this command, use the exact PowerShell 7 fetch/archive/`try`/`finally` procedure in
+`CONTRIBUTING.md`; `materialize` uses the same arguments plus `--input <absolute-json>`.
+Never execute admission code from the candidate checkout. The launcher refetches the base,
+verifies its own fetched Git object, extracts and verifies the trusted policy modules by
+Git object ID, records every object ID/digest and their aggregate digest with the exact
 source ref/commit and base SHA, resolves authoritative external state, and applies the
 closed v3 policy. Every required finding must be corrected or explicitly waived, freshly
 validated/reviewed at the current SHA, and resolved. Record the output, ledger path,
 review/ceremony evidence, and RFD handoff with the candidate SHA before proceeding.
 Coordinator/Ralph and authoritative external Squad state are trusted operational
 components. GitHub is evidence and CI only; repository code is not a tamper-proof sandbox
-and cannot provide adversarially immutable execution. PR #1504 alone uses the pre-existing
-v1/manual exact-head bootstrap; once its runtime is installed from the exact fetched merge
-commit, v3 is mandatory for subsequent PRs. Post admission and reviewer revalidation
+and cannot provide adversarially immutable execution. A concurrent same-user process that
+can change Git objects or trusted temporary files is a compromised host outside this
+boundary. PR #1504 alone uses the pre-existing v1/manual exact-head bootstrap; afterward,
+every invocation uses exact fetched `origin/dev` bytes and v3 is mandatory for subsequent
+PRs, with no install step. Post admission and reviewer revalidation
 comments under the PR Comment Writing Policy. PR comments preserve evidence but do not
 decide admission.
 

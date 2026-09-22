@@ -50,8 +50,9 @@ Examples:
    ```
    Run exact validations through `scripts/ci/squad-validation-evidence.mjs` from the
    assigned absolute worktree and exact candidate SHA. Collect structured phase-aware
-   review outputs. Materialize and read-validate the v3 ledger through the external
-   runtime-owned admission installation and configured state backend. Run the preflight
+   review outputs. After candidate validations finish, materialize and read-validate the
+   v3 ledger through launcher and policy bytes extracted by Git object ID from a freshly
+   fetched exact `origin/dev` commit. Run the preflight
    while the PR is still draft. Only then may the PR
    move to ready:
    ```bash
@@ -59,22 +60,24 @@ Examples:
    gh pr merge <number> --squash --match-head-commit <validated-sha>
    ```
    Before ready and again immediately before merge, Ralph fetches `origin/dev`, gets the
-   live PR head and base SHAs, and runs the absolute external
-   `<team-root>/admission/runtime/squad-admission-launcher.mjs` with its runtime manifest,
-   repository, PR number, absolute worktree, head SHA, base SHA, team root, and backend.
-   Never execute candidate checkout admission code. The launcher verifies and records its
-   digest, installed policy digest, exact trusted source ref/commit, and base SHA. The
+   live PR head and base SHAs, extracts
+   `scripts/ci/squad-admission-launcher.mjs` from that base commit into a private temporary
+   directory, and runs the documented `materialize` or `preflight` command with repository,
+   PR number, absolute worktree, head SHA, base ref/SHA, team root, backend, and materialize
+   input path. Never execute candidate checkout admission code. The launcher refetches and
+   binds the base, verifies and records every source blob ID and digest plus the aggregate
+   digest, and cleans its ephemeral modules in `finally`. The
    preflight uses the explicit authoritative state backend and checks
    the coordinator-owned v3 findings ledger. Missing, legacy, incomplete, or provenance-
    mismatched evidence blocks admission. Ralph records the returned
    `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
-   invokes the installed exported functions with the runtime-owned adapter for non-local
+   invokes the trusted exported functions with the invocation-owned adapter for non-local
    backends; no filesystem fallback is permitted. Coordinator/Ralph and authoritative
    external Squad state are trusted operational components; GitHub is
    evidence and CI only, and repository code is not an adversarially immutable boundary.
    PR #1504 alone bootstraps through the pre-existing v1/manual exact-head procedure;
-   after merge, Coordinator/Ralph installs the runtime from that exact fetched `dev`
-   commit and v3 is mandatory for every subsequent PR.
+   after merge, every invocation uses the exact fetched `dev` bytes and v3 is mandatory
+   for every subsequent PR. There is no persistent runtime installation.
    Confirm the PR reports `MERGED`, `mergedAt`, and merge SHA before dispatching
    dependent work.
 

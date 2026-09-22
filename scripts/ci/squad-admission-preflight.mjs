@@ -71,7 +71,7 @@ export async function runAdmissionPreflight(repository, prNumber, dependencies =
 }
 
 async function main() {
-  throw new Error('candidate checkout admission code is evidence only; invoke the installed runtime-owned launcher');
+  throw new Error('candidate checkout admission code is evidence only; invoke the launcher extracted from the fetched trusted base');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

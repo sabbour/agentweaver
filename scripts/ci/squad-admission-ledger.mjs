@@ -20,7 +20,7 @@ const DIGEST = /^sha256:[0-9a-f]{64}$/iu;
 const PHASES = new Set(['design', 'implementation']);
 const POLICIES = new Set(['advisory', 'required']);
 const VERDICTS = new Set(['approved', 'rejected']);
-const RUNTIME_KIND = 'agentweaver.squad-admission-runtime/v1';
+const RUNTIME_KIND = 'agentweaver.squad-admission-runtime/v2';
 
 function required(value, field) {
   if (typeof value !== 'string' || value.trim() === '') throw new Error(`${field} must be a non-empty string`);
@@ -43,17 +43,28 @@ function validateTrustedRuntime(runtime, field = 'trustedRuntime') {
   if (!runtime || runtime.kind !== RUNTIME_KIND) throw new Error(`${field}.kind must be ${RUNTIME_KIND}`);
   required(runtime.source?.ref, `${field}.source.ref`);
   sha(runtime.source?.commit, `${field}.source.commit`);
-  if (!DIGEST.test(required(runtime.launcherDigest, `${field}.launcherDigest`))) {
-    throw new Error(`${field}.launcherDigest must be a sha256 digest`);
+  if (!runtime.files || typeof runtime.files !== 'object' || Array.isArray(runtime.files)) {
+    throw new Error(`${field}.files must record trusted source objects`);
   }
-  if (!DIGEST.test(required(runtime.policyDigest, `${field}.policyDigest`))) {
-    throw new Error(`${field}.policyDigest must be a sha256 digest`);
+  const files = {};
+  for (const [path, identity] of Object.entries(runtime.files)) {
+    required(path, `${field}.files path`);
+    const objectId = required(identity?.objectId, `${field}.files[${path}].objectId`).toLowerCase();
+    if (!/^[0-9a-f]{40,64}$/u.test(objectId)) throw new Error(`${field}.files[${path}].objectId must be a Git object ID`);
+    const fileDigest = required(identity?.digest, `${field}.files[${path}].digest`).toLowerCase();
+    if (!DIGEST.test(fileDigest)) throw new Error(`${field}.files[${path}].digest must be a sha256 digest`);
+    files[path] = { objectId, digest: fileDigest };
+  }
+  if (Object.keys(files).length < 4) throw new Error(`${field}.files must record the launcher and policy modules`);
+  const aggregate = required(runtime.aggregateDigest, `${field}.aggregateDigest`).toLowerCase();
+  if (!DIGEST.test(aggregate)) {
+    throw new Error(`${field}.aggregateDigest must be a sha256 digest`);
   }
   return {
     kind: runtime.kind,
     source: { ref: runtime.source.ref, commit: runtime.source.commit.toLowerCase() },
-    launcherDigest: runtime.launcherDigest.toLowerCase(),
-    policyDigest: runtime.policyDigest.toLowerCase(),
+    files,
+    aggregateDigest: aggregate,
   };
 }
 
@@ -334,7 +345,7 @@ export async function materializeAdmissionLedger(input, {
 }
 
 async function main() {
-  throw new Error('candidate checkout admission code is evidence only; invoke the installed runtime-owned launcher');
+  throw new Error('candidate checkout admission code is evidence only; invoke the launcher extracted from the fetched trusted base');
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

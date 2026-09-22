@@ -61,32 +61,65 @@ they are not Agentweaver sign-in providers.
    - Open the PR as a draft before admission validation or review. Run every validation
      through `scripts/ci/squad-validation-evidence.mjs` from the assigned absolute
      worktree and exact candidate SHA. Collect structured, phase-aware review outputs.
-     Candidate repository bytes are evidence only. Materialize the v3 external-state
-     ledger only through the runtime-owned admission installation from those exact
-     outputs and validation records, then read and validate it through the same configured
-     state backend.
-   - While the PR is still draft, Ralph fetches `origin/dev`, gets the live PR
-     `headRefOid` and exact live base SHA, and invokes the external installed launcher:
-     `node <absolute-team-root>/admission/runtime/squad-admission-launcher.mjs preflight
-     --runtime-manifest <absolute-team-root>/admission/runtime/squad-admission-runtime.json
-     --repository <owner/repository> --pr-number <number>
-     --worktree <absolute-worktree> --head-sha <live-head-sha>
-     --base-sha <trusted-live-base-sha> --team-root <absolute-team-root>
-     --state-backend <backend>`. Never execute admission policy or preflight modules from
-     the candidate checkout. The installed launcher verifies its own digest and every
-     policy-module digest against its runtime-owned manifest. The manifest records the
-     exact trusted source ref and commit from which Coordinator/Ralph installed the
-     bytes after that commit was already admitted to `dev`. The preflight reads the explicit authoritative Squad
+     Candidate repository bytes are evidence only. After all candidate validation
+     commands finish, materialize the v3 external-state ledger only through admission
+     bytes extracted from the freshly fetched trusted base commit, then read and validate
+     it through the same configured state backend.
+   - While the PR is still draft, Ralph gets the live PR `headRefOid`, then runs the
+     trusted-base commands below from PowerShell 7. The first fetch and archive obtain the
+     launcher from the exact live `origin/dev` commit without reading it from the
+     candidate working tree. The launcher fetches the same ref again, rejects a moved or
+     stale commit, verifies its own Git blob bytes, obtains the authority, ledger, and
+     preflight modules by Git object ID from that commit, verifies their SHA-256 values
+     immediately before import, and removes its private temporary module directory in a
+     `finally` block. The outer `finally` removes the launcher extraction on success or
+     failure.
+
+     ```powershell
+     $ErrorActionPreference = 'Stop'
+     $PSNativeCommandUseErrorActionPreference = $true
+     $Repository = 'sabbour/agentweaver'
+     $Pr = 1504
+     $Worktree = 'C:\absolute\candidate-worktree'
+     $TeamRoot = 'C:\absolute\TEAM_ROOT'
+     $Backend = 'local'
+     $Input = "$TeamRoot\admission\inputs\sabbour\agentweaver\$Pr.json"
+     $HeadSha = gh pr view $Pr --repo $Repository --json headRefOid --jq .headRefOid
+     git -C $Worktree fetch --no-tags origin '+refs/heads/dev:refs/remotes/origin/dev'
+     $BaseSha = git -C $Worktree rev-parse --verify 'refs/remotes/origin/dev^{commit}'
+     $Stage = Join-Path ([IO.Path]::GetTempPath()) ("agentweaver-admission-launcher-" + [guid]::NewGuid())
+     New-Item -ItemType Directory -Path $Stage | Out-Null
+     try {
+       git -C $Worktree archive --format=tar $BaseSha scripts/ci/squad-admission-launcher.mjs |
+         tar -xf - -C $Stage
+       $Launcher = Join-Path $Stage 'scripts\ci\squad-admission-launcher.mjs'
+       node $Launcher materialize --launcher-path $Launcher --base-ref refs/remotes/origin/dev `
+         --repository $Repository --pr-number $Pr --worktree $Worktree --head-sha $HeadSha `
+         --base-sha $BaseSha --team-root $TeamRoot --state-backend $Backend --input $Input
+       node $Launcher preflight --launcher-path $Launcher --base-ref refs/remotes/origin/dev `
+         --repository $Repository --pr-number $Pr --worktree $Worktree --head-sha $HeadSha `
+         --base-sha $BaseSha --team-root $TeamRoot --state-backend $Backend
+     } finally {
+       Remove-Item -LiteralPath $Stage -Recurse -Force -ErrorAction SilentlyContinue
+     }
+     ```
+
+     The materialization input is JSON containing `repository`, `prNumber`, absolute
+     `worktree`, `branch`, exact `headSha`, `requiredReviewSources`, structured
+     `agentweaver.squad-review/v2` reviews, structured
+     `agentweaver.validation-evidence/v1` validation records, and `materializedAt`.
+     Each validation must already be complete and bound before this trusted invocation;
+     it launches no candidate command. The preflight reads the explicit authoritative Squad
      root and backend from the repository's primary-checkout Squad configuration,
      rejects mismatched or non-canonical caller values, and validates its coordinator-owned v3 findings
      ledger. Missing, legacy, incomplete, or mismatched evidence blocks the ready
      transition. Immediately before merge, Ralph repeats the preflight against the fresh
      live head, records the returned `<validated-sha>`, and merges manually with
      `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
-     Non-local backends call the installed exported functions with their runtime-owned
+     Non-local backends call the trusted exported functions with their invocation-owned
      adapter; the launcher never falls back to filesystem access. The trusted exact base
-     SHA, trusted runtime source identity, launcher digest, and policy digest are recorded
-     in the ledger and preflight result. The required post-implementation reviewer classes come from installed policy and
+     SHA, source ref/commit, every launcher/policy Git object ID and digest, and aggregate
+     digest are recorded in the ledger and preflight result. The required post-implementation reviewer classes come from trusted policy and
      the exact candidate diff, not ledger input. Multi-file and high-risk changes require
      distinct, independently issued exact-head approvals for code review, security review,
      and Ponytail review from the configured reviewer identities; one low-risk
@@ -95,12 +128,15 @@ they are not Agentweaver sign-in providers.
      GitHub automatically deletes the source branch after merge.
    - **v3 bootstrap:** #1504 cannot use its candidate-owned v3 source to admit itself.
      It may merge only through the pre-existing v1/manual exact-head admission procedure.
-     After that squash merge is present on a fetched exact `origin/dev` commit,
-     Coordinator/Ralph extracts the four admission runtime files from that commit into
-     `<absolute-team-root>/admission/runtime`, writes the manifest with the source ref,
-     source commit, per-file SHA-256 values, launcher digest, and aggregate policy digest,
-     and atomically activates that installation. V3 is mandatory for every subsequent PR;
-     no later PR may fall back to candidate execution or the v1/manual path.
+     After that squash merge is present on a fetched exact `origin/dev` commit, every
+     materialize/preflight invocation uses the trusted-base commands above. There is no
+     installation step or persistent runtime authorization directory. V3 is mandatory for
+     every subsequent PR; no later PR may fall back to candidate execution or the
+     v1/manual path.
+   - This boundary trusts Coordinator/Ralph, the host, Git, and the configured remote.
+     A concurrent same-user process that can alter trusted temporary files or Git objects
+     is a compromised host and is outside the claim. The procedure does not claim
+     immutable protection against a compromised coordinator or host.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
      may use a merge commit when repository policy permits it.
