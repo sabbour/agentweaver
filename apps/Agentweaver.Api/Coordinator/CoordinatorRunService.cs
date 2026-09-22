@@ -2074,9 +2074,11 @@ public sealed class CoordinatorRunService
             string? errorCode = null;
             if (providerFailure is null)
             {
-                errorCode = reason == "coordinator_executor_failed:coordinator-direct"
-                    ? "coordinator_direct_execution_failed"
-                    : "coordinator_execution_failed";
+                errorCode = failure is MandatoryContextBudgetExceededException
+                    ? "mandatory_context_budget_exceeded"
+                    : reason == "coordinator_executor_failed:coordinator-direct"
+                        ? "coordinator_direct_execution_failed"
+                        : "coordinator_execution_failed";
                 terminalPayload = new
                 {
                     reason,

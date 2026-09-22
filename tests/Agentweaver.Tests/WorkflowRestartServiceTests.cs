@@ -511,6 +511,91 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
     }
 
+    [Fact]
+    public async Task RecoverAsync_AlreadyProjectedRunFailed_ReplaysDurableTerminalEvent()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var eventStream = new RecordingEventStream();
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "test task",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "already_projected" },
+            DateTimeOffset.UtcNow, expectedLifecycleGeneration: 1);
+        (await runStore.TrySetTerminalOutcomeAsync(runId, outcome, "already_projected")).Should().BeTrue();
+        await new TerminalOutcomeProjector(
+                runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance)
+            .ProjectPendingAsync();
+        var canonical = (await eventStream.GetPersistedEventsAsync(runId.ToString())).Single();
+
+        await BuildService(
+                runStore,
+                streamStore,
+                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+                eventStream)
+            .RecoverAsync(CancellationToken.None);
+
+        var entry = streamStore.Get(runId.ToString());
+        entry.Should().NotBeNull();
+        entry!.IsCompleted.Should().BeTrue();
+        entry.GetSnapshotSince(0).Events.Should().ContainSingle()
+            .Which.Should().Be(canonical, "recovery must replay the canonical durable terminal event");
+        (await eventStream.GetPersistedEventsAsync(runId.ToString())).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task RecoverAsync_AlreadyProjectedAssemblyFailure_PreservesCanonicalTerminal()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var eventStream = new RecordingEventStream();
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "assembly task",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.CoordinatorAssemblyFailed, new { reason = "assembly_failed" },
+            DateTimeOffset.UtcNow, expectedLifecycleGeneration: 1);
+        (await runStore.TrySetTerminalOutcomeAsync(runId, outcome, "assembly_failed")).Should().BeTrue();
+        await new TerminalOutcomeProjector(
+                runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance)
+            .ProjectPendingAsync();
+        var canonical = (await eventStream.GetPersistedEventsAsync(runId.ToString())).Single();
+
+        await BuildService(
+                runStore,
+                streamStore,
+                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+                eventStream)
+            .RecoverAsync(CancellationToken.None);
+
+        var entry = streamStore.Get(runId.ToString());
+        entry.Should().NotBeNull();
+        entry!.IsCompleted.Should().BeTrue();
+        entry.GetSnapshotSince(0).Events.Should().ContainSingle()
+            .Which.Should().Be(canonical, "recovery must preserve the canonical assembly failure");
+        entry.GetSnapshotSince(0).Events.Should().NotContain(evt => evt.Type == EventTypes.RunFailed);
+        (await eventStream.GetPersistedEventsAsync(runId.ToString())).Should().ContainSingle();
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -518,7 +603,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     private WorkflowRestartService BuildService(
         SqliteRunStore runStore,
         RunStreamStore streamStore,
-        IWorktreeOperations worktreeOps)
+        IWorktreeOperations worktreeOps,
+        RecordingEventStream? eventStream = null)
     {
         var loggerFactory = NullLoggerFactory.Instance;
         var config = new ConfigurationBuilder()
@@ -583,7 +669,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             new NoOpRunLeaseStore(),
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
-        var eventStream = new RecordingEventStream();
+        eventStream ??= new RecordingEventStream();
         var projector = new TerminalOutcomeProjector(
             runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance, streamStore);
         return new WorkflowRestartService(
@@ -603,6 +689,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     private sealed class RecordingEventStream : IRunEventStream
     {
         private readonly Dictionary<string, List<RunEvent>> _events = [];
+        private readonly Dictionary<(string RunId, int LifecycleGeneration), int> _terminalProjections = [];
 
         public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
         {
@@ -612,6 +699,27 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             events.Add(persisted);
             return ValueTask.FromResult(persisted.Sequence);
         }
+
+        public async Task<RunEvent> AppendTerminalOutcomeAsync(
+            string runId,
+            TerminalRunOutcome outcome,
+            CancellationToken ct = default)
+        {
+            var sequence = await AppendAsync(runId, outcome.ToRunEvent(), ct);
+            _terminalProjections[(runId, outcome.ExpectedLifecycleGeneration)] = sequence;
+            return outcome.ToRunEvent(sequence);
+        }
+
+        public Task<bool> TryLinkTerminalOutcomeAsync(
+            string runId,
+            TerminalRunOutcome outcome,
+            RunEvent canonicalEvent,
+            CancellationToken ct = default) =>
+            Task.FromResult(
+                _terminalProjections.TryGetValue(
+                    (runId, outcome.ExpectedLifecycleGeneration), out var sequence)
+                && sequence == canonicalEvent.Sequence
+                && canonicalEvent.Type == outcome.EventType);
 
         public async IAsyncEnumerable<RunEvent> SubscribeAsync(
             string runId, int fromSequence = 0,

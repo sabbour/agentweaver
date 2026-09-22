@@ -73,6 +73,165 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task Draft_MandatoryDecisionContextOverBudget_ThrowsBeforeCallingDrafter()
+    {
+        using var budgetFactory = CoordinatorWebApplicationFactory.CreateWithMemoryContextMaxTokens(1);
+        var projectId = $"project-{Guid.NewGuid():N}";
+        await using (var scope = budgetFactory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Decisions.Add(new Decision
+            {
+                ProjectId = projectId,
+                AgentName = "Coordinator",
+                Type = "architectural",
+                Status = "active",
+                Title = "Mandatory boundary",
+                Content = new string('d', 128),
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Run,
+                SourceIdentity = "run:coordinator",
+                ApprovedBy = CoordinatorWebApplicationFactory.OwnerUser,
+                ApprovedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var drafter = budgetFactory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var coordinator = budgetFactory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        var input = new CoordinatorDraftInput(
+            "run-oversized-mandatory-context",
+            projectId,
+            "Draft an outcome spec without dropping mandatory decisions.",
+            CoordinatorWebApplicationFactory.OwnerUser,
+            budgetFactory.NewWorkingDirectory(),
+            null);
+
+        var act = () => coordinator.DraftAndPersistAsync(input, CancellationToken.None);
+
+        await act.Should().ThrowAsync<MandatoryContextBudgetExceededException>();
+        drafter.LastInput.Should().BeNull(
+            "mandatory decisions must not be dropped before outcome-spec drafting starts");
+    }
+
+    [Fact]
+    public async Task Start_MandatoryDecisionContextOverBudget_EmitsTypedTerminalFailure()
+    {
+        var projectId = await CreateProjectAsync();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Decisions.Add(new Decision
+            {
+                ProjectId = projectId,
+                AgentName = "Coordinator",
+                Type = "architectural",
+                Status = "active",
+                Title = "Mandatory boundary",
+                Content = new string('d', 100_000),
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Run,
+                SourceIdentity = "run:coordinator",
+                ApprovedBy = CoordinatorWebApplicationFactory.OwnerUser,
+                ApprovedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var runId = await StartOrchestrationAsync(
+            projectId, "Fail visibly when mandatory coordinator context exceeds its budget.");
+
+        JsonElement[]? events = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            var response = await _owner.GetAsync($"/api/runs/{runId}/events");
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            events = await response.Content.ReadFromJsonAsync<JsonElement[]>();
+            if (events?.Any(e => e.GetProperty("type").GetString() == EventTypes.RunFailed) == true)
+                break;
+            await Task.Delay(50);
+        }
+
+        var failed = events.Should().NotBeNull().And.Subject
+            .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
+        var payload = failed.GetProperty("payload");
+        payload.GetProperty("errorCode").GetString().Should().Be("mandatory_context_budget_exceeded");
+        payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Start_OptionalDraftContextOmitted_EmitsCompositionTelemetry()
+    {
+        using var budgetFactory = CoordinatorWebApplicationFactory.CreateWithMemoryContextMaxTokens(1);
+        using var owner = budgetFactory.CreateOwnerClient();
+        var workingDirectory = budgetFactory.NewWorkingDirectory();
+        var create = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Coordinator Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = workingDirectory,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory, "Coordinator Test");
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+
+        await using (var scope = budgetFactory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var now = DateTimeOffset.UtcNow;
+            db.AgentMemory.Add(new AgentMemory
+            {
+                ProjectId = projectId,
+                AgentName = "Coordinator",
+                Type = "learning",
+                Importance = "high",
+                Content = "optional draft memory",
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Run,
+                SourceIdentity = "run:coordinator",
+                ApprovedBy = CoordinatorWebApplicationFactory.OwnerUser,
+                ApprovedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await budgetFactory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var start = await owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "Draft with optional context." });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("runId").GetString()!;
+
+        var stream = budgetFactory.Services.GetRequiredService<RunStreamStore>();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        RunEvent? composition = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            composition = stream.Get(runId)?.GetSnapshotSince(0).Events
+                .SingleOrDefault(e => e.Type == EventTypes.MemoryContextComposition);
+            if (composition is not null)
+                break;
+            await Task.Delay(50);
+        }
+
+        composition.Should().NotBeNull();
+        var payload = JsonSerializer.SerializeToElement(composition!.Payload);
+        payload.GetProperty("included").GetBoolean().Should().BeFalse();
+        payload.GetProperty("omittedMemoryCount").GetInt32().Should().Be(1);
+        payload.GetProperty("omissionCauses").EnumerateArray()
+            .Select(cause => cause.GetString()).Should().Contain("budget");
+    }
+
+    [Fact]
     public async Task Start_DraftsSpec_PersistsAwaitingConfirmation_EmitsEvent_SuspendsAtGate()
     {
         var projectId = await CreateProjectAsync();

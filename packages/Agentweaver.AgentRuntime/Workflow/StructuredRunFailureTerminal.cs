@@ -38,6 +38,7 @@ public static class StructuredRunFailureTerminal
         "model_provider_unavailable",
         "model_provider_validation_unavailable",
         "shell_execution_timeout",
+        "mandatory_context_budget_exceeded",
     };
     private static readonly HashSet<string> SafeExceptionCauseTypes = new(StringComparer.Ordinal)
     {

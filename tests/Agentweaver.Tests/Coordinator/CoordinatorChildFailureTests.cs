@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -40,10 +41,47 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
         services.AddDbContextFactory<MemoryDbContext>(o => o.UseSqlite(_memoryConn));
+        var memoryConfiguration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["MemoryContext:MaxTokens"] = "1",
+            })
+            .Build();
+        services.AddSingleton<IConfiguration>(memoryConfiguration);
+        services.AddScoped(sp => new MemoryContextCompiler(
+            sp.GetRequiredService<MemoryDbContext>(), memoryConfiguration));
+        var secrets = new InMemorySecretStore();
+        services.AddSingleton<ISecretStore>(secrets);
+        services.AddScoped<GitHubConnectionsPersistenceStore>();
+        services.AddScoped<ByokProviderConfigurationService>();
+        services.AddScoped<EffectiveModelProviderResolver>();
         services.AddSingleton<IRunEventStream, EfRunEventStream>();
         _provider = services.BuildServiceProvider();
         using (var scope = _provider.CreateScope())
-            scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Database.EnsureCreated();
+            db.PlatformDefaultCopilotBindings.Add(new PlatformDefaultCopilotBindingRecord
+            {
+                Id = PlatformDefaultCopilotBindingRecord.SingletonId,
+                EntraObjectId = "platform-admin",
+                CredentialReference = "copilot-app-platform-default-context-budget-test",
+                CredentialVersion = "version",
+                GrantDigest = "digest",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = DateTimeOffset.UtcNow,
+            });
+            db.SaveChanges();
+        }
+        secrets.SetSecretAsync(
+            "copilot-app-platform-default-context-budget-test",
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = "signed-in",
+                accessToken = "test-token",
+                expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+                githubLogin = "test-user",
+            })).GetAwaiter().GetResult();
         _scopeFactory = _provider.GetRequiredService<IServiceScopeFactory>();
         _streamStore = new RunStreamStore(_provider.GetRequiredService<IRunEventStream>());
         var terminalOutcomeProjector = new TerminalOutcomeProjector(
@@ -136,6 +174,85 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         var expectedWorktreePath = Path.Combine(worktreesBase, childRun.Id.ToString());
         Directory.Exists(expectedWorktreePath).Should().BeFalse(
             "failed child launch must remove the per-child worktree it just created");
+    }
+
+    [Theory]
+    [InlineData("normal")]
+    [InlineData("child")]
+    [InlineData("reserved")]
+    public async Task MandatoryContextBudgetFailureBeforeWorkflowStart_TerminalizesRunAndCompletesStream(
+        string launchKind)
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = new RunOrchestrator(
+            _runStore,
+            _streamStore,
+            manager,
+            workflowFactory: null!,
+            registry: null!,
+            watchLoop: null!,
+            _scopeFactory,
+            configuration: null!,
+            NullLogger<RunOrchestrator>.Instance);
+        var projectId = ProjectId.New();
+        var run = NewChildRun() with
+        {
+            RepositoryPath = repoPath,
+            OriginatingBranch = "main",
+            ProjectId = projectId,
+            ParentRunId = launchKind == "child" ? RunId.New().ToString() : null,
+            Status = launchKind == "reserved" ? RunStatus.Pending : RunStatus.InProgress,
+        };
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Decisions.Add(new Decision
+            {
+                ProjectId = projectId.ToString(),
+                AgentName = run.AgentName!,
+                Type = "architectural",
+                Status = "active",
+                Title = "Mandatory boundary",
+                Content = new string('d', 128),
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Run,
+                SourceIdentity = "run:context-budget",
+                ApprovedBy = "human:alice",
+                ApprovedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        if (launchKind == "reserved")
+            await _runStore.InsertAsync(run);
+
+        Func<Task> start = launchKind switch
+        {
+            "normal" => () => orchestrator.StartRunAsync(run, CancellationToken.None),
+            "child" => () => orchestrator.StartChildRunAsync(run, CancellationToken.None),
+            "reserved" => () => orchestrator.StartReservedProjectRunAsync(run, CancellationToken.None),
+            _ => throw new ArgumentOutOfRangeException(nameof(launchKind)),
+        };
+
+        await start.Should().ThrowAsync<MandatoryContextBudgetExceededException>();
+
+        var persisted = await _runStore.GetAsync(run.Id);
+        persisted.Should().NotBeNull();
+        persisted!.Status.Should().Be(RunStatus.Failed);
+        persisted.EndedAt.Should().NotBeNull();
+        persisted.Result.Should().Contain(nameof(MandatoryContextBudgetExceededException));
+
+        var entry = _streamStore.Get(run.Id.ToString());
+        entry.Should().NotBeNull();
+        entry!.IsCompleted.Should().BeTrue();
+        entry.GetSnapshotSince(0).Events.Should().ContainSingle(e =>
+            e.Type == EventTypes.RunFailed
+            && System.Text.Json.JsonSerializer.Serialize(e.Payload)
+                .Contains("mandatory_context_budget_exceeded", StringComparison.Ordinal));
     }
 
     [Theory]

@@ -335,7 +335,7 @@ public sealed class CoordinatorWorkflowFactory
         return spec.Id;
     }
 
-    private async Task<CoordinatorOutcomeSpecRequest> DraftAndPersistAsync(
+    internal async Task<CoordinatorOutcomeSpecRequest> DraftAndPersistAsync(
         CoordinatorDraftInput input, CancellationToken ct)
     {
         // On a revision, carry the already-reviewed previous draft forward so the drafter preserves
@@ -351,10 +351,11 @@ public sealed class CoordinatorWorkflowFactory
 
         await MarkDraftingAsync(input, ct).ConfigureAwait(false);
 
-        var memoryContext = await CompileMemoryContextAsync(input.ProjectId, ct).ConfigureAwait(false);
+        var compilation = await CompileMemoryContextAsync(input.ProjectId, ct).ConfigureAwait(false);
+        EmitMemoryContextComposition(input.RunId, compilation);
         var charter = BuiltInCharterResolver.Resolve(input.RepositoryPath, "coordinator") ?? FallbackCharter;
 
-        var draft = await DraftWithTimeoutAsync(input, charter, memoryContext, ct).ConfigureAwait(false);
+        var draft = await DraftWithTimeoutAsync(input, charter, compilation?.Text, ct).ConfigureAwait(false);
 
         var (specId, status) = await PersistDraftAsync(input, draft, ct).ConfigureAwait(false);
 
@@ -542,7 +543,7 @@ public sealed class CoordinatorWorkflowFactory
         });
     }
 
-    private async Task<string?> CompileMemoryContextAsync(string projectId, CancellationToken ct)
+    private async Task<MemoryContextCompilation?> CompileMemoryContextAsync(string projectId, CancellationToken ct)
     {
         try
         {
@@ -550,12 +551,27 @@ public sealed class CoordinatorWorkflowFactory
             var compiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
             return await compiler.CompileAsync(projectId, CoordinatorAgentName, ct).ConfigureAwait(false);
         }
+        catch (MandatoryContextBudgetExceededException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
                 "Coordinator memory-context compilation failed for project {ProjectId} — drafting without", projectId);
             return null;
         }
+    }
+
+    private void EmitMemoryContextComposition(string runId, MemoryContextCompilation? compilation)
+    {
+        _streamStore.Get(runId)?.RecordNext(EventTypes.MemoryContextComposition, new
+        {
+            included = compilation?.Text is not null,
+            omittedMemoryCount = compilation?.OmittedMemoryCount ?? 0,
+            omittedSessionCount = compilation?.OmittedSessionCount ?? 0,
+            omissionCauses = compilation?.OmissionCauses ?? [],
+        });
     }
 
     private async Task<(int SpecId, string Status)> PersistDraftAsync(
