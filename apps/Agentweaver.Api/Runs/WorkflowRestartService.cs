@@ -355,17 +355,24 @@ public sealed class WorkflowRestartService
         {
             await _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
             entry = _streamStore.Get(runId);
-            if (entry?.HasEventType(EventTypes.RunFailed) == true)
+            if (entry?.GetSnapshotSince(0).Events.Any(RunEventTerminality.IsTerminal) == true)
             {
                 _streamStore.Complete(runId);
                 return;
             }
         }
 
-        if (entry?.HasEventType(EventTypes.RunFailed) == true)
+        if (_eventStream is not null)
         {
-            _streamStore.Complete(runId);
-            return;
+            var durableEvents = await _eventStream.GetPersistedEventsAsync(runId, 0, ct).ConfigureAwait(false);
+            var durableTerminal = durableEvents.LastOrDefault(RunEventTerminality.IsTerminal);
+            if (durableTerminal is not null)
+            {
+                var restoredEntry = entry ?? _streamStore.Create(runId, run.SubmittingUser);
+                restoredEntry.RecordDurable(durableTerminal);
+                _streamStore.Complete(runId);
+                return;
+            }
         }
 
         entry ??= _streamStore.Create(runId, run.SubmittingUser);
