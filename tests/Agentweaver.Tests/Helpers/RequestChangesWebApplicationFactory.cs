@@ -19,9 +19,11 @@ public sealed class RequestChangesWebApplicationFactory : ApiWebApplicationFacto
 
     /// <summary>Exposed so tests can configure the agent's behavior per test.</summary>
     public TestFileEditAgentRunner TestAgentRunner { get; } = new();
+    public FakeWorkflowAgentFactory WorkflowAgentFactory { get; }
 
     public RequestChangesWebApplicationFactory() : base("agentweaver-rc")
     {
+        WorkflowAgentFactory = new FakeWorkflowAgentFactory(TestAgentRunner);
     }
 
     public async Task<ProjectId> CreateBlankProjectAsync(string workingDirectory)
@@ -88,6 +90,6 @@ public sealed class RequestChangesWebApplicationFactory : ApiWebApplicationFacto
 
         RemoveService<Agentweaver.AgentRuntime.Workflow.IWorkflowAgentFactory>(services);
         services.AddSingleton<Agentweaver.AgentRuntime.Workflow.IWorkflowAgentFactory>(
-            new FakeWorkflowAgentFactory(TestAgentRunner));
+            WorkflowAgentFactory);
     }
 }

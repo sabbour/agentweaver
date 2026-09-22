@@ -26,9 +26,14 @@ public sealed class FakeWorkflowAgentFactory : IWorkflowAgentFactory
     internal FakeWorkflowTurnAgent? LastScribeAgent { get; private set; }
     internal FakeAgentRole? ProviderFailureRole { get; set; }
     internal FakeAgentRole? InfrastructureProviderFailureRole { get; set; }
+    internal bool ThrowOnWorkerCreation { get; set; }
 
-    public IWorkflowTurnAgent CreateWorkerAgent() =>
-        LastWorkerAgent = Create(FakeAgentRole.Worker);
+    public IWorkflowTurnAgent CreateWorkerAgent()
+    {
+        if (ThrowOnWorkerCreation)
+            throw new InvalidOperationException("test-triggered workflow start failure");
+        return LastWorkerAgent = Create(FakeAgentRole.Worker);
+    }
 
     public IWorkflowTurnAgent CreateRaiAgent() =>
         LastRaiAgent = Create(FakeAgentRole.Rai);

@@ -230,6 +230,34 @@ public sealed class RequestChangesEndpointTests
         }
     }
 
+    [Fact]
+    public async Task WorkflowStartFailure_EndpointDoesNotDuplicateTerminalFailure()
+    {
+        _factory.WorkflowAgentFactory.ThrowOnWorkerCreation = true;
+        try
+        {
+            var (run, _) = await SetupRunAwaitingReviewAsync();
+
+            var response = await PostRequestChangesAsync(run, "Please revise this.");
+
+            response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+            var entry = _factory.Services.GetRequiredService<RunStreamStore>()
+                .Get(run.Id.ToString())!;
+            var failures = entry.GetSnapshotSince(0).Events
+                .Where(e => e.Type == EventTypes.RunFailed)
+                .ToArray();
+            failures.Should().ContainSingle(
+                "StartRevisionAsync owns the workflow-start terminal transition before the endpoint fallback");
+            JsonSerializer.Serialize(failures[0].Payload).Should().NotContain("revision_start_failed");
+            entry.IsCompleted.Should().BeTrue(
+                "the winner completes the stream; the endpoint fallback must not re-complete it after losing CAS");
+        }
+        finally
+        {
+            _factory.WorkflowAgentFactory.ThrowOnWorkerCreation = false;
+        }
+    }
+
     // =========================================================================
     // Test 5 — CAS race: run NOT in awaiting_review (already merged/declined)
     // must return 409.
