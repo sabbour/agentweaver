@@ -141,13 +141,22 @@ public sealed class EndpointHelpersCancelPodReleaseTests
         (await inner.GetPreviewPublicationLeaseAsync(runId)).Should().BeNull();
     }
 
-    /// <summary>Minimal <see cref="IRunStore"/> fake — only <see cref="TrySetTerminalStatusAsync"/> is
+    /// <summary>Minimal <see cref="IRunStore"/> fake — only <see cref="TrySetTerminalOutcomeAsync"/> is
     /// exercised by <see cref="EndpointHelpers.CancelRunWorkAsync"/>; every other member throws.</summary>
     private sealed class NoOpRunStore : IRunStore
     {
+        public TerminalRunOutcome? TerminalOutcome { get; private set; }
+
         public Task<bool> TrySetTerminalStatusAsync(
             RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default)
             => Task.FromResult(true);
+
+        public Task<bool> TrySetTerminalOutcomeAsync(
+            RunId runId, TerminalRunOutcome outcome, string? result, CancellationToken ct = default)
+        {
+            TerminalOutcome = outcome;
+            return Task.FromResult(true);
+        }
 
         public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) => Task.FromResult<Run?>(null);

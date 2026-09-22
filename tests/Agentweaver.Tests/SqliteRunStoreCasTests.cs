@@ -106,14 +106,22 @@ public sealed class SqliteRunStoreCasTests
         var casWon = await store.TryStartMergingAsync(runId);
         casWon.Should().BeTrue("CAS must succeed on an awaiting_review run");
 
-        // Act step 2: SendResponseAsync (simulated) throws. The catch block calls
-        // TrySetTerminalStatusAsync to deterministically set the run to Failed.
-        var recovered = await store.TrySetTerminalStatusAsync(
-            runId, RunStatus.Failed, DateTimeOffset.UtcNow, "send_response_failed");
+        // Act step 2: SendResponseAsync (simulated) throws. The catch block persists a typed
+        // terminal winner so recovery cannot invent a generic terminal event.
+        var mergingRun = (await store.GetAsync(runId))!;
+        var recovered = await store.TrySetTerminalOutcomeAsync(
+            runId,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed,
+                EventTypes.RunFailed,
+                new { reason = "send_response_failed" },
+                DateTimeOffset.UtcNow,
+                mergingRun.LifecycleGeneration),
+            "send_response_failed");
 
         // Assert: recovery must succeed because Merging is a non-terminal status.
         recovered.Should().BeTrue(
-            "TrySetTerminalStatusAsync must succeed on a Merging run — it is non-terminal");
+            "the typed terminal outcome must succeed on a Merging run — it is non-terminal");
 
         var run = await store.GetAsync(runId);
         run!.Status.Should().Be(RunStatus.Failed,
