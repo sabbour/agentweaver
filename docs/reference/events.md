@@ -48,7 +48,7 @@ serialization.
 | `agent.message.delta` | When the model streams a chunk of visible text from the GitHub Copilot SDK runner | `delta`, `messageId` |
 | `agent.turn.end` | When the model finishes a turn (closes the turn bubble in the frontend) | `turnId` |
 | `agent.intent` | When the agent calls `report_intent` before a major step | `intent` |
-| `agent.system_prompt` | At run start, after the system prompt is set | `provider`, `prompt` (full text), `note` (optional) |
+| `agent.system_prompt` | Once for each Copilot provider turn after the system prompt is composed | The same bounded fields as `agent.runtime_context`, plus `callableMemoryGuidanceIncluded` (boolean); never prompt content |
 | `agent.tools` | At run start, listing the tools registered for this run | `tools` (string array of tool names) |
 | `agent.runtime_context` | Once for each provider agent turn after the prompt and provider tool declarations are assembled | `provider`, `runId`, `projectId`, `baseCharacters`, `runContextCharacters`, `skillCharacters`, `separatorCharacters`, `taskCharacters`, `toolDeclarationCharacters`, `skillDeliveryMode` (`none`, `file`, `inline`, `mixed`), `totalCharacters`, `estimatedTokens` |
 | `memory.context_composition` | After the structured memory context is selected for a run or coordinator decomposition | `included`, `omittedMemoryCount`, `omittedSessionCount`, `omissionCauses`; no prompt text, records, identifiers, or size measurements |
@@ -157,6 +157,19 @@ passed to the SDK. The invariant is:
 
 `estimatedTokens = ceil(totalCharacters / 4)` is a stable planning estimate, not provider-reported token usage.
 
+### `agent.system_prompt`
+
+Both GitHub Copilot execution paths emit this durable metadata-only event once per provider turn,
+using the same composition evidence as `agent.runtime_context`. Its payload contains the same
+run/project correlation, scalar character counts, fixed skill-delivery token, total, and planning
+estimate, plus `callableMemoryGuidanceIncluded`. That boolean is computed by the branch that decides
+whether the callable project-memory guidance is included in the actual provider prompt.
+
+The event never stores or returns prompt text or hashes, task text, tool names or schemas, skill or
+charter text, credentials, PII, or arbitrary extension fields. Public REST and SSE projections
+reconstruct the payload from a strict typed allowlist. Historical rows that contain raw prompt fields,
+unknown fields, or malformed values retain their sequence/type/time but those values are omitted.
+
 
 ### `rai.verdict`
 
@@ -255,10 +268,6 @@ This event records why an approved run could not merge. Terminal reasons are bra
 ### `agent.intent`
 
 Emitted when the agent calls the `report_intent` internal tool before a major step. Not shown as a tool call card in the frontend — rendered as a lightweight lifecycle card with the intent text. The `intent` field is always a non-empty string.
-
-### `agent.system_prompt`
-
-Emitted once at run start when the system prompt is set. `provider` identifies which model provider is active. `prompt` carries the full system prompt text. In the frontend, this renders as a collapsible card showing a 120-character preview with character count; clicking expands the full text.
 
 ### `agent.tools`
 

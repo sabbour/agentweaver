@@ -653,7 +653,9 @@ app.MapGet("/api/runs/{id}/events", async (
                 : IsToolPayloadEventType(rec.EventType)
                     ? RedactAndBoundToolPayload(rec.EventType, element)
                     : element;
-            durationMs = ReadRecordedEventDuration(element);
+            durationMs = rec.EventType == EventTypes.AgentSystemPrompt
+                ? null
+                : ReadRecordedEventDuration(element);
         }
         catch
         {
@@ -2942,8 +2944,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
 /// </summary>
 static bool IsToolPayloadEventType(string eventType) => eventType is "tool.call" or "tool.result" or "tool.error";
 
-static bool IsPromptPayloadEventType(string eventType) =>
-    eventType is "agent.system_prompt" or "agent.task";
+static bool IsPromptPayloadEventType(string eventType) => eventType is "agent.task";
 
 /// <summary>
 /// Strips NUL, C0 control characters (0x00-0x1F, excluding \t and \n), DEL (0x7F),

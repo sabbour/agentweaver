@@ -26,6 +26,13 @@ block, separators, task, and provider declarations, plus a fixed skill delivery 
 It is separate from `memory.context_composition`, which records the #1241 structured-context
 selection and omission results rather than prompt sizing.
 
+Copilot turns also emit `agent.system_prompt` from the same composition evidence. This durable event
+contains the same bounded metadata plus `callableMemoryGuidanceIncluded`, which records whether the
+actual prompt-composition branch added callable project-memory guidance. Prompt text and hashes,
+task/skill/charter content, tool names or schemas, credentials, PII, and unknown fields are never
+part of the public contract. REST and SSE rebuild a strict allowlisted projection, including for
+historical rows.
+
 ## Operational use
 
 Use the run stream to explain a specific run. Use `GET /api/projects/{id}/metrics` for project performance and `GET /api/metrics/runs/{runId}/traces` for trace details. Use cluster diagnostics for runtime dependencies and sandbox inventory.

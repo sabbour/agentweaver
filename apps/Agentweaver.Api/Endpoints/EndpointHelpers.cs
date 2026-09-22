@@ -510,16 +510,110 @@ internal static async Task WriteSseEventAsync(HttpResponse response, RunEvent ev
 internal static System.Text.Json.Nodes.JsonObject StampTimestamp(RunEvent evt)
 {
     evt = StructuredRunFailureTerminal.NormalizeFailure(evt);
-    var node = evt.Type == EventTypes.RunModelProviderResolved
-        ? EffectiveModelProviderProvenance.RedactPublicPayload(evt.Payload)
-        : System.Text.Json.JsonSerializer.SerializeToNode(evt.Payload) as System.Text.Json.Nodes.JsonObject
-            ?? new System.Text.Json.Nodes.JsonObject();
+    var node = evt.Type switch
+    {
+        EventTypes.RunModelProviderResolved => EffectiveModelProviderProvenance.RedactPublicPayload(evt.Payload),
+        EventTypes.AgentSystemPrompt => ProjectAgentSystemPromptPayload(evt.Payload),
+        _ => System.Text.Json.JsonSerializer.SerializeToNode(evt.Payload) as System.Text.Json.Nodes.JsonObject
+            ?? new System.Text.Json.Nodes.JsonObject(),
+    };
     if (!node.ContainsKey("timestamp_utc") && !node.ContainsKey("timestampUtc") && !node.ContainsKey("timestamp"))
     {
         if (evt.TimestampUtc != default)
             node["timestamp_utc"] = evt.TimestampUtc.ToUniversalTime().ToString("O");
     }
     return node;
+}
+
+internal static System.Text.Json.Nodes.JsonObject ProjectAgentSystemPromptPayload(object? payload)
+{
+    var source = System.Text.Json.JsonSerializer.SerializeToNode(payload) as System.Text.Json.Nodes.JsonObject;
+    var result = new System.Text.Json.Nodes.JsonObject();
+    if (source is null)
+        return result;
+
+    CopyFixedString(source, result, "provider", "copilot");
+    CopyGuidString(source, result, "runId");
+    CopyGuidString(source, result, "projectId");
+    CopyNonNegativeInt(source, result, "baseCharacters");
+    CopyNonNegativeInt(source, result, "runContextCharacters");
+    CopyNonNegativeInt(source, result, "skillCharacters");
+    CopyNonNegativeInt(source, result, "separatorCharacters");
+    CopyNonNegativeInt(source, result, "taskCharacters");
+    CopyNonNegativeInt(source, result, "toolDeclarationCharacters");
+    CopyFixedString(source, result, "skillDeliveryMode", "none", "file", "inline", "mixed");
+    CopyNonNegativeInt(source, result, "totalCharacters");
+    CopyNonNegativeInt(source, result, "estimatedTokens");
+    CopyBoolean(source, result, "callableMemoryGuidanceIncluded");
+    return result;
+}
+
+private static void CopyFixedString(
+    System.Text.Json.Nodes.JsonObject source,
+    System.Text.Json.Nodes.JsonObject destination,
+    string propertyName,
+    params string[] allowed)
+{
+    if (TryGetProperty(source, propertyName, out var value)
+        && value is System.Text.Json.Nodes.JsonValue jsonValue
+        && jsonValue.TryGetValue<string>(out var text)
+        && allowed.Contains(text, StringComparer.Ordinal))
+    {
+        destination[propertyName] = text;
+    }
+}
+
+private static void CopyGuidString(
+    System.Text.Json.Nodes.JsonObject source,
+    System.Text.Json.Nodes.JsonObject destination,
+    string propertyName)
+{
+    if (TryGetProperty(source, propertyName, out var value)
+        && value is System.Text.Json.Nodes.JsonValue jsonValue
+        && jsonValue.TryGetValue<string>(out var text)
+        && Guid.TryParse(text, out var parsed))
+    {
+        destination[propertyName] = parsed.ToString("D");
+    }
+}
+
+private static void CopyNonNegativeInt(
+    System.Text.Json.Nodes.JsonObject source,
+    System.Text.Json.Nodes.JsonObject destination,
+    string propertyName)
+{
+    if (TryGetProperty(source, propertyName, out var value)
+        && value is System.Text.Json.Nodes.JsonValue jsonValue
+        && jsonValue.TryGetValue<int>(out var number)
+        && number >= 0)
+    {
+        destination[propertyName] = number;
+    }
+}
+
+private static void CopyBoolean(
+    System.Text.Json.Nodes.JsonObject source,
+    System.Text.Json.Nodes.JsonObject destination,
+    string propertyName)
+{
+    if (TryGetProperty(source, propertyName, out var value)
+        && value is System.Text.Json.Nodes.JsonValue jsonValue
+        && jsonValue.TryGetValue<bool>(out var boolean))
+    {
+        destination[propertyName] = boolean;
+    }
+}
+
+private static bool TryGetProperty(
+    System.Text.Json.Nodes.JsonObject source,
+    string camelCaseName,
+    out System.Text.Json.Nodes.JsonNode? value)
+{
+    if (source.TryGetPropertyValue(camelCaseName, out value))
+        return true;
+
+    var pascalCaseName = char.ToUpperInvariant(camelCaseName[0]) + camelCaseName[1..];
+    return source.TryGetPropertyValue(pascalCaseName, out value);
 }
 
 internal static async Task WriteSseDoneAsync(HttpResponse response, CancellationToken ct)

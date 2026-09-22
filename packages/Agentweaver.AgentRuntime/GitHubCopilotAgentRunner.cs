@@ -366,6 +366,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         var sessionTools = BuildSessionConfigTools(toolContext);
         var toolDeclarations = sessionTools.Cast<AIFunctionDeclaration>().ToList();
         var registeredToolNames = sessionTools.Select(tool => tool.Name).ToList();
+        var promptComposition = ComposePrompt(systemPromptContext, registeredToolNames);
         var sessionConfig = new SessionConfig
         {
             OnPermissionRequest = BuildPermissionHandler(governance, runId, workingDirectory, EmitToolCallOnce, EmitToolErrorOnce, Emit, ct),
@@ -387,7 +388,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = ComposeFinalPrompt(systemPromptContext, registeredToolNames),
+                Content = promptComposition.Content,
             },
             // Apply per-run model override when specified (SessionConfig.Model is the SDK seam).
             Model = byokProvider?.Model ?? modelId,
@@ -405,7 +406,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             projectId,
             task,
             systemPromptContext,
-            registeredToolNames,
+            promptComposition,
             toolDeclarations);
 
         AIAgent? agent = null;
@@ -1005,7 +1006,7 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         return tools;
     }
 
-    internal static string ComposeFinalPrompt(
+    internal static AgentPromptComposition ComposePrompt(
         string? systemPromptContext,
         IEnumerable<string> registeredToolNames) =>
         AgentBasePrompt.Compose(systemPromptContext, registeredToolNames);
@@ -1066,16 +1067,21 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         string? projectId,
         string task,
         string? systemPromptContext,
-        IReadOnlyList<string> registeredToolNames,
-        IReadOnlyList<AIFunctionDeclaration> toolDeclarations) =>
-        emit(EventTypes.AgentRuntimeContext, AgentRuntimeContextMetricsComposer.Compose(
+        AgentPromptComposition promptComposition,
+        IReadOnlyList<AIFunctionDeclaration> toolDeclarations)
+    {
+        var metrics = AgentRuntimeContextMetricsComposer.Compose(
             provider: "copilot",
             runId,
             projectId,
             task,
             systemPromptContext,
-            registeredToolNames,
-            toolDeclarations));
+            promptComposition,
+            toolDeclarations);
+        emit(EventTypes.AgentSystemPrompt, AgentSystemPromptMetadata.From(
+            metrics, promptComposition.CallableMemoryGuidanceIncluded));
+        emit(EventTypes.AgentRuntimeContext, metrics);
+    }
 
     /// <summary>
     /// Extracts the full assistant message text from the SDK <see cref="AssistantMessageEvent"/>

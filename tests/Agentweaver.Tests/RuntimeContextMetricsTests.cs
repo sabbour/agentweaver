@@ -22,10 +22,10 @@ public sealed class RuntimeContextMetricsTests
 
         var persistentRunner = AgentRuntimeContextMetricsComposer.Compose(
             "copilot", "run-123", "project-456", "inspect implementation", context,
-            ["report_intent", "safe_tool"], declarations);
+            AgentBasePrompt.Compose(context, ["report_intent", "safe_tool"]), declarations);
         var oneShotRunner = AgentRuntimeContextMetricsComposer.Compose(
             "copilot", "run-123", "project-456", "inspect implementation", context,
-            ["report_intent", "safe_tool"], declarations);
+            AgentBasePrompt.Compose(context, ["report_intent", "safe_tool"]), declarations);
 
         persistentRunner.Should().BeEquivalentTo(oneShotRunner);
         persistentRunner.GetType().GetProperties().Select(property => property.Name).Should().Equal(
@@ -34,11 +34,19 @@ public sealed class RuntimeContextMetricsTests
             "SkillDeliveryMode", "TotalCharacters", "EstimatedTokens");
     }
 
-    [Fact]
-    public void OneShotRunner_EmitsRedactedRuntimeContextEvent()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OneShotRunner_EmitsExactlyOneRedactedSystemPromptEvent(bool includeMemoryGuidance)
     {
         const string secret = "super-secret-token";
         var emitted = new List<(string Type, object Payload)>();
+        var tools = includeMemoryGuidance
+            ? new[] { "record_memory", "unsafe_tool" }
+            : new[] { "unsafe_tool" };
+        var promptComposition = GitHubCopilotAgentRunner.ComposePrompt(
+            $"context {secret}",
+            tools);
 
         GitHubCopilotAgentRunner.EmitRuntimeContext(
             (type, payload) => emitted.Add((type, payload)),
@@ -46,16 +54,22 @@ public sealed class RuntimeContextMetricsTests
             "project-456",
             $"task {secret}",
             $"context {secret}\n\n---\n\n## Available Skills\n\n- {secret}\n  Full instructions: `.agentweaver/skills/review/SKILL.md`",
-            ["unsafe_tool"],
+            promptComposition,
             Declarations());
 
-        emitted.Should().ContainSingle().Which.Type.Should().Be(EventTypes.AgentRuntimeContext);
-        JsonSerializer.Serialize(emitted[0].Payload).Should().NotContain(secret)
+        emitted.Count(item => item.Type == EventTypes.AgentSystemPrompt).Should().Be(1);
+        emitted.Count(item => item.Type == EventTypes.AgentRuntimeContext).Should().Be(1);
+        var systemPrompt = emitted.Single(item => item.Type == EventTypes.AgentSystemPrompt).Payload;
+        systemPrompt.Should().BeOfType<AgentSystemPromptMetadata>()
+            .Which.CallableMemoryGuidanceIncluded.Should().Be(includeMemoryGuidance);
+        JsonSerializer.Serialize(systemPrompt).Should().NotContain(secret)
             .And.NotContain("unsafe_tool");
     }
 
-    [Fact]
-    public void PersistentRunner_EmitsRuntimeContextEventToItsTurnStream()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PersistentRunner_EmitsExactlyOneSystemPromptEventWithCompositionDecision(bool includeMemoryGuidance)
     {
         var events = Channel.CreateUnbounded<RunEvent>();
         var agent = new CopilotAIAgent(
@@ -66,12 +80,41 @@ public sealed class RuntimeContextMetricsTests
             new InMemoryToolApprovalGate(),
             NullLogger<CopilotAIAgent>.Instance);
         agent.SetTurnStreamWriter(events.Writer);
+        var toolNames = includeMemoryGuidance ? new[] { "record_memory" } : Array.Empty<string>();
+        var promptComposition = CopilotAIAgent.ComposePrompt("charter canary", toolNames);
 
-        agent.EmitRuntimeContext("inspect implementation");
+        agent.EmitRuntimeContext("task canary", promptComposition);
 
-        events.Reader.TryRead(out var emitted).Should().BeTrue();
-        emitted!.Type.Should().Be(EventTypes.AgentRuntimeContext);
-        emitted.Payload.Should().BeOfType<AgentRuntimeContextMetrics>();
+        var emitted = new List<RunEvent>();
+        while (events.Reader.TryRead(out var evt))
+            emitted.Add(evt);
+
+        emitted.Count(evt => evt.Type == EventTypes.AgentSystemPrompt).Should().Be(1);
+        emitted.Count(evt => evt.Type == EventTypes.AgentRuntimeContext).Should().Be(1);
+        emitted.Single(evt => evt.Type == EventTypes.AgentSystemPrompt).Payload
+            .Should().BeOfType<AgentSystemPromptMetadata>()
+            .Which.CallableMemoryGuidanceIncluded.Should().Be(includeMemoryGuidance);
+        JsonSerializer.Serialize(emitted.Single(evt => evt.Type == EventTypes.AgentSystemPrompt).Payload)
+            .Should().NotContain("canary")
+            .And.NotContain("record_memory");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BothPromptCompositionPaths_ReuseTheCallableMemoryGuidanceDecision(bool includeMemoryGuidance)
+    {
+        var tools = includeMemoryGuidance ? new[] { "record_memory" } : Array.Empty<string>();
+
+        var persistent = CopilotAIAgent.ComposePrompt("charter", tools);
+        var oneShot = GitHubCopilotAgentRunner.ComposePrompt("charter", tools);
+
+        persistent.CallableMemoryGuidanceIncluded.Should().Be(includeMemoryGuidance);
+        oneShot.CallableMemoryGuidanceIncluded.Should().Be(includeMemoryGuidance);
+        persistent.Content.Contains("## Project memory and coordination", StringComparison.Ordinal)
+            .Should().Be(includeMemoryGuidance);
+        oneShot.Content.Contains("## Project memory and coordination", StringComparison.Ordinal)
+            .Should().Be(includeMemoryGuidance);
     }
 
     [Theory]
@@ -82,7 +125,8 @@ public sealed class RuntimeContextMetricsTests
     public void Compose_ClassifiesAssignedSkillDeliveryWithoutRecordingContent(string? context, string expectedMode)
     {
         var metrics = AgentRuntimeContextMetricsComposer.Compose(
-            "copilot", "run-123", "project-456", "task", context, [], Declarations());
+            "copilot", "run-123", "project-456", "task", context,
+            AgentBasePrompt.Compose(context, []), Declarations());
 
         metrics.SkillDeliveryMode.Should().Be(expectedMode);
     }
@@ -94,7 +138,7 @@ public sealed class RuntimeContextMetricsTests
         var context = "charter\n\n---\n\n## Available Skills\n\n- metadata\n  Full instructions: `.agentweaver/skills/review/SKILL.md`";
         var metrics = AgentRuntimeContextMetricsComposer.Compose(
             "copilot", "run-123", "project-456", "do work", context,
-            ["report_intent", "safe_tool"], declarations);
+            AgentBasePrompt.Compose(context, ["report_intent", "safe_tool"]), declarations);
 
         metrics.TotalCharacters.Should().Be(
             metrics.BaseCharacters + metrics.RunContextCharacters + metrics.SkillCharacters +
@@ -108,10 +152,10 @@ public sealed class RuntimeContextMetricsTests
     public void Compose_PreservesCorrelationAndRedactsAllInputContent()
     {
         const string secret = "super-secret-token";
+        var context = $"context {secret}\n\n---\n\n## Available Skills\n\n- {secret}\n  Full instructions (inlined — no on-disk SKILL.md available for this run):\n\n  {secret}";
         var metrics = AgentRuntimeContextMetricsComposer.Compose(
             "copilot", "run-123", "project-456", $"task {secret}",
-            $"context {secret}\n\n---\n\n## Available Skills\n\n- {secret}\n  Full instructions (inlined — no on-disk SKILL.md available for this run):\n\n  {secret}",
-            ["unsafe_tool"], Declarations());
+            context, AgentBasePrompt.Compose(context, ["unsafe_tool"]), Declarations());
 
         metrics.RunId.Should().Be("run-123");
         metrics.ProjectId.Should().Be("project-456");
