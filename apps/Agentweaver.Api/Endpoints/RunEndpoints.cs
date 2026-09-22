@@ -1272,6 +1272,7 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     string id,
     RequestChangesRequest request,
     IRunStore runStore,
+    IRunEventStream eventStream,
     IRunRevisionStore revisionStore,
     RunStreamStore streamStore,
     RunWorkflowRegistry workflowRegistry,
@@ -1409,9 +1410,16 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to insert revision audit row for run {RunId} — not starting revision", id);
-        await runStore.TrySetTerminalStatusAsync(runId, RunStatus.Failed, DateTimeOffset.UtcNow, "audit_insert_failed", CancellationToken.None).ConfigureAwait(false);
-        streamEntry?.RecordNext(EventTypes.RunFailed, new { reason = "audit_insert_failed" });
-        if (streamEntry is not null) streamStore.Complete(id);
+        var terminalized = await runStore.TrySetTerminalStatusAsync(runId, RunStatus.Failed, DateTimeOffset.UtcNow, "audit_insert_failed", CancellationToken.None).ConfigureAwait(false);
+        if (terminalized)
+        {
+            var entry = streamEntry ?? streamStore.Create(id, run.SubmittingUser);
+            var terminal = await eventStream.EnsureTerminalFailureAsync(
+                id, new RunEvent(0, EventTypes.RunFailed, new { reason = "audit_insert_failed" }),
+                preserveAnyTerminal: false, CancellationToken.None).ConfigureAwait(false);
+            if (!entry.HasEventType(EventTypes.RunFailed)) entry.Record(terminal);
+            streamStore.Complete(id);
+        }
         return Results.Problem("Failed to record revision audit; revision not started.", statusCode: 500);
     }
 
@@ -1447,8 +1455,12 @@ app.MapPost("/api/runs/{id}/request-changes", async (
             .ConfigureAwait(false);
         if (terminalized)
         {
-            streamEntry?.RecordNext(EventTypes.RunFailed, new { reason = "revision_start_failed" });
-            if (streamEntry is not null) streamStore.Complete(id);
+            var entry = streamEntry ?? streamStore.Create(id, run.SubmittingUser);
+            var terminal = await eventStream.EnsureTerminalFailureAsync(
+                id, new RunEvent(0, EventTypes.RunFailed, new { reason = "revision_start_failed" }),
+                preserveAnyTerminal: false, CancellationToken.None).ConfigureAwait(false);
+            if (!entry.HasEventType(EventTypes.RunFailed)) entry.Record(terminal);
+            streamStore.Complete(id);
         }
         return Results.Problem("Failed to start revision workflow.", statusCode: 500);
     }

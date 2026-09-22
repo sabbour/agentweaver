@@ -42,6 +42,9 @@ public sealed class SqliteRunEventStream : IRunEventStream
         EventTypes.ReviewDeclined,
         EventTypes.RunAssembleReady,
         EventTypes.CoordinatorAssemblyFailed,
+        EventTypes.CoordinatorAssemblyDeclined,
+        EventTypes.CoordinatorAssemblyMergeFailed,
+        EventTypes.CoordinatorAssemblyCompleted,
     };
 
     private static readonly IReadOnlyDictionary<string, Type> PayloadTypes = new Dictionary<string, Type>(StringComparer.Ordinal)

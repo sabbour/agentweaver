@@ -1501,10 +1501,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             if (!terminalized)
                 return;
 
-            // Ensure a stream entry exists so the RunFailed event has somewhere to land, then record it
-            // and close the stream — exactly the store/stream/event pattern RunWatchLoopService uses.
+            // Project the durable terminal winner locally; this can race restart recovery.
             var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
-            entry.RecordNext(EventTypes.RunFailed, new { reason });
+            await ReconcileDurableLaunchFailureEventAsync(run.Id, entry, new { reason }, ct).ConfigureAwait(false);
             _streamStore.Complete(runId);
             _ = FirePostRunScribeAsync(runId);
 

@@ -20,7 +20,10 @@ public interface IRunEventStream
         EventTypes.MergeFailed or
         EventTypes.ReviewDeclined or
         EventTypes.RunAssembleReady or
-        EventTypes.CoordinatorAssemblyFailed;
+        EventTypes.CoordinatorAssemblyFailed or
+        EventTypes.CoordinatorAssemblyDeclined or
+        EventTypes.CoordinatorAssemblyMergeFailed or
+        EventTypes.CoordinatorAssemblyCompleted;
 
     /// <summary>
     /// Appends an event to the run's log. Performs a synchronous SQLite write BEFORE returning,
