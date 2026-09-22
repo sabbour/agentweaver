@@ -399,7 +399,13 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             SubtaskId = "0",
         });
         if (status != RunStatus.InProgress)
-            await _runStore.UpdateStatusAsync(id, status, DateTimeOffset.UtcNow);
+        {
+            var eventType = status == RunStatus.AssembleReady
+                ? EventTypes.RunAssembleReady
+                : EventTypes.RunFailed;
+            await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                id, status, eventType, new { fixture = true }, DateTimeOffset.UtcNow, null);
+        }
         return id.ToString();
     }
 

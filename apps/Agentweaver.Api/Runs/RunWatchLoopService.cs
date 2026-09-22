@@ -629,10 +629,8 @@ public sealed class RunWatchLoopService
                 EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
                 entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
-                entry.RecordNext(EventTypes.MergeCompleted, new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode });
-
-                _streamStore.Complete(runId);
-                _ = _factory.PersistRunEventsAsync(runId);
+                await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.MergeCompleted,
+                    new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode }).ConfigureAwait(false);
                 _ = FirePostRunScribeAsync(runId);
                 return true;
             }
@@ -656,10 +654,8 @@ public sealed class RunWatchLoopService
                     new { result = completedResult }, completedResult, now).ConfigureAwait(false);
 
                 EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
-                entry.RecordNext(EventTypes.RunCompleted, new { result = mergeOutput.MergeResult ?? "completed" });
-
-                _streamStore.Complete(runId);
-                _ = _factory.PersistRunEventsAsync(runId);
+                await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunCompleted,
+                    new { result = mergeOutput.MergeResult ?? "completed" }).ConfigureAwait(false);
                 _ = FirePostRunScribeAsync(runId);
                 return true;
             }
@@ -672,10 +668,8 @@ public sealed class RunWatchLoopService
             EmitTerminalMetrics(currentRun, now, "failed", "merge_failed", mergeFailedChanged);
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
             entry.RecordNext(EventTypes.ReviewApproved, new { });
-            entry.RecordNext(EventTypes.MergeFailed, new { reason = mergeOutput.MergeResult });
-
-            _streamStore.Complete(runId);
-            _ = _factory.PersistRunEventsAsync(runId);
+            await CompleteTerminalOutcomeAsync(mergeFailedChanged, runId, entry, EventTypes.MergeFailed,
+                new { reason = mergeOutput.MergeResult }).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -691,10 +685,8 @@ public sealed class RunWatchLoopService
                 new { result = "no_changes" }, "no_changes", now).ConfigureAwait(false);
 
             EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
-            entry.RecordNext(EventTypes.RunCompleted, new { result = "no_changes" });
-
-            _streamStore.Complete(runId);
-            _ = _factory.PersistRunEventsAsync(runId);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunCompleted,
+                new { result = "no_changes" }).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -715,16 +707,14 @@ public sealed class RunWatchLoopService
                 now,
                 CancellationToken.None).ConfigureAwait(false);
             EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
-            if (changed && _terminalOutcomeProjector is not null)
-                await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None).ConfigureAwait(false);
-            else if (changed)
-                entry.RecordNext(EventTypes.RunAssembleReady, new
+            if (changed)
+                await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunAssembleReady, new
                 {
                     treeHash = assembleReady.TreeHash ?? string.Empty,
                     worktreeBranch = assembleReady.WorktreeBranch ?? string.Empty,
                     diff = assembleReady.Diff ?? string.Empty,
                     stepCount = assembleReady.StepCount,
-                });
+                }).ConfigureAwait(false);
 
             // Emit an explicit no-changes signal when the worker produced nothing so the coordinator
             // and the UI can surface it clearly (the reviewer must not be sent to an empty diff with
@@ -741,8 +731,6 @@ public sealed class RunWatchLoopService
                 });
             }
 
-            _streamStore.Complete(runId);
-            _ = _factory.PersistRunEventsAsync(runId);
             return true;
         }
 
@@ -762,14 +750,8 @@ public sealed class RunWatchLoopService
                 parsedRunId, currentRun, RunStatus.Failed, EventTypes.RunFailed,
                 failedPayload, turnFailed.Reason, now).ConfigureAwait(false);
 
-            if (!entry.HasEventType(EventTypes.RunFailed))
-            {
-                entry.RecordNext(EventTypes.RunFailed, failedPayload);
-            }
             EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
-
-            _streamStore.Complete(runId);
-            _ = _factory.PersistRunEventsAsync(runId);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, failedPayload).ConfigureAwait(false);
             return true;
         }
 
@@ -790,14 +772,8 @@ public sealed class RunWatchLoopService
                 parsedRunId, currentRun, RunStatus.Failed, EventTypes.RunFailed,
                 failedPayload, childFailed.Reason, now).ConfigureAwait(false);
 
-            if (!entry.HasEventType(EventTypes.RunFailed))
-            {
-                entry.RecordNext(EventTypes.RunFailed, failedPayload);
-            }
             EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
-
-            _streamStore.Complete(runId);
-            _ = _factory.PersistRunEventsAsync(runId);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, failedPayload).ConfigureAwait(false);
             return true;
         }
 
@@ -810,10 +786,7 @@ public sealed class RunWatchLoopService
             EmitTerminalMetrics(currentRun, now, "failed", "declined", changed);
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "declined", label = "Review", timestamp_utc = now.ToString("O") });
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "merge", status = "skipped", label = "Merge", timestamp_utc = now.ToString("O") });
-            entry.RecordNext(EventTypes.ReviewDeclined, new { });
-
-            _streamStore.Complete(runId);
-            _ = _factory.PersistRunEventsAsync(runId);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.ReviewDeclined, new { }).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -830,10 +803,8 @@ public sealed class RunWatchLoopService
                 new { reason = "content_safety" }, "content_safety", now).ConfigureAwait(false);
 
             EmitTerminalMetrics(currentRun, now, "failed", "content_safety", changed);
-            entry.RecordNext(EventTypes.RunFailed, new { reason = "content_safety" });
-
-            _streamStore.Complete(runId);
-            _ = _factory.PersistRunEventsAsync(runId);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed,
+                new { reason = "content_safety" }).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -914,10 +885,8 @@ public sealed class RunWatchLoopService
                 new { reason }, reason, failedAt).ConfigureAwait(false);
 
             EmitTerminalMetrics(run, failedAt, "failed", reason, changed);
-            if (!entry.HasEventType(EventTypes.RunFailed))
-                entry.RecordNext(EventTypes.RunFailed, new { reason });
-            _streamStore.Complete(runId);
-            _ = _factory.PersistRunEventsAsync(runId);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, new { reason })
+                .ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
         }
@@ -938,6 +907,28 @@ public sealed class RunWatchLoopService
             _registry.Abandon(runId);
             _factory.ClearRunExecutorMeta(runId);
         }
+    }
+
+    private async Task CompleteTerminalOutcomeAsync(
+        bool changed,
+        string runId,
+        RunStreamEntry entry,
+        string eventType,
+        object payload)
+    {
+        if (!changed)
+            return;
+
+        if (_terminalOutcomeProjector is not null)
+        {
+            await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None).ConfigureAwait(false);
+            if (entry.HasEventType(eventType))
+                return;
+        }
+
+        entry.RecordNext(eventType, payload);
+        _streamStore.Complete(runId);
+        _ = _factory.PersistRunEventsAsync(runId);
     }
 
     private Task<bool> SetTerminalOutcomeAsync(

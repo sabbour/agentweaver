@@ -1487,14 +1487,13 @@ public sealed class CoordinatorRunService
             var result = delegated ? "delegated_to_backlog" : spec?.Status ?? "confirmed";
             var terminal = spec?.Status == "declined" ? RunStatus.Declined : RunStatus.Completed;
             var entry0 = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
-            await _runStore.TrySetTerminalOutcomeAsync(
+            var eventType = terminal == RunStatus.Declined ? EventTypes.ReviewDeclined : EventTypes.RunCompleted;
+            var changed = await _runStore.TrySetTerminalOutcomeAsync(
                 run.Id,
-                TerminalRunOutcome.Create(terminal, EventTypes.RunCompleted, new { result }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                TerminalRunOutcome.Create(terminal, eventType, new { result }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
                 result,
                 ct).ConfigureAwait(false);
-            entry0.RecordNext(EventTypes.RunCompleted, new { result });
-            _streamStore.Complete(runId);
-            _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
+            await CompleteTerminalOutcomeAsync(changed, entry0, runId, eventType, new { result }, ct).ConfigureAwait(false);
             _factory.DeleteCheckpoints(runId);
             return;
         }
@@ -1540,14 +1539,12 @@ public sealed class CoordinatorRunService
             // (f) The plan reached a terminal/parked state but the coordinator run row was never flipped
             // off InProgress (a crash between the plan write and the run finalize). Settle the run row.
             case CoordinatorRecoveryAction.SettleComplete:
-                await _runStore.TrySetTerminalOutcomeAsync(
+                var completedChanged = await _runStore.TrySetTerminalOutcomeAsync(
                     run.Id,
                     TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted, new { result = "complete" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
                     "complete",
                     ct).ConfigureAwait(false);
-                entry.RecordNext(EventTypes.RunCompleted, new { result = "complete" });
-                _streamStore.Complete(runId);
-                _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
+                await CompleteTerminalOutcomeAsync(completedChanged, entry, runId, EventTypes.RunCompleted, new { result = "complete" }, ct).ConfigureAwait(false);
                 _factory.DeleteCheckpoints(runId);
                 _assembly.EnsureFinalScribe((await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)) ?? run with
                 {
@@ -1557,14 +1554,12 @@ public sealed class CoordinatorRunService
                 break;
 
             case CoordinatorRecoveryAction.SettleFailed:
-                await _runStore.TrySetTerminalOutcomeAsync(
+                var failedChanged = await _runStore.TrySetTerminalOutcomeAsync(
                     run.Id,
                     TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = run.Result ?? planState.Status }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
                     run.Result ?? planState.Status,
                     ct).ConfigureAwait(false);
-                entry.RecordNext(EventTypes.RunFailed, new { reason = run.Result ?? planState.Status });
-                _streamStore.Complete(runId);
-                _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
+                await CompleteTerminalOutcomeAsync(failedChanged, entry, runId, EventTypes.RunFailed, new { reason = run.Result ?? planState.Status }, ct).ConfigureAwait(false);
                 _factory.DeleteCheckpoints(runId);
                 _assembly.EnsureFinalScribe((await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)) ?? run with
                 {
@@ -2005,16 +2000,29 @@ public sealed class CoordinatorRunService
         var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
             parsedRunId, status, eventType, new { result }, DateTimeOffset.UtcNow, result, CancellationToken.None).ConfigureAwait(false);
 
+        await CompleteTerminalOutcomeAsync(
+            changed, entry, runId, eventType, new { result }, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task CompleteTerminalOutcomeAsync(
+        bool changed,
+        RunStreamEntry entry,
+        string runId,
+        string eventType,
+        object payload,
+        CancellationToken ct)
+    {
         if (!changed)
             return;
 
         if (_terminalOutcomeProjector is not null)
         {
-            await _terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None).ConfigureAwait(false);
-            return;
+            await _terminalOutcomeProjector.ProjectPendingAsync(ct).ConfigureAwait(false);
+            if (entry.HasEventType(eventType))
+                return;
         }
 
-        entry.RecordNext(eventType, new { result });
+        entry.RecordNext(eventType, payload);
         _streamStore.Complete(runId);
         _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
     }
@@ -2100,30 +2108,20 @@ public sealed class CoordinatorRunService
                     runId);
                 return;
             }
-            if (entry.HasEventType(EventTypes.RunFailed))
+            await CompleteTerminalOutcomeAsync(
+                changed, entry, runId, EventTypes.RunFailed, terminalPayload, CancellationToken.None).ConfigureAwait(false);
+            if (providerFailure is null)
             {
-                _logger.LogInformation(
-                    "Coordinator run {RunId} already has a terminal failure event; skipping duplicate emission",
-                    runId);
+                _logger.LogError(
+                    "Coordinator terminal failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
+                    runId, errorCode, correlationId);
             }
             else
             {
-                entry.RecordNext(EventTypes.RunFailed, terminalPayload);
-                if (providerFailure is null)
-                {
-                    _logger.LogError(
-                        "Coordinator terminal failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
-                        runId, errorCode, correlationId);
-                }
-                else
-                {
-                    _logger.LogError(
-                        "Coordinator provider failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
-                        runId, providerFailure.ErrorCode, correlationId);
-                }
+                _logger.LogError(
+                    "Coordinator provider failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
+                    runId, providerFailure.ErrorCode, correlationId);
             }
-            _streamStore.Complete(runId);
-            _ = _runWorkflowFactory.PersistRunEventsAsync(runId);
         }
         catch (Exception ex)
         {
