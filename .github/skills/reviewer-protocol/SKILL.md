@@ -27,7 +27,8 @@ When an artifact is **rejected** by a Reviewer:
 
 1. **Use one fresh agent context for one bounded corrective pass.** Give that context the rejection evidence and a defined correction scope.
 2. **The fresh context may use the same named agent and charter as the original author.** Do not require a different agent, lock out the original author, or treat charter rotation as independent review.
-3. **After the bounded pass, re-review the stated finding using the evidence.** If concrete design or safety risks remain unresolved, escalate with the review evidence.
+3. **After the bounded pass, re-review the stated finding using the evidence.** Post a new reviewer revalidation comment under the PR Comment Writing Policy in `.github/agents/squad.agent.md`.
+4. **Escalate unresolved concrete design or safety risks with the review evidence.**
 
 ## Examples
 

@@ -482,8 +482,10 @@ artifact, they provide evidence and a defined corrective scope for one bounded p
 Coordinator uses one fresh agent context, which may use the original author's named agent
 and charter; it must not impose an original-author lockout or rotate charters as theater.
 The stated finding and its evidence are re-reviewed after the pass. The Coordinator
-escalates only when concrete design or safety risks remain unresolved. The full rules are
-in the "Reviewer Rejection Protocol" section of `squad.agent.md`.
+posts a new revalidation comment under the
+[PR Comment Writing Policy](.github/agents/squad.agent.md#pr-comment-writing-policy).
+The Coordinator escalates only when concrete design or safety risks remain unresolved.
+The full rules are in the "Reviewer Rejection Protocol" section of `squad.agent.md`.
 
 **Rubber-ducking.** Before a non-trivial or risky change ships, the Coordinator can invoke a
 `rubber-duck` review pass — a dedicated critical-feedback agent whose only job is to hunt for

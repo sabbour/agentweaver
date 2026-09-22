@@ -427,6 +427,60 @@ validation prerequisites proportional to the change.
   scripts and rerun the affected focused API scenarios. Repeat until the acceptance gate is
   clean; do not declare the milestone complete while findings remain.
 
+### PR Comment Writing Policy
+
+Use this policy for every PR admission or reviewer revalidation comment.
+
+Add a new comment. Do not edit a previous PR comment.
+
+Write short active sentences. Write one fact in each descriptive sentence. Use one name
+for each concept. Do not use filler, contractions, or semicolons.
+
+Use `make sure that` for statements about a required state. Do not use `check`, `verify`,
+`confirm`, or `ensure` as state verbs.
+
+Keep descriptive sentences at 25 words or fewer. Keep procedural instructions at 20 words
+or fewer. Put each required condition before its command.
+
+Use a flat list after an introductory colon. Keep commands, identifiers, paths, SHA values,
+URLs, labels, and quoted errors exact.
+
+Use this format for admission comments:
+
+### Admission evidence
+
+Record the admission evidence:
+
+- PR head: `<head-sha>`.
+- Ledger: `<ledger-path>`.
+- Finding result: `<resolved-status>`.
+- Validation: `<command-and-result>`.
+- Decision: `<admission-decision>`.
+
+Use this format for reviewer revalidation comments:
+
+### Reviewer revalidation
+
+Record the reviewer revalidation:
+
+- PR head: `<head-sha>`.
+- Finding: `<finding-id>`.
+- Correction: `<correction-fact>`.
+- Validation: `<command-and-result>`.
+- Decision: `<revalidation-decision>`.
+
+Before you post, complete this self-review:
+
+1. Make sure that each descriptive sentence has 25 words or fewer.
+2. Make sure that each procedural instruction has 20 words or fewer.
+3. Scan for `should`, `would`, `may`, `might`, `could`, `shall`, and filler.
+4. Make sure that each condition appears before its command.
+5. Make sure that each list uses an introductory colon and flat items.
+6. Make sure that commands, identifiers, paths, SHA values, URLs, labels, and quoted errors are exact.
+
+Raw JSON is evidence, not descriptive prose. Keep raw JSON exact. Post it in a separate
+comment.
+
 ### Consult Mode Detection
 
 When a user addresses a personal agent by name:

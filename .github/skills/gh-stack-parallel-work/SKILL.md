@@ -72,10 +72,11 @@ npm run workflow:ponytail-gate -- \
   --expect-tip "$(git rev-parse HEAD)"
 ```
 
-The command failing blocks review evidence. Persist the validated JSON verbatim in the
-candidate PR as a comment (a raw JSON body is intentionally machine-readable and
-auditable), for example `gh pr comment <number> --body-file <gate.json>`. A waiver is an
-explicit accountable decision, not reviewer silence.
+The command failing blocks review evidence. Follow the PR Comment Writing Policy in
+`.github/agents/squad.agent.md`. Post a prose admission summary before the raw JSON
+evidence. Persist the validated JSON verbatim in a separate candidate PR comment, for
+example `gh pr comment <number> --body-file <gate.json>`. A waiver is an explicit
+accountable decision, not reviewer silence.
 
 ## Coordinator-owned admission preflight
 
@@ -99,7 +100,8 @@ resolved. Record the output, ledger path, review/ceremony evidence, and RFD hand
 the candidate SHA before proceeding. Coordinator/Ralph and authoritative external Squad
 state are trusted operational components. GitHub is evidence and CI only; repository
 code is not a tamper-proof sandbox and cannot provide adversarially immutable
-`origin/dev` execution. PR comments preserve evidence but do not decide admission.
+`origin/dev` execution. Post admission and reviewer revalidation comments under the PR
+Comment Writing Policy. PR comments preserve evidence but do not decide admission.
 
 ## Temporary integration branch queue
 
