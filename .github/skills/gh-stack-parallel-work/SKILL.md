@@ -20,7 +20,7 @@ for ordinary PRs.
 cohort. It is never the admission queue for independent issues. Independent changes use
 the temporary integration branch workflow below.
 
-## Ponytail implementation and admission gate
+## Ponytail implementation evidence
 
 Coding agents use `ponytail` by default. After implementation they must:
 
@@ -72,10 +72,34 @@ npm run workflow:ponytail-gate -- \
   --expect-tip "$(git rev-parse HEAD)"
 ```
 
-The command failing blocks admission. Persist the validated JSON verbatim in the
+The command failing blocks review evidence. Persist the validated JSON verbatim in the
 candidate PR as a comment (a raw JSON body is intentionally machine-readable and
 auditable), for example `gh pr comment <number> --body-file <gate.json>`. A waiver is an
 explicit accountable decision, not reviewer silence.
+
+## Coordinator-owned admission preflight
+
+GitHub is the PR, CI, and evidence record only; it is not an admission gate. Ralph stores
+the versioned finding ledger at `admission/findings/<repository>/<pr>.json` in
+authoritative external Squad state. The coordinator hands Ralph the PR number, live
+`headRefOid`, required review findings, ceremony evidence, and any RFD decision that
+governed the change. Before ready and immediately before manual squash merge, Ralph
+fetches `origin/dev`, gets the live head SHA, and runs:
+
+```bash
+node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
+  --head-sha <live-head-sha>
+gh pr merge <number> --squash --match-head-commit <validated-sha>
+```
+
+The preflight resolves the declared external state with the pinned Squad SDK and applies
+a closed policy: every finding is advisory or required, and every required finding must
+be owned, corrected or waived, freshly validated/reviewed at the current SHA, and
+resolved. Record the output, ledger path, review/ceremony evidence, and RFD handoff with
+the candidate SHA before proceeding. Coordinator/Ralph and authoritative external Squad
+state are trusted operational components. GitHub is evidence and CI only; repository
+code is not a tamper-proof sandbox and cannot provide adversarially immutable
+`origin/dev` execution. PR comments preserve evidence but do not decide admission.
 
 ## Temporary integration branch queue
 
