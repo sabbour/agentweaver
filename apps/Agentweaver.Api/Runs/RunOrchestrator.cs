@@ -1013,14 +1013,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 .ConfigureAwait(false);
             if (changed)
             {
-                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = "workflow_bind_failed",
-                    detail = ex.Message,
-                });
-                _streamStore.Complete(runId.ToString());
-                _ = FirePostRunScribeAsync(runId.ToString());
+                await ReconcileLaunchFailureAsync(
+                    runId, entry, "workflow_bind_failed", ex.Message, CancellationToken.None).ConfigureAwait(false);
             }
 
             throw new RunSubmissionValidationException($"Policy hook failed: {ex.Message}", ex);
@@ -1034,14 +1028,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 .ConfigureAwait(false);
             if (changed)
             {
-                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
-                entry.RecordNext(EventTypes.RunFailed, new
-                {
-                    reason = "workflow_start_failed",
-                    detail,
-                });
-                _streamStore.Complete(runId.ToString());
-                _ = FirePostRunScribeAsync(runId.ToString());
+                await ReconcileLaunchFailureAsync(
+                    runId, entry, "workflow_start_failed", detail, CancellationToken.None).ConfigureAwait(false);
             }
 
             throw;
@@ -1060,17 +1048,78 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         if (!changed)
             return false;
 
-        EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false),
-            "mandatory_context_budget_exceeded");
-        entry.RecordNext(EventTypes.RunFailed, new
-        {
-            errorCode = "mandatory_context_budget_exceeded",
-            retryable = false,
-            detail,
-        });
-        _streamStore.Complete(runId.ToString());
-        _ = FirePostRunScribeAsync(runId.ToString());
+        await ReconcileLaunchFailureAsync(
+            runId, entry, "mandatory_context_budget_exceeded", detail, CancellationToken.None,
+            typedMandatoryContextFailure: true).ConfigureAwait(false);
         return true;
+    }
+
+    private async Task ReconcileLaunchFailureAsync(
+        RunId runId,
+        RunStreamEntry entry,
+        string reason,
+        string detail,
+        CancellationToken ct,
+        bool typedMandatoryContextFailure = false)
+    {
+        object payload = typedMandatoryContextFailure
+            ? new { errorCode = reason, retryable = false, detail }
+            : new { reason, detail };
+
+        try
+        {
+            if (!entry.GetSnapshotSince(0).Events.Any(e => e.Type == EventTypes.RunFailed))
+                entry.RecordNext(EventTypes.RunFailed, payload);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Launch failure event append failed for run {RunId}; reconciling durable terminal event", runId);
+            await ReconcileDurableLaunchFailureEventAsync(runId, entry, payload, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _streamStore.Complete(runId.ToString());
+        }
+
+        try
+        {
+            EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), reason);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Launch failure metrics failed for run {RunId}", runId);
+        }
+
+        _ = FirePostRunScribeAsync(runId.ToString());
+    }
+
+    private async Task ReconcileDurableLaunchFailureEventAsync(
+        RunId runId,
+        RunStreamEntry entry,
+        object payload,
+        CancellationToken ct)
+    {
+        var stream = _eventStream;
+        if (stream is null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            stream = scope.ServiceProvider.GetService<IRunEventStream>();
+        }
+
+        if (stream is null)
+            throw new InvalidOperationException($"No durable event stream is available for failed run {runId}.");
+
+        var persisted = await stream.GetPersistedEventsAsync(runId.ToString(), 0, ct).ConfigureAwait(false);
+        var terminal = persisted.FirstOrDefault(e => e.Type == EventTypes.RunFailed);
+        if (terminal is null)
+        {
+            var sequence = await stream.AppendAsync(
+                runId.ToString(), new RunEvent(0, EventTypes.RunFailed, payload), ct).ConfigureAwait(false);
+            terminal = new RunEvent(sequence, EventTypes.RunFailed, payload);
+        }
+
+        if (!entry.GetSnapshotSince(0).Events.Any(e => e.Type == EventTypes.RunFailed))
+            entry.Record(terminal);
     }
 
     /// <summary>

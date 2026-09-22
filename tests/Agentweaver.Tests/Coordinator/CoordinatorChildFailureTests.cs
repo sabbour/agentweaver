@@ -302,6 +302,36 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
                 .Contains("mandatory_context_budget_exceeded", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task MandatoryContextFailure_WhenFirstTerminalEventAppendFails_ReconcilesOneDurableEvent()
+    {
+        var durable = new FailFirstRunFailedAppendStream(
+            _provider.GetRequiredService<IRunEventStream>());
+        var streamStore = new RunStreamStore(durable);
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = new RunOrchestrator(
+            _runStore, streamStore, manager, workflowFactory: null!, registry: null!, watchLoop: null!,
+            _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
+        var projectId = ProjectId.New();
+        var run = NewChildRun() with
+        {
+            RepositoryPath = repoPath,
+            OriginatingBranch = "main",
+            ProjectId = projectId,
+        };
+        await SeedMandatoryDecisionAsync(projectId, run.AgentName!);
+
+        await Assert.ThrowsAsync<MandatoryContextBudgetExceededException>(() =>
+            orchestrator.StartChildRunAsync(run, CancellationToken.None));
+
+        var failures = (await durable.GetPersistedEventsAsync(run.Id.ToString()))
+            .Where(e => e.Type == EventTypes.RunFailed)
+            .ToArray();
+        failures.Should().ContainSingle();
+        streamStore.Get(run.Id.ToString())!.IsCompleted.Should().BeTrue();
+    }
+
     [Theory]
     [InlineData(@"could not create worktree at C:\Users\asabbour\.local\share\agentweaver\worktrees\abc")]
     [InlineData("path /home/asabbour/.copilot/session-state/x rejected")]
@@ -358,6 +388,33 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
             UpdatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
+    }
+
+    private sealed class FailFirstRunFailedAppendStream(IRunEventStream inner) : IRunEventStream
+    {
+        private int _failed;
+
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            if (evt.Type == EventTypes.RunFailed && Interlocked.Exchange(ref _failed, 1) == 0)
+                throw new InvalidOperationException("injected terminal event append failure");
+            return inner.AppendAsync(runId, evt, ct);
+        }
+
+        public Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
+            string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default) =>
+            inner.AppendWhileRunActiveAsync(runId, events, runStore, ct);
+
+        public IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            inner.SubscribeAsync(runId, fromSequence, ct);
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            inner.CompleteAsync(runId, ct);
+
+        public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(
+            string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            inner.GetPersistedEventsAsync(runId, fromSequence, ct);
     }
 
     private (string RepoPath, string WorktreesBase) CreateRepository()
