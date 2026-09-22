@@ -69,6 +69,13 @@ public interface ICoordinatorDispatch
 /// </summary>
 public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 {
+    private enum SteeringRevisionLaunchResult
+    {
+        NotLaunched,
+        Launched,
+        Terminalized,
+    }
+
     internal static readonly TimeSpan MaxInfrastructureRetryBackoff = TimeSpan.FromMinutes(2);
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
@@ -511,19 +518,22 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 var directive = await _steering.TryTakeForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
                     .ConfigureAwait(false);
-                if (directive is not null
-                    && await TryInjectSteeringRevisionAsync(
-                        context, workPlanId.Value, result, directive, statusById, seq, ct).ConfigureAwait(false))
+                if (directive is not null)
                 {
-                    inFlight[result.SubtaskId] = ObserveChildAsync(
-                        context.CoordinatorRunId,
-                        workPlanId.Value,
-                        result.SubtaskId,
-                        result.ChildRunId,
-                        seq,
-                        ct,
-                        fromSequence: result.TerminalSequence ?? 0);
-                    continue;
+                    var launch = await TryInjectSteeringRevisionAsync(
+                        context, workPlanId.Value, result, directive, statusById, seq, ct).ConfigureAwait(false);
+                    if (launch is not SteeringRevisionLaunchResult.NotLaunched)
+                    {
+                        inFlight[result.SubtaskId] = ObserveChildAsync(
+                            context.CoordinatorRunId,
+                            workPlanId.Value,
+                            result.SubtaskId,
+                            result.ChildRunId,
+                            seq,
+                            ct,
+                            fromSequence: result.TerminalSequence ?? 0);
+                        continue;
+                    }
                 }
             }
             // A redirect directive targeting this child can also apply when the child was force-cancelled
@@ -534,19 +544,22 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 var redirect = await _steering.TryTakeRedirectForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
                     .ConfigureAwait(false);
-                if (redirect is not null
-                    && await TryInjectSteeringRevisionAsync(
-                        context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false))
+                if (redirect is not null)
                 {
-                    inFlight[result.SubtaskId] = ObserveChildAsync(
-                        context.CoordinatorRunId,
-                        workPlanId.Value,
-                        result.SubtaskId,
-                        result.ChildRunId,
-                        seq,
-                        ct,
-                        fromSequence: result.TerminalSequence ?? 0);
-                    continue;
+                    var launch = await TryInjectSteeringRevisionAsync(
+                        context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false);
+                    if (launch is not SteeringRevisionLaunchResult.NotLaunched)
+                    {
+                        inFlight[result.SubtaskId] = ObserveChildAsync(
+                            context.CoordinatorRunId,
+                            workPlanId.Value,
+                            result.SubtaskId,
+                            result.ChildRunId,
+                            seq,
+                            ct,
+                            fromSequence: result.TerminalSequence ?? 0);
+                        continue;
+                    }
                 }
 
                 if (redirect is not null)
@@ -568,19 +581,22 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 var redirect = await _steering.TryTakeRedirectForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
                     .ConfigureAwait(false);
-                if (redirect is not null
-                    && await TryInjectSteeringRevisionAsync(
-                        context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false))
+                if (redirect is not null)
                 {
-                    inFlight[result.SubtaskId] = ObserveChildAsync(
-                        context.CoordinatorRunId,
-                        workPlanId.Value,
-                        result.SubtaskId,
-                        result.ChildRunId,
-                        seq,
-                        ct,
-                        fromSequence: result.TerminalSequence ?? 0);
-                    continue;
+                    var launch = await TryInjectSteeringRevisionAsync(
+                        context, workPlanId.Value, result, redirect, statusById, seq, ct).ConfigureAwait(false);
+                    if (launch is not SteeringRevisionLaunchResult.NotLaunched)
+                    {
+                        inFlight[result.SubtaskId] = ObserveChildAsync(
+                            context.CoordinatorRunId,
+                            workPlanId.Value,
+                            result.SubtaskId,
+                            result.ChildRunId,
+                            seq,
+                            ct,
+                            fromSequence: result.TerminalSequence ?? 0);
+                        continue;
+                    }
                 }
             }
 
@@ -1764,11 +1780,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     // Reuses the revision-injection mechanism identified in the steering spike: the child resumes
     // its session and worktree with the steered instruction as a fresh trimmed-pipeline turn. There
     // is NO mid-turn interrupt — this only runs once the child's prior turn has fully completed.
-    // Returns true when the revised turn was injected (the caller re-observes the child), false to
-    // fall through to normal finalization.
+    // Returns a terminalized result when a context fence failed after reopening, so callers re-observe
+    // the new failed terminal event rather than applying the stale pre-revision result.
     // -----------------------------------------------------------------------
 
-    private async Task<bool> TryInjectSteeringRevisionAsync(
+    private async Task<SteeringRevisionLaunchResult> TryInjectSteeringRevisionAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
         ChildResult result,
@@ -1778,7 +1794,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         CancellationToken ct)
     {
         if (!RunId.TryParse(result.ChildRunId, out var childRunId))
-            return false;
+            return SteeringRevisionLaunchResult.NotLaunched;
 
         var childRun = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
         if (childRun is null)
@@ -1786,7 +1802,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             _logger.LogWarning(
                 "Steering: child run {ChildRunId} not found; cannot inject directive {DirectiveId}",
                 result.ChildRunId, directive.DirectiveId);
-            return false;
+            return SteeringRevisionLaunchResult.NotLaunched;
         }
 
         await _orchestrator.ValidateDurableProviderBoundaryAsync(childRun, ct).ConfigureAwait(false);
@@ -1809,12 +1825,22 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             await _orchestrator.StartRevisionAsync(childRun, directive.Instruction, ct, isChild: true)
                 .ConfigureAwait(false);
         }
+        catch (MandatoryContextBudgetExceededException ex)
+        {
+            _logger.LogError(ex,
+                "Steering: mandatory context budget terminalized revised child {ChildRunId} (directive {DirectiveId})",
+                result.ChildRunId, directive.DirectiveId);
+            await UpdateDirectiveStatusAsync(directive.DirectiveId, SteeringStatus.NeedsAttention, DateTimeOffset.UtcNow, ct)
+                .ConfigureAwait(false);
+            EmitSteering(context.CoordinatorRunId, directive, SteeringStatus.NeedsAttention);
+            return SteeringRevisionLaunchResult.Terminalized;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex,
                 "Steering: failed to inject revised turn for child {ChildRunId} (directive {DirectiveId}); finalizing normally",
                 result.ChildRunId, directive.DirectiveId);
-            return false;
+            return SteeringRevisionLaunchResult.NotLaunched;
         }
 
         // The child is executing a new turn carrying the steered instruction.
@@ -1832,7 +1858,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _logger.LogInformation(
             "Steering: applied {Kind} directive {DirectiveId} to child {ChildRunId} at its next turn boundary",
             directive.Kind, directive.DirectiveId, result.ChildRunId);
-        return true;
+        return SteeringRevisionLaunchResult.Launched;
     }
 
     private async Task UpdateDirectiveStatusAsync(

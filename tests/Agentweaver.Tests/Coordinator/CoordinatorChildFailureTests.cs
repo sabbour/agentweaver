@@ -148,6 +148,26 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task DispatchFailureFallback_WhenTerminalCasLoses_DoesNotDuplicateRunFailed()
+    {
+        var childRun = NewChildRun();
+        await _runStore.InsertAsync(childRun);
+        (await _runStore.TrySetTerminalStatusAsync(
+            childRun.Id, RunStatus.Failed, DateTimeOffset.UtcNow, "already_failed", default))
+            .Should().BeTrue();
+
+        var entry = _streamStore.Create(childRun.Id.ToString(), childRun.SubmittingUser);
+        entry.RecordNext(EventTypes.RunFailed, new { reason = "already_failed" });
+        _streamStore.Complete(childRun.Id.ToString());
+
+        await _orchestrator.MarkChildRunFailedAsync(
+            childRun, new InvalidOperationException("late dispatch failure"), default);
+
+        entry.GetSnapshotSince(0).Events.Should().ContainSingle(e => e.Type == EventTypes.RunFailed);
+        entry.IsCompleted.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task StartChildRunAsync_WhenLaunchFailsAfterWorktreeCreation_CleansUpChildWorktree()
     {
         var (repoPath, worktreesBase) = CreateRepository();
@@ -251,6 +271,37 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
                 .Contains("mandatory_context_budget_exceeded", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task SteeringRevision_MandatoryContextBudgetFailure_TerminalizesReopenedStream()
+    {
+        var projectId = ProjectId.New();
+        var run = NewChildRun() with
+        {
+            ProjectId = projectId,
+            WorktreePath = "existing-worktree",
+            WorktreeBranch = "agentweaver/existing",
+        };
+        await _runStore.InsertAsync(run);
+        await SeedMandatoryDecisionAsync(projectId, run.AgentName!);
+
+        var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
+        entry.RecordNext(EventTypes.RunCompleted, new { result = "prior turn complete" });
+        _streamStore.Complete(run.Id.ToString());
+        _streamStore.Reopen(run.Id.ToString());
+
+        var act = () => _orchestrator.StartRevisionAsync(
+            run, "redirect to the corrected task", CancellationToken.None, isChild: true);
+
+        await act.Should().ThrowAsync<MandatoryContextBudgetExceededException>();
+
+        (await _runStore.GetAsync(run.Id))!.Status.Should().Be(RunStatus.Failed);
+        entry.IsCompleted.Should().BeTrue();
+        entry.GetSnapshotSince(0).Events.Should().ContainSingle(e =>
+            e.Type == EventTypes.RunFailed
+            && System.Text.Json.JsonSerializer.Serialize(e.Payload)
+                .Contains("mandatory_context_budget_exceeded", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData(@"could not create worktree at C:\Users\asabbour\.local\share\agentweaver\worktrees\abc")]
     [InlineData("path /home/asabbour/.copilot/session-state/x rejected")]
@@ -285,6 +336,29 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
         ParentRunId = RunId.New().ToString(),
         SubtaskId = "7",
     };
+
+    private async Task SeedMandatoryDecisionAsync(ProjectId projectId, string agentName)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.Decisions.Add(new Decision
+        {
+            ProjectId = projectId.ToString(),
+            AgentName = agentName,
+            Type = "architectural",
+            Status = "active",
+            Title = "Mandatory boundary",
+            Content = new string('d', 128),
+            TrustState = MemoryTrustStates.Approved,
+            SourceKind = MemorySourceKinds.Run,
+            SourceIdentity = "run:context-budget",
+            ApprovedBy = "human:alice",
+            ApprovedAt = DateTimeOffset.UtcNow,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
 
     private (string RepoPath, string WorktreesBase) CreateRepository()
     {

@@ -1434,6 +1434,11 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     {
         await orchestrator.StartRevisionAsync(run, revisedTask, CancellationToken.None).ConfigureAwait(false);
     }
+    catch (MandatoryContextBudgetExceededException ex)
+    {
+        logger.LogError(ex, "Mandatory context budget prevented revision workflow start for run {RunId}", id);
+        return Results.Problem("Mandatory context exceeded the configured budget.", statusCode: 500);
+    }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to start revision workflow for run {RunId}", id);

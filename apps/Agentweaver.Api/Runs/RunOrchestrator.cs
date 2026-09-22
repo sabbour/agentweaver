@@ -550,12 +550,20 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 run.ModelId,
                 EffectiveModelProviderProvenance.ScopeProject));
 
-        var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
-            run with { Task = revisedTask }, ct);
+        (string taskWithHarvest, string? systemPromptContext) context;
+        try
+        {
+            context = await BuildContextAsync(run with { Task = revisedTask }, ct).ConfigureAwait(false);
+        }
+        catch (MandatoryContextBudgetExceededException ex)
+        {
+            await FailPreWorkflowLaunchAsync(run.Id, entry, ex).ConfigureAwait(false);
+            throw;
+        }
 
         var input = new AgentTurnInput(
             run.Id.ToString(),
-            taskWithHarvest,
+            context.taskWithHarvest,
             run.WorktreePath,
             run.WorktreeBranch,
             run.RepositoryPath,
@@ -563,7 +571,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             run.ModelSource.ToApiString(),
             run.ModelId,
             run.SubmittingUser,
-            systemPromptContext,
+            context.systemPromptContext,
             run.ProjectId?.ToString(),
             run.AgentName,
             run.StartedAt,
@@ -724,7 +732,16 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     EffectiveModelProviderProvenance.ScopeProject));
             entry.RecordNext("coordinator.child_revision_handoff", evidence);
 
-            var (taskWithHarvest, systemPromptContext) = await BuildContextAsync(started, ct);
+            (string taskWithHarvest, string? systemPromptContext) context;
+            try
+            {
+                context = await BuildContextAsync(started, ct).ConfigureAwait(false);
+            }
+            catch (MandatoryContextBudgetExceededException ex)
+            {
+                await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
+                throw;
+            }
 
             // BLOCKING #1 (lockout correctness): IsRevision:false → CreateSessionAsync mints a FRESH
             // SDK session under agentweaver-run-{newAgentRun.Id}. The new agent does NOT resume — and
@@ -732,7 +749,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             // carried via the reused/branched worktree and the RenderedGuidance injected above.
             var input = new AgentTurnInput(
                 newAgentRun.Id.ToString(),
-                taskWithHarvest,
+                context.taskWithHarvest,
                 worktreePath,
                 worktreeBranch,
                 newAgentRun.RepositoryPath,
@@ -740,7 +757,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 newAgentRun.ModelSource.ToApiString(),
                 newAgentRun.ModelId,
                 newAgentRun.SubmittingUser,
-                systemPromptContext,
+                context.systemPromptContext,
                 newAgentRun.ProjectId?.ToString(),
                 newAgentRun.AgentName,
                 started.StartedAt,
@@ -991,23 +1008,19 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             _logger.LogError(ex, "Workflow binding failed for run {RunId}; transitioning to failed", runId);
             var result = $"workflow_bind_failed: {ex.Message}";
-            try
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                runId, RunStatus.Failed, DateTimeOffset.UtcNow, result, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (changed)
             {
-                var changed = await _runStore.TrySetTerminalStatusAsync(
-                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, result, CancellationToken.None)
-                    .ConfigureAwait(false);
-                if (changed)
-                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
+                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
                 entry.RecordNext(EventTypes.RunFailed, new
                 {
                     reason = "workflow_bind_failed",
                     detail = ex.Message,
                 });
-                _ = FirePostRunScribeAsync(runId.ToString());
-            }
-            finally
-            {
                 _streamStore.Complete(runId.ToString());
+                _ = FirePostRunScribeAsync(runId.ToString());
             }
 
             throw new RunSubmissionValidationException($"Policy hook failed: {ex.Message}", ex);
@@ -1016,55 +1029,48 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             _logger.LogError(ex, "Workflow start failed for run {RunId}; transitioning to failed", runId);
             var detail = RedactFailureReason(ex);
-            try
+            var changed = await _runStore.TrySetTerminalStatusAsync(
+                runId, RunStatus.Failed, DateTimeOffset.UtcNow, detail, CancellationToken.None)
+                .ConfigureAwait(false);
+            if (changed)
             {
-                var changed = await _runStore.TrySetTerminalStatusAsync(
-                    runId, RunStatus.Failed, DateTimeOffset.UtcNow, detail, CancellationToken.None)
-                    .ConfigureAwait(false);
-                if (changed)
-                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
+                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
                 entry.RecordNext(EventTypes.RunFailed, new
                 {
                     reason = "workflow_start_failed",
                     detail,
                 });
-                _ = FirePostRunScribeAsync(runId.ToString());
-            }
-            finally
-            {
                 _streamStore.Complete(runId.ToString());
+                _ = FirePostRunScribeAsync(runId.ToString());
             }
 
             throw;
         }
     }
 
-    private async Task FailPreWorkflowLaunchAsync(
+    private async Task<bool> FailPreWorkflowLaunchAsync(
         RunId runId,
         RunStreamEntry entry,
         MandatoryContextBudgetExceededException exception)
     {
         var detail = RedactFailureReason(exception);
-        try
+        var changed = await _runStore.TrySetTerminalStatusAsync(
+            runId, RunStatus.Failed, DateTimeOffset.UtcNow, detail, CancellationToken.None)
+            .ConfigureAwait(false);
+        if (!changed)
+            return false;
+
+        EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false),
+            "mandatory_context_budget_exceeded");
+        entry.RecordNext(EventTypes.RunFailed, new
         {
-            var changed = await _runStore.TrySetTerminalStatusAsync(
-                runId, RunStatus.Failed, DateTimeOffset.UtcNow, detail, CancellationToken.None)
-                .ConfigureAwait(false);
-            if (changed)
-                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false),
-                    "mandatory_context_budget_exceeded");
-            entry.RecordNext(EventTypes.RunFailed, new
-            {
-                errorCode = "mandatory_context_budget_exceeded",
-                retryable = false,
-                detail,
-            });
-            _ = FirePostRunScribeAsync(runId.ToString());
-        }
-        finally
-        {
-            _streamStore.Complete(runId.ToString());
-        }
+            errorCode = "mandatory_context_budget_exceeded",
+            retryable = false,
+            detail,
+        });
+        _streamStore.Complete(runId.ToString());
+        _ = FirePostRunScribeAsync(runId.ToString());
+        return true;
     }
 
     /// <summary>
@@ -1414,9 +1420,11 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 Result = reason,
             };
 
+            var terminalized = false;
             try
             {
                 await _runStore.InsertAsync(failedRow, ct).ConfigureAwait(false);
+                terminalized = true;
                 EmitCompletedMetric(failedRow, "failed");
                 EmitErrorMetric(failedRow, "child_launch_failed");
             }
@@ -1426,11 +1434,15 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                     .ConfigureAwait(false);
                 if (changed)
                 {
+                    terminalized = true;
                     var stored = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
                     EmitCompletedMetric(stored ?? failedRow, "failed");
                     EmitErrorMetric(stored ?? failedRow, "child_launch_failed");
                 }
             }
+
+            if (!terminalized)
+                return;
 
             // Ensure a stream entry exists so the RunFailed event has somewhere to land, then record it
             // and close the stream — exactly the store/stream/event pattern RunWatchLoopService uses.

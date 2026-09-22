@@ -7,10 +7,12 @@ using LibGit2Sharp;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -176,6 +178,56 @@ public sealed class RequestChangesEndpointTests
             "review.changes_requested must follow review.requested in monotonic sequence");
         revisionStartedSeq.Should().BeGreaterThan(changesRequestedSeq,
             "revision.started must follow review.changes_requested in monotonic sequence");
+    }
+
+    [Fact]
+    public async Task MandatoryContextBudgetFailure_PreservesTypedFailureEvent()
+    {
+        var configuration = _factory.Services.GetRequiredService<IConfiguration>();
+        configuration["MemoryContext:MaxTokens"] = "1";
+        try
+        {
+            var (run, _) = await SetupRunAwaitingReviewAsync(agentName: "morpheus");
+            await using (var scope = _factory.Services.CreateAsyncScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                db.Decisions.Add(new Decision
+                {
+                    ProjectId = run.ProjectId!.Value.ToString(),
+                    AgentName = run.AgentName!,
+                    Type = "architectural",
+                    Status = "active",
+                    Title = "Mandatory boundary",
+                    Content = new string('d', 128),
+                    TrustState = MemoryTrustStates.Approved,
+                    SourceKind = MemorySourceKinds.Run,
+                    SourceIdentity = "run:request-changes-context-budget",
+                    ApprovedBy = "human:alice",
+                    ApprovedAt = DateTimeOffset.UtcNow,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                });
+                await db.SaveChangesAsync();
+            }
+
+            var response = await PostRequestChangesAsync(run, "Please revise this.");
+
+            response.StatusCode.Should().Be(HttpStatusCode.InternalServerError);
+            (await _factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(run.Id))!
+                .Status.Should().Be(RunStatus.Failed);
+            var failed = _factory.Services.GetRequiredService<RunStreamStore>()
+                .Get(run.Id.ToString())!
+                .GetSnapshotSince(0).Events
+                .Single(e => e.Type == EventTypes.RunFailed);
+            using var payload = JsonDocument.Parse(JsonSerializer.Serialize(failed.Payload));
+            payload.RootElement.GetProperty("errorCode").GetString()
+                .Should().Be("mandatory_context_budget_exceeded");
+            payload.RootElement.GetProperty("retryable").GetBoolean().Should().BeFalse();
+        }
+        finally
+        {
+            configuration["MemoryContext:MaxTokens"] = null;
+        }
     }
 
     // =========================================================================
@@ -472,7 +524,8 @@ public sealed class RequestChangesEndpointTests
     /// file into the worktree, and inserts a run record at AwaitingReview status.
     /// Mirrors SetupRunAwaitingReviewAsync in ReviewEndpointTests.
     /// </summary>
-    private async Task<(Run Run, string RepoPath)> SetupRunAwaitingReviewAsync(string? parentRunId = null)
+    private async Task<(Run Run, string RepoPath)> SetupRunAwaitingReviewAsync(
+        string? parentRunId = null, string? agentName = null)
     {
         var repoPath = CreateTempGitRepo();
         var runId    = RunId.New();
@@ -498,6 +551,7 @@ public sealed class RequestChangesEndpointTests
             SubmittingUser    = RequestChangesWebApplicationFactory.OwnerUser,
             ProjectId         = projectId,
             ParentRunId       = parentRunId,
+            AgentName         = agentName,
             Status            = RunStatus.InProgress,
             StartedAt         = DateTimeOffset.UtcNow,
             WorktreePath      = worktreeInfo.WorktreePath,
