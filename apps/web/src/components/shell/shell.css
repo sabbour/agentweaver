@@ -15,6 +15,11 @@
   overflow: hidden;
 }
 
+.aw-app-shell--focus .aw-left-nav,
+.aw-app-shell--focus .aw-floating-actions {
+  display: none;
+}
+
 /* --------------------------------------------------------------------------
    Left navigation rail
    -------------------------------------------------------------------------- */
@@ -360,17 +365,61 @@
 .aw-left-nav--collapsed .aw-nav-item {
   justify-content: center;
   gap: 0;
-  padding: var(--spacingVerticalS) 0;
-  width: 100%;
+  padding: 0;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .aw-left-nav--collapsed .aw-rail-chrome {
-  justify-content: center;
-  padding: var(--spacingVerticalS) var(--spacingHorizontalXS);
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  gap: var(--spacingVerticalXXS);
+  padding: var(--spacingVerticalS) 8px;
 }
 
 .aw-left-nav--collapsed .aw-rail-brand {
   display: none;
+}
+
+.aw-left-nav--collapsed .aw-rail-chrome__actions {
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacingVerticalXXS);
+}
+
+.aw-left-nav--collapsed .aw-rail-scroll {
+  align-items: center;
+  padding-inline: 8px;
+  overscroll-behavior: contain;
+}
+
+.aw-left-nav--collapsed .aw-nav-section {
+  align-items: center;
+  width: 100%;
+}
+
+.aw-left-nav--collapsed .aw-nav-action-button,
+.aw-left-nav--collapsed .aw-rail-collapse-btn,
+.aw-left-nav--collapsed [data-testid="settings-menu-button"],
+.aw-left-nav--collapsed [data-testid="notification-bell"],
+.aw-left-nav--collapsed .aw-rail-footer > .fui-Button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 0;
+  overflow: hidden;
 }
 
 /* --------------------------------------------------------------------------
@@ -399,13 +448,13 @@
   flex-direction: column;
   align-items: center;
   gap: var(--spacingVerticalXS);
-  padding: var(--spacingVerticalS) var(--spacingHorizontalXS);
+  padding: var(--spacingVerticalS) 8px;
 }
 
 .aw-left-nav--collapsed .aw-rail-footer > .fui-Button,
 .aw-left-nav--collapsed .aw-rail-footer .fui-Menu {
   flex: 0 0 auto;
-  width: 100%;
+  width: 40px;
 }
 
 .aw-identity-menu-footer__version {

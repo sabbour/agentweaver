@@ -182,11 +182,6 @@ afterEach(() => {
   cleanup();
 });
 
-async function expandRunControls(): Promise<void> {
-  // The topology entry point now lives in the left rail (minimap), not the header.
-  await screen.findByTestId('open-topology-minimap', undefined, { timeout: 4000 });
-}
-
 async function openTopologyInspector(): Promise<HTMLElement> {
   const button = await screen.findByTestId('open-topology-minimap', undefined, { timeout: 4000 });
   fireEvent.click(button);
@@ -199,7 +194,7 @@ function LocationProbe() {
 }
 
 describe('CoordinatorRunPage — unified coordinator graph view', () => {
-  it('clamps a long run prompt by default and expands without losing content', async () => {
+  it('does not render the submitted run prompt or disclosure controls', async () => {
     const longPrompt = [
       'Audit the preview stack from API routes through the deployed UI and identify the smallest safe fix.',
       'Validate with the existing web tests, avoid cluster mutations, and keep the run evidence copyable for handoff.',
@@ -221,51 +216,14 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
-    const promptBody = await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 });
-    expect(promptBody.textContent).toBe(longPrompt);
-    expect(promptBody.getAttribute('data-expanded')).toBe('false');
-    expect(promptBody.getAttribute('data-collapsed-lines')).toBe('4');
+    await screen.findByTestId('run-header', undefined, { timeout: 4000 });
     expect(screen.getByTestId('run-metadata').textContent).toContain('Run coord-run-1');
     expect(screen.getByTestId('run-metadata').textContent).toContain('Started');
-    expect((screen.getByTestId('run-header').textContent ?? '').indexOf('Run coord-run-1')).toBeLessThan(
-      (screen.getByTestId('run-header').textContent ?? '').indexOf(longPrompt.slice(0, 40)),
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show more run prompt' }));
-
-    expect(promptBody.textContent).toBe(longPrompt);
-    expect(promptBody.getAttribute('data-expanded')).toBe('true');
-    expect(promptBody.hasAttribute('data-collapsed-lines')).toBe(false);
-    expect(screen.getByRole('button', { name: 'Show less run prompt' })).toBeDefined();
-  });
-
-  it('does not show a prompt disclosure for a short run prompt', async () => {
-    const shortPrompt = 'Fix the preview button copy.';
-    mockRunStreamState.current.events = [
-      { sequence: 1, type: 'coordinator.started', payload: { goal: shortPrompt } },
-    ];
-    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events as never);
-
-    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    expect((await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 })).textContent).toBe(shortPrompt);
+    expect(screen.queryByTestId('run-prompt')).toBeNull();
+    expect(screen.queryByTestId('run-prompt-body')).toBeNull();
+    expect(screen.getByTestId('run-header').textContent).not.toContain(longPrompt);
     expect(screen.queryByRole('button', { name: 'Show more run prompt' })).toBeNull();
-  });
-
-  it('preserves run prompt newlines and renders inline shell snippets as code', async () => {
-    const shellSnippet = "'node src/server.js & pid=$!; sleep 2; curl -s localhost:5173/health; kill $pid'";
-    const prompt = `Check the local preview.\n\nRun ${shellSnippet}\nThen report readiness.`;
-    mockRunStreamState.current.events = [
-      { sequence: 1, type: 'coordinator.started', payload: { goal: prompt } },
-    ];
-    vi.mocked(apiClient.getRunEvents).mockResolvedValue(mockRunStreamState.current.events as never);
-
-    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
-
-    const promptBody = await screen.findByTestId('run-prompt-body', undefined, { timeout: 4000 });
-    expect(promptBody.textContent).toBe(prompt);
-    expect(getComputedStyle(promptBody).whiteSpace).toBe('pre-wrap');
-    expect(within(promptBody).getByText(shellSnippet, { selector: 'code' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Show less run prompt' })).toBeNull();
   });
 
   it('navigates to the run trace deep link from the "View trace" header button', async () => {
@@ -368,8 +326,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(document.body.textContent).not.toContain(secret);
     expect(document.body.textContent).not.toContain('Authorization');
     expect(document.body.textContent).not.toContain(instruction);
-    await expandRunControls();
-    expect((screen.getByRole('button', { name: /Stop run/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: /Stop run/i })).toBeNull();
   });
 
 
@@ -563,6 +520,9 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       { timeout: 4000 },
     );
     expect(document.body.textContent).toContain('Ready for assembly');
+    const header = screen.getByTestId('run-header');
+    expect(within(header).queryByTestId('coordinator-stop-button')).toBeNull();
+    expect(within(header).queryByRole('button', { name: 'Close' })).toBeNull();
   });
 
   it('does not incorrectly terminalize blocked run status without a terminal orchestration phase', async () => {

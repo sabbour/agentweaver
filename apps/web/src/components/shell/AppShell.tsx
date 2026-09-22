@@ -15,6 +15,7 @@ import {
   markFirstRunTourComplete,
 } from '../onboarding/firstRunTourStorage';
 import { NotificationsProvider } from '../../notifications/NotificationsProvider';
+import { AppShellFocusContext } from './AppShellFocusContext';
 import { resolveActiveKey } from './navConfig';
 import { projectIdFromPath } from './projectIdFromPath';
 import { clearLastActiveProjectId, getLastActiveProjectId, setLastActiveProjectId } from './projectContext';
@@ -61,6 +62,11 @@ export function AppShell({
   );
   const [connectionRequirement, setConnectionRequirement] =
     useState<ModelProviderConnectionRequirement | null>(null);
+  const [focusState, setFocusState] = useState({ locationKey: location.key, focused: false });
+  const focused = focusState.locationKey === location.key && focusState.focused;
+  const setFocused = useCallback((nextFocused: boolean) => {
+    setFocusState({ locationKey: location.key, focused: nextFocused });
+  }, [location.key]);
   const previousStartFirstRunTour = useRef(startFirstRunTour);
 
   useEffect(() => {
@@ -133,51 +139,53 @@ export function AppShell({
   return (
     <ProjectListProvider>
       <NotificationsProvider>
-        <div className="aw-app-shell">
-          <LeftNav
-            projectId={effectiveProjectId}
-            activeKey={activeKey}
-            pathname={location.pathname}
-            isFallbackProject={isFallbackProject}
-            onFallbackProjectMissing={clearFallbackProject}
-            isPlatformAdmin={isPlatformAdmin}
-            tourTargets={tourTargets}
-            onTakeProductTour={() => setTourOpen(true)}
-          />
-          <div className="aw-shell-canvas">
-            {/* key remounts the content area when the active project changes,
-                clearing stale page state the same way the old bodyKey did. */}
-            <main
-              key={routeProjectId ?? '__global__'}
-              className="aw-shell-content"
-              aria-label="Main content"
-            >
-              <div className="aw-floating-actions">
-                <StartOrchestrationFab
-                  currentProjectId={effectiveProjectId}
-                  buttonRef={startTaskTourTarget}
-                />
-              </div>
-              <div className="aw-shell-scroll">
-                {tourUserKey && <PersonalAiAccessPrompt userKey={tourUserKey} />}
-                {connectionRequirement && (
-                  <ModelProviderRequiredAction
-                    requirement={connectionRequirement}
-                    onDismiss={() => setConnectionRequirement(null)}
+        <AppShellFocusContext.Provider value={{ focused, setFocused }}>
+          <div className={`aw-app-shell${focused ? ' aw-app-shell--focus' : ''}`}>
+            <LeftNav
+              projectId={effectiveProjectId}
+              activeKey={activeKey}
+              pathname={location.pathname}
+              isFallbackProject={isFallbackProject}
+              onFallbackProjectMissing={clearFallbackProject}
+              isPlatformAdmin={isPlatformAdmin}
+              tourTargets={tourTargets}
+              onTakeProductTour={() => setTourOpen(true)}
+            />
+            <div className="aw-shell-canvas">
+              {/* key remounts the content area when the active project changes,
+                  clearing stale page state the same way the old bodyKey did. */}
+              <main
+                key={routeProjectId ?? '__global__'}
+                className="aw-shell-content"
+                aria-label="Main content"
+              >
+                <div className="aw-floating-actions">
+                  <StartOrchestrationFab
+                    currentProjectId={effectiveProjectId}
+                    buttonRef={startTaskTourTarget}
                   />
-                )}
-                {banner}
-                {children}
-              </div>
-            </main>
+                </div>
+                <div className="aw-shell-scroll">
+                  {tourUserKey && <PersonalAiAccessPrompt userKey={tourUserKey} />}
+                  {connectionRequirement && (
+                    <ModelProviderRequiredAction
+                      requirement={connectionRequirement}
+                      onDismiss={() => setConnectionRequirement(null)}
+                    />
+                  )}
+                  {banner}
+                  {children}
+                </div>
+              </main>
+            </div>
+            <FirstRunTour
+              open={tourOpen}
+              targets={tourTargets}
+              returnFocusTarget={settingsTourTarget}
+              onDismiss={dismissFirstRunTour}
+            />
           </div>
-          <FirstRunTour
-            open={tourOpen}
-            targets={tourTargets}
-            returnFocusTarget={settingsTourTarget}
-            onDismiss={dismissFirstRunTour}
-          />
-        </div>
+        </AppShellFocusContext.Provider>
       </NotificationsProvider>
     </ProjectListProvider>
   );

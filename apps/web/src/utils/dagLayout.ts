@@ -114,10 +114,6 @@ export interface NodeSizeHint {
   height: number;
 }
 
-/** The rollout layout is the balanced grid; staircase remains a diagnostic comparison. */
-export type TopologyLayoutEngine = 'balanced-grid' | 'legacy-staircase';
-export const DEFAULT_TOPOLOGY_LAYOUT_ENGINE: TopologyLayoutEngine = 'balanced-grid';
-
 export interface ConnectorPoint {
   x: number;
   y: number;
@@ -727,7 +723,7 @@ export interface WorkflowLayoutAnalysis {
   isLongLinear: boolean;
 }
 
-export type WorkflowDefinitionLayoutMode = TopologyLayoutEngine;
+export type WorkflowDefinitionLayoutMode = 'balanced-grid';
 
 export interface WorkflowDefinitionLayoutResult {
   nodes: Node[];
@@ -1140,27 +1136,18 @@ export function layoutWorkflowDefinitionNodes(
   nodes: Node[],
   edges: Edge[],
   nodeSizeHints?: Record<string, NodeSizeHint>,
-  engine: TopologyLayoutEngine = DEFAULT_TOPOLOGY_LAYOUT_ENGINE,
 ): WorkflowDefinitionLayoutResult {
   const analysis = analyzeWorkflowLayout(nodes, edges);
-  const laidOut = engine === 'legacy-staircase'
-    ? layoutDagStaircase(nodes, edges, {
-      rankdir: 'LR',
-      rankSep: analysis.isLongLinear ? 64 : 72,
-      nodeSep: analysis.isLongLinear ? 40 : 48,
-      minStepRanks: BANDED_SNAKE_MIN_RANKS,
-      targetAspect: 1.35,
-    }, nodeSizeHints)
-    : layoutDagBalancedGrid(nodes, edges, {
-      rankSep: 72,
-      nodeSep: 48,
-      minColumns: 1,
-      maxColumns: 4,
-    }, nodeSizeHints);
+  const laidOut = layoutDagBalancedGrid(nodes, edges, {
+    rankSep: 72,
+    nodeSep: 48,
+    minColumns: 1,
+    maxColumns: 4,
+  }, nodeSizeHints);
 
   return {
     nodes: laidOut,
-    mode: engine,
+    mode: 'balanced-grid',
     bbox: layoutBBox(laidOut, nodeSizeHints),
     analysis,
   };

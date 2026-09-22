@@ -43,6 +43,7 @@ import { aiExecutionContextFromEvents, aiExecutionProviderLabel, providerIdentit
 import { OutcomePlanPanel } from '../components/OutcomePlanPanel';
 import { AgentTokenBreakdown } from '../components/runs/AgentTokenBreakdown';
 import { SlidePanel } from '../components/SlidePanel';
+import { useAppShellFocus } from '../components/shell/AppShellFocusContext';
 import {
   accentClass,
   ActiveEdgeContext,
@@ -65,10 +66,10 @@ import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
 import { formatModelLabel } from '../utils/agentIdentity';
-import { layoutDagBalancedGrid, layoutDagStaircase, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H, type TopologyLayoutEngine } from '../utils/dagLayout';
-import { TopologyLayoutToggle } from '../components/TopologyLayoutToggle';
-import { useTopologyLayoutEngine } from '../hooks/useTopologyLayoutEngine';
+import { layoutDagBalancedGrid, layoutBBox, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H } from '../utils/dagLayout';
 import {
+  ArrowMaximizeRegular,
+  ArrowMinimizeRegular,
   ArrowAutofitHeightRegular,
   ArrowAutofitWidthRegular,
   ArrowRepeatAllRegular,
@@ -85,6 +86,7 @@ import {
   PanelLeftContractRegular,
   PanelLeftExpandRegular,
   ScaleFitRegular,
+  StopRegular,
   ZoomInRegular,
   ZoomOutRegular,
 } from '@fluentui/react-icons';
@@ -98,7 +100,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { CSSProperties, ReactNode, RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { FormattedApiError } from '../api/errors';
 import type { RunStreamEvent } from '../api/sse';
@@ -261,41 +263,10 @@ interface CoordinatorRunViewState {
   canToggleAutomation: boolean;
 }
 
-const RUN_PROMPT_COLLAPSED_LINES = 4;
-const RUN_PROMPT_TOGGLE_THRESHOLD = 280;
-
-function isLongRunPrompt(prompt: string): boolean {
-  return prompt.length > RUN_PROMPT_TOGGLE_THRESHOLD || prompt.split(/\r\n|\r|\n/).length > RUN_PROMPT_COLLAPSED_LINES;
-}
-
 function formatRunStartedAt(timestamp: number | undefined): string {
   if (timestamp === undefined) return 'Start time unavailable';
   const value = new Date(timestamp);
   return Number.isNaN(value.getTime()) ? 'Start time unavailable' : value.toLocaleString();
-}
-
-function looksLikeInlineShellSnippet(value: string): boolean {
-  const text = value.replace(/^['`]|['`]$/g, '').trim();
-  return /(?:^|\s)(?:node|npm|pnpm|yarn|dotnet|git|gh|curl|sleep|kill)(?:\s|$)/i.test(text)
-    || /\b(?:localhost|pid=\$!|\$pid)\b/i.test(text)
-    || /[;&|]/.test(text);
-}
-
-function renderPromptWithInlineCode(prompt: string): ReactNode[] {
-  const parts: ReactNode[] = [];
-  const matcher = /(`[^`\r\n]+`|'[^'\r\n]+')/g;
-  let cursor = 0;
-  let match: RegExpExecArray | null;
-  while ((match = matcher.exec(prompt)) !== null) {
-    if (match.index > cursor) parts.push(prompt.slice(cursor, match.index));
-    const value = match[0];
-    parts.push(looksLikeInlineShellSnippet(value)
-      ? <code key={`code-${match.index}`}>{value}</code>
-      : value);
-    cursor = match.index + value.length;
-  }
-  if (cursor < prompt.length) parts.push(prompt.slice(cursor));
-  return parts;
 }
 
 const RUN_LEVEL_RETRYABLE = new Set<string>(['failed', 'merge_failed']);
@@ -1288,34 +1259,19 @@ const useStyles = makeStyles({
   },
   // ---- Run header (identity / actions grid) --------------------------------
   runHeader: {
-    display: 'grid',
-    gridTemplateColumns: '1fr',
-    gridTemplateAreas: '"identity" "actions"',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalL,
-    borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    display: 'block',
+    paddingBottom: tokens.spacingVerticalXS,
     minWidth: 0,
   },
   identityArea: {
-    gridArea: 'identity',
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalS,
-    minWidth: 0,
-  },
-  actionsArea: {
-    gridArea: 'actions',
-    paddingTop: tokens.spacingVerticalM,
-    borderTopWidth: tokens.strokeWidthThin,
-    borderTopStyle: 'solid',
-    borderTopColor: tokens.colorNeutralStroke2,
+    gap: tokens.spacingVerticalXS,
     minWidth: 0,
   },
   topTitleRow: {
     display: 'flex',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
     flexWrap: 'wrap',
@@ -1329,8 +1285,8 @@ const useStyles = makeStyles({
     flex: '1 1 auto',
   },
   titleText: {
-    fontSize: tokens.fontSizeHero700,
-    lineHeight: tokens.lineHeightHero700,
+    fontSize: tokens.fontSizeBase600,
+    lineHeight: tokens.lineHeightBase600,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground1,
     margin: 0,
@@ -1403,40 +1359,6 @@ const useStyles = makeStyles({
   },
   metaSeparator: {
     color: tokens.colorNeutralForeground4,
-  },
-  runPromptBlock: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    gap: tokens.spacingVerticalXS,
-    maxWidth: '76ch',
-    minWidth: 0,
-  },
-  runPromptLabel: {
-    fontSize: tokens.fontSizeBase200,
-    fontWeight: tokens.fontWeightSemibold,
-    color: tokens.colorNeutralForeground2,
-  },
-  runPromptBody: {
-    maxWidth: '100%',
-    color: tokens.colorNeutralForeground2,
-    fontSize: tokens.fontSizeBase300,
-    lineHeight: tokens.lineHeightBase300,
-    whiteSpace: 'pre-wrap',
-    overflowWrap: 'anywhere',
-    '& code': {
-      fontFamily: tokens.fontFamilyMonospace,
-      fontSize: tokens.fontSizeBase200,
-      padding: `0 ${tokens.spacingHorizontalXXS}`,
-      borderRadius: tokens.borderRadiusSmall,
-      backgroundColor: tokens.colorNeutralBackground3,
-      color: tokens.colorNeutralForeground1,
-    },
-  },
-  runPromptToggle: {
-    minWidth: 0,
-    paddingLeft: 0,
-    paddingRight: 0,
   },
   executionContext: {
     display: 'flex',
@@ -1601,6 +1523,19 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    width: '56px',
+    minWidth: '56px',
+    boxSizing: 'border-box',
+    overflow: 'hidden',
+    '& .fui-Button': {
+      width: '40px',
+      minWidth: '40px',
+      maxWidth: '40px',
+      height: '40px',
+      minHeight: '40px',
+      padding: 0,
+      boxSizing: 'border-box',
+    },
   },
   treeRailHeader: {
     display: 'flex',
@@ -2308,8 +2243,6 @@ const useTopologyToolbarStyles = makeStyles({
 
 interface TopologyToolbarProps {
   orientation: 'LR' | 'TB';
-  layoutEngine: TopologyLayoutEngine;
-  onLayoutEngineChange: (engine: TopologyLayoutEngine) => void;
   onToggleOrientation: () => void;
   onTidy: () => void;
   fitPadding: number;
@@ -2319,14 +2252,13 @@ interface TopologyToolbarProps {
 // can drive the shared viewport (zoom in/out, fit) natively. Tidy re-runs the dagre layout and
 // re-fits; Switch orientation toggles LR/TB rank direction (both re-fit on next render via the
 // keyed ReactFlow remount + its fitView prop).
-function TopologyToolbar({ orientation, layoutEngine, onLayoutEngineChange, onToggleOrientation, onTidy, fitPadding }: TopologyToolbarProps) {
+function TopologyToolbar({ orientation, onToggleOrientation, onTidy, fitPadding }: TopologyToolbarProps) {
   const toolbarStyles = useTopologyToolbarStyles();
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const zoom = useStore((s) => s.transform[2]);
   const zoomPct = Math.round((zoom ?? 1) * 100);
   return (
     <div className={toolbarStyles.bar} role="toolbar" aria-label="Topology graph controls" data-testid="topology-toolbar">
-      <TopologyLayoutToggle engine={layoutEngine} onChange={onLayoutEngineChange} />
       <Tooltip content="Zoom out" relationship="label" withArrow>
         <Button appearance="subtle" size="small" icon={<ZoomOutRegular />} onClick={() => zoomOut({ duration: 200 })} />
       </Tooltip>
@@ -2393,7 +2325,7 @@ function TopologyViewportController({
 
 export function CoordinatorRunPage() {
   const styles = useStyles();
-  const [layoutEngine, setLayoutEngine] = useTopologyLayoutEngine();
+  const { focused, setFocused } = useAppShellFocus();
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
   const [previewRetrying, setPreviewRetrying] = useState(false);
@@ -2425,10 +2357,7 @@ export function CoordinatorRunPage() {
   }>({ runId: '', startedAt: undefined, endedAt: undefined });
   const runStartedAt = runTimingState.runId === (runId ?? '') ? runTimingState.startedAt : undefined;
   const runEndedAt = runTimingState.runId === (runId ?? '') ? runTimingState.endedAt : undefined;
-  const [runPromptExpansion, setRunPromptExpansion] = useState<{ key: string; expanded: boolean }>({
-    key: '',
-    expanded: false,
-  });
+  useEffect(() => () => setFocused(false), [setFocused]);
 
   const {
     events,
@@ -3370,27 +3299,13 @@ export function CoordinatorRunPage() {
       };
     });
 
-    const staircaseOpts = {
+    const laidOutLR = layoutDagBalancedGrid(raw, fwdEdges, {
       rankSep: COORD_GRAPH_RANK_SEP,
       nodeSep: COORD_GRAPH_NODE_SEP,
-      // Fold long linear runs into serpentine bands so the graph uses both panel dimensions.
-      // True parallel ranks remain aligned in deterministic columns with routing gutters between them.
-      targetAspect: 1.35,
-      minStepRanks: 3,
-    };
-    // Lay out BOTH orientations deterministically so we can (a) render the active one and
-    // (b) compare their footprints to auto-pick the orientation that fills the panel best.
-    const laidOutLR = layoutEngine === 'legacy-staircase'
-      ? layoutDagStaircase(raw, fwdEdges, { ...staircaseOpts, rankdir: 'LR' }, nodeSizeHints)
-      : layoutDagBalancedGrid(raw, fwdEdges, {
-        rankSep: COORD_GRAPH_RANK_SEP,
-        nodeSep: COORD_GRAPH_NODE_SEP,
-        minColumns: 1,
-        maxColumns: 4,
-      }, nodeSizeHints);
-    const laidOutTB = layoutEngine === 'legacy-staircase'
-      ? layoutDagStaircase(raw, fwdEdges, { ...staircaseOpts, rankdir: 'TB' }, nodeSizeHints)
-      : laidOutLR;
+      minColumns: 1,
+      maxColumns: 4,
+    }, nodeSizeHints);
+    const laidOutTB = laidOutLR;
     const laidOutNodes = graphOrientation === 'TB' ? laidOutTB : laidOutLR;
     return {
       rfNodes:      laidOutNodes,
@@ -3398,7 +3313,7 @@ export function CoordinatorRunPage() {
       bboxLR:       layoutBBox(laidOutLR, nodeSizeHints),
       bboxTB:       layoutBBox(laidOutTB, nodeSizeHints),
     };
-  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, layoutEngine, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
+  }, [planningDescriptor, topology, projectId, runId, coordNodeStatusOverride, orch.phase, subtaskTiming, assemblyTiming, roleByAgent, latestOutcomePlanDraftingEvent, latestOutcomePlanEvent, specConfirmed, workPlanSeen, coordStatusField, graphOrientation, viewState.terminal, runStatusColor, revisingSubtasks, activePreviewUrl]);
 
   const liveTerminalNow = useTickingNow(viewState.terminal);
   const liveRfNodes = !viewState.terminal
@@ -4127,18 +4042,6 @@ export function CoordinatorRunPage() {
 
   const shortId         = runId && runId.length > 8 ? runId.slice(0, 8) : (runId ?? '');
   const runStartedLabel = formatRunStartedAt(runStartedAt);
-  const runPrompt = goal && goal.trim() ? goal : undefined;
-  const runPromptKey = `${runId ?? ''}\n${runPrompt ?? ''}`;
-  const runPromptExpanded = runPromptExpansion.key === runPromptKey ? runPromptExpansion.expanded : false;
-  const runPromptIsLong = runPrompt ? isLongRunPrompt(runPrompt) : false;
-  const runPromptClampStyle: CSSProperties | undefined = runPrompt && runPromptIsLong && !runPromptExpanded
-    ? {
-        display: '-webkit-box',
-        WebkitBoxOrient: 'vertical',
-        WebkitLineClamp: RUN_PROMPT_COLLAPSED_LINES,
-        overflow: 'hidden',
-      }
-    : undefined;
   const isConnecting    = streamStatus === 'connecting';
   const isStreaming     = streamStatus === 'streaming';
   const hasGraph        = rfNodes.length > 0;
@@ -4516,8 +4419,6 @@ export function CoordinatorRunPage() {
           <ReactFlowProvider>
           <TopologyToolbar
             orientation={graphOrientation}
-            layoutEngine={layoutEngine}
-            onLayoutEngineChange={setLayoutEngine}
             onToggleOrientation={() => {
               setOrientationUserChose(true);
               setGraphOrientation((o) => (o === 'LR' ? 'TB' : 'LR'));
@@ -4537,7 +4438,7 @@ export function CoordinatorRunPage() {
           >
             <div ref={topoContainerRef} data-testid="topology-graph-canvas" style={{ width: '100%', height: '100%' }}>
               <ReactFlow
-                key={`${layoutEngine}:${graphOrientation}:${displayNodes.length}:${displayEdges2.length}:${tidyNonce}:${layoutSignature}`}
+                key={`${graphOrientation}:${displayNodes.length}:${displayEdges2.length}:${tidyNonce}:${layoutSignature}`}
                 nodes={linkedDisplayNodes}
                 edges={displayEdges2}
                 nodeTypes={coordinatorNodeTypes}
@@ -4815,9 +4716,7 @@ export function CoordinatorRunPage() {
     : terminalDiagnostic?.retryable === false
       ? 'This terminal failure is marked non-retryable.'
       : 'Re-run is unavailable for this run state.';
-  const stopHint = viewState.canStop ? 'Stop cancels run' : 'Stop while running';
   const retryAriaLabel = isRetryable ? 'Re-run this orchestration' : `Re-run unavailable: ${retryHint}`;
-  const stopAriaLabel = viewState.canStop ? 'Stop run' : `Stop run unavailable: ${stopHint}`;
   const terminalDiagnosticAction = terminalDiagnostic?.code === 'model_provider_snapshot_unavailable'
     ? 'Agentweaver could not load the provider snapshot saved for this run. Retry creates a new snapshot; this does not mean the configured provider changed or became unavailable.'
     : terminalDiagnostic?.code === 'github_copilot_capability_snapshot_unavailable'
@@ -4959,7 +4858,7 @@ export function CoordinatorRunPage() {
       )}
 
       <div className={styles.console} data-testid="run-operator-console">
-        <div className={styles.runHeader} data-testid="run-header">
+        <header className={styles.runHeader} data-testid="run-header">
           <div className={styles.identityArea} data-testid="run-summary">
             <div className={styles.topTitleRow}>
               <div className={styles.identityLead}>
@@ -5054,16 +4953,30 @@ export function CoordinatorRunPage() {
                   </AiExecutionProviderHint>
                 )}
                 <AiProviderChangeAnnouncement message={providerContext.announcement} />
-                <Button
-                  appearance={viewState.canStop ? 'secondary' : 'subtle'}
-                  size="small"
-                  icon={stopping ? <Spinner size="extra-tiny" /> : <DismissRegular />}
-                  disabled={!viewState.canStop || stopping}
-                  onClick={() => setStopConfirmationOpen(true)}
-                  data-testid="coordinator-stop-button"
-                  aria-label={stopAriaLabel}
-                  title={stopHint}
-                />
+                {viewState.canStop && (
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    icon={stopping ? <Spinner size="extra-tiny" /> : <StopRegular />}
+                    disabled={stopping}
+                    onClick={() => setStopConfirmationOpen(true)}
+                    data-testid="coordinator-stop-button"
+                    aria-label="Stop run"
+                  >
+                    Stop run
+                  </Button>
+                )}
+                <Tooltip content={focused ? 'Exit focus mode' : 'Enter focus mode'} relationship="label" withArrow>
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    icon={focused ? <ArrowMinimizeRegular /> : <ArrowMaximizeRegular />}
+                    onClick={() => setFocused(!focused)}
+                    aria-label={focused ? 'Exit focus mode' : 'Enter focus mode'}
+                    aria-pressed={focused}
+                    data-testid="run-focus-toggle"
+                  />
+                </Tooltip>
                 {showPreviewSandboxButton && (
                   <Button
                     appearance="transparent"
@@ -5089,37 +5002,8 @@ export function CoordinatorRunPage() {
                 <span className={styles.metaValue} title={runStartedLabel}>{runStartedLabel}</span>
               </span>
             </div>
-            {runPrompt && (
-              <div className={styles.runPromptBlock} data-testid="run-prompt">
-                <span className={styles.runPromptLabel}>Prompt</span>
-                <div
-                  id="run-prompt-body"
-                  className={styles.runPromptBody}
-                  data-testid="run-prompt-body"
-                  data-expanded={runPromptExpanded ? 'true' : 'false'}
-                  data-collapsed-lines={runPromptIsLong && !runPromptExpanded ? RUN_PROMPT_COLLAPSED_LINES : undefined}
-                  style={runPromptClampStyle}
-                >
-                  {renderPromptWithInlineCode(runPrompt)}
-                </div>
-                {runPromptIsLong && (
-                  <Button
-                    appearance="transparent"
-                    size="small"
-                    className={styles.runPromptToggle}
-                    onClick={() => setRunPromptExpansion({ key: runPromptKey, expanded: !runPromptExpanded })}
-                    aria-expanded={runPromptExpanded}
-                    aria-controls="run-prompt-body"
-                    aria-label={runPromptExpanded ? 'Show less run prompt' : 'Show more run prompt'}
-                    data-testid="run-prompt-toggle"
-                  >
-                    {runPromptExpanded ? 'Show less' : 'Show more'}
-                  </Button>
-                )}
-              </div>
-            )}
           </div>
-        </div>
+        </header>
 
         <div className={mergeClasses(styles.bodyGrid, treeRailCollapsed && styles.bodyGridCollapsed)}>
           {treeRailCollapsed ? (

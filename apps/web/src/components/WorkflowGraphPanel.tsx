@@ -41,11 +41,8 @@ import {
   workflowDefinitionViewportHeight,
   workflowNodeSizeHint,
 } from '../utils/dagLayout';
-import type { TopologyLayoutEngine } from '../utils/dagLayout';
 import { AiCredits } from './AiCredits';
 import { PodIndicator } from './PodIndicator';
-import { TopologyLayoutToggle } from './TopologyLayoutToggle';
-import { useTopologyLayoutEngine } from '../hooks/useTopologyLayoutEngine';
 import {
   AlertRegular,
   ArrowSyncRegular,
@@ -1514,13 +1511,12 @@ const useInlinePanelStyles = makeStyles({
 });
 
 /**
- * Builds the read-only workflow-definition graph with the same staircase and
- * grid-edge-routing pipeline used by the coordinator topology.
+ * Builds the read-only workflow-definition graph with the same balanced-grid
+ * edge-routing pipeline used by the coordinator topology.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- pure graph transform is unit-tested independently.
 export function buildWorkflowDefinitionGraph(
   graph: WorkflowGraphDto,
-  engine: TopologyLayoutEngine = 'balanced-grid',
 ) {
   const allEdges = graph.edges.map((edge) =>
     edge.loopback
@@ -1553,7 +1549,7 @@ export function buildWorkflowDefinitionGraph(
       } as WorkflowNodeData,
     };
   });
-  const layout = layoutWorkflowDefinitionNodes(raw, forwardEdges, hints, engine);
+  const layout = layoutWorkflowDefinitionNodes(raw, forwardEdges, hints);
 
   return {
     rfNodes: layout.nodes,
@@ -1575,7 +1571,6 @@ export function WorkflowDefinitionInlinePanel({
   workflowId: string;
 }) {
   const s = useInlinePanelStyles();
-  const [layoutEngine, setLayoutEngine] = useTopologyLayoutEngine();
   const [graph, setGraph]     = useState<WorkflowGraphDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
@@ -1606,9 +1601,9 @@ export function WorkflowDefinitionInlinePanel({
 
   const { rfNodes, rfEdges, layoutMode, bbox } = useMemo(
     () => graph
-      ? buildWorkflowDefinitionGraph(graph, layoutEngine)
+      ? buildWorkflowDefinitionGraph(graph)
       : { rfNodes: [], rfEdges: [], layoutMode: 'balanced-grid' as const, bbox: { w: 0, h: 0 } },
-    [graph, layoutEngine],
+    [graph],
   );
   const viewportHeight = workflowDefinitionViewportHeight(bbox);
 
@@ -1637,7 +1632,6 @@ export function WorkflowDefinitionInlinePanel({
           className={s.container}
           style={{ height: `${viewportHeight}px` }}
           data-layout-mode={layoutMode}
-          data-layout-engine={layoutEngine}
           data-testid="workflow-definition-viewport"
         >
           <ReactFlow
@@ -1661,9 +1655,6 @@ export function WorkflowDefinitionInlinePanel({
             panOnDrag
             proOptions={{ hideAttribution: true }}
           >
-            <Panel position="top-left">
-              <TopologyLayoutToggle engine={layoutEngine} onChange={setLayoutEngine} />
-            </Panel>
             <Panel position="bottom-right">
               <Text size={200} style={{ color: 'var(--colorNeutralForeground3)' }}>Read-only</Text>
             </Panel>

@@ -1,6 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { AppShell } from '../components/shell/AppShell';
+import { useAppShellFocus } from '../components/shell/AppShellFocusContext';
 import {
   MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT,
   MODEL_PROVIDER_CONNECTION_REQUIRED_MESSAGE,
@@ -21,7 +22,7 @@ import {
   vi,
 } from 'vitest';
 import type { Project } from '../api/types';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import type { AppShellProps } from '../components/shell/AppShell';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -72,6 +73,21 @@ function Wrapper({ children }: { children: ReactNode }) {
   return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
 }
 
+function FocusControls({ cleanupOnUnmount = false }: { cleanupOnUnmount?: boolean }) {
+  const { focused, setFocused } = useAppShellFocus();
+  useEffect(() => () => {
+    if (cleanupOnUnmount) setFocused(false);
+  }, [cleanupOnUnmount, setFocused]);
+  return (
+    <>
+      <button type="button" onClick={() => setFocused(!focused)}>
+        {focused ? 'Restore shell' : 'Focus shell'}
+      </button>
+      <output data-testid="shell-focus-state">{focused ? 'focused' : 'standard'}</output>
+    </>
+  );
+}
+
 function renderShellAt(
   path: string,
   isPlatformAdmin = false,
@@ -89,6 +105,8 @@ function renderShellAt(
             <Route path="/projects/:projectId/team" element={<div>Team content <Link to="/projects/proj-1">Go board</Link></div>} />
             <Route path="/settings" element={<div>Account settings page</div>} />
             <Route path="/platform-settings" element={<div>Platform settings page</div>} />
+            <Route path="/focus" element={<div><FocusControls cleanupOnUnmount /><Link to="/focus-next">Next route</Link></div>} />
+            <Route path="/focus-next" element={<div><FocusControls />Next content</div>} />
           </Routes>
         </AppShell>
       </MemoryRouter>
@@ -460,6 +478,66 @@ describe('AppShell navigation', () => {
     expect(screen.getByTestId('app-navigation-menu').getAttribute('data-collapsed')).toBe('true');
     expect(screen.getByTestId('app-navigation-scroll').getAttribute('data-scrollbar-mode')).toBe('hidden');
     expect(localStorage.getItem('aw.nav.collapsed')).toBe('1');
+
+    for (const control of [
+      screen.getByRole('link', { name: 'Board' }),
+      screen.getByRole('button', { name: 'Settings' }),
+      screen.getByTestId('notification-bell'),
+      screen.getByRole('button', { name: 'Expand navigation' }),
+      screen.getByRole('button', { name: 'New session' }),
+      screen.getByRole('button', { name: 'GitHub identity' }),
+    ]) {
+      expect(control.getAttribute('aria-label')).toBeTruthy();
+    }
+    expect(shellCss).toMatch(/\.aw-left-nav--collapsed \.aw-nav-item\s*\{[^}]*width:\s*40px;[^}]*height:\s*40px;[^}]*box-sizing:\s*border-box;[^}]*overflow:\s*hidden;/s);
+    expect(shellCss).toMatch(/\.aw-left-nav--collapsed \.aw-nav-action-button,[^{]*\[data-testid="notification-bell"\],[^{]*\.aw-rail-footer > \.fui-Button\s*\{[^}]*width:\s*40px;[^}]*height:\s*40px;[^}]*padding:\s*0;/s);
+    expect(shellCss).toMatch(/\.aw-left-nav--collapsed \.aw-rail-chrome__actions\s*\{[^}]*flex-direction:\s*column;/s);
+  });
+
+  it.each(['0', '1'])('focus mode hides and restores shell chrome without changing collapsed persistence (%s)', (persisted) => {
+    localStorage.setItem('aw.nav.collapsed', persisted);
+    renderShellAt('/focus');
+
+    const shell = screen.getByRole('main').closest('.aw-app-shell') as HTMLElement;
+    const nav = screen.getByTestId('app-navigation-menu');
+    const globalActions = screen.getByTestId('start-task-topbar-action').closest('.aw-floating-actions') as HTMLElement;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Focus shell' }));
+    expect(shell.classList.contains('aw-app-shell--focus')).toBe(true);
+    expect(document.body.contains(nav)).toBe(true);
+    expect(document.body.contains(globalActions)).toBe(true);
+    expect(shellCss).toMatch(/\.aw-app-shell--focus \.aw-left-nav,\s*\.aw-app-shell--focus \.aw-floating-actions\s*\{\s*display:\s*none;/s);
+    expect(localStorage.getItem('aw.nav.collapsed')).toBe(persisted);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore shell' }));
+    expect(shell.classList.contains('aw-app-shell--focus')).toBe(false);
+    expect(localStorage.getItem('aw.nav.collapsed')).toBe(persisted);
+  });
+
+  it('clears focus when the focused route unmounts or navigation changes location keys', async () => {
+    const result = renderShellAt('/focus');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Focus shell' }));
+    expect(screen.getByTestId('shell-focus-state').textContent).toBe('focused');
+    fireEvent.click(screen.getByRole('link', { name: 'Next route' }));
+
+    await waitFor(() => expect(screen.getByText('Next content')).toBeDefined());
+    expect(screen.getByTestId('shell-focus-state').textContent).toBe('standard');
+    expect(screen.getByRole('main').closest('.aw-app-shell')?.classList.contains('aw-app-shell--focus')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Focus shell' }));
+    result.unmount();
+    renderShellAt('/focus-next');
+    expect(screen.getByTestId('shell-focus-state').textContent).toBe('standard');
+  });
+
+  it('keeps the collapsed middle rail vertically scrollable without horizontal overflow', () => {
+    localStorage.setItem('aw.nav.collapsed', '1');
+    renderShellAt('/projects/proj-1');
+
+    expect(screen.getByTestId('app-navigation-scroll')).toBeTruthy();
+    expect(shellCss).toMatch(/\.aw-rail-scroll\s*\{[^}]*flex:\s*1;[^}]*overflow-y:\s*auto;[^}]*overflow-x:\s*hidden;[^}]*min-height:\s*0;/s);
+    expect(shellCss).toMatch(/\.aw-left-nav--collapsed \.aw-rail-scroll\s*\{[^}]*padding-inline:\s*8px;[^}]*overscroll-behavior:\s*contain;/s);
   });
 
   it('keeps the persisted project in context on the global Overview route', async () => {

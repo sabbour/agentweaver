@@ -643,6 +643,9 @@ describe('VisualWorkflowEditor — stable drag targets (#557)', () => {
 
     expect(await screen.findByTestId('workflow-canvas')).toBeDefined();
     expect(screen.getByTestId('workflow-canvas').getAttribute('data-layout-mode')).toBe('balanced-grid');
+    expect(screen.getByTestId('workflow-canvas').hasAttribute('data-layout-engine')).toBe(false);
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(document.body.textContent).not.toContain('Legacy staircase');
     expect(await screen.findByTestId('workflow-node-implement')).toBeDefined();
     // GRID routing (matches CoordinatorRunPage / WorkflowDefinitionInlinePanel) exposes four
     // source and four target handles per node instead of a single source/target pair.
