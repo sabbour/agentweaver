@@ -867,14 +867,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         // --- Emit sandbox backend selection event (T019) ---
         Emit("sandbox.selected", new { backend = executor.BackendName, isRealIsolation = executor.IsRealIsolation, reason = executor.SelectionReason });
 
-        Emit(EventTypes.AgentRuntimeContext, AgentRuntimeContextMetricsComposer.Compose(
-            provider: "copilot",
-            _runId,
-            _projectId,
-            task,
-            _systemPromptContext,
-            _registeredToolNames,
-            _toolDeclarations));
+        EmitRuntimeContext(task);
         if (executor.HasNetworkWarning)
         {
             Emit("sandbox.warning", new { category = "network-open", message = executor.NetworkWarningMessage, backend = executor.BackendName });
@@ -1489,6 +1482,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 _logger.LogWarning("TryWrite false for {EventType}", type);
         }
     }
+
+    internal void EmitRuntimeContext(string task) =>
+        Emit(EventTypes.AgentRuntimeContext, AgentRuntimeContextMetricsComposer.Compose(
+            provider: "copilot",
+            _runId,
+            _projectId,
+            task,
+            _systemPromptContext,
+            _registeredToolNames,
+            _toolDeclarations));
 
     internal void EmitToolCallOnce(string callId, string toolName, object? arguments)
     {

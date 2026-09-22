@@ -1,7 +1,14 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Runtime;
 
@@ -25,6 +32,46 @@ public sealed class RuntimeContextMetricsTests
             "Provider", "RunId", "ProjectId", "BaseCharacters", "RunContextCharacters",
             "SkillCharacters", "SeparatorCharacters", "TaskCharacters", "ToolDeclarationCharacters",
             "SkillDeliveryMode", "TotalCharacters", "EstimatedTokens");
+    }
+
+    [Fact]
+    public void OneShotRunner_EmitsRedactedRuntimeContextEvent()
+    {
+        const string secret = "super-secret-token";
+        var emitted = new List<(string Type, object Payload)>();
+
+        GitHubCopilotAgentRunner.EmitRuntimeContext(
+            (type, payload) => emitted.Add((type, payload)),
+            "run-123",
+            "project-456",
+            $"task {secret}",
+            $"context {secret}\n\n---\n\n## Available Skills\n\n- {secret}\n  Full instructions: `.agentweaver/skills/review/SKILL.md`",
+            ["unsafe_tool"],
+            Declarations());
+
+        emitted.Should().ContainSingle().Which.Type.Should().Be(EventTypes.AgentRuntimeContext);
+        JsonSerializer.Serialize(emitted[0].Payload).Should().NotContain(secret)
+            .And.NotContain("unsafe_tool");
+    }
+
+    [Fact]
+    public void PersistentRunner_EmitsRuntimeContextEventToItsTurnStream()
+    {
+        var events = Channel.CreateUnbounded<RunEvent>();
+        var agent = new CopilotAIAgent(
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
+            SandboxExecutorFactory.CreatePassthrough(),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLogger<CopilotAIAgent>.Instance);
+        agent.SetTurnStreamWriter(events.Writer);
+
+        agent.EmitRuntimeContext("inspect implementation");
+
+        events.Reader.TryRead(out var emitted).Should().BeTrue();
+        emitted!.Type.Should().Be(EventTypes.AgentRuntimeContext);
+        emitted.Payload.Should().BeOfType<AgentRuntimeContextMetrics>();
     }
 
     [Theory]

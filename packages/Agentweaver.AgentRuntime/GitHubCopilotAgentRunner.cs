@@ -399,14 +399,14 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
             InfiniteSessions = new InfiniteSessionConfig { Enabled = false },
         };
 
-        Emit(EventTypes.AgentRuntimeContext, AgentRuntimeContextMetricsComposer.Compose(
-            provider: "copilot",
+        EmitRuntimeContext(
+            Emit,
             runId,
             projectId,
             task,
             systemPromptContext,
             registeredToolNames,
-            toolDeclarations));
+            toolDeclarations);
 
         AIAgent? agent = null;
         AgentSession session;
@@ -1059,6 +1059,23 @@ public sealed class GitHubCopilotAgentRunner : IAgentRunner
         }
         return sb.ToString();
     }
+
+    internal static void EmitRuntimeContext(
+        Action<string, object> emit,
+        string runId,
+        string? projectId,
+        string task,
+        string? systemPromptContext,
+        IReadOnlyList<string> registeredToolNames,
+        IReadOnlyList<AIFunctionDeclaration> toolDeclarations) =>
+        emit(EventTypes.AgentRuntimeContext, AgentRuntimeContextMetricsComposer.Compose(
+            provider: "copilot",
+            runId,
+            projectId,
+            task,
+            systemPromptContext,
+            registeredToolNames,
+            toolDeclarations));
 
     /// <summary>
     /// Extracts the full assistant message text from the SDK <see cref="AssistantMessageEvent"/>
