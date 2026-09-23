@@ -224,6 +224,11 @@ Agent → Assemble-ready
 
 RAI, Build & Test, Human Review, Merge, and Scribe run once on the **combined** output of all child agents — not per subtask. In the built-in software workflows, Build & Test runs after RAI and before Human Review.
 
+Scribe uses a read-only model tool profile. Durable memory housekeeping is performed by a
+server-side finalizer with bounded recovery and deterministic operation identities, so a timeout
+or restart can resume without duplicating decisions, session history, or exports. A Scribe child
+failure is visible and retryable but does not reverse an otherwise completed coordinator run.
+
 Collective feedback goes through coordinator steering, which can redirect existing
 children or dispatch fresh work. It is not a per-child RAI loop.
 

@@ -13,6 +13,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<DecisionInboxEntry> DecisionInbox => Set<DecisionInboxEntry>();
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
     public DbSet<RunAuthorshipCapability> RunAuthorshipCapabilities => Set<RunAuthorshipCapability>();
+    public DbSet<ScribeOperationAttempt> ScribeOperationAttempts => Set<ScribeOperationAttempt>();
     public DbSet<SessionContext> SessionContexts => Set<SessionContext>();
     public DbSet<RunEventRecord> RunEvents => Set<RunEventRecord>();
     public DbSet<OutcomeSpec> OutcomeSpecs => Set<OutcomeSpec>();
@@ -116,6 +117,18 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .HasColumnName("expires_at")
             .IsRequired();
         model.Entity<RunAuthorshipCapability>().HasIndex(capability => capability.ExpiresAt);
+        model.Entity<ScribeOperationAttempt>(attempt =>
+        {
+            attempt.ToTable("scribe_operation_attempts");
+            attempt.HasKey(candidate => candidate.Id);
+            attempt.Property(candidate => candidate.OperationKey).HasMaxLength(256).IsRequired();
+            attempt.Property(candidate => candidate.ProjectId).HasMaxLength(128).IsRequired();
+            attempt.Property(candidate => candidate.RunId).HasMaxLength(128).IsRequired();
+            attempt.Property(candidate => candidate.OperationType).HasMaxLength(64).IsRequired();
+            attempt.Property(candidate => candidate.Status).HasMaxLength(32).IsRequired();
+            attempt.Property(candidate => candidate.FailureCode).HasMaxLength(64);
+            attempt.HasIndex(candidate => new { candidate.OperationKey, candidate.Status });
+        });
         model.Entity<RunModelProviderSnapshotOwner>(owner =>
         {
             owner.ToTable("run_model_provider_snapshot_owners");

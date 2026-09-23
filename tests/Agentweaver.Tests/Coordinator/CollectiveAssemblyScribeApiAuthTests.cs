@@ -1,7 +1,15 @@
 using FluentAssertions;
+using System.Net;
+using System.Net.Http.Json;
+using System.Net.Http.Headers;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
+using Agentweaver.AgentRuntime;
+using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -93,5 +101,69 @@ public sealed class CollectiveAssemblyScribeApiAuthTests : IClassFixture<Workflo
             because: "CollectiveAssemblyPipeline reads ApiKey from this singleton; " +
                      "if it is null here, the assembly-scribe executor is built without " +
                      "authentication and every loopback memory tool call returns 401");
+    }
+
+    [Fact]
+    public async Task ScribeFinalize_RejectsCrossProjectAndLifecycleGeneration()
+    {
+        using var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", WorkflowWebApplicationFactory.TestApiKey);
+        var firstProject = await CreateProjectAsync(client, "scribe-scope-a");
+        var secondProject = await CreateProjectAsync(client, "scribe-scope-b");
+        var run = new Run
+        {
+            Id = RunId.New(),
+            RepositoryPath = AppContext.BaseDirectory,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "scribe",
+            SubmittingUser = "test-user",
+            Status = RunStatus.Completed,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = firstProject,
+            AgentName = "worker",
+            LifecycleGeneration = 4,
+        };
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<IRunStore>().InsertAsync(run);
+        }
+        client.DefaultRequestHeaders.Add(RunAuthorshipHeaders.ScribeCapability, "worker");
+
+        var crossProject = await client.PostAsJsonAsync(
+            $"/api/projects/{secondProject}/scribe/finalize",
+            new
+            {
+                run_id = run.Id.ToString(),
+                lifecycle_generation = 4,
+                authority = "worker",
+                terminal_status = "completed",
+            });
+        crossProject.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        var staleGeneration = await client.PostAsJsonAsync(
+            $"/api/projects/{firstProject}/scribe/finalize",
+            new
+            {
+                run_id = run.Id.ToString(),
+                lifecycle_generation = 3,
+                authority = "worker",
+                terminal_status = "completed",
+            });
+        staleGeneration.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    private static async Task<ProjectId> CreateProjectAsync(HttpClient client, string prefix)
+    {
+        var response = await client.PostAsJsonAsync("/api/projects", new CreateProjectRequest
+        {
+            Name = $"{prefix}-{Guid.NewGuid():N}",
+            Origin = "blank",
+            WorkingDirectory = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}"),
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        return ProjectId.Parse(json.GetProperty("project_id").GetString()!);
     }
 }

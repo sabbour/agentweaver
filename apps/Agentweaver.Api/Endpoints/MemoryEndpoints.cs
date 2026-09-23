@@ -510,6 +510,66 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     });
 });
 
+app.MapPost("/api/projects/{id}/scribe/finalize", async (
+    string id,
+    FinalizeScribeRequest request,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    IRunStore runStore,
+    ScribeHousekeepingService housekeeping,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "invalid_project" });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(
+        httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid)
+        return forbid;
+    if (!RunId.TryParse(request.RunId, out var runId))
+        return Results.BadRequest(new { error = "invalid_run" });
+
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null)
+        return Results.NotFound();
+    if (run.ProjectId != projectId || run.LifecycleGeneration != request.LifecycleGeneration)
+    {
+        return Results.Json(
+            new { error = "scribe_scope_mismatch" },
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    var authority = request.Authority switch
+    {
+        "worker" => ScribeAuthority.Worker,
+        "coordinator_finalization" => ScribeAuthority.CoordinatorFinalization,
+        _ => (ScribeAuthority?)null,
+    };
+    var capability = httpContext.Request.Headers[RunAuthorshipHeaders.ScribeCapability].ToString();
+    if (!string.Equals(capability, request.Authority, StringComparison.Ordinal)
+        || authority is null
+        || authority == ScribeAuthority.CoordinatorFinalization
+            && !string.Equals(run.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase)
+        || authority == ScribeAuthority.Worker
+            && string.Equals(run.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase))
+    {
+        return Results.Json(
+            new { error = "scribe_authority_mismatch" },
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    await housekeeping.RunAsync(
+        new ScribeHousekeepingRequest(
+            run,
+            authority.Value,
+            string.IsNullOrWhiteSpace(request.TerminalStatus)
+                ? run.Status.ToApiString()
+                : request.TerminalStatus),
+        ct);
+    return Results.Ok(new { completed = true });
+});
+
 // POST /api/projects/{id}/memory/import
 app.MapPost("/api/projects/{id}/memory/import", async (
     string id,
