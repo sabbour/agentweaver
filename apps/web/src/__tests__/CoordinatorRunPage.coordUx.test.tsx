@@ -3,6 +3,7 @@ import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
+import { AppShellFocusContext } from '../components/shell/AppShellFocusContext';
 import { COORDINATOR_GRAPH_DESCRIPTOR } from './fixtures/graphDescriptor';
 import {
   act,
@@ -23,7 +24,7 @@ import {
   vi,
 } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 class ResizeObserverStub {
   observe() {}
   unobserve() {}
@@ -121,13 +122,17 @@ vi.mock('../components/OutcomePlanPanel', () => ({
 import type { GraphDescriptor } from '../api/types';
 
 function Wrapper({ children }: { children: ReactNode }) {
+  const [focused, setFocused] = useState(false);
   return (
     <AzureFluentProvider density="compact">
-      <MemoryRouter initialEntries={['/projects/p1/orchestrations/coord-run-1']}>
-        <Routes>
-          <Route path="/projects/:projectId/orchestrations/:runId" element={children} />
-        </Routes>
-      </MemoryRouter>
+      <AppShellFocusContext.Provider value={{ focused, setFocused }}>
+        <output data-testid="focus-state">{focused ? 'focused' : 'standard'}</output>
+        <MemoryRouter initialEntries={['/projects/p1/orchestrations/coord-run-1']}>
+          <Routes>
+            <Route path="/projects/:projectId/orchestrations/:runId" element={children} />
+          </Routes>
+        </MemoryRouter>
+      </AppShellFocusContext.Provider>
     </AzureFluentProvider>
   );
 }
@@ -312,6 +317,9 @@ describe('CoordinatorRunPage operator console redesign', () => {
     await waitFor(() => expect(screen.getByRole('link', { name: 'Silver Pancake' })).toBeTruthy(), { timeout: 4000 });
     const topologyScroller = screen.getByTestId('topology-scroll-container');
     expect(topologyScroller.getAttribute('data-pan-enabled')).toBe('true');
+    expect(within(inspector).queryByRole('radio')).toBeNull();
+    expect(inspector.textContent).not.toContain('Legacy staircase');
+    expect(inspector.textContent).not.toContain('Topology layout');
 
     // The composer for steering the coordinator lives inline in the Messages surface and hosts the toggles.
     expect(screen.getByPlaceholderText('Message coordinator...')).toBeTruthy();
@@ -363,6 +371,7 @@ describe('CoordinatorRunPage operator console redesign', () => {
     const progress = screen.getByTestId('run-progress-chips');
 
     expect(summary.parentElement).toBe(header);
+    expect(header.tagName).toBe('HEADER');
     expect(screen.queryByTestId('run-actions-row')).toBeNull();
     expect(title.textContent).toBe('Orchestration');
     expect(progress.textContent).toContain('tasks');
@@ -379,6 +388,55 @@ describe('CoordinatorRunPage operator console redesign', () => {
     // No legacy run-actions toolbar copy leaks into the compact header.
     expect(header.textContent).not.toContain('Run + children');
     expect(header.textContent).not.toContain('Retry after failure · Stop while running');
+    expect(header.getAttribute('style')).toBeNull();
+  });
+
+  it('toggles shell focus with a native accessible button and restores it on unmount', async () => {
+    const user = userEvent.setup();
+    const result = render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const enter = await screen.findByRole('button', { name: 'Enter focus mode' }, { timeout: 4000 });
+    expect(enter.tagName).toBe('BUTTON');
+    expect(enter.getAttribute('aria-pressed')).toBe('false');
+
+    await user.hover(enter);
+    expect((await screen.findByRole('tooltip')).textContent).toContain('Enter focus mode');
+    enter.focus();
+    await user.keyboard('{Enter}');
+
+    const exit = screen.getByRole('button', { name: 'Exit focus mode' });
+    expect(exit.getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('focus-state').textContent).toBe('focused');
+
+    exit.focus();
+    await user.keyboard(' ');
+    expect(screen.getByRole('button', { name: 'Enter focus mode' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByTestId('focus-state').textContent).toBe('standard');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enter focus mode' }));
+    expect(screen.getByTestId('focus-state').textContent).toBe('focused');
+    result.unmount();
+  });
+
+  it('keeps the mobile header actions and run workspace available when controls wrap', async () => {
+    const previousWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 640 });
+    window.dispatchEvent(new Event('resize'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    const actions = await screen.findByTestId('run-header-actions', undefined, { timeout: 4000 });
+    expect(getComputedStyle(actions).flexWrap).toBe('wrap');
+    expect(within(actions).getByRole('button', { name: 'View trace' })).toBeTruthy();
+    expect(within(actions).getByRole('button', { name: 'Enter focus mode' })).toBeTruthy();
+    expect(actions.textContent).toContain('GitHub Copilot');
+    expect(screen.getByRole('tree', { name: 'Run tree' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('treeitem', { name: /Subtask 1/i }));
+    await waitFor(() => expect(document.body.textContent).toContain('Context: Subtask 1'), { timeout: 4000 });
+
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: previousWidth });
+    window.dispatchEvent(new Event('resize'));
   });
 
   it('uses the run tree as task-structured navigation and scopes the composer to the selected task', async () => {
