@@ -146,7 +146,8 @@ internal static class MemoryLedgerExporter
     public static Task CommitExportAsync(
         string workingDirectory,
         string defaultBranch,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? operationKey = null)
     {
         ct.ThrowIfCancellationRequested();
         using var repo = new Repository(workingDirectory);
@@ -194,14 +195,18 @@ internal static class MemoryLedgerExporter
         }
 
         var treeId = repo.ObjectDatabase.CreateTree(tree);
-        if (string.Equals(treeId.Sha, parent.Tree.Sha, StringComparison.Ordinal))
+        if (operationKey is null
+            && string.Equals(treeId.Sha, parent.Tree.Sha, StringComparison.Ordinal))
             return Task.CompletedTask;
 
         var signature = new Signature("Agentweaver", "agentweaver@localhost", DateTimeOffset.UtcNow);
+        var message = operationKey is null
+            ? "Export project memory"
+            : $"Export project memory\n\nAgentweaver-Scribe-Operation: {operationKey}";
         var commit = repo.ObjectDatabase.CreateCommit(
             signature,
             signature,
-            "Export project memory",
+            message,
             treeId,
             new[] { parent },
             prettifyMessage: true);
@@ -218,6 +223,24 @@ internal static class MemoryLedgerExporter
             repo.Index.Write();
         }
         return Task.CompletedTask;
+    }
+
+    public static Task<bool> HasCommittedOperationAsync(
+        string workingDirectory,
+        string defaultBranch,
+        string operationKey,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        using var repo = new Repository(workingDirectory);
+        var branch = repo.Branches[defaultBranch]
+            ?? throw new InvalidOperationException($"Default branch '{defaultBranch}' was not found.");
+        var marker = $"Agentweaver-Scribe-Operation: {operationKey}";
+        return Task.FromResult(branch.Commits.Any(commit =>
+        {
+            ct.ThrowIfCancellationRequested();
+            return commit.Message.Contains(marker, StringComparison.Ordinal);
+        }));
     }
 
     private static IEnumerable<string> EnumerateTreePaths(Tree tree, string prefix = "")

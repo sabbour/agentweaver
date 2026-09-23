@@ -98,6 +98,97 @@ public sealed class ScribeHousekeepingServiceTests
         }
     }
 
+    [Fact]
+    public async Task ConcurrentExport_ClaimsBeforeInvokingSideEffect()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"scribe-export-{Guid.NewGuid():N}.db");
+        try
+        {
+            Run seededRun;
+            await using (var setup = CreateContext($"Data Source={path}"))
+            {
+                await setup.Database.EnsureCreatedAsync();
+                seededRun = Seed(setup, "worker");
+                await setup.SaveChangesAsync();
+            }
+
+            var project = ProjectFor(seededRun);
+            var exporter = new FakeExportOperation(blockApply: true);
+            await using var db1 = CreateContext($"Data Source={path};Default Timeout=5");
+            await using var db2 = CreateContext($"Data Source={path};Default Timeout=5");
+            var service1 = new ScribeHousekeepingService(
+                db1,
+                new SingleProjectStore(project),
+                NullLogger<ScribeHousekeepingService>.Instance,
+                exporter);
+            var service2 = new ScribeHousekeepingService(
+                db2,
+                new SingleProjectStore(project),
+                NullLogger<ScribeHousekeepingService>.Instance,
+                exporter);
+            var request1 = new ScribeHousekeepingRequest(
+                await LoadRunShapeAsync(db1), ScribeAuthority.Worker, "completed");
+            var request2 = new ScribeHousekeepingRequest(
+                await LoadRunShapeAsync(db2), ScribeAuthority.Worker, "completed");
+
+            var first = service1.RunAsync(request1, CancellationToken.None);
+            await exporter.WaitUntilInvokedAsync();
+            var second = service2.RunAsync(request2, CancellationToken.None);
+            exporter.Release();
+            await Task.WhenAll(first, second);
+
+            exporter.ApplyCount.Should().Be(1);
+            await using var verify = CreateContext($"Data Source={path}");
+            (await verify.ScribeOperationAttempts.CountAsync(attempt =>
+                attempt.OperationType == "export" && attempt.Status == "completed")).Should().Be(1);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task AppliedExportRecovery_CompletesClaimWithoutInvokingSideEffectAgain()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = CreateContext(connection);
+        await db.Database.EnsureCreatedAsync();
+        var run = Seed(db, "worker");
+        var operationKey = $"scribe:{run.Id}:generation:{run.LifecycleGeneration}:export";
+        db.ScribeOperationAttempts.Add(new ScribeOperationAttempt
+        {
+            OperationKey = operationKey,
+            ProjectId = run.ProjectId!.Value.ToString(),
+            RunId = run.Id.ToString(),
+            LifecycleGeneration = run.LifecycleGeneration,
+            OperationType = "export",
+            Status = "started",
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var exporter = new FakeExportOperation();
+        exporter.MarkApplied();
+        var service = new ScribeHousekeepingService(
+            db,
+            new SingleProjectStore(ProjectFor(run)),
+            NullLogger<ScribeHousekeepingService>.Instance,
+            exporter);
+
+        await service.RunAsync(
+            new ScribeHousekeepingRequest(run, ScribeAuthority.Worker, "completed"),
+            CancellationToken.None);
+
+        exporter.ApplyCount.Should().Be(0);
+        (await db.ScribeOperationAttempts.SingleAsync(attempt =>
+            attempt.OperationKey == operationKey && attempt.Status == "completed"))
+            .CompletedAt.Should().NotBeNull();
+    }
+
     private static async Task<Exception?> Capture(Task task)
     {
         try
@@ -141,6 +232,23 @@ public sealed class ScribeHousekeepingServiceTests
         return run;
     }
 
+    private static Project ProjectFor(Run run) => new()
+    {
+        Id = run.ProjectId!.Value,
+        Name = "test",
+        Origin = ProjectOrigin.Blank(),
+        WorkingDirectory = Path.GetTempPath(),
+        DefaultBranch = "main",
+        Owner = "owner",
+        ProviderSettings = new ProjectProviderSettings
+        {
+            DefaultProvider = ModelSource.GitHubCopilot,
+        },
+        State = ProjectState.Active,
+        CreatedAt = DateTimeOffset.UtcNow,
+        UpdatedAt = DateTimeOffset.UtcNow,
+    };
+
     private static DecisionInboxEntry Entry(Run run, string type, string slug) => new()
     {
         ProjectId = run.ProjectId!.Value.ToString(),
@@ -181,4 +289,63 @@ public sealed class ScribeHousekeepingServiceTests
 
     private static MemoryDbContext CreateContext(string connectionString) =>
         new(new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(connectionString).Options);
+
+    private sealed class FakeExportOperation(bool blockApply = false) : IScribeExportOperation
+    {
+        private readonly TaskCompletionSource _entered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _applied;
+        private int _applyCount;
+
+        public int ApplyCount => Volatile.Read(ref _applyCount);
+
+        public Task<bool> IsAppliedAsync(
+            string workingDirectory,
+            string defaultBranch,
+            string operationKey,
+            CancellationToken ct) =>
+            Task.FromResult(Volatile.Read(ref _applied) == 1);
+
+        public async Task ApplyAsync(
+            string projectId,
+            string workingDirectory,
+            string defaultBranch,
+            string operationKey,
+            CancellationToken ct)
+        {
+            Interlocked.Increment(ref _applyCount);
+            _entered.TrySetResult();
+            if (blockApply)
+                await _release.Task.WaitAsync(ct);
+            Volatile.Write(ref _applied, 1);
+        }
+
+        public Task WaitUntilInvokedAsync() => _entered.Task;
+        public void Release() => _release.TrySetResult();
+        public void MarkApplied() => Volatile.Write(ref _applied, 1);
+    }
+
+    private sealed class SingleProjectStore(Project project) : IProjectStore
+    {
+        public Task<Project?> GetAsync(ProjectId id, CancellationToken ct = default) =>
+            Task.FromResult<Project?>(id == project.Id ? project : null);
+
+        public Task InsertAsync(Project project, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<Project>> ListAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateNameAsync(ProjectId id, string name, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateProviderSettingsAsync(ProjectId id, ProjectProviderSettings settings, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateGenerationModelSettingsAsync(ProjectId id, string? blueprintGenerationModel, string? workflowGenerationModel, string? outcomeSpecGenerationModel, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateOriginAsync(ProjectId id, ProjectOrigin origin, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task DeleteAsync(ProjectId id, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdatePickupSettingsAsync(ProjectId id, int maxReadyPerHeartbeat, bool autopilot, bool autoApproveTools, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateDefaultWorkflowAsync(ProjectId id, string? workflowId, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateActiveReviewPolicyAsync(ProjectId id, string? policyName, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateSandboxProfileAsync(ProjectId id, string? sandboxProfile, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task UpdateAllowedWorkflowIdsAsync(ProjectId id, IReadOnlyList<string>? allowedWorkflowIds, DateTimeOffset updatedAt, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IProjectTeamMutationLease?> TryBeginTeamMutationAsync(ProjectId id, long expectedRevision, CancellationToken ct = default) => throw new NotImplementedException();
+    }
 }

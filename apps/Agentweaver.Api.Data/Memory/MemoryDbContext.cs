@@ -127,7 +127,9 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             attempt.Property(candidate => candidate.OperationType).HasMaxLength(64).IsRequired();
             attempt.Property(candidate => candidate.Status).HasMaxLength(32).IsRequired();
             attempt.Property(candidate => candidate.FailureCode).HasMaxLength(64);
-            attempt.HasIndex(candidate => new { candidate.OperationKey, candidate.Status });
+            attempt.HasIndex(candidate => candidate.OperationKey)
+                .IsUnique()
+                .HasFilter("\"Status\" IN ('started', 'completed')");
         });
         model.Entity<RunModelProviderSnapshotOwner>(owner =>
         {
