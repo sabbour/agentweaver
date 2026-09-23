@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +16,7 @@ using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Api.Workflows;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -1766,13 +1769,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             mergeResult: merge.CommitHash,
             ct).ConfigureAwait(false);
 
-        // ── Coordinator decision promotion ───────────────────────────────────────────────────────
-        // The per-run Scribe auto-merges only learning/pattern/update entries; architectural and
-        // scope entries are deliberately left for the Coordinator. Promote the still-pending ones
-        // here so they become active decisions (visible in the UI and injected into agent context).
-        // Best-effort and idempotent: a failure must not fail the already-merged assembly.
-        await PromoteCoordinatorDecisionsAsync(context, ct).ConfigureAwait(false);
-
         // ── Complete ─────────────────────────────────────────────────────────────────────────────
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Complete, AssemblyStage.Done, ct).ConfigureAwait(false);
@@ -1839,25 +1835,35 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     scribeProvider.ModelSource,
                     ModelId: coordinatorRun.ModelId,
                     RunStartedAt: coordinatorRun.StartedAt,
+                    LifecycleGeneration: coordinatorRun.LifecycleGeneration,
                     TerminalStatus: terminalStatus,
                     MergeResult: mergeResult,
                     ByokProviderFingerprint: scribeProvider.ByokProviderFingerprint),
                     scribeCts.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested && scribeCts.IsCancellationRequested)
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested && scribeCts.IsCancellationRequested)
             {
                 scribeSucceeded = false;
-                failureReason = $"Scribe pass timed out after {_finalScribeTimeout.TotalSeconds:0.###} seconds.";
-                _logger.LogWarning(ex,
-                    "Collective assembly: scribe pass timed out for run {RunId} after {TimeoutSeconds}s (non-fatal)",
+                failureReason = "scribe_timeout";
+                _logger.LogWarning(
+                    "Collective assembly: scribe pass timed out for run {RunId} after {TimeoutSeconds}s; code=scribe_timeout",
                     context.CoordinatorRunId, _finalScribeTimeout.TotalSeconds);
+            }
+            catch (ScribeTurnException ex)
+            {
+                scribeSucceeded = false;
+                failureReason = ex.Code;
+                _logger.LogWarning(
+                    "Collective assembly: scribe pass failed for run {RunId}; code={FailureCode}; retryable={Retryable}",
+                    context.CoordinatorRunId, ex.Code, ex.Retryable);
             }
             catch (Exception ex)
             {
                 scribeSucceeded = false;
-                failureReason = ex.Message;
-                _logger.LogWarning(ex, "Collective assembly: scribe pass failed for run {RunId} (non-fatal)",
-                    context.CoordinatorRunId);
+                failureReason = ScribeFailureClassifier.Classify(ex).Code;
+                _logger.LogWarning(
+                    "Collective assembly: scribe pass failed for run {RunId}; code={FailureCode}",
+                    context.CoordinatorRunId, failureReason);
             }
 
             if (!scribeSucceeded)
@@ -1865,11 +1871,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 Emit(context.CoordinatorRunId, "run.scribe_failed", new
                 {
                     workPlanId,
-                    reason = failureReason,
+                    code = failureReason,
                 });
                 await _runStore.TrySetTerminalOutcomeAsync(
                     scribeRun.Id,
-                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = failureReason }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { code = failureReason }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
                     failureReason,
                     ct).ConfigureAwait(false);
                 return;
@@ -1938,6 +1944,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 scribeProvider.ModelSource,
                 coordinatorRun.ModelId,
                 RunStartedAt: coordinatorRun.StartedAt,
+                LifecycleGeneration: coordinatorRun.LifecycleGeneration,
                 TerminalStatus: coordinatorRun.Status.ToApiString(),
                 MergeResult: coordinatorRun.Result,
                 ByokProviderFingerprint: scribeProvider.ByokProviderFingerprint),
@@ -1951,11 +1958,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Coordinator final scribe failed for run {RunId} (non-fatal)", coordinatorRun.Id);
+            var failureCode = ex is ScribeTurnException scribe
+                ? scribe.Code
+                : ScribeFailureClassifier.Classify(ex).Code;
+            _logger.LogWarning(
+                "Coordinator final scribe failed for run {RunId}; code={FailureCode}",
+                coordinatorRun.Id, failureCode);
             await _runStore.TrySetTerminalOutcomeAsync(
                 scribeRun.Id,
-                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = ex.Message }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
-                ex.Message,
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { code = failureCode }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                failureCode,
                 ct).ConfigureAwait(false);
         }
     }
@@ -1977,9 +1989,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (!ShouldAttemptFinalScribe(existingChildren, _finalScribeMaxAttempts))
             return (null, false);
 
+        var attemptNumber = existingChildren.Count(r =>
+            string.Equals(r.SubtaskId, AssemblyScribeSubtaskId, StringComparison.Ordinal)
+            && string.Equals(r.AgentName, "Scribe", StringComparison.Ordinal)) + 1;
+        var scribeRunId = DeterministicScribeRunId(
+            coordinatorRun.Id, coordinatorRun.LifecycleGeneration, attemptNumber);
         var scribeRun = new Run
         {
-            Id = RunId.New(),
+            Id = scribeRunId,
             RepositoryPath = coordinatorRun.RepositoryPath,
             OriginatingBranch = coordinatorRun.OriginatingBranch,
             ModelSource = coordinatorRun.ModelSource,
@@ -1995,8 +2012,28 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             Result = mergeResult,
         };
 
-        await _runStore.InsertAsync(scribeRun, ct).ConfigureAwait(false);
-        return (scribeRun, true);
+        try
+        {
+            await _runStore.InsertAsync(scribeRun, ct).ConfigureAwait(false);
+            return (scribeRun, true);
+        }
+        catch (Exception ex) when (ex is DbUpdateException or InvalidOperationException)
+        {
+            var concurrent = await _runStore.GetAsync(scribeRunId, ct).ConfigureAwait(false);
+            if (concurrent is not null)
+                return (concurrent, false);
+            throw;
+        }
+    }
+
+    private static RunId DeterministicScribeRunId(
+        RunId coordinatorRunId,
+        int lifecycleGeneration,
+        int attempt)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{coordinatorRunId}:scribe:{lifecycleGeneration}:{attempt}"));
+        return new RunId(new Guid(bytes.AsSpan(0, 16)));
     }
 
     internal static int GetFinalScribeMaxAttempts(IConfiguration? configuration) =>
@@ -2030,66 +2067,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return null;
 
         return await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// Deterministic backstop for the Coordinator's autonomous decision review: promotes every
-    /// still-pending architectural/scope inbox entry for the run's project into an active decision,
-    /// using the same mapping as the <c>/merge</c> endpoint. Best-effort and non-blocking — mirrors
-    /// <see cref="PostRunScribeService"/>: any failure is logged and the run completes regardless.
-    /// </summary>
-    private async Task PromoteCoordinatorDecisionsAsync(CoordinatorDispatchContext context, CancellationToken ct)
-    {
-        var projectId = context.ProjectId?.Value.ToString();
-        if (string.IsNullOrEmpty(projectId))
-            return;
-
-        try
-        {
-            if (!RunId.TryParse(context.CoordinatorRunId, out var parsedRunId))
-                return;
-            var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
-            if (run is null)
-                return;
-
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
-            var pending = (await db.DecisionInbox
-                .Where(e => e.ProjectId == projectId
-                         && e.Status == "pending"
-                         && e.SourceKind == MemorySourceKinds.Run)
-                .ToListAsync(ct).ConfigureAwait(false))
-                .Where(e => e.CreatedAt >= run.StartedAt
-                         && string.Equals(e.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase)
-                         && (string.Equals(e.SourceRunId, context.CoordinatorRunId, StringComparison.Ordinal)
-                             || e.SourceRunId?.StartsWith(
-                                 context.CoordinatorRunId + "-coordinator-",
-                                 StringComparison.Ordinal) == true)
-                         && DecisionPromotion.CoordinatorReviewTypes.Contains(e.Type))
-                .ToList();
-
-            var now = DateTimeOffset.UtcNow;
-            foreach (var entry in pending)
-                await DecisionPromotion.PromoteEntry(
-                    db,
-                    entry,
-                    now,
-                    entry.SourceIdentity ?? $"run:{context.CoordinatorRunId}",
-                    ct).ConfigureAwait(false);
-            await tx.CommitAsync(ct).ConfigureAwait(false);
-
-            var promoted = pending.Count;
-            if (promoted > 0)
-                _logger.LogInformation(
-                    "Coordinator promoted {Count} run-scoped architectural/scope decision(s) for run {RunId}",
-                    promoted, context.CoordinatorRunId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Coordinator decision promotion failed for run {RunId} (non-fatal)", context.CoordinatorRunId);
-        }
     }
 
     // -----------------------------------------------------------------------

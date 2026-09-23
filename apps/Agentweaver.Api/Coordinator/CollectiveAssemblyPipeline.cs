@@ -527,7 +527,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             TerminalStatus: request.TerminalStatus,
             MergeResult: request.MergeResult,
             SubmittingUser: request.SubmittingUser,
-            ByokProviderFingerprint: request.ByokProviderFingerprint);
+            ByokProviderFingerprint: request.ByokProviderFingerprint,
+            LifecycleGeneration: request.LifecycleGeneration);
 
         await scribe.HandleAsync(input, NoOpWorkflowContext.Instance, ct).ConfigureAwait(false);
     }

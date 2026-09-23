@@ -2,6 +2,7 @@ using System.Threading.Channels;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.AI;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
@@ -25,7 +26,8 @@ public sealed class BuildTestWorkflowTests
             new InMemoryShellApprovalStore(),
             new InMemoryToolApprovalGate(),
             NullLoggerFactory.Instance,
-            agentFactory: agentFactory);
+            agentFactory: agentFactory,
+            finalizeHousekeeping: (_, _, _) => Task.CompletedTask);
 
         await executor.HandleAsync(new ScribeTurnInput(
             RunId: "scribe-provider-run",
@@ -41,6 +43,64 @@ public sealed class BuildTestWorkflowTests
 
         agentFactory.LastScribeAgent!.ProviderModelSource.Should().Be(ModelSource.Byok);
         agentFactory.LastScribeAgent.ByokProviderFingerprint.Should().Be("byok-fingerprint");
+    }
+
+    [Fact]
+    public async Task ScribeExecutor_PropagatesCaughtFailure_AndRedactsDiagnostic()
+    {
+        var agentFactory = new FakeWorkflowAgentFactory(new TestFileEditAgentRunner());
+        var channel = Channel.CreateUnbounded<RunEvent>();
+        var executor = new ScribeTurnExecutor(
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new FixedGitHubCopilotCapabilityCredentialProvider()),
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLoggerFactory.Instance,
+            getRecordingWriter: _ => channel.Writer,
+            agentFactory: agentFactory,
+            finalizeHousekeeping: (_, _, _) =>
+                throw new InvalidOperationException("CANARY prompt=/secret/path token=credential"));
+
+        var act = () => executor.HandleAsync(new ScribeTurnInput(
+            RunId: "scribe-failure-run",
+            ProjectId: "project",
+            AgentName: "scribe",
+            RunStartedAt: DateTimeOffset.UtcNow,
+            RepositoryPath: AppContext.BaseDirectory,
+            ModelSource: ModelSource.GitHubCopilot.ToApiString(),
+            ModelId: null),
+            context: null!,
+            CancellationToken.None).AsTask();
+
+        var exception = await act.Should().ThrowAsync<ScribeTurnException>();
+        exception.Which.Code.Should().Be("scribe_internal_failure");
+
+        var events = new List<RunEvent>();
+        while (channel.Reader.TryRead(out var evt))
+            events.Add(evt);
+        var serialized = System.Text.Json.JsonSerializer.Serialize(events);
+        serialized.Should().Contain("scribe_internal_failure");
+        serialized.Should().NotContain("CANARY");
+        serialized.Should().NotContain("/secret/path");
+        serialized.Should().NotContain("credential");
+        serialized.Should().NotContain("\"reason\"");
+    }
+
+    [Fact]
+    public void ScribeToolProfile_RejectsMutationAndShellTools()
+    {
+        var candidates = new[]
+        {
+            AIFunctionFactory.Create(() => "ok", "list_inbox"),
+            AIFunctionFactory.Create(() => "bad", "merge_inbox_entry"),
+            AIFunctionFactory.Create(() => "bad", "record_memory"),
+            AIFunctionFactory.Create(() => "bad", "run_command"),
+            AIFunctionFactory.Create(() => "ok", "report_intent"),
+        };
+
+        ScribeAIAgent.FilterAllowedTools(candidates).Select(tool => tool.Name)
+            .Should().BeEquivalentTo(["list_inbox", "report_intent"]);
     }
 
     [Fact]

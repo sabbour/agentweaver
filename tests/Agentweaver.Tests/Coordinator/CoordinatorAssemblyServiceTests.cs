@@ -2864,9 +2864,40 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await run;
 
         EventTypes_(coordinatorRunId).Should().Contain("run.scribe_failed");
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyScribeCompleted);
         _pipeline.CleanupBuildTestResourcesCalls.Should().Be(1);
         (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status
             .Should().Be(RunStatus.Completed);
+        (await _runStore.GetRunsByParentAsync(coordinatorRunId))
+            .Single(run => run.SubtaskId == CoordinatorAssemblyService.AssemblyScribeSubtaskId)
+            .Status.Should().Be(RunStatus.Failed);
+    }
+
+    [Fact]
+    public void FinalScribeAttemptBudget_SuppressesCompletedAndExhaustedRecovery()
+    {
+        static Run Attempt(RunStatus status) => new()
+        {
+            Id = RunId.New(),
+            RepositoryPath = "",
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "scribe",
+            SubmittingUser = "owner",
+            Status = status,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Scribe",
+            SubtaskId = CoordinatorAssemblyService.AssemblyScribeSubtaskId,
+        };
+
+        CoordinatorAssemblyService.ShouldAttemptFinalScribe(
+            [Attempt(RunStatus.Failed)], maxAttempts: 2).Should().BeTrue();
+        CoordinatorAssemblyService.ShouldAttemptFinalScribe(
+            [Attempt(RunStatus.Failed), Attempt(RunStatus.Failed)], maxAttempts: 2).Should().BeFalse();
+        CoordinatorAssemblyService.ShouldAttemptFinalScribe(
+            [Attempt(RunStatus.Completed)], maxAttempts: 2).Should().BeFalse();
+        CoordinatorAssemblyService.ShouldAttemptFinalScribe(
+            [Attempt(RunStatus.InProgress)], maxAttempts: 2).Should().BeFalse();
     }
 
     [Fact]
@@ -3179,7 +3210,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var projectId = ProjectId.New();
         var projectKey = projectId.Value.ToString();
 
-        await SeedCoordinatorRunAsync(coordinatorRunId);
+        await SeedCoordinatorRunAsync(coordinatorRunId, projectId: projectId);
         await SeedPlanAsync(coordinatorRunId, new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         await SeedInboxEntryAsync(projectKey, coordinatorRunId, "use-event-sourcing", "architectural", "Adopt event sourcing");
         await SeedInboxEntryAsync(projectKey, coordinatorRunId, "exclude-billing", "scope", "Billing is out of scope");
@@ -3187,6 +3218,20 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await SeedInboxEntryAsync(
             projectKey, coordinatorRunId, "legacy-forged-coordinator", "architectural",
             "Unverified coordinator boundary", verifiedRun: false);
+        _pipeline.OnScribe = async (_, ct) =>
+        {
+            var coordinatorRun = (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), ct))!;
+            using var serviceScope = _provider.CreateScope();
+            var db = serviceScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var housekeeping = new ScribeHousekeepingService(
+                db, projectStore: null, NullLogger<ScribeHousekeepingService>.Instance);
+            await housekeeping.RunAsync(
+                new ScribeHousekeepingRequest(
+                    coordinatorRun,
+                    ScribeAuthority.CoordinatorFinalization,
+                    "completed"),
+                ct);
+        };
         _streamStore.Create(coordinatorRunId, "alice");
 
         var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", projectId);
@@ -3204,16 +3249,16 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var decisions = await db.Decisions
             .Where(d => d.ProjectId == projectKey && d.Status == "active")
             .ToListAsync();
-        decisions.Select(d => d.Type).Should().BeEquivalentTo(new[] { "architectural", "scope" });
+        decisions.Select(d => d.Type).Should().BeEquivalentTo(
+            new[] { "architectural", "scope", "learning" });
 
         var arch = await db.DecisionInbox.SingleAsync(e => e.Slug == "use-event-sourcing");
         arch.Status.Should().Be("merged");
         var boundary = await db.DecisionInbox.SingleAsync(e => e.Slug == "exclude-billing");
         boundary.Status.Should().Be("merged");
 
-        // The learning entry is the per-run Scribe's responsibility, not the coordinator backstop.
         var learning = await db.DecisionInbox.SingleAsync(e => e.Slug == "cache-gotcha");
-        learning.Status.Should().Be("pending");
+        learning.Status.Should().Be("merged");
         var unverified = await db.DecisionInbox.SingleAsync(e => e.Slug == "legacy-forged-coordinator");
         unverified.Status.Should().Be("pending",
             "a client-supplied coordinator name without verified run provenance must not auto-promote");
@@ -3779,7 +3824,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             _scopeFactory, coordinatorRunId, decision, CancellationToken.None);
     }
 
-    private async Task SeedCoordinatorRunAsync(string coordinatorRunId, string? modelId = null)
+    private async Task SeedCoordinatorRunAsync(
+        string coordinatorRunId,
+        string? modelId = null,
+        ProjectId? projectId = null)
     {
         await _runStore.InsertAsync(new Run
         {
@@ -3793,6 +3841,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
             ModelId = modelId,
+            ProjectId = projectId,
         });
     }
 

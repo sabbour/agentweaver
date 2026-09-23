@@ -641,7 +641,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     MergeResult: output.MergeResult,
                     MergeMode: output.MergeMode,
                     SubmittingUser: submittingUser,
-                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
+                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint,
+                    LifecycleGeneration: run?.LifecycleGeneration ?? 1);
             });
 
         ExecutorBinding scribeInputNoChanges = new VisualFunctionExecutor<NoChangesOutput, ScribeTurnInput>(
@@ -701,7 +702,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     agentInput?.ModelId ?? run?.ModelId,
                     TerminalStatus: "no_changes",
                     SubmittingUser: submittingUser,
-                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
+                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint,
+                    LifecycleGeneration: run?.LifecycleGeneration ?? 1);
             });
 
         // Scribe output adapters: reconstruct terminal output types from pass-through.
@@ -909,7 +911,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             agentInput?.ModelId ?? run?.ModelId,
             TerminalStatus: terminalStatus,
             SubmittingUser: submittingUser,
-            ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
+            ByokProviderFingerprint: agentInput?.ByokProviderFingerprint,
+            LifecycleGeneration: run?.LifecycleGeneration ?? 1);
     }
 
     /// <summary>

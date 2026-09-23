@@ -1061,6 +1061,14 @@ public sealed record UpdateSessionRequest
     [JsonPropertyName("end")] public bool? End { get; init; }
 }
 
+public sealed record FinalizeScribeRequest
+{
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("lifecycle_generation")] public int LifecycleGeneration { get; init; }
+    [JsonPropertyName("authority")] public string? Authority { get; init; }
+    [JsonPropertyName("terminal_status")] public string? TerminalStatus { get; init; }
+}
+
 // -----------------------------------------------------------------------
 // Coordinator (Feature 008 Phase 1) — outcome-spec flow.
 // These contracts use camelCase JSON to match the web client (apps/web/src/api/types.ts).
