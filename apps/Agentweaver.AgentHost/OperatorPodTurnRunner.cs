@@ -130,6 +130,22 @@ internal sealed class OperatorPodTurnRunner : IPodTurnRunner
             writer.WriteAsync(
                 new RunEvent(0, EventTypes.AgentMessageDelta, new { delta }), ct);
 
+        public async ValueTask OnPromptMetadataAsync(
+            AgentRuntimeContextMetrics runtimeContext,
+            bool callableMemoryGuidanceIncluded,
+            CancellationToken ct)
+        {
+            await writer.WriteAsync(
+                new RunEvent(
+                    0,
+                    EventTypes.AgentSystemPrompt,
+                    AgentSystemPromptMetadata.From(runtimeContext, callableMemoryGuidanceIncluded)),
+                ct).ConfigureAwait(false);
+            await writer.WriteAsync(
+                new RunEvent(0, EventTypes.AgentRuntimeContext, runtimeContext),
+                ct).ConfigureAwait(false);
+        }
+
         public ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken ct) =>
             writer.WriteAsync(
                 new RunEvent(0, EventTypes.ToolCall, new { name = toolName, arguments = argumentsJson }), ct);

@@ -62,6 +62,17 @@ public sealed record OperatorAssistantTurnEnvelope(
 /// </summary>
 public interface IOperatorAssistantTurnSink
 {
+    /// <summary>
+    /// Projects the bounded prompt-composition metadata for this turn. The payload contains only
+    /// scalar counts and stable correlation identifiers; prompt, task, tool, and credential content
+    /// must never cross this callback.
+    /// </summary>
+    ValueTask OnPromptMetadataAsync(
+        AgentRuntimeContextMetrics runtimeContext,
+        bool callableMemoryGuidanceIncluded,
+        CancellationToken ct) =>
+        ValueTask.CompletedTask;
+
     /// <summary>A streamed slice of the assistant's textual answer.</summary>
     ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct);
 
@@ -197,9 +208,25 @@ public sealed class OperatorAssistantAgent(
                     "Operator assistant provider failure while starting client: {Code}",
                     providerFailure.ErrorCode)).ConfigureAwait(false);
 
+            var systemPrompt = BuildSystemPrompt(request, toolDeclarations.Count);
+            var runtimeContext = AgentRuntimeContextMetricsComposer.ComposeFlat(
+                provider: "copilot",
+                request.ConversationId,
+                request.ProjectId,
+                request.Message,
+                systemPrompt,
+                toolDeclarations);
+            if (sink is not null)
+            {
+                await sink.OnPromptMetadataAsync(
+                    runtimeContext,
+                    callableMemoryGuidanceIncluded: false,
+                    ct).ConfigureAwait(false);
+            }
+
             var sessionConfig = BuildSessionConfig(
                 request.ConversationId,
-                BuildSystemPrompt(request),
+                systemPrompt,
                 toolDeclarations,
                 request.ModelId,
                 byokProvider);
@@ -636,6 +663,20 @@ public sealed class OperatorAssistantAgent(
             AgentDefinition: agentDefinition,
             McpBrokerToken: "test",
             History: []), mcpToolCount);
+
+    internal static AgentRuntimeContextMetrics ComposeRuntimeContextForTests(
+        OperatorAssistantRequest request,
+        IReadOnlyList<AIFunctionDeclaration> toolDeclarations)
+    {
+        var systemPrompt = BuildSystemPrompt(request, toolDeclarations.Count);
+        return AgentRuntimeContextMetricsComposer.ComposeFlat(
+            "copilot",
+            request.ConversationId,
+            request.ProjectId,
+            request.Message,
+            systemPrompt,
+            toolDeclarations);
+    }
 
     private static string BuildSystemPrompt(OperatorAssistantRequest request, int mcpToolCount = 0)
     {

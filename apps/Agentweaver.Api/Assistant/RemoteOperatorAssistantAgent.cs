@@ -316,6 +316,11 @@ public sealed class RemoteOperatorAssistantAgent(
                     await eventStream.AppendAsync(runId, runEvent, ct).ConfigureAwait(false);
                     break;
 
+                case EventTypes.AgentSystemPrompt:
+                case EventTypes.AgentRuntimeContext:
+                    await eventStream.AppendAsync(runId, runEvent, ct).ConfigureAwait(false);
+                    break;
+
                 case EventTypes.McpBrokerTokenRefreshRequired:
                     await RefreshMcpBrokerTokenAsync(request, podLifecycle, ct).ConfigureAwait(false);
                     break;

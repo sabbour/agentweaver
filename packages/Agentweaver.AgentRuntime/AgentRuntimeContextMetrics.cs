@@ -4,7 +4,7 @@ using Agentweaver.Domain.Skills;
 
 namespace Agentweaver.AgentRuntime;
 
-internal sealed record AgentRuntimeContextMetrics(
+public sealed record AgentRuntimeContextMetrics(
     string Provider,
     string RunId,
     string? ProjectId,
@@ -86,6 +86,32 @@ internal static class AgentRuntimeContextMetricsComposer
             taskCharacters,
             toolDeclarationCharacters,
             skillDeliveryMode,
+            totalCharacters,
+            (totalCharacters + 3) / 4);
+    }
+
+    internal static AgentRuntimeContextMetrics ComposeFlat(
+        string provider,
+        string runId,
+        string? projectId,
+        string task,
+        string systemPrompt,
+        IReadOnlyList<AIFunctionDeclaration> toolDeclarations)
+    {
+        var toolDeclarationCharacters = JsonSerializer.Serialize(toolDeclarations).Length;
+        var totalCharacters = systemPrompt.Length + task.Length + toolDeclarationCharacters;
+
+        return new AgentRuntimeContextMetrics(
+            provider,
+            runId,
+            projectId,
+            systemPrompt.Length,
+            0,
+            0,
+            0,
+            task.Length,
+            toolDeclarationCharacters,
+            "none",
             totalCharacters,
             (totalCharacters + 3) / 4);
     }
