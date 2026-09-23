@@ -140,7 +140,7 @@ human merge review remain separate.
 Once you confirm the spec, the coordinator:
 
 1. Decomposes the OutcomeSpec into a **WorkPlan** — a dependency graph of subtasks
-2. Assigns each subtask to the best-fit agent and selects a model — an explicit run `modelId` (or the project's GitHub Copilot default) pins every subtask; otherwise each subtask uses its role's default model
+2. Assigns each subtask to the best-fit agent and records the effective execution model — BYOK runs use the frozen provider model for the coordinator and every child; GitHub Copilot runs use an explicit run `modelId` (or the project's default) when pinned, otherwise each subtask uses its role's default model
 3. Dispatches independent subtasks in parallel; dependent ones run in series
 
 If activation or decomposition fails after the run is created, Agentweaver retains that run as
