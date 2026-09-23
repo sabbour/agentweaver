@@ -41,6 +41,9 @@ public static class OperatorToolApprovalPolicy
         "run_retry",
         "start_preview",
         "session_start",
+        "blueprint_generate",
+        "blueprint_generation_cancel",
+        "blueprint_generation_retry",
 
         // Steer / stop live work.
         "coordinator_steer",
@@ -106,7 +109,8 @@ public static class OperatorToolApprovalPolicy
         "backlog_set_settings",
 
         // Blueprints / catalog / topology reads.
-        "blueprint_generate",
+        "blueprint_generation_result",
+        "blueprint_generation_status",
         "catalog_list_roles",
         "catalog_list_scenarios",
         "list_blueprints",

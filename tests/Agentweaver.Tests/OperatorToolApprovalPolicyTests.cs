@@ -34,6 +34,9 @@ public sealed class OperatorToolApprovalPolicyTests
     [InlineData("coordinator_start")]
     [InlineData("project_delete")]
     [InlineData("run_submit")]
+    [InlineData("blueprint_generate")]
+    [InlineData("blueprint_generation_cancel")]
+    [InlineData("blueprint_generation_retry")]
     [InlineData("github_repository_selection_issue")]
     public void RequiresApproval_is_true_for_unknown_and_mutating_tools(string? toolName)
     {
@@ -45,6 +48,8 @@ public sealed class OperatorToolApprovalPolicyTests
     [InlineData("project_get")]
     [InlineData("project_list")]
     [InlineData("run_status")]
+    [InlineData("blueprint_generation_status")]
+    [InlineData("blueprint_generation_result")]
     [InlineData("memory_search")]
     [InlineData("sandbox_policy_get")]
     [InlineData("skill_marketplace_sources_list")]

@@ -25,6 +25,8 @@ GET /api/auth/github/repo-app/authorization/status | PlatformOrMcp
 GET /api/auth/github/repo-app/authorizations/{transactionId} | PlatformOrMcp
 GET /api/auth/session | AuthenticatedSelf
 GET /api/blueprints | PlatformOrMcp
+GET /api/blueprints/generation-jobs/{jobId} | PlatformOrMcp
+GET /api/blueprints/generation-jobs/{jobId}/result | PlatformOrMcp
 GET /api/casting/templates | PlatformOrMcp
 GET /api/catalog/roles | PlatformOrMcp
 GET /api/diagnostics | PlatformOrMcp
@@ -144,6 +146,8 @@ POST /api/auth/github/repo-app/authorizations/handoff | PlatformOrMcp
 POST /api/auth/session/exchange | ProtocolManaged
 POST /api/auth/session/sign-out | AuthenticatedSelf
 POST /api/blueprints/generate | PlatformOrMcp
+POST /api/blueprints/generation-jobs/{jobId}/cancel | PlatformOrMcp
+POST /api/blueprints/generation-jobs/{jobId}/retry | PlatformOrMcp
 POST /api/blueprints/suggest | PlatformOrMcp
 POST /api/blueprints/validate | PlatformOrMcp
 POST /api/github/repository-selections | PlatformOrMcp
