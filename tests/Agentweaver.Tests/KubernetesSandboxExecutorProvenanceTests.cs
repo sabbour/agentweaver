@@ -107,7 +107,17 @@ public sealed class KubernetesSandboxExecutorProvenanceTests
     {
         var parentRunId = RunId.New();
         var subRunId = $"{parentRunId}-coordinator-decompose";
-        var runStore = new RecordingSandboxInfoRunStore();
+        var runStore = new RecordingSandboxInfoRunStore(new Run
+        {
+            Id = parentRunId,
+            RepositoryPath = "dummy-repo-path",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "coordinator provenance test",
+            SubmittingUser = "sabbour",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
 
         var executor = new KubernetesSandboxExecutor(
             ClientFor(BoundClusterFor(subRunId)),
@@ -292,8 +302,8 @@ public sealed class KubernetesSandboxExecutorProvenanceTests
         public ValueTask CompleteAsync(string runId, CancellationToken ct = default) => ValueTask.CompletedTask;
     }
 
-    /// <summary>Minimal <see cref="IRunStore"/> that only records <c>SetSandboxInfoAsync</c> writes.</summary>
-    private sealed class RecordingSandboxInfoRunStore : IRunStore
+    /// <summary>Minimal <see cref="IRunStore"/> that serves one persisted run and records sandbox writes.</summary>
+    private sealed class RecordingSandboxInfoRunStore(Run? persistedRun = null) : IRunStore
     {
         public sealed record SandboxInfoCall(
             RunId RunId, string? Backend, string? ClaimName, string? PodName, string? Namespace);
@@ -311,7 +321,8 @@ public sealed class KubernetesSandboxExecutorProvenanceTests
         public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<Run>>(Array.Empty<Run>());
         public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) =>
+            Task.FromResult(runId == persistedRun?.Id ? persistedRun : null);
         public Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default) => throw new NotImplementedException();
         public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) => throw new NotImplementedException();
