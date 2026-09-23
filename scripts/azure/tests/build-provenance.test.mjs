@@ -145,6 +145,25 @@ test("stashFrontendNodeModules: removes stale sibling stashes but preserves this
   }]);
 });
 
+test("stashFrontendNodeModules: treats a missing parent directory as no stale stashes", () => {
+  const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
+  const fsImpl = {
+    readdirSync: () => { throw missing; },
+    existsSync: () => false,
+  };
+
+  assert.doesNotThrow(() => stashFrontendNodeModules("C:\\fake\\repo", { fsImpl }));
+});
+
+test("stashFrontendNodeModules: propagates stale-stash enumeration failures other than ENOENT", () => {
+  const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+  const fsImpl = {
+    readdirSync: () => { throw denied; },
+  };
+
+  assert.throws(() => stashFrontendNodeModules("C:\\existing\\repo", { fsImpl }), denied);
+});
+
 // -------------------- releaseRefForTag / pathsChanged (20) --------------------
 
 test("releaseRefForTag: a tag that is a real git ref resolves directly", async () => {
