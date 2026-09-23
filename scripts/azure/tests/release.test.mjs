@@ -41,13 +41,6 @@ test("release composes publication followed by deployment", async () => {
       return { ok: true, tag: "v1.2.3" };
     },
   };
-  const acceptance = {
-    runReleaseAcceptanceGate(args) {
-      calls.push({ command: "acceptance", args });
-      return { ok: true };
-    },
-  };
-
   const result = await run({
     argv: [
       "--resume", "v1.2.3",
@@ -57,44 +50,31 @@ test("release composes publication followed by deployment", async () => {
     log,
     publish,
     deployFromRelease,
-    acceptance,
   });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(calls.map((call) => call.command), ["publish", "deploy", "acceptance"]);
+  assert.deepEqual(calls.map((call) => call.command), ["publish", "deploy"]);
   assert.deepEqual(calls[0].argv, ["--resume", "v1.2.3"]);
-  assert.deepEqual(calls[1].argv, ["v1.2.3"]);
   assert.deepEqual(calls[1].validatedRelease, {
     tag: "v1.2.3",
     version: "1.2.3",
     commit: "abc",
   });
-  assert.deepEqual(calls[2].args, {
-    featureManifestPath: "feature.json",
-    resultPaths: ["representative.json"],
-  });
+  assert.deepEqual(calls[1].argv, [
+    "v1.2.3",
+    "--feature-manifest", "feature.json",
+    "--result", "representative.json",
+  ]);
 });
 
-test("release deploys but fails closed until post-deployment acceptance evidence is supplied", async () => {
-  const calls = [];
+test("release requires the pre-deploy feature declaration before publication", async () => {
   await assert.rejects(
     run({
       argv: [],
       log,
-      publish: {
-        run: async () => {
-          calls.push("publish");
-          return { tag: "v1.2.3", version: "1.2.3", commit: "abc" };
-        },
-      },
-      deployFromRelease: {
-        run: async () => {
-          calls.push("deploy");
-          return { ok: true };
-        },
-      },
+      publish: { run: async () => assert.fail("must not publish without declaration") },
+      deployFromRelease: { run: async () => assert.fail("must not deploy without declaration") },
     }),
-    /Deployment completed, but release acceptance remains blocked/,
+    /requires --feature-manifest/,
   );
-  assert.deepEqual(calls, ["publish", "deploy"]);
 });

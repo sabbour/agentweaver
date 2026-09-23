@@ -43,7 +43,6 @@
     "release:plan": "node scripts/changesets/plan-release.mjs",
     "release:prepare": "node scripts/changesets/prepare-release.mjs",
     "release:publish": "node scripts/azure/cli.mjs publish-release",
-    "release:acceptance": "node scripts/persona-briefs/release-acceptance-gate.mjs",
     "release:sync-dev": "node scripts/changesets/sync-dev.mjs"
   },
   "devDependencies": {

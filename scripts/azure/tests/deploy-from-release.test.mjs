@@ -106,6 +106,8 @@ test("deploy-from-release requires one vX.Y.Z tag", () => {
     ghcrToken: undefined,
     resume: false,
     restart: false,
+    featureManifestPath: undefined,
+    resultPaths: [],
   });
   assert.throws(() => parseArgs([]), /Usage/);
   assert.throws(() => parseArgs(["1.2.3"]), /Usage/);
@@ -120,6 +122,8 @@ test("deploy-from-release accepts --image-source ghcr and --ghcr-token", () => {
     ghcrToken: "tok",
     resume: false,
     restart: false,
+    featureManifestPath: undefined,
+    resultPaths: [],
   });
   assert.deepEqual(parseArgs(["v1.2.3", "--image-source=ghcr"]).imageSource, "ghcr");
   assert.throws(() => parseArgs(["v1.2.3", "--image-source", "bogus"]), /--image-source must be one of/);
@@ -194,7 +198,11 @@ test("deploy-from-release builds, deploys, verifies provenance, waits, then veri
   };
 
   const result = await run({
-    argv: ["v1.2.3", "--image-source", "acr-build"],
+    argv: [
+      "v1.2.3", "--image-source", "acr-build",
+      "--feature-manifest", "feature.json",
+      "--result", "result.json",
+    ],
     repoRoot: "/repo",
     exec,
     log,
@@ -206,9 +214,30 @@ test("deploy-from-release builds, deploys, verifies provenance, waits, then veri
       AGENTHOST_IMAGE_DIGEST: env.AGENTHOST_IMAGE_DIGEST,
       ACR_NAME: "acr",
       ACR_LOGIN_SERVER: "acr.azurecr.io",
+      SUBSCRIPTION_ID: "sub",
+      RESOURCE_GROUP: "rg",
+      CLUSTER_NAME: "cluster",
       NAMESPACE: "agentweaver",
     }),
     env: { AGENTHOST_IMAGE_DIGEST: `sha256:${"b".repeat(64)}` },
+    acceptance: {
+      runReleaseDeclarationGate: ({ expectedDeployment }) => {
+        assert.deepEqual(expectedDeployment, {
+          version: "1.2.3",
+          deployedRevision: "abc",
+          deploymentIdentity: "azure:sub/rg/cluster/agentweaver",
+        });
+        return { ok: true };
+      },
+      runReleaseAcceptanceGate: ({ expectedDeployment }) => {
+        assert.deepEqual(expectedDeployment, {
+          version: "1.2.3",
+          deployedRevision: "abc",
+          deploymentIdentity: "azure:sub/rg/cluster/agentweaver",
+        });
+        return { ok: true };
+      },
+    },
     steps,
   });
 
@@ -247,7 +276,11 @@ test("deploy-from-release --image-source ghcr pins AgentHost only to its returne
   };
 
   const result = await run({
-    argv: ["v1.2.3", "--image-source", "ghcr", "--ghcr-token", "tok"],
+    argv: [
+      "v1.2.3", "--image-source", "ghcr", "--ghcr-token", "tok",
+      "--feature-manifest", "feature.json",
+      "--result", "result.json",
+    ],
     repoRoot: "/repo",
     exec,
     log,
@@ -261,11 +294,18 @@ test("deploy-from-release --image-source ghcr pins AgentHost only to its returne
         AGENTHOST_IMAGE_DIGEST: env.AGENTHOST_IMAGE_DIGEST,
         ACR_NAME: "acr",
         ACR_LOGIN_SERVER: "acr.azurecr.io",
+        SUBSCRIPTION_ID: "sub",
+        RESOURCE_GROUP: "rg",
+        CLUSTER_NAME: "cluster",
         NAMESPACE: "agentweaver",
       };
     },
     env: { AGENTHOST_IMAGE_DIGEST: `sha256:${"b".repeat(64)}` },
     resolveGitHubRepository: async () => ({ owner: "sabbour", repo: "agentweaver" }),
+    acceptance: {
+      runReleaseDeclarationGate: () => ({ ok: true }),
+      runReleaseAcceptanceGate: () => ({ ok: true }),
+    },
     steps,
   });
 
@@ -278,6 +318,73 @@ test("deploy-from-release --image-source ghcr pins AgentHost only to its returne
   assert.equal(resolvedEnv.AGENTHOST_IMAGE_DIGEST, undefined);
   assert.equal(capturedCfg.AGENTHOST_IMAGE_DIGEST, undefined);
   assert.equal(deployCfg.AGENTHOST_IMAGE_DIGEST, `sha256:${"a".repeat(64)}`);
+});
+
+test("verified standalone deployment remains blocked until post-deploy results close acceptance", async () => {
+  const order = [];
+  await assert.rejects(
+    run({
+      argv: ["v1.2.3", "--image-source", "acr-build", "--feature-manifest", "feature.json"],
+      repoRoot: "/repo",
+      exec: fakeExec(),
+      log,
+      readFile,
+      validatedRelease: { tag: "v1.2.3", version: "1.2.3", commit: "abc" },
+      resolveVariables: async () => ({
+        ACR_NAME: "acr",
+        SUBSCRIPTION_ID: "sub",
+        RESOURCE_GROUP: "rg",
+        CLUSTER_NAME: "cluster",
+        NAMESPACE: "agentweaver",
+      }),
+      acceptance: {
+        runReleaseDeclarationGate: () => { order.push("declaration"); return { ok: true }; },
+        runReleaseAcceptanceGate: () => assert.fail("must not close without result manifests"),
+      },
+      steps: {
+        buildImages: { run: async () => { order.push("build"); return {}; } },
+        deployStep: { run: async () => { order.push("deploy"); return {}; } },
+        verifyProvenance: { run: async () => { order.push("provenance"); return {}; } },
+        verifyStep: { run: async () => { order.push("health"); return { ok: true }; } },
+      },
+    }),
+    /acceptance remains pending/,
+  );
+  assert.deepEqual(order, ["declaration", "build", "deploy", "provenance", "health"]);
+});
+
+test("standalone release deployment validates feature declaration before build or deploy", async () => {
+  const calls = [];
+  await assert.rejects(
+    run({
+      argv: ["v1.2.3", "--image-source", "acr-build"],
+      repoRoot: "/repo",
+      exec: fakeExec(),
+      log,
+      readFile,
+      validatedRelease: { tag: "v1.2.3", version: "1.2.3", commit: "abc" },
+      resolveVariables: async () => ({
+        ACR_NAME: "acr",
+        SUBSCRIPTION_ID: "sub",
+        RESOURCE_GROUP: "rg",
+        CLUSTER_NAME: "cluster",
+        NAMESPACE: "agentweaver",
+      }),
+      acceptance: {
+        runReleaseDeclarationGate: ({ featureManifestPath }) => {
+          calls.push("declaration");
+          assert.equal(featureManifestPath, undefined);
+          throw new Error("--feature-manifest is required");
+        },
+      },
+      steps: {
+        buildImages: { run: async () => calls.push("build") },
+        deployStep: { run: async () => calls.push("deploy") },
+      },
+    }),
+    /--feature-manifest is required/,
+  );
+  assert.deepEqual(calls, ["declaration"]);
 });
 
 test("deploy-from-release GHCR --dry-run does not pin an ambient AgentHost digest", async () => {

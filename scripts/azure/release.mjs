@@ -7,7 +7,6 @@
 import * as logDefault from "./lib/log.mjs";
 import * as publishDefault from "./release-publish.mjs";
 import * as deployFromReleaseDefault from "./deploy-from-release.mjs";
-import * as acceptanceDefault from "../persona-briefs/release-acceptance-gate.mjs";
 
 export function parseArgs(argv = []) {
   let resumeTag;
@@ -55,6 +54,7 @@ export function parseArgs(argv = []) {
 export const HELP_TEXT = `release -- publish and deploy a prepared Agentweaver release
 
 Usage:
+  node scripts/azure/cli.mjs release --feature-manifest <path> [--result <path>...]
   node scripts/azure/cli.mjs release [--dry-run]
   node scripts/azure/cli.mjs release --resume vX.Y.Z \
     --feature-manifest <path> --result <path> [--result <path>...]
@@ -72,13 +72,17 @@ export async function run(opts = {}) {
     log = logDefault,
     publish = publishDefault,
     deployFromRelease = deployFromReleaseDefault,
-    acceptance = acceptanceDefault,
   } = opts;
   const { resumeTag, dryRun, help, featureManifestPath, resultPaths } = parseArgs(argv);
 
   if (help) {
     log.info(HELP_TEXT);
     return { ok: true, help: true };
+  }
+  if (!dryRun && !featureManifestPath) {
+    throw new Error(
+      "Release deployment requires --feature-manifest <path> before publication and deployment.",
+    );
   }
   const publishArgs = [];
   if (resumeTag) publishArgs.push("--resume", resumeTag);
@@ -87,6 +91,8 @@ export async function run(opts = {}) {
 
   const deployArgs = [published.tag];
   if (dryRun) deployArgs.push("--dry-run");
+  if (featureManifestPath) deployArgs.push("--feature-manifest", featureManifestPath);
+  for (const resultPath of resultPaths) deployArgs.push("--result", resultPath);
   const deployed = await deployFromRelease.run({
     ...opts,
     argv: deployArgs,
@@ -97,20 +103,11 @@ export async function run(opts = {}) {
       commit: published.commit,
     },
   });
-  if (!dryRun && (!featureManifestPath || resultPaths.length === 0)) {
-    throw new Error(
-      "Deployment completed, but release acceptance remains blocked: run the declared Harness "
-      + "scenarios, then resume with --feature-manifest <path> and at least one --result <path>.",
-    );
-  }
-  const acceptanceResult = dryRun
-    ? { ok: false, status: "NOT_EVALUATED_DRY_RUN" }
-    : acceptance.runReleaseAcceptanceGate({ featureManifestPath, resultPaths });
 
   return {
     ...deployed,
     published,
     deployed,
-    acceptance: acceptanceResult,
+    acceptance: deployed.releaseAcceptance,
   };
 }
