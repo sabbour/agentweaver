@@ -179,6 +179,9 @@ export function validateReleaseAcceptanceManifest(manifest) {
   }
   const triggers = abnormalTriggers(manifest);
   const errors = [];
+  if (triggers.some((trigger) => trigger.code === 'EVIDENCE_BINDING_MISMATCH')) {
+    errors.push('manifest evidence contains malformed binding metadata');
+  }
   for (const [index, claim] of manifest.claimResults.entries()) {
     if (claim.cleanup.required && claim.cleanup.status === 'NOT_REQUIRED') {
       errors.push(`manifest.claimResults[${index}].cleanup cannot be NOT_REQUIRED when cleanup is required`);

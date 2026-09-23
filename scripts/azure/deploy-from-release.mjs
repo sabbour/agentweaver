@@ -55,7 +55,7 @@ export function parseArgs(argv = []) {
   let resume = false;
   let restart = false;
   let featureManifestPath;
-  const resultPaths = [];
+  let acceptanceBundlePath;
 
   const takeValue = (i, name) => {
     const raw = argv[i];
@@ -88,9 +88,9 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--feature-manifest");
       featureManifestPath = value;
       i += consumed;
-    } else if (arg === "--result" || arg.startsWith("--result=")) {
-      const { value, consumed } = takeValue(i, "--result");
-      resultPaths.push(value);
+    } else if (arg === "--acceptance-bundle" || arg.startsWith("--acceptance-bundle=")) {
+      const { value, consumed } = takeValue(i, "--acceptance-bundle");
+      acceptanceBundlePath = value;
       i += consumed;
     } else if (!tag && !arg.startsWith("-")) {
       tag = arg;
@@ -120,7 +120,7 @@ export function parseArgs(argv = []) {
     resume,
     restart,
     featureManifestPath,
-    resultPaths,
+    acceptanceBundlePath,
   };
 }
 
@@ -130,9 +130,9 @@ Usage:
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--dry-run]
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source acr-build
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z \
-    --feature-manifest <path> [--result <path>...]
+    --feature-manifest <path>
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --resume \
-    --feature-manifest <path> --result <path> [--result <path>...]
+    --feature-manifest <path> --acceptance-bundle <path>
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --recover-repo-app-private-key
 
 Requires an existing annotated git tag and matching GitHub Release. The
@@ -148,8 +148,8 @@ and runs health verification.
 
 Every non-dry-run release deployment requires a feature manifest before
 deployment. After deployment and verification, acceptance remains blocked
-until exact deployment-bound result manifests are supplied. Re-run with
---resume and the same feature manifest plus repeated --result arguments to
+until an integrity-verified canonical Harness/Judge bundle is supplied. Re-run with
+--resume and the same feature manifest plus --acceptance-bundle to
 re-verify the deployment and close release acceptance without repeating
 completed build/deploy stages.
 
@@ -448,15 +448,16 @@ export async function run(opts = {}) {
       ? { ok: false, status: "NOT_EVALUATED_DRY_RUN" }
       : { ok: false, status: "BLOCKED_ON_DEPLOYMENT_VERIFICATION" };
     if (!dryRun && verify.ok) {
-      if (parsed.resultPaths.length === 0) {
+      if (!parsed.acceptanceBundlePath) {
         throw new Error(
           "Release deployment verified, but acceptance remains pending. Run the selected Harness "
-          + "scenarios, then re-run with --resume, the same --feature-manifest, and --result paths.",
+          + "scenarios, then re-run with --resume, the same --feature-manifest, and "
+          + "--acceptance-bundle <path>.",
         );
       }
-      releaseAcceptance = acceptance.runReleaseAcceptanceGate({
+      releaseAcceptance = acceptance.runCanonicalReleaseAcceptanceGate({
         featureManifestPath: parsed.featureManifestPath,
-        resultPaths: parsed.resultPaths,
+        bundlePath: parsed.acceptanceBundlePath,
         expectedDeployment,
       });
     }

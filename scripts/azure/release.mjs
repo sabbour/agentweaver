@@ -13,7 +13,7 @@ export function parseArgs(argv = []) {
   let dryRun = false;
   let help = false;
   let featureManifestPath;
-  const resultPaths = [];
+  let acceptanceBundlePath;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -33,31 +33,30 @@ export function parseArgs(argv = []) {
         throw new Error("Missing path after --feature-manifest.");
       }
       index += 1;
-    } else if (arg === "--result") {
-      const resultPath = argv[index + 1];
-      if (!resultPath || resultPath.startsWith("-")) {
-        throw new Error("Missing path after --result.");
+    } else if (arg === "--acceptance-bundle") {
+      acceptanceBundlePath = argv[index + 1];
+      if (!acceptanceBundlePath || acceptanceBundlePath.startsWith("-")) {
+        throw new Error("Missing path after --acceptance-bundle.");
       }
-      resultPaths.push(resultPath);
       index += 1;
     } else {
       throw new Error(
         `Unknown argument: ${arg}. release accepts --dry-run, --resume vX.Y.Z, `
-        + "--feature-manifest <path>, and repeated --result <path>.",
+        + "--feature-manifest <path>, and --acceptance-bundle <path>.",
       );
     }
   }
 
-  return { resumeTag, dryRun, help, featureManifestPath, resultPaths };
+  return { resumeTag, dryRun, help, featureManifestPath, acceptanceBundlePath };
 }
 
 export const HELP_TEXT = `release -- publish and deploy a prepared Agentweaver release
 
 Usage:
-  node scripts/azure/cli.mjs release --feature-manifest <path> [--result <path>...]
+  node scripts/azure/cli.mjs release --feature-manifest <path>
   node scripts/azure/cli.mjs release [--dry-run]
   node scripts/azure/cli.mjs release --resume vX.Y.Z \
-    --feature-manifest <path> --result <path> [--result <path>...]
+    --feature-manifest <path> --acceptance-bundle <path>
 
 Composes publish-release followed by deploy-from-release. Publication creates
 the annotated tag and GitHub Release; deployment builds or retags that exact
@@ -73,7 +72,7 @@ export async function run(opts = {}) {
     publish = publishDefault,
     deployFromRelease = deployFromReleaseDefault,
   } = opts;
-  const { resumeTag, dryRun, help, featureManifestPath, resultPaths } = parseArgs(argv);
+  const { resumeTag, dryRun, help, featureManifestPath, acceptanceBundlePath } = parseArgs(argv);
 
   if (help) {
     log.info(HELP_TEXT);
@@ -92,7 +91,7 @@ export async function run(opts = {}) {
   const deployArgs = [published.tag];
   if (dryRun) deployArgs.push("--dry-run");
   if (featureManifestPath) deployArgs.push("--feature-manifest", featureManifestPath);
-  for (const resultPath of resultPaths) deployArgs.push("--result", resultPath);
+  if (acceptanceBundlePath) deployArgs.push("--acceptance-bundle", acceptanceBundlePath);
   const deployed = await deployFromRelease.run({
     ...opts,
     argv: deployArgs,

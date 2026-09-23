@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/schemas/persona-briefs/release-acceptance-bundle-v1.schema.json",
+  "title": "Agentweaver canonical Harness/Judge release acceptance bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "bundleId",
+    "batchId",
+    "producer",
+    "deployment",
+    "results",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "agentweaver.release-acceptance-bundle/v1" },
+    "bundleId": { "type": "string", "minLength": 1 },
+    "batchId": { "type": "string", "minLength": 1 },
+    "producer": { "const": "agentweaver-harness-judge" },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "deployedRevision", "deploymentIdentity"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "deployedRevision": { "type": "string", "minLength": 1 },
+        "deploymentIdentity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/bundleFile" }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/bundleFile" }
+    }
+  },
+  "$defs": {
+    "bundleFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resultId",
+        "scenarioId",
+        "executionId",
+        "path",
+        "sha256",
+        "mediaType"
+      ],
+      "properties": {
+        "resultId": { "type": "string", "minLength": 1 },
+        "scenarioId": { "type": "string", "minLength": 1 },
+        "executionId": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "mediaType": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

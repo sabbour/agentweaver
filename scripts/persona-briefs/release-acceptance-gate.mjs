@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,9 +10,44 @@ import {
   validateReleaseFeatureManifest,
 } from './challenge-catalog.mjs';
 import { validateReleaseAcceptanceManifest } from './release-acceptance.mjs';
+import { validateJsonSchema } from './schema-validator.mjs';
+
+const PACKAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
+export const RELEASE_ACCEPTANCE_BUNDLE_SCHEMA_PATH = path.join(
+  PACKAGE_DIR,
+  'release-acceptance-bundle-v1.schema.json',
+);
 
 function loadJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+}
+
+function sha256(filePath) {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function resolveBundleFile(bundleRoot, relativePath) {
+  if (!relativePath || path.isAbsolute(relativePath)) {
+    throw new Error(`bundle artifact path must be relative: ${relativePath}`);
+  }
+  const root = fs.realpathSync(bundleRoot);
+  const candidate = path.resolve(root, relativePath);
+  if (!fs.existsSync(candidate)) throw new Error(`bundle artifact is missing: ${relativePath}`);
+  const resolved = fs.realpathSync(candidate);
+  const fromRoot = path.relative(root, resolved);
+  if (!fromRoot || fromRoot.startsWith('..') || path.isAbsolute(fromRoot)) {
+    throw new Error(`bundle artifact resolves outside the approved bundle root: ${relativePath}`);
+  }
+  if (!fs.statSync(resolved).isFile()) throw new Error(`bundle artifact is not a file: ${relativePath}`);
+  return resolved;
+}
+
+function verifyBundleFile(bundleRoot, file) {
+  const resolved = resolveBundleFile(bundleRoot, file.path);
+  if (sha256(resolved) !== file.sha256) {
+    throw new Error(`bundle artifact hash mismatch: ${file.path}`);
+  }
+  return resolved;
 }
 
 function findPassingClaim(result, claimContract, requiredSurfaces) {
@@ -167,6 +203,89 @@ export function runReleaseAcceptanceGate({
   });
   if (!result.ok) throw new Error(result.errors.join('\n'));
   return result;
+}
+
+export function runCanonicalReleaseAcceptanceGate({
+  featureManifestPath,
+  bundlePath,
+  expectedDeployment,
+  catalog = loadChallengeCatalog(),
+}) {
+  if (!bundlePath) throw new Error('--acceptance-bundle is required');
+  const resolvedBundlePath = fs.realpathSync(bundlePath);
+  const bundleRoot = path.dirname(resolvedBundlePath);
+  const bundle = loadJson(resolvedBundlePath);
+  const schema = validateJsonSchema(
+    RELEASE_ACCEPTANCE_BUNDLE_SCHEMA_PATH,
+    bundle,
+    'acceptance bundle',
+  );
+  if (!schema.ok) throw new Error(schema.errors.join('\n'));
+  for (const field of ['version', 'deployedRevision', 'deploymentIdentity']) {
+    if (bundle.deployment[field] !== expectedDeployment[field]) {
+      throw new Error(`acceptance bundle ${field} does not match the verified deployment`);
+    }
+  }
+
+  const artifactByPath = new Map();
+  for (const artifact of bundle.artifacts) {
+    if (artifactByPath.has(artifact.path)) {
+      throw new Error(`acceptance bundle contains duplicate artifact path: ${artifact.path}`);
+    }
+    verifyBundleFile(bundleRoot, artifact);
+    artifactByPath.set(artifact.path, artifact);
+  }
+
+  const results = bundle.results.map((reference) => {
+    if (reference.mediaType !== 'application/json') {
+      throw new Error(`result manifest must use application/json: ${reference.path}`);
+    }
+    const result = loadJson(verifyBundleFile(bundleRoot, reference));
+    if (result.resultId !== reference.resultId
+      || result.challenge?.challengeId !== reference.scenarioId
+      || result.challenge?.executionId !== reference.executionId) {
+      throw new Error(`result manifest IDs do not match bundle reference: ${reference.path}`);
+    }
+    const evidenceItems = [
+      ...(result.evidence?.items ?? []),
+      ...(result.claimResults ?? []).flatMap((claim) =>
+        (claim.surfaceResults ?? []).flatMap((surface) => surface.evidence ?? [])),
+    ];
+    for (const evidence of evidenceItems) {
+      if (evidence.bundleId !== bundle.bundleId
+        || evidence.batchId !== bundle.batchId
+        || evidence.resultId !== result.resultId
+        || evidence.scenarioId !== result.challenge.challengeId
+        || evidence.executionId !== result.challenge.executionId) {
+        throw new Error(`evidence IDs do not match canonical bundle/result: ${evidence.path}`);
+      }
+      const artifact = artifactByPath.get(evidence.path);
+      if (!artifact) throw new Error(`evidence artifact is absent from canonical bundle: ${evidence.path}`);
+      if (artifact.sha256 !== evidence.sha256
+        || artifact.mediaType !== evidence.mediaType
+        || artifact.resultId !== evidence.resultId
+        || artifact.scenarioId !== evidence.scenarioId
+        || artifact.executionId !== evidence.executionId) {
+        throw new Error(`evidence metadata does not match canonical bundle: ${evidence.path}`);
+      }
+    }
+    return result;
+  });
+
+  const result = validateReleaseAcceptance({
+    catalog,
+    featureManifest: loadJson(featureManifestPath),
+    results,
+    expectedDeployment,
+  });
+  if (!result.ok) throw new Error(result.errors.join('\n'));
+  return {
+    ...result,
+    authoritative: true,
+    bundleId: bundle.bundleId,
+    batchId: bundle.batchId,
+    bundlePath: resolvedBundlePath,
+  };
 }
 
 function parseArgs(argv) {

@@ -124,7 +124,7 @@ node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-li
 node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
 npm run azure:deploy-from-release -- vX.Y.Z --resume \
   --feature-manifest <release-feature-manifest.json> \
-  --result <representative-result.json> --result <focused-result.json>
+  --acceptance-bundle <canonical-harness-judge-bundle.json>
 ```
 
 Catalog prose is untrusted scenario intent. It cannot configure targets, credentials,
@@ -150,6 +150,13 @@ the representative challenge and every feature-specific affected surface have pa
 exact-revision evidence, cleanup succeeded, and no abnormal anomaly remains unresolved.
 Evidence also binds to the catalog version. The standalone manifest validator is
 diagnostic only and cannot close acceptance.
+
+Authoritative closure requires a canonical Harness/Judge bundle. The verifier resolves
+every result and evidence path beneath that bundle's directory, rejects traversal or
+missing files, recomputes SHA-256, compares media/path metadata, and binds bundle, batch,
+result, scenario, and execution IDs to the exact deployment. This protects the
+trusted release operator from accidental or simply fabricated JSON closure; it does not
+claim cryptographic protection from a malicious operator who controls the local files.
 
 Abnormal release results use the structured
 `agentweaver.release-acceptance-result/v1` contract. Harness and Judge only emit

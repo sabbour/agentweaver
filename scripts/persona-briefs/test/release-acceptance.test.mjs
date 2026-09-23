@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -10,7 +14,10 @@ import {
   validateCoordinatorDisposition,
   validateReleaseAcceptanceManifest,
 } from '../release-acceptance.mjs';
-import { validateReleaseAcceptance } from '../release-acceptance-gate.mjs';
+import {
+  runCanonicalReleaseAcceptanceGate,
+  validateReleaseAcceptance,
+} from '../release-acceptance-gate.mjs';
 import { loadChallengeCatalog } from '../challenge-catalog.mjs';
 
 const HASH = 'a'.repeat(64);
@@ -19,11 +26,20 @@ const PROJECT_ID = 'project-1';
 const EXECUTION_ID = 'execution-1';
 const RUN_ID = 'run-1';
 
+function hashFile(filePath) {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
 function evidence(surface, type = 'surface-transcript') {
   return {
     type,
+    mediaType: 'application/json',
     path: `${surface}.json`,
     sha256: HASH,
+    bundleId: 'bundle-1',
+    batchId: 'batch-1',
+    resultId: 'result-1',
+    scenarioId: 'release-repair-disposition-v1',
     deployedRevision: REVISION,
     projectId: PROJECT_ID,
     executionId: EXECUTION_ID,
@@ -176,8 +192,13 @@ test('schema validation rejects P0 PARTIAL and every required nested execution f
 
   for (const field of [
     'type',
+    'mediaType',
     'path',
     'sha256',
+    'bundleId',
+    'batchId',
+    'resultId',
+    'scenarioId',
     'deployedRevision',
     'projectId',
     'executionId',
@@ -399,4 +420,134 @@ test('post-deployment release gate requires representative and focused exact-rev
     featureManifest,
     results: [result],
   }).ok, false);
+});
+
+function canonicalBundleFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'release-acceptance-bundle-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const artifactsDir = path.join(root, 'artifacts');
+  fs.mkdirSync(artifactsDir);
+  const apiPath = path.join(artifactsDir, 'api.json');
+  const uiPath = path.join(artifactsDir, 'ui.json');
+  fs.writeFileSync(apiPath, '{"surface":"api"}');
+  fs.writeFileSync(uiPath, '{"surface":"ui"}');
+
+  const result = manifest();
+  result.feature.behaviorId = 'release-repair-contract';
+  const bind = (item, surface) => Object.assign(item, {
+    path: `artifacts/${surface}.json`,
+    sha256: hashFile(surface === 'api' ? apiPath : uiPath),
+    mediaType: 'application/json',
+  });
+  result.claimResults[0].surfaceResults.forEach((surface) => {
+    surface.evidence.forEach((item) => bind(item, surface.surface));
+  });
+  result.evidence.items = [
+    evidence('api', 'deployed-release-revision'),
+    evidence('api', 'structural-validation'),
+    evidence('api', 'artifact-file'),
+    evidence('api', 'artifact-hash'),
+  ].map((item) => bind(item, 'api'));
+
+  const resultPath = path.join(root, 'result.json');
+  fs.writeFileSync(resultPath, JSON.stringify(result, null, 2));
+  const fileRef = (surface, filePath) => ({
+    resultId: result.resultId,
+    scenarioId: result.challenge.challengeId,
+    executionId: result.challenge.executionId,
+    path: `artifacts/${surface}.json`,
+    sha256: hashFile(filePath),
+    mediaType: 'application/json',
+  });
+  const bundle = {
+    schemaVersion: 'agentweaver.release-acceptance-bundle/v1',
+    bundleId: 'bundle-1',
+    batchId: 'batch-1',
+    producer: 'agentweaver-harness-judge',
+    deployment: {
+      version: '0.34.0',
+      deployedRevision: REVISION,
+      deploymentIdentity: 'staging-a',
+    },
+    results: [{
+      resultId: result.resultId,
+      scenarioId: result.challenge.challengeId,
+      executionId: result.challenge.executionId,
+      path: 'result.json',
+      sha256: hashFile(resultPath),
+      mediaType: 'application/json',
+    }],
+    artifacts: [fileRef('api', apiPath), fileRef('ui', uiPath)],
+  };
+  const bundlePath = path.join(root, 'bundle.json');
+  fs.writeFileSync(bundlePath, JSON.stringify(bundle, null, 2));
+  const featureManifest = {
+    schemaVersion: 'agentweaver.release-feature-manifest/v1',
+    release: bundle.deployment,
+    features: [{
+      id: 'issue-1519',
+      refs: ['sabbour/agentweaver#1519'],
+      shippedBehaviors: [{
+        id: 'release-repair-contract',
+        claimIds: ['release-repair-contract-deterministic-v1'],
+        affectedSurfaces: ['api'],
+      }],
+    }],
+  };
+  const featureManifestPath = path.join(root, 'feature.json');
+  fs.writeFileSync(featureManifestPath, JSON.stringify(featureManifest, null, 2));
+  const catalog = structuredClone(loadChallengeCatalog());
+  catalog.releasePolicy.representativeChallengeId = 'release-repair-disposition-v1';
+  return {
+    root,
+    apiPath,
+    bundle,
+    bundlePath,
+    featureManifestPath,
+    expectedDeployment: bundle.deployment,
+    catalog,
+  };
+}
+
+test('canonical Harness/Judge bundle verifies artifacts before authoritative closure', (t) => {
+  const fixture = canonicalBundleFixture(t);
+  const result = runCanonicalReleaseAcceptanceGate(fixture);
+  assert.equal(result.ok, true);
+  assert.equal(result.authoritative, true);
+  assert.equal(result.bundleId, 'bundle-1');
+});
+
+test('canonical bundle rejects tampered hashes, missing artifacts, and paths outside its root', async (t) => {
+  await t.test('tampered hash', () => {
+    const fixture = canonicalBundleFixture(t);
+    fs.writeFileSync(fixture.apiPath, '{"surface":"tampered"}');
+    assert.throws(() => runCanonicalReleaseAcceptanceGate(fixture), /hash mismatch/);
+  });
+  await t.test('missing artifact', () => {
+    const fixture = canonicalBundleFixture(t);
+    fs.unlinkSync(fixture.apiPath);
+    assert.throws(() => runCanonicalReleaseAcceptanceGate(fixture), /artifact is missing/);
+  });
+  await t.test('outside root', (subtest) => {
+    const fixture = canonicalBundleFixture(t);
+    const outsideName = `outside-${path.basename(fixture.root)}.json`;
+    const outsidePath = path.join(fixture.root, '..', outsideName);
+    fs.writeFileSync(outsidePath, '{}');
+    subtest.after(() => fs.unlinkSync(outsidePath));
+    fixture.bundle.artifacts[0].path = `../${outsideName}`;
+    fixture.bundle.artifacts[0].sha256 = hashFile(outsidePath);
+    fs.writeFileSync(fixture.bundlePath, JSON.stringify(fixture.bundle, null, 2));
+    assert.throws(() => runCanonicalReleaseAcceptanceGate(fixture), /outside the approved bundle root/);
+  });
+});
+
+test('authoritative closure rejects a fabricated result without a canonical bundle', () => {
+  assert.throws(
+    () => runCanonicalReleaseAcceptanceGate({
+      featureManifestPath: 'feature.json',
+      bundlePath: undefined,
+      expectedDeployment: {},
+    }),
+    /--acceptance-bundle is required/,
+  );
 });
