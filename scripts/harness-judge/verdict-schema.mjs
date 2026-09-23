@@ -141,18 +141,22 @@ export function validateVerdict(verdict, opts = {}) {
   if (!isPlainObject(verdict.p0) || !P0_VERDICTS.includes(verdict.p0?.verdict)) {
     errors.push(`p0.verdict must be one of ${P0_VERDICTS.join(', ')}`);
   }
-  if (verdict.p0?.evidence != null && !isNonEmptyString(verdict.p0.evidence)) {
-    errors.push('p0.evidence must be a non-empty string when present');
+  if (!isNonEmptyString(verdict.p0?.evidence)) {
+    errors.push('p0.evidence must be a non-empty string');
   }
 
   if (!isPlainObject(verdict.p1) || !P1_VERDICTS.includes(verdict.p1?.verdict)) {
     errors.push(`p1.verdict must be one of ${P1_VERDICTS.join(', ')}`);
   }
-  if (verdict.p1?.evidence != null && !isNonEmptyString(verdict.p1.evidence)) {
-    errors.push('p1.evidence must be a non-empty string when present');
+  if (!isNonEmptyString(verdict.p1?.evidence)) {
+    errors.push('p1.evidence must be a non-empty string');
   }
-  if (verdict.p1?.criteriaCoverage != null && !Array.isArray(verdict.p1.criteriaCoverage)) {
-    errors.push('p1.criteriaCoverage must be an array when present');
+  if (!Array.isArray(verdict.p1?.criteriaCoverage)) {
+    errors.push('p1.criteriaCoverage must be an array');
+  } else {
+    for (const [idx, item] of verdict.p1.criteriaCoverage.entries()) {
+      if (!isNonEmptyString(item)) errors.push(`p1.criteriaCoverage[${idx}] must be a non-empty string`);
+    }
   }
 
   validateFrustration(verdict.frustration, errors);
