@@ -830,6 +830,13 @@ Ceremonies are structured team meetings where agents align before or after work.
 5. **Ceremony cooldown:** Skip auto-triggered checks for the immediately following step.
 6. Show: `📋 {CeremonyName} completed — facilitated by {Lead}. Decisions: {count} | Action items: {count}.`
 
+For software implementation, the project integration policy is always active even when
+`.squad/ceremonies.md` is absent: implementer validation and a meaningful rubber-duck must finish
+before a different agent runs `ponytail-review`. Follow
+`.github/skills/gh-stack-parallel-work/SKILL.md` for the machine-readable gate, waivers, ordered
+integration admission, and aggregate `ponytail-debt` capture. The implementer must not perform the
+independent review.
+
 ### Adding Team Members
 
 If the user says "I need a designer" or "add someone for DevOps":

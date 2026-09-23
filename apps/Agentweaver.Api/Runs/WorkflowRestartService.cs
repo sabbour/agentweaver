@@ -59,6 +59,13 @@ public sealed class WorkflowRestartService
 
     public async Task RecoverAsync(CancellationToken ct)
     {
+        // A process can die after a launch path commits Failed but before it appends run.failed and
+        // completes the stream. Failed rows are otherwise outside the active-run sweep, so repair
+        // that narrow crash window without reopening or changing their terminal status.
+        var failed = await _runStore.GetByStatusAsync(RunStatus.Failed, ct).ConfigureAwait(false);
+        foreach (var run in failed)
+            await ReconcileFailedRunTerminalEventAsync(run, ct).ConfigureAwait(false);
+
         // 1. Fail stranded InProgress runs. Child turns stranded by a worker restart are safe to
         // redispatch as a fresh child: the coordinator owns their retry budget and will release
         // the old pod before dispatching. Root turns remain non-replayable.
@@ -339,6 +346,69 @@ public sealed class WorkflowRestartService
     /// reconstruction is impossible (e.g. the branch itself is gone), in which case the caller should
     /// proceed with its existing "recovered_worktree_missing" terminal-failure path.
     /// </summary>
+    private async Task ReconcileFailedRunTerminalEventAsync(DomainRun run, CancellationToken ct)
+    {
+        var runId = run.Id.ToString();
+        var entry = _streamStore.Get(runId);
+
+        if (_terminalOutcomeProjector is not null)
+        {
+            await _terminalOutcomeProjector.ProjectPendingAsync(ct, _streamStore).ConfigureAwait(false);
+            entry = _streamStore.Get(runId);
+            if (entry?.GetSnapshotSince(0).Events.Any(RunEventTerminality.IsTerminal) == true)
+            {
+                _streamStore.Complete(runId);
+                return;
+            }
+        }
+
+        if (entry?.GetSnapshotSince(0).Events.Any(RunEventTerminality.IsTerminal) == true)
+        {
+            _streamStore.Complete(runId);
+            return;
+        }
+
+        if (_eventStream is not null)
+        {
+            IReadOnlyList<RunEvent> persistedEvents;
+            try
+            {
+                persistedEvents = await _eventStream.GetPersistedEventsAsync(runId, 0, ct).ConfigureAwait(false);
+            }
+            catch (NotSupportedException)
+            {
+                persistedEvents = [];
+            }
+
+            foreach (var terminalEvent in persistedEvents.Where(RunEventTerminality.IsTerminal).Reverse())
+            {
+                var projectedOutcome = TerminalRunOutcome.Create(
+                    run.Status,
+                    terminalEvent.Type,
+                    terminalEvent.Payload,
+                    terminalEvent.TimestampUtc,
+                    run.LifecycleGeneration);
+                if (await _eventStream.TryLinkTerminalOutcomeAsync(
+                        runId, projectedOutcome, terminalEvent, ct).ConfigureAwait(false))
+                {
+                    var restoredEntry = entry ?? _streamStore.Create(runId, run.SubmittingUser);
+                    restoredEntry.RecordDurable(terminalEvent);
+                    _streamStore.Complete(runId);
+                    return;
+                }
+            }
+        }
+
+        entry ??= _streamStore.Create(runId, run.SubmittingUser);
+        await RecordRecoveryEventAsync(
+            runId,
+            entry,
+            EventTypes.RunFailed,
+            new { reason = run.Result ?? "recovered_missing_terminal_event", retryable = false, recovered = true },
+            ct).ConfigureAwait(false);
+        _streamStore.Complete(runId);
+    }
+
     private async Task<DomainRun?> TryReattachWorktreeAsync(DomainRun run, CancellationToken ct)
     {
         var reattached = _worktreeOps.TryReattachWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id.ToString());
