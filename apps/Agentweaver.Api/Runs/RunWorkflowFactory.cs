@@ -76,6 +76,26 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
 
     internal IWorkflowAgentFactory AgentFactory => _agentFactory;
 
+    internal async Task FinalizeScribeHousekeepingAsync(
+        ScribeTurnInput input,
+        bool _,
+        CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var result = await scope.ServiceProvider.GetRequiredService<ScribeFinalizationService>()
+            .FinalizeAsync(
+                ProjectId.Parse(input.ProjectId),
+                RunId.Parse(input.RunId),
+                input.LifecycleGeneration,
+                input.AgentName,
+                input.SubmittingUser,
+                input.TerminalStatus,
+                ct)
+            .ConfigureAwait(false);
+        if (!result.Completed)
+            throw new UnauthorizedAccessException(result.Error);
+    }
+
     public RunWorkflowFactory(
         IAgentRunner agentRunner,
         GitHubCopilotClientFactory copilotClientFactory,
@@ -560,12 +580,14 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
-            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory);
+            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory,
+            finalizeHousekeeping: FinalizeScribeHousekeepingAsync);
         var scribeNoChangesExec = new ScribeTurnExecutor(
             _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-no-changes",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
-            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory);
+            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory,
+            finalizeHousekeeping: FinalizeScribeHousekeepingAsync);
         ExecutorBinding scribeBindingMerge = scribeMergeExec;
         ExecutorBinding scribeBindingNoChanges = scribeNoChangesExec;
 
@@ -1245,7 +1267,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 _factory._loggerFactory, _factory.GetRecordingWriter,
                 name: $"scribe-turn-{edge.From}-{edge.To}",
                 createSubStream: _factory.CreateSubStreamWriter, completeSubStream: _factory.CompleteSubStream,
-                apiBaseUrl: _factory._apiBaseUrl, apiKey: _factory._apiKey, agentFactory: _factory._agentFactory);
+                apiBaseUrl: _factory._apiBaseUrl, apiKey: _factory._apiKey, agentFactory: _factory._agentFactory,
+                finalizeHousekeeping: _factory.FinalizeScribeHousekeepingAsync);
 
             var outputId = $"scribe-output-{edge.From}-{edge.To}";
             ExecutorBinding output = new VisualFunctionExecutor<ScribeTurnInput, MergeOutput>(

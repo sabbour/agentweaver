@@ -6,11 +6,15 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Security;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -104,13 +108,153 @@ public sealed class CollectiveAssemblyScribeApiAuthTests : IClassFixture<Workflo
     }
 
     [Fact]
-    public async Task ScribeFinalize_RejectsCrossProjectAndLifecycleGeneration()
+    public async Task ScribeFinalize_RejectsProjectContributor()
+    {
+        const string ownerId = "11111111-1111-1111-1111-111111111111";
+        const string contributorId = "22222222-2222-2222-2222-222222222222";
+        using var factory = new EntraWebApplicationFactory();
+        using var owner = factory.CreateAuthenticatedClientForObjectId(ownerId, PlatformRoles.ProjectCreator);
+        var projectResponse = await owner.PostAsJsonAsync("/api/projects", new CreateProjectRequest
+        {
+            Name = $"scribe-contributor-{Guid.NewGuid():N}",
+            Origin = "blank",
+            WorkingDirectory = factory.NewWorkingDirectory(),
+        });
+        projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = ProjectId.Parse((await projectResponse.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!);
+        (await owner.PostAsJsonAsync($"/api/projects/{projectId}/role-assignments", new
+        {
+            principal_id = contributorId,
+            role = "Contributor",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var run = await InsertRunAsync(factory.Services, projectId);
+        using var contributor = factory.CreateAuthenticatedClientForObjectId(
+            contributorId, PlatformRoles.Contributor);
+        var response = await contributor.PostAsJsonAsync(
+            $"/api/projects/{projectId}/scribe/finalize",
+            Request(run));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task ScribeFinalize_RejectsWrongRunOrToken()
     {
         using var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization =
             new AuthenticationHeaderValue("Bearer", WorkflowWebApplicationFactory.TestApiKey);
-        var firstProject = await CreateProjectAsync(client, "scribe-scope-a");
-        var secondProject = await CreateProjectAsync(client, "scribe-scope-b");
+        var projectId = await CreateProjectAsync(client, "scribe-capability");
+        var run = await InsertRunAsync(_factory.Services, projectId);
+        await RegisterCapabilityAsync(_factory.Services, run, "correct-token");
+
+        AddRunHeaders(client, RunId.New().ToString(), "correct-token");
+        (await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/scribe/finalize",
+            Request(run))).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        client.DefaultRequestHeaders.Remove(RunAuthorshipHeaders.RunId);
+        client.DefaultRequestHeaders.Remove(RunAuthorshipHeaders.RunToken);
+        AddRunHeaders(client, run.Id.ToString(), "wrong-token");
+        (await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/scribe/finalize",
+            Request(run))).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task ScribeFinalize_RejectsWrongUserAndStaleGeneration()
+    {
+        var setup = await CreateInternalClientAsync("scribe-boundaries");
+        using var client = setup.Client;
+        var projectId = setup.ProjectId;
+        var run = await InsertRunAsync(_factory.Services, projectId);
+        await RegisterCapabilityAsync(_factory.Services, run, "scribe-token");
+        AddRunHeaders(client, run.Id.ToString(), "scribe-token");
+
+        var wrongUser = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/scribe/finalize",
+            Request(run, submittingUser: "another-user"));
+        wrongUser.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await wrongUser.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("scribe_identity_mismatch");
+
+        var staleGeneration = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/scribe/finalize",
+            Request(run, lifecycleGeneration: run.LifecycleGeneration - 1));
+        staleGeneration.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await staleGeneration.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("scribe_scope_mismatch");
+    }
+
+    [Fact]
+    public async Task ScribeFinalize_LegitimateInternalReplay_IsExactlyOnce()
+    {
+        var setup = await CreateInternalClientAsync("scribe-replay");
+        using var client = setup.Client;
+        var projectId = setup.ProjectId;
+        var run = await InsertRunAsync(_factory.Services, projectId);
+        await RegisterCapabilityAsync(_factory.Services, run, "scribe-token");
+        AddRunHeaders(client, run.Id.ToString(), "scribe-token");
+
+        var first = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/scribe/finalize",
+            Request(run));
+        var replay = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/scribe/finalize",
+            Request(run));
+
+        first.StatusCode.Should().Be(HttpStatusCode.OK, await first.Content.ReadAsStringAsync());
+        replay.StatusCode.Should().Be(HttpStatusCode.OK, await replay.Content.ReadAsStringAsync());
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.ScribeOperationAttempts.CountAsync(
+            attempt => attempt.RunId == run.Id.ToString() && attempt.Status == "completed"))
+            .Should().Be(4);
+    }
+
+    private async Task<(HttpClient Client, ProjectId ProjectId)> CreateInternalClientAsync(string prefix)
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", WorkflowWebApplicationFactory.TestApiKey);
+        var projectId = await CreateProjectAsync(client, prefix);
+        return (client, projectId);
+    }
+
+    private static object Request(
+        Run run,
+        int? lifecycleGeneration = null,
+        string? submittingUser = null) => new
+    {
+        run_id = run.Id.ToString(),
+        lifecycle_generation = lifecycleGeneration ?? run.LifecycleGeneration,
+        agent_name = run.AgentName,
+        submitting_user = submittingUser ?? run.SubmittingUser,
+        terminal_status = "completed",
+    };
+
+    private static void AddRunHeaders(HttpClient client, string runId, string token)
+    {
+        client.DefaultRequestHeaders.Add(RunAuthorshipHeaders.RunId, runId);
+        client.DefaultRequestHeaders.Add(RunAuthorshipHeaders.RunToken, token);
+    }
+
+    private static async Task RegisterCapabilityAsync(
+        IServiceProvider services,
+        Run run,
+        string token)
+    {
+        await services.GetRequiredService<IRunAuthorshipCapabilityStore>()
+            .RegisterAsync(
+                run.Id.ToString(),
+                token,
+                DateTimeOffset.UtcNow.AddMinutes(5),
+                CancellationToken.None);
+    }
+
+    private static async Task<Run> InsertRunAsync(IServiceProvider services, ProjectId projectId)
+    {
         var run = new Run
         {
             Id = RunId.New(),
@@ -121,37 +265,13 @@ public sealed class CollectiveAssemblyScribeApiAuthTests : IClassFixture<Workflo
             SubmittingUser = "test-user",
             Status = RunStatus.Completed,
             StartedAt = DateTimeOffset.UtcNow,
-            ProjectId = firstProject,
+            ProjectId = projectId,
             AgentName = "worker",
             LifecycleGeneration = 4,
         };
-        await using (var scope = _factory.Services.CreateAsyncScope())
-        {
-            await scope.ServiceProvider.GetRequiredService<IRunStore>().InsertAsync(run);
-        }
-        client.DefaultRequestHeaders.Add(RunAuthorshipHeaders.ScribeCapability, "worker");
-
-        var crossProject = await client.PostAsJsonAsync(
-            $"/api/projects/{secondProject}/scribe/finalize",
-            new
-            {
-                run_id = run.Id.ToString(),
-                lifecycle_generation = 4,
-                authority = "worker",
-                terminal_status = "completed",
-            });
-        crossProject.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-
-        var staleGeneration = await client.PostAsJsonAsync(
-            $"/api/projects/{firstProject}/scribe/finalize",
-            new
-            {
-                run_id = run.Id.ToString(),
-                lifecycle_generation = 3,
-                authority = "worker",
-                terminal_status = "completed",
-            });
-        staleGeneration.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        var runStore = services.GetRequiredService<IRunStore>();
+        await runStore.InsertAsync(run);
+        return (await runStore.GetAsync(run.Id))!;
     }
 
     private static async Task<ProjectId> CreateProjectAsync(HttpClient client, string prefix)

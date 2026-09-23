@@ -1093,6 +1093,7 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();
 builder.Services.AddScoped<ScribeHousekeepingService>();
+builder.Services.AddScoped<ScribeFinalizationService>();
 builder.Services.AddSingleton<Agentweaver.Api.Projects.ProjectWorkspaceService>();
 
 // Checkpoint GC background service (Guardrail 8)
