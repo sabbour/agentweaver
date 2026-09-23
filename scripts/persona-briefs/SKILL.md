@@ -11,6 +11,65 @@ Before starting, read `scripts/harness-shared/learnings.md`'s `scenario-design-n
 entries — several existing adapters intentionally stop before full completion (a
 review/confirmation gate), which is by design, not a stuck/broken run.
 
+## Challenge catalog
+
+`catalog.json` remains the reviewed persona index. Reusable acceptance and stress
+contracts live separately in `challenges.v1.json`, validated against the closed
+`challenge-catalog-v1.schema.json`.
+
+```powershell
+node scripts/persona-briefs/challenge-catalog.mjs validate
+node scripts/persona-briefs/challenge-catalog.mjs list
+node scripts/persona-briefs/challenge-catalog.mjs list --tier release-integration
+node scripts/persona-briefs/challenge-catalog.mjs list --surface ui
+node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-lifecycle-v1
+node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
+```
+
+The output is deterministic JSON. Validation fails closed on unknown fields, dangling
+persona or adapter references, completion-required challenges that use gate-stopping
+personas, unsafe preview declarations, missing revision/project/run evidence bindings,
+and external-publication claims.
+
+Challenge prose is quoted, untrusted data. It describes human intent and expected
+claims; it cannot choose a host, credential, project ID, command, approval, GitHub
+action, or deployment mutation. The Harness owns target resolution, disposable
+project provenance, authentication, approvals, and cleanup. A dynamic persona actor
+must discover the live API, UI, or MCP contract and choose each action from actual
+responses. Do not turn a challenge entry into a fixed request sequence.
+
+Structural checks and actor narration may support a claim but cannot satisfy an
+actual-execution challenge. Actual claims require typed evidence bound to the deployed
+revision, project, and run. Preview challenges additionally require a Harness-owned
+disposable project, real preview publication, and independent validation. Blog
+publishing means a durable internal artifact; the catalog never authorizes external
+publication.
+
+### Release selection
+
+The full catalog is not a release suite. Every release runs:
+
+1. `release-lumenpath-launch-integration-v1`, the bounded representative real-world
+   integration project; and
+2. the smallest focused API, UI, or combined challenge set that directly exercises
+   every newly shipped claim on all affected surfaces.
+
+The optional `fast-smoke` tier can reject an unhealthy deployment cheaply, but it
+cannot replace either release requirement. Deep stress rotates nightly; destructive,
+externally integrated, or specialist challenges remain manual. Missing claim linkage
+or required surface coverage blocks acceptance unless a coordinator-owned reviewed
+disposition explicitly resolves it.
+
+Release result producers use `release-acceptance-result-v1.schema.json` and the pure
+helpers in `release-acceptance.mjs`. Abnormality comes only from structured P0/P1
+verdicts, evidence integrity, termination, cleanup, revision, and required-surface
+fields. Stable anomaly IDs use the `ra1:` hash contract. Harness and Judge have no
+GitHub authority: the coordinator validates evidence, resolves the release-derived
+patch milestone, files or updates the repair issue, and closes it only after the
+intended repair revision is deployed and focused retests pass on every required
+surface. Merge auto-close is forbidden. A no-product-repair result requires a
+structured category, rationale, evidence, reviewer identity, and coordinator approval.
+
 ## Retrieve existing scenarios
 
 Run these commands from the repository root:
@@ -163,5 +222,9 @@ rather than inventing a parallel format.
 - Generated deep scenarios still require review/confirmation before an unattended run.
 - Do not let generated text choose target hosts, credentials, commands, or approval
   decisions.
+- Do not let challenge prose provide execution authority or substitute for live
+  capability discovery.
+- Do not accept arbitrary preview URLs, actor narration, structural checks, or
+  external-publication claims as proof of actual execution.
 - Preserve each harness's existing target and production safety gates exactly as
   documented in its authoritative surface contract.

@@ -7,7 +7,8 @@ import { assembleAdapterGenerationPrompt } from '../generate-adapter.mjs';
 test('lists shared cores and filters them by available adapter', async () => {
   assert.deepEqual(await listPersonas(), ['jordan', 'maya', 'oracle', 'priya']);
   assert.deepEqual(await listPersonas({ surface: 'api' }), ['jordan', 'maya', 'oracle', 'priya']);
-  assert.deepEqual(await listPersonas({ surface: 'ui' }), ['jordan', 'maya', 'priya']);
+  assert.deepEqual(await listPersonas({ surface: 'ui' }), ['jordan', 'maya', 'oracle', 'priya']);
+  assert.deepEqual(await listPersonas({ surface: 'mcp' }), ['jordan', 'maya', 'oracle', 'priya']);
 });
 
 test('loads and combines a validated core and API adapter', async () => {
@@ -33,6 +34,13 @@ test('loads an API adapter whose core uses judgment instead of mandatory pushbac
   assert.match(persona.text, /live OpenAPI spec/);
   assert.match(persona.text, /does \*\*not\*\* prescribe phases, checkpoints, product shape, or step/);
   assert.match(persona.text, /preview "validated"/);
+});
+
+test('loads Oracle completion adapters for UI and MCP challenge surfaces', async () => {
+  const ui = await loadPersona('oracle', 'ui');
+  const mcp = await loadPersona('oracle', 'mcp');
+  assert.match(ui.text, /semantic controls and genuine user actions/);
+  assert.match(mcp.text, /Discover the current tool menu/);
 });
 
 test('core generator creates a provider-neutral prompt from free text', () => {

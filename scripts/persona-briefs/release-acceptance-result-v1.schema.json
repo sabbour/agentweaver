@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/schemas/persona-briefs/release-acceptance-result-v1.schema.json",
+  "title": "Agentweaver release acceptance result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "resultId",
+    "resultStatus",
+    "release",
+    "feature",
+    "challenge",
+    "claimResults",
+    "evidence",
+    "anomalies",
+    "patchMilestone",
+    "authority"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "agentweaver.release-acceptance-result/v1" },
+    "resultId": { "type": "string", "minLength": 1 },
+    "resultStatus": { "enum": ["PASS", "ABNORMAL"] },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "releaseId", "deployedRevision", "deploymentIdentity", "verifiedAt"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "releaseId": { "type": "string", "minLength": 1 },
+        "deployedRevision": { "type": "string", "minLength": 1 },
+        "deploymentIdentity": { "type": "string", "minLength": 1 },
+        "verifiedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["featureId", "refs", "behaviorId"],
+      "properties": {
+        "featureId": { "type": "string", "minLength": 1 },
+        "refs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "behaviorId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "challenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["challengeId", "challengeVersion", "catalogVersion", "executionId"],
+      "properties": {
+        "challengeId": { "type": "string", "minLength": 1 },
+        "challengeVersion": { "type": "integer", "minimum": 1 },
+        "catalogVersion": { "type": "integer", "minimum": 1 },
+        "executionId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "claimResults": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/claimResult" }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "items"],
+      "properties": {
+        "root": { "type": "string", "minLength": 1 },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceItem" }
+        }
+      }
+    },
+    "anomalies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["anomalyId", "claimId", "surface", "triggerCodes", "blocksReleaseAcceptance"],
+        "properties": {
+          "anomalyId": { "type": "string", "pattern": "^ra1:[a-f0-9]{64}$" },
+          "claimId": { "type": "string", "minLength": 1 },
+          "surface": { "enum": ["api", "ui", "mcp"] },
+          "triggerCodes": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "blocksReleaseAcceptance": { "const": true }
+        }
+      }
+    },
+    "patchMilestone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolutionStatus", "milestoneId", "title", "derivedFromReleaseId"],
+      "properties": {
+        "resolutionStatus": { "enum": ["UNRESOLVED", "RESOLVED", "AMBIGUOUS"] },
+        "milestoneId": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] },
+        "derivedFromReleaseId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["harnessGitHubWrite", "judgeGitHubWrite", "coordinatorDispositionRequired"],
+      "properties": {
+        "harnessGitHubWrite": { "const": false },
+        "judgeGitHubWrite": { "const": false },
+        "coordinatorDispositionRequired": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "evidenceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "deployedRevision"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "deployedRevision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "surfaceResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface", "status", "evidence"],
+      "properties": {
+        "surface": { "enum": ["api", "ui", "mcp"] },
+        "status": {
+          "enum": [
+            "PASS",
+            "PARTIAL",
+            "FAIL",
+            "INDETERMINATE",
+            "NOT_RUN",
+            "UNAVAILABLE_EXPECTED",
+            "UNAVAILABLE_UNEXPECTED"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceItem" }
+        }
+      }
+    },
+    "claimResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claimId",
+        "priority",
+        "verdict",
+        "requiredSurfaces",
+        "surfaceResults",
+        "evidenceIntegrity",
+        "termination",
+        "cleanup"
+      ],
+      "properties": {
+        "claimId": { "type": "string", "minLength": 1 },
+        "priority": { "enum": ["P0", "P1"] },
+        "verdict": { "enum": ["PASS", "PARTIAL", "FAIL", "INDETERMINATE"] },
+        "requiredSurfaces": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["api", "ui", "mcp"] }
+        },
+        "surfaceResults": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/surfaceResult" }
+        },
+        "evidenceIntegrity": {
+          "enum": ["VALID", "MISSING", "STALE", "MIXED_REVISION", "HASH_MISMATCH"]
+        },
+        "termination": {
+          "enum": ["COMPLETED", "TIMEOUT", "BUDGET_TERMINATED", "INFRASTRUCTURE_TERMINATED"]
+        },
+        "cleanup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required", "status"],
+          "properties": {
+            "required": { "type": "boolean" },
+            "status": { "enum": ["NOT_REQUIRED", "SUCCEEDED", "FAILED", "INDETERMINATE"] }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "priority": { "const": "P0" } },
+              "required": ["priority"]
+            },
+            "then": {
+              "properties": {
+                "verdict": { "enum": ["PASS", "FAIL", "INDETERMINATE"] }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
