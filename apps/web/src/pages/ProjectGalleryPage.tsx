@@ -444,7 +444,11 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       onChange={d.setBlueprint}
       generated={generation.generated}
       onGenerate={() => void generation.generate(goal)}
+      onCancel={() => void generation.cancel()}
+      onRetry={() => void generation.retry()}
       generating={generation.generating}
+      canRetry={generation.job?.status === 'failed' || generation.job?.status === 'cancelled'}
+      jobStatus={generation.job?.status}
       generationError={generation.error}
       generateDescription={goal}
       onGenerateDescriptionChange={setGoal}
@@ -735,7 +739,11 @@ function CreateFromGitHubDialog({
       targetRepository={d.sourceRepository}
       generated={generation.generated}
       onGenerate={() => void generation.generate(generateDescription)}
+      onCancel={() => void generation.cancel()}
+      onRetry={() => void generation.retry()}
       generating={generation.generating}
+      canRetry={generation.job?.status === 'failed' || generation.job?.status === 'cancelled'}
+      jobStatus={generation.job?.status}
       generationError={generation.error}
       generateDescription={generateDescription}
       onGenerateDescriptionChange={setGenerateDescription}

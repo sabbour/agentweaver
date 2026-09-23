@@ -1,17 +1,20 @@
 using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
+using Microsoft.OpenApi;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace Agentweaver.Api.Endpoints;
 
 /// <summary>
-/// Blueprint endpoints (Feature 012): list predefined blueprints, generate a blueprint from a
-/// description via the model, and validate a file blueprint. All require an authenticated caller;
-/// blueprints are global (not project-scoped), so no owner check applies here.
+/// Blueprint endpoints (Feature 012): list predefined blueprints, run durable generation jobs, and
+/// validate a file blueprint. All require an authenticated caller; generation jobs are rebound to
+/// their accepted subject and optional project on every status, result, cancel, and retry request.
 /// </summary>
 public static class BlueprintEndpoints
 {
@@ -27,16 +30,61 @@ public static class BlueprintEndpoints
                 return Task.CompletedTask;
             });
 
-        // POST /api/blueprints/generate — generate a single blueprint from a description.
+        // POST /api/blueprints/generate — accept a durable blueprint-generation job.
         app.MapPost("/api/blueprints/generate", GenerateBlueprintAsync)
             .WithName("GenerateBlueprint")
             .WithTags("Blueprints")
             .AddOpenApiOperationTransformer((operation, _, _) =>
             {
-                operation.Description ??= "Generates a validated blueprint draft from prose, with optional project or repository grounding.";
+                operation.Description ??= "Accepts a durable Blueprint-generation job. Supply Idempotency-Key; poll the returned status URL.";
+                operation.Parameters ??= [];
+                operation.Parameters.Add(new OpenApiParameter
+                {
+                    Name = "Idempotency-Key",
+                    In = ParameterLocation.Header,
+                    Required = true,
+                    Description = "Caller-chosen retry key. Reuse only for the identical Blueprint-generation request.",
+                    Schema = new OpenApiSchema { Type = JsonSchemaType.String },
+                });
                 return Task.CompletedTask;
             })
+            .Produces<BlueprintGenerationJobResponse>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status409Conflict)
             .RequiresAiExecutionContext("blueprint_generation");
+
+        app.MapGet("/api/blueprints/generation-jobs/{jobId}", GetBlueprintGenerationJobAsync)
+            .WithName("GetBlueprintGenerationJob")
+            .WithTags("Blueprints")
+            .Produces<BlueprintGenerationJobResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound);
+        app.MapGet("/api/blueprints/generation-jobs/{jobId}/result", GetBlueprintGenerationResultAsync)
+            .WithName("GetBlueprintGenerationResult")
+            .WithTags("Blueprints")
+            .Produces<BlueprintGenerationResultResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
+        app.MapPost("/api/blueprints/generation-jobs/{jobId}/cancel", CancelBlueprintGenerationJobAsync)
+            .WithName("CancelBlueprintGenerationJob")
+            .WithTags("Blueprints")
+            .Produces<BlueprintGenerationJobResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound);
+        app.MapPost("/api/blueprints/generation-jobs/{jobId}/retry", RetryBlueprintGenerationJobAsync)
+            .WithName("RetryBlueprintGenerationJob")
+            .WithTags("Blueprints")
+            .Produces<BlueprintGenerationJobResponse>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict);
 
         // POST /api/blueprints/suggest — analyze a GitHub repository and recommend a catalog blueprint.
         app.MapPost("/api/blueprints/suggest", SuggestBlueprintAsync)
@@ -75,15 +123,11 @@ public static class BlueprintEndpoints
     /// Generates a draft blueprint from a natural-language description, optionally grounded in an existing project or target repository.
     /// </summary>
     /// <param name="request">Prompt and optional project/repository context for blueprint generation.</param>
-    /// <response code="200">Returns a validated blueprint draft and any generated workflow YAML.</response>
+    /// <response code="202">Returns the accepted durable generation job.</response>
     /// <response code="400">The request was malformed or referenced an invalid project id.</response>
-    /// <response code="401">The configured provider rejected the generation request.</response>
     /// <response code="403">The caller does not own the referenced project.</response>
     /// <response code="404">The referenced project was not found.</response>
-    /// <response code="422">The model returned an invalid blueprint draft.</response>
-    /// <response code="429">The configured provider rate-limited the generation request.</response>
-    /// <response code="502">The downstream model run failed after the request was accepted.</response>
-    /// <response code="503">The configured provider or model inventory was unavailable.</response>
+    /// <response code="409">The idempotency key was already used for a different request.</response>
     /// <remarks>
     /// This is the fastest way for an agent to bootstrap a castable project shape from prose. When
     /// <c>generated_workflow_yaml</c> is returned, pass it back to project creation so the workflow is materialized.
@@ -91,16 +135,21 @@ public static class BlueprintEndpoints
     public static async Task<IResult> GenerateBlueprintAsync(
         HttpContext httpContext,
         GenerateBlueprintRequest request,
-        BlueprintService blueprints,
         IProjectStore projectStore,
         IConfiguration configuration,
         IOptions<GenerationModelOptions> generationOptions,
         AiExecutionPlanService executionPlans,
         AiExecutionPlanAccessor executionPlanAccessor,
+        BlueprintGenerationJobStore jobs,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.Description))
             return Results.BadRequest(new { error = "description is required." });
+        var idempotencyKey = httpContext.Request.Headers["Idempotency-Key"].ToString().Trim();
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+            return Results.BadRequest(new { error = "idempotency_key_required", message = "Idempotency-Key is required." });
+        if (idempotencyKey.Length > 256)
+            return Results.BadRequest(new { error = "idempotency_key_invalid", message = "Idempotency-Key must be 256 characters or fewer." });
 
         Project? project = null;
         if (!string.IsNullOrWhiteSpace(request.ProjectId))
@@ -117,7 +166,6 @@ public static class BlueprintEndpoints
             }
         }
 
-        var caller = httpContext.GetCaller();
         using var execution = await EndpointHelpers.BeginAiExecutionAsync(
             httpContext,
             "blueprint_generation",
@@ -125,64 +173,147 @@ public static class BlueprintEndpoints
             executionPlans,
             executionPlanAccessor,
             ct).ConfigureAwait(false);
-        execution.Activate();
         if (execution.Error is not null)
             return execution.Error;
+        var plan = execution.Plan!;
         var options = generationOptions.Value;
-        BlueprintGenerationResult result;
-        try
-        {
-            result = await blueprints.GenerateAsync(
-                request.Description!,
-                ct,
-                caller.User,
-                request.TargetRepository,
-                request.ProjectId,
-                project is null ? null : options.ResolveBlueprintModel(project.BlueprintGenerationModel),
-                project is null ? null : options.ResolveWorkflowModel(project.WorkflowGenerationModel));
-        }
-        catch (AiExecutionPlanException ex)
-        {
-            return EndpointHelpers.AiExecutionError(ex);
-        }
-        if (!result.Succeeded)
-        {
-            if (IsProviderFailure(result.FailureKind))
-                return Results.Json(new
-                {
-                    error = result.ErrorCode ?? "blueprint_provider_unavailable",
-                    message = result.FailureMessage ?? "Blueprint generation could not reach the configured AI provider or model list. Check provider authentication, entitlement, model access, and configuration, then retry.",
-                    details = result.Errors,
-                    options = result.FailureKind == BlueprintGenerationFailureKind.ProviderRateLimited
-                        ? ["retry"]
-                        : new[] { "check_provider_auth", "check_provider_config", "retry" },
-                }, statusCode: ProviderFailureStatus(result.FailureKind));
+        var blueprintModel = project is null
+            ? options.ResolveBlueprintModel()
+            : options.ResolveBlueprintModel(project.BlueprintGenerationModel);
+        var workflowModel = project is null
+            ? options.ResolveWorkflowModel()
+            : options.ResolveWorkflowModel(project.WorkflowGenerationModel);
+        var fingerprint = BlueprintGenerationFingerprint.Create(
+            request,
+            project?.Id.ToString(),
+            blueprintModel,
+            workflowModel,
+            plan);
+        var created = await jobs.CreateOrGetAsync(new BlueprintGenerationJobCreate(
+            plan.Subject,
+            idempotencyKey,
+            fingerprint,
+            request.Description.Trim(),
+            project?.Id.ToString(),
+            request.TargetRepository?.Trim(),
+            blueprintModel,
+            workflowModel,
+            plan.Provider.ProviderKind(),
+            plan.Provider.ProviderType(),
+            plan.Provider.ProviderKey()!,
+            plan.Provider.ProviderScope(),
+            plan.ResolutionScope,
+            plan.Provider.CredentialVersion(),
+            executionPlans.CreateQueuedProviderKey(plan)), ct).ConfigureAwait(false);
 
-            if (result.FailureKind == BlueprintGenerationFailureKind.InternalError)
-                return Results.Json(new
-                {
-                    error = result.ErrorCode ?? "blueprint_generation_internal_error",
-                    message = "An unexpected server error prevented blueprint generation. Retry, then inspect server logs if it persists.",
-                    details = result.Errors,
-                    options = new[] { "retry" },
-                }, statusCode: StatusCodes.Status500InternalServerError);
-
-            return Results.UnprocessableEntity(new
+        if (created.Disposition == BlueprintGenerationJobCreateDisposition.Conflict)
+        {
+            return Results.Conflict(new
             {
-                error = "blueprint_generation_failed",
-                message = "The generated blueprint could not be validated. You can regenerate with a more specific prompt or edit the draft fields and validate again.",
-                details = result.Errors,
-                options = new[] { "regenerate", "edit" },
+                error = "idempotency_key_conflict",
+                message = "The Idempotency-Key was already used for a different Blueprint-generation request.",
+                job_id = created.Snapshot.Job.JobId,
             });
         }
 
-        return Results.Ok(new GenerateBlueprintResponse
+        return Results.Accepted(
+            $"/api/blueprints/generation-jobs/{created.Snapshot.Job.JobId}",
+            ToJobResponse(
+                created.Snapshot,
+                created.Disposition == BlueprintGenerationJobCreateDisposition.Created
+                    ? executionPlans.ToResponse(plan, "active")
+                    : null));
+    }
+
+    public static async Task<IResult> GetBlueprintGenerationJobAsync(
+        HttpContext httpContext,
+        string jobId,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
+    {
+        var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
+        if (snapshot is null)
+            return Results.NotFound();
+        if (await RequireJobAccessAsync(httpContext, snapshot.Job, ct).ConfigureAwait(false) is { } denied)
+            return denied;
+        return Results.Ok(ToJobResponse(snapshot));
+    }
+
+    public static async Task<IResult> GetBlueprintGenerationResultAsync(
+        HttpContext httpContext,
+        string jobId,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
+    {
+        var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
+        if (snapshot is null)
+            return Results.NotFound();
+        if (await RequireJobAccessAsync(httpContext, snapshot.Job, ct).ConfigureAwait(false) is { } denied)
+            return denied;
+        if (snapshot.Artifact is null)
         {
-            Blueprint = BlueprintDto.FromModel(result.Blueprint!),
-            GeneratedWorkflowYaml = result.GeneratedWorkflowYaml,
-            Warnings = result.Warnings,
-            AiExecutionContext = executionPlans.ToResponse(execution.Plan!, "completed"),
+            return Results.Conflict(new
+            {
+                error = "blueprint_generation_not_complete",
+                status = snapshot.Job.Status,
+                failure = snapshot.Job.FailureCode is null ? null : ToFailure(snapshot.Job),
+            });
+        }
+
+        return Results.Ok(new BlueprintGenerationResultResponse
+        {
+            JobId = jobId,
+            ArtifactId = snapshot.Artifact.ArtifactId,
+            LogicalId = snapshot.Artifact.LogicalId,
+            Version = snapshot.Artifact.Version,
+            Blueprint = JsonSerializer.Deserialize<BlueprintDto>(snapshot.Artifact.BlueprintJson)
+                ?? throw new InvalidOperationException("Persisted Blueprint artifact is invalid."),
+            GeneratedWorkflowYaml = snapshot.Artifact.GeneratedWorkflowYaml,
+            Warnings = JsonSerializer.Deserialize<IReadOnlyList<string>>(snapshot.Artifact.WarningsJson) ?? [],
         });
+    }
+
+    public static async Task<IResult> CancelBlueprintGenerationJobAsync(
+        HttpContext httpContext,
+        string jobId,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
+    {
+        var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
+        if (snapshot is null)
+            return Results.NotFound();
+        if (await RequireJobAccessAsync(httpContext, snapshot.Job, ct).ConfigureAwait(false) is { } denied)
+            return denied;
+        var cancelled = await jobs.CancelAsync(jobId, ct).ConfigureAwait(false);
+        return Results.Ok(ToJobResponse(cancelled!));
+    }
+
+    public static async Task<IResult> RetryBlueprintGenerationJobAsync(
+        HttpContext httpContext,
+        string jobId,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
+    {
+        var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
+        if (snapshot is null)
+            return Results.NotFound();
+        if (await RequireJobAccessAsync(httpContext, snapshot.Job, ct).ConfigureAwait(false) is { } denied)
+            return denied;
+        var retryable = snapshot.Job.Status == BlueprintGenerationJobStatuses.Cancelled
+            || snapshot.Job.Status == BlueprintGenerationJobStatuses.Failed
+                && snapshot.Job.FailureRetryable;
+        if (!retryable)
+        {
+            return Results.Conflict(new
+            {
+                error = "blueprint_generation_not_retryable",
+                status = snapshot.Job.Status,
+            });
+        }
+        var retried = await jobs.RetryAsync(jobId, ct).ConfigureAwait(false);
+        return Results.Accepted(
+            $"/api/blueprints/generation-jobs/{jobId}",
+            ToJobResponse(retried!));
     }
 
     /// <summary>
@@ -245,19 +376,76 @@ public static class BlueprintEndpoints
         });
     }
 
-    private static bool IsProviderFailure(BlueprintGenerationFailureKind kind) =>
-        kind is BlueprintGenerationFailureKind.ProviderAuthorization
-            or BlueprintGenerationFailureKind.ProviderConfiguration
-            or BlueprintGenerationFailureKind.ProviderUnavailable
-            or BlueprintGenerationFailureKind.ProviderRateLimited
-            or BlueprintGenerationFailureKind.ModelRunFailed;
+    private static async Task<IResult?> RequireJobAccessAsync(
+        HttpContext context,
+        Agentweaver.Api.Memory.BlueprintGenerationJobRecord job,
+        CancellationToken ct)
+    {
+        if (!context.GetCaller().Owns(job.Subject))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        if (!ProjectId.TryParse(job.ProjectId, out var projectId))
+            return null;
+        var project = await context.RequestServices.GetRequiredService<IProjectStore>()
+            .GetAsync(projectId, ct).ConfigureAwait(false);
+        if (project is null)
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        return await ProjectAuthorization.RequireAccessAsync(
+            context,
+            project,
+            context.RequestServices.GetRequiredService<IConfiguration>(),
+            ProjectRole.Owner,
+            ct).ConfigureAwait(false);
+    }
 
-    private static int ProviderFailureStatus(BlueprintGenerationFailureKind kind) =>
-        kind switch
+    private static BlueprintGenerationJobResponse ToJobResponse(
+        BlueprintGenerationJobSnapshot snapshot,
+        AiExecutionContextResponse? executionContext = null)
+    {
+        var job = snapshot.Job;
+        var baseUrl = $"/api/blueprints/generation-jobs/{job.JobId}";
+        return new BlueprintGenerationJobResponse
         {
-            BlueprintGenerationFailureKind.ProviderAuthorization => StatusCodes.Status401Unauthorized,
-            BlueprintGenerationFailureKind.ProviderRateLimited => StatusCodes.Status429TooManyRequests,
-            BlueprintGenerationFailureKind.ModelRunFailed => StatusCodes.Status502BadGateway,
-            _ => StatusCodes.Status503ServiceUnavailable,
+            JobId = job.JobId,
+            Status = job.Status,
+            Attempt = job.Attempt,
+            ProjectId = job.ProjectId,
+            TargetRepository = job.TargetRepository,
+            ProviderSnapshot = new BlueprintGenerationProviderSnapshotDto
+            {
+                ProviderKind = job.ProviderKind,
+                ProviderType = job.ProviderType,
+                ProviderKey = job.ProviderKey,
+                ProviderScope = job.ProviderScope,
+                ResolutionScope = job.ResolutionScope,
+                BlueprintModel = job.BlueprintModel,
+                WorkflowModel = job.WorkflowModel,
+                CredentialBindingVersion = job.CredentialBindingVersion,
+            },
+            Artifact = snapshot.Artifact is null
+                ? null
+                : new BlueprintGenerationArtifactDto
+                {
+                    ArtifactId = snapshot.Artifact.ArtifactId,
+                    LogicalId = snapshot.Artifact.LogicalId,
+                    Version = snapshot.Artifact.Version,
+                },
+            Failure = job.FailureCode is null ? null : ToFailure(job),
+            CreatedAt = job.CreatedAt,
+            UpdatedAt = job.UpdatedAt,
+            StatusUrl = baseUrl,
+            ResultUrl = $"{baseUrl}/result",
+            CancelUrl = $"{baseUrl}/cancel",
+            RetryUrl = $"{baseUrl}/retry",
+            AiExecutionContext = executionContext,
+        };
+    }
+
+    private static BlueprintGenerationFailureDto ToFailure(
+        Agentweaver.Api.Memory.BlueprintGenerationJobRecord job) =>
+        new()
+        {
+            Code = job.FailureCode!,
+            Message = job.FailureMessage ?? "Blueprint generation failed.",
+            Retryable = job.FailureRetryable,
         };
 }

@@ -79,6 +79,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<BlueprintPackageVersionRecord> BlueprintPackageVersions => Set<BlueprintPackageVersionRecord>();
     public DbSet<BlueprintPackagePayloadRecord> BlueprintPackagePayloads => Set<BlueprintPackagePayloadRecord>();
     public DbSet<BlueprintPackageAcquisitionRecord> BlueprintPackageAcquisitions => Set<BlueprintPackageAcquisitionRecord>();
+    public DbSet<BlueprintGenerationJobRecord> BlueprintGenerationJobs => Set<BlueprintGenerationJobRecord>();
+    public DbSet<BlueprintGenerationArtifactRecord> BlueprintGenerationArtifacts => Set<BlueprintGenerationArtifactRecord>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -194,6 +196,58 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<OAuthDynamicRegistration>().HasIndex(x => new { x.SourceHash, x.RegisteredAt });
         model.Entity<OAuthRefreshTokenFamily>().HasIndex(x => x.AuthorizationId).IsUnique();
         model.Entity<OAuthMaintenanceLease>().HasKey(x => x.Name);
+        model.Entity<BlueprintGenerationJobRecord>(entity =>
+        {
+            entity.ToTable("blueprint_generation_jobs");
+            entity.HasKey(x => x.JobId);
+            entity.Property(x => x.JobId).HasColumnName("job_id").HasMaxLength(32);
+            entity.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(256);
+            entity.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(256);
+            entity.Property(x => x.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
+            entity.Property(x => x.Description).HasColumnName("description");
+            entity.Property(x => x.ProjectId).HasColumnName("project_id").HasMaxLength(64);
+            entity.Property(x => x.TargetRepository).HasColumnName("target_repository").HasMaxLength(512);
+            entity.Property(x => x.BlueprintModel).HasColumnName("blueprint_model").HasMaxLength(256);
+            entity.Property(x => x.WorkflowModel).HasColumnName("workflow_model").HasMaxLength(256);
+            entity.Property(x => x.ProviderKind).HasColumnName("provider_kind").HasMaxLength(64);
+            entity.Property(x => x.ProviderType).HasColumnName("provider_type").HasMaxLength(64);
+            entity.Property(x => x.ProviderKey).HasColumnName("provider_key").HasMaxLength(64);
+            entity.Property(x => x.ProviderScope).HasColumnName("provider_scope").HasMaxLength(32);
+            entity.Property(x => x.ResolutionScope).HasColumnName("resolution_scope").HasMaxLength(32);
+            entity.Property(x => x.CredentialBindingVersion).HasColumnName("credential_binding_version").HasMaxLength(128);
+            entity.Property(x => x.QueuedProviderKey).HasColumnName("queued_provider_key");
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(32);
+            entity.Property(x => x.Attempt).HasColumnName("attempt");
+            entity.Property(x => x.LeaseOwner).HasColumnName("lease_owner").HasMaxLength(128);
+            entity.Property(x => x.LeaseExpiresAt).HasColumnName("lease_expires_at");
+            entity.Property(x => x.FailureCode).HasColumnName("failure_code").HasMaxLength(128);
+            entity.Property(x => x.FailureMessage).HasColumnName("failure_message");
+            entity.Property(x => x.FailureRetryable).HasColumnName("failure_retryable");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(x => x.StartedAt).HasColumnName("started_at");
+            entity.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            entity.HasIndex(x => new { x.Subject, x.IdempotencyKey }).IsUnique();
+            entity.HasIndex(x => new { x.Status, x.LeaseExpiresAt, x.CreatedAt });
+        });
+        model.Entity<BlueprintGenerationArtifactRecord>(entity =>
+        {
+            entity.ToTable("blueprint_generation_artifacts");
+            entity.HasKey(x => x.ArtifactId);
+            entity.Property(x => x.ArtifactId).HasColumnName("artifact_id").HasMaxLength(32);
+            entity.Property(x => x.JobId).HasColumnName("job_id").HasMaxLength(32);
+            entity.Property(x => x.LogicalId).HasColumnName("logical_id").HasMaxLength(256);
+            entity.Property(x => x.Version).HasColumnName("version");
+            entity.Property(x => x.BlueprintJson).HasColumnName("blueprint_json");
+            entity.Property(x => x.GeneratedWorkflowYaml).HasColumnName("generated_workflow_yaml");
+            entity.Property(x => x.WarningsJson).HasColumnName("warnings_json");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(x => x.JobId).IsUnique();
+            entity.HasOne<BlueprintGenerationJobRecord>()
+                .WithOne()
+                .HasForeignKey<BlueprintGenerationArtifactRecord>(x => x.JobId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
         ConfigureGitHubConnectionsPersistence(model);
