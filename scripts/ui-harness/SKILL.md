@@ -109,6 +109,8 @@ node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --
 node scripts/ui-harness/agent-driver-ui/tools.mjs type-coordinator --session <sessionId> --text "<text>"
 node scripts/ui-harness/agent-driver-ui/tools.mjs drag --session <sessionId> --from-test-id <source-test-id> --to-test-id <target-test-id>
 node scripts/ui-harness/agent-driver-ui/tools.mjs zoom --session <sessionId> --percent 75
+node scripts/ui-harness/agent-driver-ui/tools.mjs viewport --session <sessionId> --width 1280 --height 480
+node scripts/ui-harness/agent-driver-ui/tools.mjs viewport --session <sessionId> --mobile
 node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId>
 ```
 
@@ -131,6 +133,17 @@ Failed drags release the pointer and append a failed evidence turn before exitin
 subsequent actions and captures, which is useful for wide topology, trace, and
 dashboard layouts that would otherwise be cropped. `--percent` accepts 25 through
 200; for example, 50% captures a 2560x1440 viewport.
+
+`viewport` sets an exact browser viewport without replacing the authenticated session.
+Pass integer `--width` and `--height` values (240-7680), or use the maintained
+`--mobile`/`--preset mobile` size of `390x844`. The command captures the resized page
+immediately and records actual viewport dimensions, page overflow/scroll extents, and
+required deterministic assertions for navigation reachability, contained horizontal
+overflow, reachable vertical scrolling, focus-mode availability/state, and content
+visibility. Run-detail defaults use `app-navigation-menu`, `run-focus-toggle`, and
+`run-operator-console`; override those IDs with `--navigation-test-id`,
+`--focus-test-id`, and `--content-test-id`. Set `--focus-mode standard`, `focused`, or
+`available` (the default) to assert the expected focus-toggle state.
 
 `goto` and `capture` wait up to 30 seconds for the authenticated Agentweaver app shell
 after `domcontentloaded`; a transient authentication spinner is allowed to resolve
