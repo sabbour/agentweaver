@@ -4,6 +4,7 @@ import { BlueprintSkillBindings } from '../components/BlueprintPicker';
 import { ProjectListProvider } from '../hooks/useProjectList';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import {
   afterEach,
@@ -181,6 +182,24 @@ function fillNameAndFolder() {
 }
 
 describe('ProjectGalleryPage — blueprint selection', () => {
+  it('exposes the required project name to keyboard and semantic automation', async () => {
+    const user = userEvent.setup();
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    const trigger = await screen.findByRole('button', { name: 'Create blank project' });
+
+    trigger.focus();
+    await user.keyboard('{Enter}');
+
+    const nameInput = screen.getByRole('textbox', { name: 'Project name' });
+    expect(nameInput).toBe(screen.getByTestId('create-project-name'));
+    expect((nameInput as HTMLInputElement).required).toBe(true);
+    expect((nameInput as HTMLInputElement).tabIndex).toBe(0);
+    nameInput.focus();
+    await user.keyboard('Keyboard project');
+    expect(document.activeElement).toBe(nameInput);
+    expect((nameInput as HTMLInputElement).value).toBe('Keyboard project');
+  });
+
   it('pages project tiles from the server when the catalog exceeds 100 projects', async () => {
     const manyProjects = Array.from({ length: 101 }, (_, index) =>
       makeProject(`p-${index + 1}`, `Project ${index + 1}`),
