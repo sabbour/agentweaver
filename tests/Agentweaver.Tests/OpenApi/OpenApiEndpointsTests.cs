@@ -174,6 +174,60 @@ public sealed class OpenApiEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkflowGrammar_CheckContractProducesBindableWorkflow()
+    {
+        var response = await _client.GetAsync("/api/workflows/grammar");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var grammar = document.RootElement;
+        var check = grammar.GetProperty("node_types").EnumerateArray()
+            .Single(node => node.GetProperty("yaml_type").GetString() == "check");
+        check.GetProperty("runtime_bindable").GetBoolean().Should().BeTrue();
+        check.GetProperty("required_fields").EnumerateArray()
+            .Select(field => field.GetString())
+            .Should().Contain(["branches", "gate_kind"]);
+
+        var gateKind = check.GetProperty("allowed_gate_kinds").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .Intersect(check.GetProperty("runtime_kinds").EnumerateArray().Select(value => value.GetString()!))
+            .Single(kind => kind == "human-review");
+        var transition = grammar.GetProperty("edge").GetProperty("transitions").EnumerateArray()
+            .Single(rule =>
+                rule.GetProperty("from_kind").GetString() == gateKind
+                && rule.GetProperty("to_kind").GetString() == "terminal");
+        var verdict = transition.GetProperty("when").EnumerateArray()
+            .Select(value => value.GetString()!)
+            .First();
+
+        var result = WorkflowDefinitionLoader.Load($"""
+            id: grammar-check-client
+            name: Grammar check client
+            version: "1"
+            start: author
+            nodes:
+              - id: author
+                type: prompt
+              - id: review
+                type: check
+                gate_kind: {gateKind}
+                branches:
+                  - {verdict}
+              - id: done
+                type: terminal
+            edges:
+              - from: author
+                to: review
+              - from: review
+                to: done
+                when: {verdict}
+            """, "grammar-check-client");
+
+        result.IsValid.Should().BeTrue(result.Error);
+        RunWorkflowGraphBinder.GetBindabilityErrors(result.Definition!).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task OpenApiJson_DeclaresProviderKeyHeaderOnEveryAiGuardedOperation()
     {
         var response = await _client.GetAsync("/openapi/v1.json");
