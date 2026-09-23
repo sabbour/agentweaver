@@ -96,7 +96,9 @@ for (const [name, fields] of Object.entries(contract.invalid)) {
     });
 
     assert.equal(result.verdict.p0.verdict, 'CANNOT_DETERMINE');
+    assert.equal(result.verdict.p1.verdict, 'CANNOT_DETERMINE');
     assert.equal(result.verdict.judgeError.kind, 'schema_invalid');
+    assert.equal(validateVerdict(result.verdict, { expectedMetadata: evidence().metadata }).ok, true);
     assert.equal(result.rawVerdict, candidate);
     assert.notEqual(result.verdict, candidate);
   });

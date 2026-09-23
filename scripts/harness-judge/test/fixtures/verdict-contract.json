@@ -26,8 +26,23 @@
     "emptyEvidence": {
       "p1": { "verdict": "PASS", "evidence": "   ", "criteriaCoverage": [] }
     },
+    "omittedP0Evidence": {
+      "p0": { "verdict": "PASS" }
+    },
+    "omittedP1Evidence": {
+      "p1": { "verdict": "PASS", "criteriaCoverage": [] }
+    },
+    "omittedCriteriaCoverage": {
+      "p1": { "verdict": "PASS", "evidence": "Goal met." }
+    },
     "criteriaCoverage": {
       "p1": { "verdict": "PASS", "evidence": "Goal met.", "criteriaCoverage": { "criterion": "MET" } }
+    },
+    "nonStringCriteriaEntry": {
+      "p1": { "verdict": "PASS", "evidence": "Goal met.", "criteriaCoverage": [42] }
+    },
+    "emptyCriteriaEntry": {
+      "p1": { "verdict": "PASS", "evidence": "Goal met.", "criteriaCoverage": ["   "] }
     },
     "frustrationSignals": {
       "frustration": { "level": "mild", "score": 1, "signals": ["turn 2 was confusing"], "rationale": "One confusing response was observed." }
