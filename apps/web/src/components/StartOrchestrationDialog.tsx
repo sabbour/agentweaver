@@ -23,7 +23,7 @@ import {
 import { DismissRegular } from '@fluentui/react-icons';
 import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
-import { formatApiErrorMessage, parseNoTeamStartError } from '../api/errors';
+import { formatApiErrorMessage, parseCoordinatorStartupError, parseNoTeamStartError } from '../api/errors';
 import type { StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 import {
   AiExecutionProviderHint,
@@ -109,6 +109,13 @@ export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestr
       reset();
       onStarted(result.runId);
     } catch (err) {
+      const startupFailure = parseCoordinatorStartupError(err);
+      if (startupFailure) {
+        setOpen(false);
+        reset();
+        onStarted(startupFailure.runId);
+        return;
+      }
       if (providerContext.handleInvocationError(err)) {
         setError('The AI provider changed. Review the updated provider and start again.');
         return;

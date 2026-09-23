@@ -23,6 +23,7 @@ public static class StructuredRunFailureTerminal
         "agent_host_turn_incomplete",
         "coordinator_execution_failed",
         "coordinator_direct_execution_failed",
+        "coordinator_startup_failed",
         "github_copilot_auth_required",
         "github_copilot_capability_snapshot_unavailable",
         "github_copilot_model_unavailable",

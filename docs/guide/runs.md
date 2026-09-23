@@ -143,6 +143,13 @@ Once you confirm the spec, the coordinator:
 2. Assigns each subtask to the best-fit agent and selects a model — an explicit run `modelId` (or the project's GitHub Copilot default) pins every subtask; otherwise each subtask uses its role's default model
 3. Dispatches independent subtasks in parallel; dependent ones run in series
 
+If activation or decomposition fails after the run is created, Agentweaver retains that run as
+**Failed** instead of leaving it executing with zero tasks. The start response includes the
+`run_id`, stable `coordinator_startup_failed` code, retryability, correlation ID, diagnostic link,
+and recovery guidance. The run page shows the same actionable failed state and offers a fresh retry.
+These diagnostics are intentionally bounded and never include prompts, filesystem paths, credentials,
+provider internals, or raw exception text.
+
 There is a short transition while the WorkPlan and integration branch are being created. During
 that transition, the coordinator's ordinary changed-files endpoint returns an empty list, and
 the collective assembly-files endpoint also returns an empty list. `GET /api/runs/{id}/work-plan`

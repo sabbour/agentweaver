@@ -247,6 +247,14 @@ public sealed class CoordinatorPickupService
                     effectiveProvider: effectiveProvider)
                 .ConfigureAwait(false);
         }
+        catch (CoordinatorStartupException ex)
+        {
+            _logger.LogError(
+                "Pickup: coordinator start failed for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
+                ex.RunId,
+                ex.ErrorCode,
+                ex.CorrelationId);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Pickup: coordinator start failed for run {RunId}", runId);

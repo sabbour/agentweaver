@@ -28,7 +28,7 @@ import { DismissRegular } from '@fluentui/react-icons';
 import { FlowRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { formatApiErrorMessage, parseNoTeamStartError } from '../api/errors';
+import { formatApiErrorMessage, parseCoordinatorStartupError, parseNoTeamStartError } from '../api/errors';
 import type { Project, StartOrchestrationMode, WorkflowSummaryDto } from '../api/types';
 import type { RefObject } from 'react';
 import { EmptyState } from './ui';
@@ -174,6 +174,13 @@ export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrch
       reset();
       navigate(`/projects/${selectedProjectId}/orchestrations/${result.runId}`);
     } catch (err) {
+      const startupFailure = parseCoordinatorStartupError(err);
+      if (startupFailure) {
+        setOpen(false);
+        reset();
+        navigate(`/projects/${selectedProjectId}/orchestrations/${startupFailure.runId}`);
+        return;
+      }
       if (providerContext.handleInvocationError(err)) {
         setError('The AI provider changed. Review the updated provider and start again.');
         return;

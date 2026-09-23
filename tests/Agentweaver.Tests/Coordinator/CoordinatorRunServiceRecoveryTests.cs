@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -213,6 +214,154 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         await foreach (var evt in restarted.SubscribeAsync(run.ToString()))
             replayed.Add(evt);
         replayed.Where(evt => evt.Type == EventTypes.RunFailed).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task TerminalizeStartupFailureAsync_ProjectsOneSafeFailureAndReturnsTypedRecovery()
+    {
+        var databasePath = Path.Combine(_checkpointsPath, "startup-failure.db");
+        var config = BuildConfiguration(new Dictionary<string, string?>
+        {
+            ["Database:Path"] = databasePath,
+        });
+        var db = new SqliteDb(config);
+        await db.EnsureCreatedAsync();
+        CreateRunEventsTable(Path.Combine(_checkpointsPath, "startup-failure.memory.db"));
+        var store = new SqliteRunStore(db);
+        var run = new Run
+        {
+            Id = RunId.New(),
+            AgentName = "Coordinator",
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "start safely",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow,
+            Origin = RunOrigin.Interactive,
+        };
+        await store.InsertAsync(run);
+
+        var eventStream = new SqliteRunEventStream(config);
+        var live = new RunStreamStore(eventStream);
+        var projector = new TerminalOutcomeProjector(
+            store, eventStream, NullLogger<TerminalOutcomeProjector>.Instance, live);
+        var service = BuildCoordinatorRunService(
+            store, live, terminalOutcomeProjector: projector, configuration: config);
+        var rawFailure = new InvalidOperationException(
+            @"Provider https://secret.example failed at C:\agents\private with credential=must-not-escape");
+
+        var first = await service.TerminalizeStartupFailureAsync(run, rawFailure);
+        var second = await service.TerminalizeStartupFailureAsync(run, rawFailure);
+
+        first.RunId.Should().Be(run.Id.ToString());
+        first.ErrorCode.Should().Be(CoordinatorFailureCodes.StartupFailed);
+        first.Retryable.Should().BeTrue();
+        first.CorrelationId.Should().MatchRegex("^[a-f0-9]{32}$");
+        second.CorrelationId.Should().Be(first.CorrelationId);
+        first.DiagnosticPath.Should().Be($"/api/runs/{run.Id}/terminal-diagnostic");
+        first.RecoveryGuidance.Should().Contain("Retry the run");
+        first.Message.Should().NotContain("secret.example")
+            .And.NotContain(@"C:\agents")
+            .And.NotContain("credential");
+
+        var persistedRun = await store.GetAsync(run.Id);
+        persistedRun!.Status.Should().Be(RunStatus.Failed);
+        persistedRun.Result.Should().Be(CoordinatorFailureCodes.StartupFailed);
+
+        var events = await eventStream.GetPersistedEventsAsync(run.Id.ToString());
+        var terminal = events.Where(evt => evt.Type == EventTypes.RunFailed).Should().ContainSingle().Subject;
+        var payload = System.Text.Json.JsonSerializer.Serialize(terminal.Payload);
+        payload.Should().Contain(CoordinatorFailureCodes.StartupFailed)
+            .And.NotContain("secret.example")
+            .And.NotContain(@"C:\agents")
+            .And.NotContain("must-not-escape");
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+
+        var diagnosticOptions = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite($"Data Source={Path.Combine(_checkpointsPath, "startup-failure.memory.db")}")
+            .Options;
+        await using var diagnosticDb = new MemoryDbContext(diagnosticOptions);
+        var diagnostic = await new RunTerminalDiagnosticReader(diagnosticDb)
+            .GetAsync(run.Id.ToString(), CancellationToken.None);
+        diagnostic!.Code.Should().Be(CoordinatorFailureCodes.StartupFailed);
+        diagnostic.Retryable.Should().BeTrue();
+        diagnostic.CorrelationIds["correlation_id"].Should().Be(first.CorrelationId);
+    }
+
+    [Fact]
+    public async Task TerminalizeStartupFailureAsync_ProjectionFailureKeepsTypedRecoveryAndPendingOutcome()
+    {
+        var run = new Run
+        {
+            Id = RunId.New(),
+            AgentName = "Coordinator",
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "defer projection",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow,
+            Origin = RunOrigin.Interactive,
+        };
+        await _runStore.InsertAsync(run);
+
+        var eventStream = new ThrowingTerminalEventStream();
+        var live = new RunStreamStore(eventStream);
+        var projector = new TerminalOutcomeProjector(
+            _runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance, live);
+        var service = BuildCoordinatorRunService(
+            _runStore, live, terminalOutcomeProjector: projector);
+
+        var failure = await service.TerminalizeStartupFailureAsync(
+            run,
+            new InvalidOperationException("must-not-escape"));
+
+        failure.RunId.Should().Be(run.Id.ToString());
+        failure.ErrorCode.Should().Be(CoordinatorFailureCodes.StartupFailed);
+        (await _runStore.GetAsync(run.Id))!.Status.Should().Be(RunStatus.Failed);
+        (await _runStore.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task TerminalizeStartupFailureAsync_StaleGenerationCannotFailReopenedRun()
+    {
+        var staleRun = new Run
+        {
+            Id = RunId.New(),
+            AgentName = "Coordinator",
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "preserve reopened lifecycle",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow,
+            Origin = RunOrigin.Interactive,
+        };
+        await _runStore.InsertAsync(staleRun);
+        (await _runStore.TrySetTerminalOutcomeAsync(
+            staleRun.Id,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed,
+                EventTypes.RunFailed,
+                new { errorCode = "earlier_failure" },
+                DateTimeOffset.UtcNow,
+                staleRun.LifecycleGeneration),
+            "earlier_failure")).Should().BeTrue();
+        (await _runStore.TryReopenTerminalToInProgressAsync(staleRun.Id)).Should().BeTrue();
+
+        var service = BuildCoordinatorRunService(_runStore, new RunStreamStore());
+        Func<Task> act = async () => await service.TerminalizeStartupFailureAsync(
+            staleRun,
+            new InvalidOperationException("stale activation"));
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        var reopened = await _runStore.GetAsync(staleRun.Id);
+        reopened!.Status.Should().Be(RunStatus.InProgress);
+        reopened.LifecycleGeneration.Should().Be(staleRun.LifecycleGeneration + 1);
     }
 
     [Fact]
@@ -922,6 +1071,24 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             StoryIndependenceClassificationContext context,
             CancellationToken ct) =>
             throw new NotImplementedException("ClassifyAsync is not called in the FailRunSafeAsync path");
+    }
+
+    private sealed class ThrowingTerminalEventStream : IRunEventStream
+    {
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default) =>
+            ValueTask.FromException<int>(new IOException("terminal projection unavailable"));
+
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId,
+            int fromSequence = 0,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
     }
 
     private sealed class TestHostApplicationLifetime : IHostApplicationLifetime

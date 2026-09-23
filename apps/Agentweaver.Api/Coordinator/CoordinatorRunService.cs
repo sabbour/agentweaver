@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.EntityFrameworkCore;
@@ -191,7 +193,7 @@ public sealed class CoordinatorRunService
 
         // Interactive define-outcome runs stop at the confirmation gate; Direct runs skip only that
         // definition gate and still enter the same dispatch/review/merge pipeline.
-        await ActivateAsync(
+        await ActivatePersistedRunAsync(
                 run,
                 approvalPolicy,
                 workflowOverrideId,
@@ -357,7 +359,7 @@ public sealed class CoordinatorRunService
             throw;
         }
 
-        await ActivateAsync(
+        await ActivatePersistedRunAsync(
                 run,
                 approvalPolicy,
                 submittingUserDisplayName: submittingUserDisplayName,
@@ -394,7 +396,7 @@ public sealed class CoordinatorRunService
         EffectiveModelProviderResult? effectiveProvider = null)
     {
         var approvalPolicy = approvalSnapshot.Policy;
-        await ActivateAsync(
+        await ActivatePersistedRunAsync(
                 reservedRun,
                 approvalPolicy,
                 effectiveProvider: effectiveProvider,
@@ -419,6 +421,130 @@ public sealed class CoordinatorRunService
     /// per-run CTS (registered so Abandon -> Cts.Cancel() tears the run down, mirroring
     /// RunOrchestrator), and starts the supervised watch loop.
     /// </summary>
+    private async Task ActivatePersistedRunAsync(
+        Run run, RunApprovalPolicy approvalPolicy, string? workflowOverrideId = null, bool direct = false,
+        string? submittingUserDisplayName = null,
+        EffectiveModelProviderResult? effectiveProvider = null,
+        ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null,
+        bool providerSnapshotCaptured = false,
+        string approvalPolicySource = "direct",
+        DateTimeOffset? approvalPolicyCapturedAt = null,
+        DateTimeOffset? approvalPolicySettingsUpdatedAt = null,
+        string? approvalPolicyInheritedFromRunId = null)
+    {
+        try
+        {
+            await ActivateAsync(
+                    run,
+                    approvalPolicy,
+                    workflowOverrideId,
+                    direct,
+                    submittingUserDisplayName,
+                    effectiveProvider,
+                    effectiveProviderBoundary,
+                    providerSnapshotCaptured,
+                    approvalPolicySource,
+                    approvalPolicyCapturedAt,
+                    approvalPolicySettingsUpdatedAt,
+                    approvalPolicyInheritedFromRunId)
+                .ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            var startupFailure = await TerminalizeStartupFailureAsync(run, failure).ConfigureAwait(false);
+            throw startupFailure;
+        }
+    }
+
+    internal async Task<CoordinatorStartupException> TerminalizeStartupFailureAsync(
+        Run run,
+        Exception failure)
+    {
+        var runId = run.Id.ToString();
+        var correlationId = CreateStartupFailureCorrelationId(run);
+        var payload = new
+        {
+            reason = CoordinatorFailureCodes.StartupFailed,
+            errorCode = CoordinatorFailureCodes.StartupFailed,
+            message = StructuredRunFailureTerminal.CreateDiagnosticMessage(
+                CoordinatorFailureCodes.StartupFailed,
+                retryable: true),
+            retryable = true,
+            correlationId,
+            traceId = Activity.Current?.TraceId.ToHexString(),
+            diagnosticPath = $"/api/runs/{runId}/terminal-diagnostic",
+            recoveryGuidance = "Retry the run. If it fails again, open the run trace and use the correlation id when reporting the failure.",
+            causeChain = BuildSafeCauseChain(
+                CoordinatorFailureCodes.StartupFailed,
+                "activation",
+                failure),
+        };
+
+        try
+        {
+            var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
+            var changed = await _runStore.TrySetTerminalOutcomeAsync(
+                run.Id,
+                TerminalRunOutcome.Create(
+                    RunStatus.Failed,
+                    EventTypes.RunFailed,
+                    payload,
+                    DateTimeOffset.UtcNow,
+                    run.LifecycleGeneration),
+                CoordinatorFailureCodes.StartupFailed,
+                CancellationToken.None).ConfigureAwait(false);
+            if (!changed)
+            {
+                var terminalRun = await _runStore.GetAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
+                if (terminalRun?.LifecycleGeneration != run.LifecycleGeneration
+                    || terminalRun.Result != CoordinatorFailureCodes.StartupFailed)
+                    throw new InvalidOperationException(
+                        $"Coordinator run {runId} reached a different terminal outcome during startup failure handling.");
+            }
+            else
+            {
+                try
+                {
+                    await CompleteTerminalOutcomeAsync(
+                        changed,
+                        entry,
+                        runId,
+                        EventTypes.RunFailed,
+                        payload,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception projectionFailure)
+                {
+                    _logger.LogError(
+                        "Immediate startup-failure projection deferred for run {RunId}: cause={CauseType}",
+                        runId,
+                        projectionFailure.GetType().Name);
+                }
+            }
+
+            _logger.LogError(
+                "Coordinator startup failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId} cause={CauseType}",
+                runId,
+                CoordinatorFailureCodes.StartupFailed,
+                correlationId,
+                failure.GetType().Name);
+        }
+        finally
+        {
+            await ReleaseAgentHostPodSafeAsync(runId).ConfigureAwait(false);
+            _registry.Abandon(runId);
+        }
+
+        return new CoordinatorStartupException(runId, correlationId, failure);
+    }
+
+    private static string CreateStartupFailureCorrelationId(Run run)
+    {
+        var input = Encoding.UTF8.GetBytes(
+            $"coordinator-startup:{run.Id}:{run.LifecycleGeneration}");
+        return Convert.ToHexString(SHA256.HashData(input))[..32].ToLowerInvariant();
+    }
+
     private async Task ActivateAsync(
         Run run, RunApprovalPolicy approvalPolicy, string? workflowOverrideId = null, bool direct = false,
         string? submittingUserDisplayName = null,

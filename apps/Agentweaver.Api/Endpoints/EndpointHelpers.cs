@@ -93,6 +93,20 @@ internal static IResult AiExecutionError(AiExecutionPlanException exception) =>
         },
         statusCode: exception.StatusCode);
 
+internal static IResult CoordinatorStartupError(CoordinatorStartupException exception) =>
+    Results.Json(
+        new
+        {
+            error = exception.ErrorCode,
+            message = exception.Message,
+            run_id = exception.RunId,
+            retryable = exception.Retryable,
+            correlation_id = exception.CorrelationId,
+            diagnostic_url = exception.DiagnosticPath,
+            recovery = exception.RecoveryGuidance,
+        },
+        statusCode: StatusCodes.Status500InternalServerError);
+
 internal static async Task<IResult> DurableProviderBoundaryErrorAsync(
     AgentProviderException exception,
     string operationName,
