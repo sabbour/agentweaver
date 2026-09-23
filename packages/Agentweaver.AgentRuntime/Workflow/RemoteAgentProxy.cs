@@ -217,6 +217,10 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
                 "RemoteAgentProxy: SetupAsync must be called before RunTurnAsync.");
         }
 
+        // This is the last safe recovery fence. Once RunStreamingAsync starts, the AgentHost may
+        // have accepted the turn, so transport/configuration failures must never replay it.
+        await _endpointResolver.ValidateDeliveryAsync(_runId, ct).ConfigureAwait(false);
+
         // Encode setup parameters as a JSON DataPart (first content part) so the pod's
         // CopilotAIAgent can call its own SetupAsync before executing the task.
         var setupParams = new AgentSetupParams

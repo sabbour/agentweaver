@@ -27,6 +27,12 @@ public interface ISandboxAgentEndpointResolver
     Task<Uri?> TryResolveEndpointAsync(string runId, CancellationToken ct);
 
     /// <summary>
+    /// Revalidates the dispatch immediately before the first A2A request is delivered. Implementations
+    /// must not perform recovery here because request acceptance would become ambiguous.
+    /// </summary>
+    Task ValidateDeliveryAsync(string runId, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>
     /// Returns whether the run was launched as an implementation turn in a local writable
     /// workspace and must therefore return an explicit write-back publication envelope.
     /// </summary>

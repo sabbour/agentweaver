@@ -66,6 +66,15 @@ public interface IAgentHostPodLifecycle
         throw new NotSupportedException("This AgentHost lifecycle does not support MCP broker token renewal.");
 
     /// <summary>
+    /// Reads the dispatch identity durably stamped on the current claim. Returns
+    /// <see langword="null"/> when no current claim or complete dispatch fence exists.
+    /// </summary>
+    Task<AgentHostLaunchContext?> GetAgentHostDispatchContextAsync(
+        string runId,
+        CancellationToken ct = default) =>
+        Task.FromResult<AgentHostLaunchContext?>(null);
+
+    /// <summary>
     /// Releases the AgentHost pod for the given run by deleting its
     /// <c>SandboxClaim</c>. Called on workflow suspension (HITL / coordinator-idle)
     /// when <c>Sandbox:ReleasePodOnSuspend=true</c>.
@@ -122,7 +131,13 @@ public sealed record AgentHostLaunchContext(
     string? CommitAuthorName = null,
     string? CommitAuthorEmail = null,
     string? McpBrokerToken = null,
-    string? HolderToken = null)
+    string? HolderToken = null,
+    string? DispatchId = null,
+    int? LifecycleGeneration = null,
+    string? DispatchProjectId = null,
+    string? DispatchUserId = null,
+    string? DispatchAgentName = null,
+    string? ProviderSnapshotKey = null)
 {
     /// <summary>
     /// Whether this launch must resolve its effective model provider at PLATFORM scope
