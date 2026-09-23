@@ -276,6 +276,10 @@ body into downstream prompts through the trigger path.
 
 Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. Trigger generation covers recurring schedules and curated GitHub events, including prompts that request both on one workflow; generated automation uses the `triggers:` list while existing singular `trigger:` drafts remain valid.
 
+Generation runs as a durable background job. The UI keeps polling while it is queued or running,
+so a substantial workflow is not tied to one long HTTP request. Provider timeouts become a stable,
+retryable failure, and retries reuse one job/artifact rather than creating duplicate drafts.
+
 The generator is still preview-first. It teaches the model the workflow schema, the supported
 trigger shapes, and a few-shot set of natural-language → trigger examples, then validates the draft
 with the same loader the runtime uses. If the first draft is malformed, the server allows exactly one

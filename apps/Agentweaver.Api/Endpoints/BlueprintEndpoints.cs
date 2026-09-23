@@ -232,7 +232,7 @@ public static class BlueprintEndpoints
         CancellationToken ct)
     {
         var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
-        if (snapshot is null)
+        if (snapshot is null || WorkflowGenerationJobPayload.TryDeserialize(snapshot.Job.Description, out _))
             return Results.NotFound();
         if (await RequireJobAccessAsync(httpContext, snapshot.Job, ct).ConfigureAwait(false) is { } denied)
             return denied;
@@ -246,7 +246,7 @@ public static class BlueprintEndpoints
         CancellationToken ct)
     {
         var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
-        if (snapshot is null)
+        if (snapshot is null || WorkflowGenerationJobPayload.TryDeserialize(snapshot.Job.Description, out _))
             return Results.NotFound();
         if (await RequireJobAccessAsync(httpContext, snapshot.Job, ct).ConfigureAwait(false) is { } denied)
             return denied;
@@ -280,7 +280,7 @@ public static class BlueprintEndpoints
         CancellationToken ct)
     {
         var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
-        if (snapshot is null)
+        if (snapshot is null || WorkflowGenerationJobPayload.TryDeserialize(snapshot.Job.Description, out _))
             return Results.NotFound();
         if (await RequireJobAccessAsync(httpContext, snapshot.Job, ct).ConfigureAwait(false) is { } denied)
             return denied;
@@ -295,7 +295,7 @@ public static class BlueprintEndpoints
         CancellationToken ct)
     {
         var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
-        if (snapshot is null)
+        if (snapshot is null || WorkflowGenerationJobPayload.TryDeserialize(snapshot.Job.Description, out _))
             return Results.NotFound();
         if (await RequireJobAccessAsync(httpContext, snapshot.Job, ct).ConfigureAwait(false) is { } denied)
             return denied;

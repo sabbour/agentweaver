@@ -1508,17 +1508,58 @@ export class AgentweaverApiClient {
     );
   }
 
-  // Generate a workflow draft from a natural-language description (US10). Returns the generated YAML
-  // (unsaved — open it in the editor for review), the workflow id, and whether the single correction
-  // pass was needed. Throws ApiError 400 when generation fails after the correction pass.
-  generateWorkflow(projectId: string, description: string, providerKey?: string, contentOnly = false): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }> {
-    return this.request<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }>(
+  // Accept durable workflow generation, then poll the job while preserving the existing UI result shape.
+  async generateWorkflow(projectId: string, description: string, providerKey?: string, contentOnly = false): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }> {
+    const idempotencyKey = globalThis.crypto?.randomUUID?.()
+      ?? `workflow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const headers = {
+      ...providerHeaders(providerKey),
+      'Idempotency-Key': idempotencyKey,
+    };
+    type Job = {
+      status: string;
+      status_url: string;
+      result_url: string;
+      failure?: { code: string; message: string; retryable: boolean } | null;
+      ai_execution_context?: AiExecutionContext | null;
+    };
+    const submit = () => this.request<Job>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/workflows/generate`,
       { description, content_only: contentOnly },
       undefined,
-      providerHeaders(providerKey),
+      headers,
     );
+    let job: Job;
+    try {
+      job = await submit();
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      job = await submit();
+    }
+    const executionContext = job.ai_execution_context;
+    const deadline = Date.now() + 5 * 60_000 + 30_000;
+    while (job.status === 'queued' || job.status === 'running') {
+      if (Date.now() >= deadline) {
+        throw new Error('Workflow generation is still running. Reopen the workflow generator to check again.');
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+      job = await this.request<Job>('GET', job.status_url.replace(/^\/api/, ''));
+    }
+    if (job.status !== 'completed') {
+      throw new Error(job.failure?.message ?? 'Workflow generation failed before producing a draft.');
+    }
+    const result = await this.request<{
+      yaml: string;
+      workflow_id: string;
+      was_corrected: boolean;
+    }>('GET', job.result_url.replace(/^\/api/, ''));
+    return {
+      yaml: result.yaml,
+      workflowId: result.workflow_id,
+      wasCorrected: result.was_corrected,
+      ai_execution_context: executionContext,
+    };
   }
 
   // Get the static graph descriptor for a workflow definition (US6). Returns a WorkflowGraphDto

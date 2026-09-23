@@ -6,8 +6,12 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore;
+using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Generation;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
@@ -1138,6 +1142,42 @@ public sealed class WorkflowGeneratorTests
     private static int CountOccurrences(string value, string text) =>
         value.Split(text, StringSplitOptions.None).Length - 1;
 
+    private static async Task<(JsonElement Job, JsonElement Result)> GenerateThroughDurableJobAsync(
+        StubWorkflowGeneratorFactory factory,
+        HttpClient client,
+        string projectId,
+        object body,
+        string? idempotencyKey = null)
+    {
+        var (accepted, job) = await SubmitDurableJobAsync(client, projectId, body, idempotencyKey);
+        accepted.StatusCode.Should().Be(HttpStatusCode.Accepted, await accepted.Content.ReadAsStringAsync());
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        _ = await worker.RunOneAsync(CancellationToken.None);
+        var result = await client.GetAsync(job.GetProperty("result_url").GetString());
+        result.StatusCode.Should().Be(HttpStatusCode.OK, await result.Content.ReadAsStringAsync());
+        return (job, await result.Content.ReadFromJsonAsync<JsonElement>());
+    }
+
+    private static async Task<(HttpResponseMessage Response, JsonElement Body)> SubmitDurableJobAsync(
+        HttpClient client,
+        string projectId,
+        object body,
+        string? idempotencyKey = null)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/projects/{projectId}/workflows/generate")
+        {
+            Content = JsonContent.Create(body),
+        };
+        message.Headers.Add("Idempotency-Key", idempotencyKey ?? Guid.NewGuid().ToString("N"));
+        var accepted = await client.SendAsync(message);
+        var job = await accepted.Content.ReadFromJsonAsync<JsonElement>();
+        return (accepted, job);
+    }
+
     // â”€â”€ Endpoint integration (stub generator) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
@@ -1172,10 +1212,11 @@ public sealed class WorkflowGeneratorTests
         confirm.StatusCode.Should().Be(HttpStatusCode.OK, await confirm.Content.ReadAsStringAsync());
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        _ = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "A manual review-and-merge workflow." });
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
 
         var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
             .Should().BeOfType<StubWorkflowGenerator>().Subject;
@@ -1186,7 +1227,7 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateEndpoint_Returns200_WithYamlAndWorkflowId()
+    public async Task GenerateEndpoint_ReturnsAcceptedJob_WithDurableYamlIdVersionAndGraph()
     {
         await using var factory = new StubWorkflowGeneratorFactory();
         var client = factory.CreateAuthenticatedClient();
@@ -1202,15 +1243,18 @@ public sealed class WorkflowGeneratorTests
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        var (job, result) = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "A manual review-and-merge workflow." });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("yaml").GetString().Should().Contain("id: generated-flow");
-        body.GetProperty("workflowId").GetString().Should().Be("generated-flow");
-        body.GetProperty("wasCorrected").GetBoolean().Should().BeFalse();
+        job.GetProperty("status").GetString().Should().Be("queued");
+        result.GetProperty("yaml").GetString().Should().Contain("id: generated-flow");
+        result.GetProperty("workflow_id").GetString().Should().Be("generated-flow");
+        result.GetProperty("version").GetInt32().Should().Be(1);
+        result.GetProperty("was_corrected").GetBoolean().Should().BeFalse();
+        result.GetProperty("graph").GetProperty("nodes").GetArrayLength().Should().BeGreaterThan(0);
 
         var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
             .Should().BeOfType<StubWorkflowGenerator>().Subject;
@@ -1242,10 +1286,11 @@ public sealed class WorkflowGeneratorTests
         update.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        _ = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "A manual review workflow." });
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
             .Should().BeOfType<StubWorkflowGenerator>().Subject;
@@ -1270,16 +1315,16 @@ public sealed class WorkflowGeneratorTests
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        var (_, body) = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "Add a QA gate.", base_workflow_id = "default" });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("mode").GetString().Should().Be("edit");
         body.GetProperty("base_workflow_id").GetString().Should().Be("default");
         body.GetProperty("base_workflow_is_built_in").GetBoolean().Should().BeTrue();
-        body.GetProperty("workflowId").GetString().Should().Be("generated-flow");
+        body.GetProperty("workflow_id").GetString().Should().Be("generated-flow");
 
         var workflowsDir = Path.Combine(dir, ".agentweaver", "workflows");
         File.Exists(Path.Combine(workflowsDir, "generated-flow.yaml")).Should().BeFalse(
@@ -1311,17 +1356,158 @@ public sealed class WorkflowGeneratorTests
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        _ = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "Rename the first step.", base_yaml = ValidWorkflowYaml });
-
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
         var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
             .Should().BeOfType<StubWorkflowGenerator>().Subject;
         generator.LastRequest.Should().NotBeNull();
         generator.LastRequest!.IsEdit.Should().BeTrue();
         generator.LastRequest.BaseWorkflowId.Should().Be("generated-flow");
         generator.LastRequest.BaseWorkflowYaml.Should().Be(ValidWorkflowYaml);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_IdempotencyReturnsOneJobAndPersistsOneArtifact()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Idempotency Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+
+        const string key = "workflow-generation-stable-retry";
+        var first = await SubmitDurableJobAsync(
+            client, projectId, new { description = "Generate a release workflow." }, key);
+        var repeated = await SubmitDurableJobAsync(
+            client, projectId, new { description = "Generate a release workflow." }, key);
+        first.Response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        repeated.Response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        repeated.Body.GetProperty("job_id").GetString()
+            .Should().Be(first.Body.GetProperty("job_id").GetString());
+        first.Body.GetProperty("provider_snapshot").GetProperty("provider_key").GetString()
+            .Should().NotBeNullOrWhiteSpace();
+
+        var conflict = await SubmitDurableJobAsync(
+            client, projectId, new { description = "Generate a different workflow." }, key);
+        conflict.Response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        var otherCreate = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Other Project {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var otherProjectId = (await otherCreate.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        var crossProject = await client.GetAsync(
+            $"/api/projects/{otherProjectId}/workflows/generation-jobs/{first.Body.GetProperty("job_id").GetString()}");
+        crossProject.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeFalse();
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var jobId = first.Body.GetProperty("job_id").GetString()!;
+        (await db.BlueprintGenerationArtifacts.CountAsync(x => x.JobId == jobId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_ProviderTimeoutHasCanonicalRetryableFailureAndRetryCompletes()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Timeout Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.Hang = true;
+        var (_, job) = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description = "Generate an advanced release readiness workflow." },
+            "workflow-timeout-retry");
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+
+        var statusUrl = job.GetProperty("status_url").GetString()!;
+        var failed = await client.GetFromJsonAsync<JsonElement>(statusUrl);
+        failed.GetProperty("status").GetString().Should().Be("failed");
+        failed.GetProperty("failure").GetProperty("code").GetString()
+            .Should().Be("workflow_provider_timeout");
+        failed.GetProperty("failure").GetProperty("retryable").GetBoolean().Should().BeTrue();
+
+        generator.Hang = false;
+        var retry = await client.PostAsJsonAsync(job.GetProperty("retry_url").GetString(), new { });
+        retry.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+        var result = await client.GetAsync(job.GetProperty("result_url").GetString());
+        result.StatusCode.Should().Be(HttpStatusCode.OK, await result.Content.ReadAsStringAsync());
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var jobId = job.GetProperty("job_id").GetString()!;
+        (await db.BlueprintGenerationArtifacts.CountAsync(x => x.JobId == jobId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_CancelledQueuedJobDoesNotRunAndCanBeRetried()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Cancel Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+        var (_, job) = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description = "Generate a cancellable workflow." },
+            "workflow-cancel-retry");
+
+        var cancelled = await client.PostAsJsonAsync(job.GetProperty("cancel_url").GetString(), new { });
+        cancelled.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await cancelled.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("status").GetString().Should().Be("cancelled");
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeFalse();
+
+        var retry = await client.PostAsJsonAsync(job.GetProperty("retry_url").GetString(), new { });
+        retry.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+        var result = await client.GetAsync(job.GetProperty("result_url").GetString());
+        result.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]
@@ -1405,12 +1591,16 @@ public sealed class WorkflowGeneratorTests
         public int CallCount { get; private set; }
         public WorkflowGenerationRequest? LastRequest { get; private set; }
 
-        public Task<WorkflowGenerationResult> GenerateAsync(WorkflowGenerationRequest request, CancellationToken ct = default)
+        public bool Hang { get; set; }
+
+        public async Task<WorkflowGenerationResult> GenerateAsync(WorkflowGenerationRequest request, CancellationToken ct = default)
         {
             CallCount++;
             LastRequest = request;
+            if (Hang)
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
             var loaded = WorkflowDefinitionLoader.Load(ValidWorkflowYaml, "stub");
-            return Task.FromResult(new WorkflowGenerationResult(loaded.Definition!, ValidWorkflowYaml, WasCorrected: false));
+            return new WorkflowGenerationResult(loaded.Definition!, ValidWorkflowYaml, WasCorrected: false);
         }
     }
 
@@ -1471,6 +1661,7 @@ public sealed class WorkflowGeneratorTests
             configuration["Auth:User"] = TestUser;
             configuration["Auth:GitHub:ClientId"] = "test-github-client-id";
             configuration["Auth:GitHub:BaseUrl"] = "https://github.com";
+            configuration["Generation:DurableJobTimeoutSeconds"] = "1";
         }
 
         protected override void ConfigureTestServices(IServiceCollection services)

@@ -22,7 +22,8 @@ This document covers the server-side generation capability behind
 | `CopilotWorkflowGenerator` | Builds the prompt, resolves the effective generation provider via `GenerationModelProviderExecutor`, calls `IAgentRunner`, validates, and runs one correction pass. |
 | `WorkflowDefinitionLoader` | Validates the model output with the **same** schema/structural rules the runtime loader enforces. |
 | `RunWorkflowGraphBinder.ValidateBindable` | Dry-runs runtime binding after schema validation; rejects loadable but unrunnable node/edge combinations. |
-| `WorkflowDefinitionEndpoints` | Hosts the `POST .../workflows/generate` endpoint; resolves the project's cast roles and maps results/errors to HTTP. |
+| `WorkflowDefinitionEndpoints` | Accepts durable generation jobs, resolves the project's cast roles, and exposes authorized status, result, cancellation, and retry endpoints. |
+| `BlueprintGenerationJobWorker` | Runs both Blueprint and workflow generation through the existing leased durable-job queue, with provider snapshots, bounded execution, and exactly-once artifact persistence. |
 
 All prompt construction, schema context, and LLM invocation live **server-side**
 (FR-057). The client sends a description plus project target-repository context
@@ -32,17 +33,28 @@ when available, then renders the returned YAML.
 
 ```
 POST /api/projects/{id}/workflows/generate
+Idempotency-Key: <caller retry key>
 Body: { "description": "string" }
-→ 200 { "yaml": string, "workflowId": string, "wasCorrected": bool }
-→ 400 { "error": string }   // description missing, or generation failed after the correction pass
+→ 202 { "job_id": string, "status": "queued", "status_url": string, "result_url": string, ... }
+→ 400 { "error": string }   // description or Idempotency-Key missing
+→ 409 { "error": "idempotency_key_conflict" }
 → 404                       // project not found
 → 403                       // caller is not the project owner
 ```
 
-The response YAML is a draft — the MCP server and Web UI use the same server-side
-generation contract (FR-059). The production provider can be Copilot or BYOK; the class
-name is not a provider guarantee. Prepare the `workflow_generation` AI execution context
-and send its `execution_key` in `If-Model-Provider-Key` for the guarded request.
+Poll `status_url`; a completed job exposes immutable YAML, workflow ID, version, and graph at
+`result_url`. The job can be cancelled while queued/running and retried after cancellation or a
+retryable failure. Reusing the same `Idempotency-Key` with the identical request returns the same
+job; using it for different input returns `409`. A provider timeout becomes the canonical
+retryable `workflow_provider_timeout` failure instead of a disconnected request with ambiguous
+progress. The returned YAML remains an unsaved draft — the MCP server and Web UI use the same
+server-side generation contract (FR-059), and project workspace persistence still requires an
+explicit save.
+
+The production provider can be Copilot or BYOK; the class name is not a provider guarantee.
+Prepare the `workflow_generation` AI execution context and send its `execution_key` in
+`If-Model-Provider-Key` for the guarded acceptance request. The accepted job snapshots that
+provider binding and restores it in the worker.
 For GitHub-backed projects, the server also passes the project's source repository
 into the generation prompt so generated node prompts keep acting against that repo.
 

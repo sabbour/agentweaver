@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Generation;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -50,6 +52,47 @@ public enum BlueprintGenerationJobCreateDisposition
 public sealed record BlueprintGenerationJobCreateResult(
     BlueprintGenerationJobCreateDisposition Disposition,
     BlueprintGenerationJobSnapshot Snapshot);
+
+public sealed record WorkflowGenerationJobPayload(
+    string Description,
+    string ProjectId,
+    IReadOnlyList<string>? TeamRoles,
+    string UserId,
+    string? TargetRepository,
+    string? BaseWorkflowId,
+    string? BaseWorkflowYaml,
+    bool BaseWorkflowIsBuiltIn,
+    string? GenerationModel,
+    bool ContentOnly)
+{
+    private const string Prefix = "agentweaver:workflow-generation:v1:";
+
+    public string Serialize() =>
+        Prefix + Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(this)));
+
+    public static bool TryDeserialize(string value, out WorkflowGenerationJobPayload? payload)
+    {
+        payload = null;
+        if (!value.StartsWith(Prefix, StringComparison.Ordinal))
+            return false;
+        try
+        {
+            payload = JsonSerializer.Deserialize<WorkflowGenerationJobPayload>(
+                Encoding.UTF8.GetString(Convert.FromBase64String(value[Prefix.Length..])));
+            return payload is not null;
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            return false;
+        }
+    }
+}
+
+public sealed record WorkflowGenerationArtifactMetadata(
+    bool WasCorrected,
+    string Mode,
+    string? BaseWorkflowId,
+    bool BaseWorkflowIsBuiltIn);
 
 public sealed class BlueprintGenerationJobStore(MemoryDbContext db)
 {
@@ -246,6 +289,63 @@ public sealed class BlueprintGenerationJobStore(MemoryDbContext db)
         }
     }
 
+    public async Task<bool> CompleteWorkflowAsync(
+        string jobId,
+        string leaseOwner,
+        WorkflowGenerationResult result,
+        WorkflowGenerationJobPayload request,
+        CancellationToken ct)
+    {
+        var metadata = new WorkflowGenerationArtifactMetadata(
+            result.WasCorrected,
+            request.BaseWorkflowYaml is null ? "create" : "edit",
+            request.BaseWorkflowId,
+            request.BaseWorkflowIsBuiltIn);
+        var now = DateTimeOffset.UtcNow;
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var artifact = new BlueprintGenerationArtifactRecord
+        {
+            ArtifactId = Guid.NewGuid().ToString("N"),
+            JobId = jobId,
+            LogicalId = result.Workflow.Id,
+            Version = 1,
+            BlueprintJson = JsonSerializer.Serialize(metadata),
+            GeneratedWorkflowYaml = result.GeneratedYaml,
+            WarningsJson = "[]",
+            CreatedAt = now,
+        };
+        db.BlueprintGenerationArtifacts.Add(artifact);
+        try
+        {
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            var completed = await db.BlueprintGenerationJobs
+                .Where(x => x.JobId == jobId
+                    && x.Status == BlueprintGenerationJobStatuses.Running
+                    && x.LeaseOwner == leaseOwner)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(x => x.Status, BlueprintGenerationJobStatuses.Completed)
+                    .SetProperty(x => x.LeaseOwner, (string?)null)
+                    .SetProperty(x => x.LeaseExpiresAt, (DateTimeOffset?)null)
+                    .SetProperty(x => x.CompletedAt, now)
+                    .SetProperty(x => x.UpdatedAt, now), ct)
+                .ConfigureAwait(false);
+            if (completed != 1)
+            {
+                await transaction.RollbackAsync(ct).ConfigureAwait(false);
+                db.Entry(artifact).State = EntityState.Detached;
+                return false;
+            }
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(ct).ConfigureAwait(false);
+            db.Entry(artifact).State = EntityState.Detached;
+            return false;
+        }
+    }
+
     public async Task<bool> FailAsync(
         string jobId,
         string leaseOwner,
@@ -332,12 +432,15 @@ public sealed class BlueprintGenerationJobStore(MemoryDbContext db)
 
 public sealed class BlueprintGenerationJobWorker(
     IServiceScopeFactory scopeFactory,
+    IConfiguration configuration,
     ILogger<BlueprintGenerationJobWorker> logger) : BackgroundService
 {
     internal static readonly TimeSpan LeaseDuration = TimeSpan.FromMinutes(2);
     internal static readonly TimeSpan LeaseHeartbeat = TimeSpan.FromSeconds(20);
     internal static readonly TimeSpan IdleDelay = TimeSpan.FromSeconds(1);
     internal const int WorkerCount = 4;
+    private readonly TimeSpan _executionTimeout = TimeSpan.FromSeconds(
+        Math.Clamp(configuration.GetValue("Generation:DurableJobTimeoutSeconds", 300), 1, 3600));
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -377,6 +480,7 @@ public sealed class BlueprintGenerationJobWorker(
             return false;
 
         using var executionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        executionCts.CancelAfter(_executionTimeout);
         var execution = ExecuteClaimedAsync(scope.ServiceProvider, snapshot.Job, executionCts.Token);
         while (!execution.IsCompleted)
         {
@@ -391,63 +495,150 @@ public sealed class BlueprintGenerationJobWorker(
             }
         }
 
-        BlueprintGenerationResult result;
         try
         {
-            result = await execution.ConfigureAwait(false);
+            var result = await execution.ConfigureAwait(false);
+            if (result.Workflow is not null)
+            {
+                _ = await store.CompleteWorkflowAsync(
+                    snapshot.Job.JobId,
+                    leaseOwner,
+                    result.Workflow,
+                    result.WorkflowRequest!,
+                    ct).ConfigureAwait(false);
+                return true;
+            }
+
+            var blueprint = result.Blueprint!;
+            if (blueprint.Succeeded)
+            {
+                _ = await store.CompleteAsync(snapshot.Job.JobId, leaseOwner, blueprint, ct).ConfigureAwait(false);
+                return true;
+            }
+
+            var failure = CanonicalFailure(blueprint);
+            _ = await store.FailAsync(
+                snapshot.Job.JobId,
+                leaseOwner,
+                failure.Code,
+                failure.Message,
+                failure.Retryable,
+                ct).ConfigureAwait(false);
+            return true;
         }
-        catch (OperationCanceledException) when (executionCts.IsCancellationRequested)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            var workflow = WorkflowGenerationJobPayload.TryDeserialize(
+                snapshot.Job.Description, out _);
+            await store.FailAsync(
+                snapshot.Job.JobId,
+                leaseOwner,
+                workflow ? "workflow_provider_timeout" : "blueprint_provider_timeout",
+                workflow
+                    ? "The AI provider did not complete workflow generation before its deadline."
+                    : "The AI provider did not complete Blueprint generation before its deadline.",
+                retryable: true,
+                ct).ConfigureAwait(false);
             return true;
         }
         catch (AiExecutionPlanException)
         {
+            var workflow = WorkflowGenerationJobPayload.TryDeserialize(
+                snapshot.Job.Description, out _);
             await store.FailAsync(
                 snapshot.Job.JobId,
                 leaseOwner,
-                "blueprint_provider_authorization_required",
-                "The accepted AI provider binding changed. Reauthorize it and submit a new Blueprint-generation request.",
+                workflow
+                    ? "workflow_provider_authorization_required"
+                    : "blueprint_provider_authorization_required",
+                workflow
+                    ? "The accepted AI provider binding changed. Reauthorize it and submit a new workflow-generation request."
+                    : "The accepted AI provider binding changed. Reauthorize it and submit a new Blueprint-generation request.",
                 retryable: false,
+                ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (AgentProviderException ex)
+        {
+            var workflow = WorkflowGenerationJobPayload.TryDeserialize(
+                snapshot.Job.Description, out _);
+            var failure = workflow
+                ? CanonicalWorkflowProviderFailure(ex)
+                : ("blueprint_provider_unavailable",
+                    "The AI provider is temporarily unavailable for Blueprint generation. Retry later.",
+                    ex.IsRetryable);
+            await store.FailAsync(
+                snapshot.Job.JobId,
+                leaseOwner,
+                failure.Item1,
+                failure.Item2,
+                failure.Item3,
+                ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (WorkflowGenerationException)
+        {
+            await store.FailAsync(
+                snapshot.Job.JobId,
+                leaseOwner,
+                "workflow_generation_invalid",
+                "The generated workflow did not satisfy the workflow contract after its correction pass.",
+                retryable: false,
+                ct).ConfigureAwait(false);
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            var workflow = WorkflowGenerationJobPayload.TryDeserialize(
+                snapshot.Job.Description, out _);
+            await store.FailAsync(
+                snapshot.Job.JobId,
+                leaseOwner,
+                workflow ? "workflow_provider_timeout" : "blueprint_provider_timeout",
+                workflow
+                    ? "The AI provider did not complete workflow generation before its deadline."
+                    : "The AI provider did not complete Blueprint generation before its deadline.",
+                retryable: true,
                 ct).ConfigureAwait(false);
             return true;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Blueprint generation job {JobId} failed unexpectedly", snapshot.Job.JobId);
+            var workflow = WorkflowGenerationJobPayload.TryDeserialize(
+                snapshot.Job.Description, out _);
+            logger.LogError(ex, "{GenerationKind} generation job {JobId} failed unexpectedly",
+                workflow ? "Workflow" : "Blueprint", snapshot.Job.JobId);
             await store.FailAsync(
                 snapshot.Job.JobId,
                 leaseOwner,
-                "blueprint_generation_failed",
-                "Blueprint generation failed before an artifact could be persisted.",
+                workflow ? "workflow_generation_failed" : "blueprint_generation_failed",
+                workflow
+                    ? "Workflow generation failed before an artifact could be persisted."
+                    : "Blueprint generation failed before an artifact could be persisted.",
                 retryable: true,
                 ct).ConfigureAwait(false);
             return true;
         }
-
-        if (result.Succeeded)
-        {
-            _ = await store.CompleteAsync(snapshot.Job.JobId, leaseOwner, result, ct).ConfigureAwait(false);
-            return true;
-        }
-
-        var failure = CanonicalFailure(result);
-        _ = await store.FailAsync(
-            snapshot.Job.JobId,
-            leaseOwner,
-            failure.Code,
-            failure.Message,
-            failure.Retryable,
-            ct).ConfigureAwait(false);
-        return true;
     }
 
-    private static async Task<BlueprintGenerationResult> ExecuteClaimedAsync(
+    private sealed record ClaimedGenerationResult(
+        BlueprintGenerationResult? Blueprint,
+        WorkflowGenerationResult? Workflow,
+        WorkflowGenerationJobPayload? WorkflowRequest);
+
+    private static async Task<ClaimedGenerationResult> ExecuteClaimedAsync(
         IServiceProvider services,
         BlueprintGenerationJobRecord job,
         CancellationToken ct)
     {
-        if (!AiOperationCatalog.TryGet("blueprint_generation", out var operation))
-            throw new InvalidOperationException("Blueprint generation AI operation is not registered.");
+        var isWorkflow = WorkflowGenerationJobPayload.TryDeserialize(job.Description, out var workflowRequest);
+        var operationId = isWorkflow ? "workflow_generation" : "blueprint_generation";
+        if (!AiOperationCatalog.TryGet(operationId, out var operation))
+            throw new InvalidOperationException($"{operationId} AI operation is not registered.");
         var plans = services.GetRequiredService<AiExecutionPlanService>();
         var accessor = services.GetRequiredService<AiExecutionPlanAccessor>();
         var projectId = ProjectId.TryParse(job.ProjectId, out var parsed) ? parsed : (ProjectId?)null;
@@ -458,8 +649,27 @@ public sealed class BlueprintGenerationJobWorker(
             job.Subject,
             ct).ConfigureAwait(false);
         using var accepted = accessor.Push(plan);
+        if (isWorkflow)
+        {
+            var generator = services.GetRequiredService<IWorkflowGenerator>();
+            var result = await generator.GenerateAsync(
+                new WorkflowGenerationRequest(
+                    workflowRequest!.Description,
+                    workflowRequest.ProjectId,
+                    workflowRequest.TeamRoles,
+                    workflowRequest.UserId,
+                    workflowRequest.TargetRepository,
+                    workflowRequest.BaseWorkflowId,
+                    workflowRequest.BaseWorkflowYaml,
+                    workflowRequest.BaseWorkflowIsBuiltIn,
+                    workflowRequest.GenerationModel,
+                    workflowRequest.ContentOnly),
+                ct).ConfigureAwait(false);
+            return new(null, result, workflowRequest);
+        }
+
         var blueprints = services.GetRequiredService<BlueprintService>();
-        return await blueprints.GenerateAsync(
+        var blueprint = await blueprints.GenerateAsync(
             job.Description,
             ct,
             job.Subject,
@@ -467,6 +677,35 @@ public sealed class BlueprintGenerationJobWorker(
             job.ProjectId,
             job.BlueprintModel,
             job.WorkflowModel).ConfigureAwait(false);
+        return new(blueprint, null, null);
+    }
+
+    private static (string, string, bool) CanonicalWorkflowProviderFailure(
+        AgentProviderException failure)
+    {
+        if (failure.ErrorCode.Contains("timeout", StringComparison.OrdinalIgnoreCase))
+        {
+            return (
+                "workflow_provider_timeout",
+                "The AI provider did not complete workflow generation before its deadline.",
+                true);
+        }
+
+        return failure.FailureKind switch
+        {
+            AgentProviderFailureKind.Authorization => (
+                "workflow_provider_authorization_required",
+                "The configured AI provider requires reauthorization before workflow generation can continue.",
+                false),
+            AgentProviderFailureKind.RateLimited => (
+                "workflow_provider_unavailable",
+                "The AI provider is rate limited for workflow generation. Retry later.",
+                true),
+            _ => (
+                "workflow_provider_unavailable",
+                "The AI provider is temporarily unavailable for workflow generation. Retry later.",
+                failure.IsRetryable),
+        };
     }
 
     private static (string Code, string Message, bool Retryable) CanonicalFailure(
