@@ -44,9 +44,15 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
     // store (or a missing run row) degrades to the generic failure path unchanged.
     private readonly IRunStore? _runStore;
     private readonly IRunAgentHostContextResolver? _launchContextResolver;
+    private readonly IAgentHostDispatchBoundaryValidator? _dispatchBoundaryValidator;
     // Dedupes concurrent launches for the same run (e.g. parallel sub-agent turns) and
     // caches the in-flight/launched task so a run is launched at most once.
     private readonly ConcurrentDictionary<string, Lazy<Task<string>>> _launches = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<Lazy<Task<string>>, DispatchMetadata> _launchMetadata = new();
+
+    private sealed record DispatchMetadata(
+        AgentHostDispatchBoundary? Boundary,
+        string DispatchId);
 
     public KubernetesPodAgentEndpointResolver(
         IKubernetes k8sClient,
@@ -56,7 +62,8 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         ILogger<KubernetesPodAgentEndpointResolver> logger,
         IAgentHostPodLifecycle? podLifecycle = null,
         IRunStore? runStore = null,
-        IRunAgentHostContextResolver? launchContextResolver = null)
+        IRunAgentHostContextResolver? launchContextResolver = null,
+        IAgentHostDispatchBoundaryValidator? dispatchBoundaryValidator = null)
     {
         _k8sClient = k8sClient ?? throw new ArgumentNullException(nameof(k8sClient));
         _podRegistry = podRegistry ?? throw new ArgumentNullException(nameof(podRegistry));
@@ -66,6 +73,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         _podLifecycle = podLifecycle;
         _runStore = runStore;
         _launchContextResolver = launchContextResolver;
+        _dispatchBoundaryValidator = dispatchBoundaryValidator;
     }
 
     /// <inheritdoc />
@@ -93,6 +101,11 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                         runId);
                     return null;
                 }
+            }
+            else
+            {
+                if (!await EnsureAdoptedDispatchAsync(runId, ct).ConfigureAwait(false))
+                    podName = await EnsurePodLaunchedAsync(runId, ct).ConfigureAwait(false);
             }
 
             try
@@ -136,10 +149,9 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                     return null;
                 }
 
-                _podRegistry.Unregister(runId);
-                _launches.TryRemove(runId, out _);
                 if (_podLifecycle is not null && recoveryAttempt < maxReapedPodRecoveries)
                 {
+                    await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
                     _logger.LogWarning(
                         ex,
                         "KubernetesPodAgentEndpointResolver: AgentHost pod {PodName} for non-terminal run {RunId} " +
@@ -151,15 +163,22 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                     continue;
                 }
 
-                var reason = _podLifecycle is null
-                    ? "agenthost_pod_reaped"
-                    : "agenthost_pod_reaped_recovery_exhausted";
-                throw new WorkflowAgentInfrastructureException(
-                    reason,
-                    $"AgentHost pod '{podName}' for non-terminal run '{runId}' was reaped; " +
-                    $"redispatch recovery attempts exhausted ({recoveryAttempt}/{maxReapedPodRecoveries}).",
-                    ex,
-                    isRetryable: _podLifecycle is null);
+                await RecordExhaustionAsync(runId).ConfigureAwait(false);
+                await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
+                throw AgentHostUnavailable(runId, ex);
+            }
+            catch (WorkflowAgentInfrastructureException ex)
+                when (ex.Reason == "agenthost_ip_not_ready" && _podLifecycle is not null)
+            {
+                if (recoveryAttempt < maxReapedPodRecoveries)
+                {
+                    await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
+                    continue;
+                }
+
+                await RecordExhaustionAsync(runId).ConfigureAwait(false);
+                await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
+                throw AgentHostUnavailable(runId, ex);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -171,6 +190,29 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                     runId, podName);
                 return null;
             }
+        }
+    }
+
+    public async Task ValidateDeliveryAsync(string runId, CancellationToken ct)
+    {
+        if (_dispatchBoundaryValidator is null)
+            return;
+
+        if (!_launches.TryGetValue(runId, out var launch)
+            || !launch.IsValueCreated
+            || !_launchMetadata.TryGetValue(launch, out var metadata))
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "agenthost_dispatch_stale",
+                $"AgentHost dispatch '{runId}' has no active pre-delivery claim.");
+        }
+
+        var current = await _dispatchBoundaryValidator.CaptureAsync(runId, ct).ConfigureAwait(false);
+        if (metadata.Boundary != current)
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "agenthost_dispatch_stale",
+                $"AgentHost dispatch '{runId}' changed before delivery.");
         }
     }
 
@@ -201,12 +243,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         if (existing is not null)
             return existing;
 
-        var launch = _launches.GetOrAdd(
-            runId,
-            id => new Lazy<Task<string>>(
-                // Use a non-cancelable token: the pod's lifetime spans the whole run, not a
-                // single turn's cancellation scope. Released by RunWatchLoopService on suspend.
-                () => LaunchPodAsync(id)));
+        var launch = await GetOrCreateLaunchAsync(runId, ct).ConfigureAwait(false);
 
         try
         {
@@ -225,8 +262,11 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
         catch (Exception ex)
         {
             // Drop the cached failed launch so a subsequent turn can retry.
-            _launches.TryRemove(
-                new KeyValuePair<string, Lazy<Task<string>>>(runId, launch));
+            if (_launches.TryRemove(
+                    new KeyValuePair<string, Lazy<Task<string>>>(runId, launch)))
+            {
+                _launchMetadata.TryRemove(launch, out _);
+            }
 
             if (ex is AgentProviderException)
                 throw;
@@ -236,63 +276,247 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             // admission/scheduling/queueing is Kubernetes' job (issue #217) — a Pending pod is not a
             // failure here; LaunchAgentHostPodAsync simply waits (emitting provisioning heartbeats)
             // until the claim binds, so there is no capacity/quota exception to translate anymore.
-            var reason = ex switch
-            {
-                AgentHostPodReconcilerErrorException => "agent_pod_reconciler_error",
-                _ => null,
-            };
-            if (reason is not null)
-                await TryRecordFailureReasonAsync(runId, reason).ConfigureAwait(false);
-
             _logger.LogError(ex,
-                "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId}{Reason}",
-                runId, reason is null ? string.Empty : $" ({reason})");
+                "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId}",
+                runId);
+            if (ex is WorkflowAgentInfrastructureException infrastructure)
+                throw infrastructure;
             throw new WorkflowAgentInfrastructureException(
-                reason ?? "agenthost_launch_failed",
-                $"AgentHost pod launch failed for run '{runId}'" +
-                (reason is null ? $": {ex.Message}" : $" ({reason})."),
-                ex);
+                "agent_host_unavailable",
+                $"AgentHost is unavailable for run '{runId}'. Retry the run.",
+                ex,
+                isRetryable: true);
         }
     }
 
-    private async Task<string> LaunchPodAsync(string runId)
+    private async Task<Lazy<Task<string>>> GetOrCreateLaunchAsync(string runId, CancellationToken ct)
     {
-        if (_launchContextResolver is null)
-            return await _podLifecycle!
-                .LaunchAgentHostPodAsync(runId, CancellationToken.None)
-                .ConfigureAwait(false);
+        while (true)
+        {
+            var boundary = _dispatchBoundaryValidator is null
+                ? null
+                : await _dispatchBoundaryValidator.CaptureAsync(runId, ct).ConfigureAwait(false);
+            if (_launches.TryGetValue(runId, out var existing))
+            {
+                if (existing.IsValueCreated
+                    && existing.Value.IsCompletedSuccessfully
+                    && _podRegistry.TryGet(runId) is null)
+                {
+                    if (_launches.TryRemove(new KeyValuePair<string, Lazy<Task<string>>>(runId, existing)))
+                        _launchMetadata.TryRemove(existing, out _);
+                    continue;
+                }
 
-        var context = await _launchContextResolver
-            .ResolveAsync(runId, CancellationToken.None)
-            .ConfigureAwait(false);
-        return await _podLifecycle!
-            .LaunchAgentHostPodAsync(runId, context, CancellationToken.None)
-            .ConfigureAwait(false);
+                if (boundary is null
+                    || (_launchMetadata.TryGetValue(existing, out var existingMetadata)
+                        && existingMetadata.Boundary == boundary))
+                    return existing;
+
+                try
+                {
+                    await existing.Value.WaitAsync(ct).ConfigureAwait(false);
+                }
+                catch when (!ct.IsCancellationRequested)
+                {
+                    // The stale generation is finished; remove it below before creating the new claim.
+                }
+                if (_launches.TryRemove(new KeyValuePair<string, Lazy<Task<string>>>(runId, existing)))
+                    _launchMetadata.TryRemove(existing, out _);
+                continue;
+            }
+
+            var dispatchId = Guid.NewGuid().ToString("N");
+            var candidate = new Lazy<Task<string>>(
+                () => LaunchPodWithRecoveryAsync(runId, boundary, dispatchId),
+                LazyThreadSafetyMode.ExecutionAndPublication);
+            _launchMetadata[candidate] = new DispatchMetadata(boundary, dispatchId);
+            if (_launches.TryAdd(runId, candidate))
+                return candidate;
+            _launchMetadata.TryRemove(candidate, out _);
+        }
     }
 
-    /// <summary>
-    /// Best-effort: terminalizes <paramref name="runId"/> as Failed with <paramref name="reason"/>
-    /// as its FailureReason. Never throws — a missing store, missing run row, or a losing CAS
-    /// (the run was already terminalized elsewhere) all degrade silently to the generic path.
-    /// </summary>
-    private async Task TryRecordFailureReasonAsync(string runId, string reason)
+    private async Task<bool> EnsureAdoptedDispatchAsync(string runId, CancellationToken ct)
     {
-        if (_runStore is null || !RunId.TryParse(runId, out var parsed))
+        if (_dispatchBoundaryValidator is null || _launches.ContainsKey(runId))
+            return true;
+
+        var boundary = await _dispatchBoundaryValidator.CaptureAsync(runId, ct).ConfigureAwait(false);
+        var persisted = _podLifecycle is null
+            ? null
+            : await _podLifecycle.GetAgentHostDispatchContextAsync(runId, ct).ConfigureAwait(false);
+        if (persisted is null
+            || persisted.LifecycleGeneration != boundary.LifecycleGeneration
+            || !string.Equals(persisted.DispatchProjectId, boundary.ProjectId, StringComparison.Ordinal)
+            || !string.Equals(persisted.DispatchUserId, boundary.UserId, StringComparison.Ordinal)
+            || !string.Equals(persisted.DispatchAgentName, boundary.AgentName, StringComparison.Ordinal)
+            || !string.Equals(persisted.ProviderSnapshotKey, boundary.ProviderKey, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(persisted.DispatchId))
+        {
+            if (_podLifecycle is not null)
+                await _podLifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            _podRegistry.Unregister(runId);
+            return false;
+        }
+
+        var adopted = new Lazy<Task<string>>(
+            () => Task.FromResult(string.Empty),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+        _launchMetadata[adopted] = new DispatchMetadata(boundary, persisted.DispatchId);
+        if (_launches.TryAdd(runId, adopted))
+        {
+            _ = adopted.Value;
+            return true;
+        }
+
+        _launchMetadata.TryRemove(adopted, out _);
+        return true;
+    }
+
+    private async Task<string> LaunchPodWithRecoveryAsync(
+        string runId,
+        AgentHostDispatchBoundary? boundary,
+        string dispatchId)
+    {
+        Exception? lastFailure = null;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                if (boundary is not null)
+                    await ValidateBoundaryAsync(boundary, CancellationToken.None).ConfigureAwait(false);
+
+                var context = _launchContextResolver is null
+                    ? new AgentHostLaunchContext(SharedWorkingDirectory: null)
+                    : await _launchContextResolver.ResolveAsync(runId, CancellationToken.None).ConfigureAwait(false);
+                context = context with
+                {
+                    HolderToken = dispatchId,
+                    DispatchId = dispatchId,
+                    LifecycleGeneration = boundary?.LifecycleGeneration,
+                    DispatchProjectId = boundary?.ProjectId,
+                    DispatchUserId = boundary?.UserId,
+                    DispatchAgentName = boundary?.AgentName,
+                    ProviderSnapshotKey = boundary?.ProviderKey,
+                };
+
+                var endpoint = await _podLifecycle!
+                    .LaunchAgentHostPodAsync(runId, context, CancellationToken.None)
+                    .ConfigureAwait(false);
+
+                try
+                {
+                    if (boundary is not null)
+                        await ValidateBoundaryAsync(boundary, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    await _podLifecycle.TryReleaseHeldAgentHostPodAsync(
+                        runId, dispatchId, CancellationToken.None).ConfigureAwait(false);
+                    _podRegistry.Unregister(runId);
+                    throw;
+                }
+                return endpoint;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException && IsRecoverablePreDeliveryFailure(ex))
+            {
+                lastFailure = ex;
+                await _podLifecycle!.TryReleaseHeldAgentHostPodAsync(
+                    runId, dispatchId, CancellationToken.None).ConfigureAwait(false);
+                _podRegistry.Unregister(runId);
+                if (attempt == 0)
+                    continue;
+            }
+        }
+
+        await RecordExhaustionAsync(runId, boundary, dispatchId).ConfigureAwait(false);
+        throw AgentHostUnavailable(runId, lastFailure);
+    }
+
+    private static bool IsRecoverablePreDeliveryFailure(Exception ex) =>
+        ex is not AgentProviderException
+        && ex is not WorkflowAgentInfrastructureException { Reason: "agenthost_dispatch_stale" or "agenthost_dispatch_inactive" };
+
+    private async Task ValidateBoundaryAsync(AgentHostDispatchBoundary expected, CancellationToken ct)
+    {
+        var current = await _dispatchBoundaryValidator!.CaptureAsync(expected.DispatchRunId, ct).ConfigureAwait(false);
+        if (current != expected)
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "agenthost_dispatch_stale",
+                $"AgentHost dispatch '{expected.DispatchRunId}' no longer matches its run generation.");
+        }
+    }
+
+    private async Task ClearDispatchForFreshLaunchAsync(string runId)
+    {
+        _podRegistry.Unregister(runId);
+        if (!_launches.TryRemove(runId, out var launch))
             return;
 
-        try
+        if (_launchMetadata.TryRemove(launch, out var metadata)
+            && _podLifecycle is not null)
         {
-            await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                parsed, RunStatus.Failed, EventTypes.RunFailed, new { reason }, DateTimeOffset.UtcNow, reason, CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "KubernetesPodAgentEndpointResolver: failed to record FailureReason '{Reason}' for run {RunId}",
-                reason, runId);
+            await _podLifecycle.TryReleaseHeldAgentHostPodAsync(
+                runId, metadata.DispatchId, CancellationToken.None).ConfigureAwait(false);
         }
     }
+
+    private Task RecordExhaustionAsync(string runId)
+    {
+        if (!_launches.TryGetValue(runId, out var launch)
+            || !_launchMetadata.TryGetValue(launch, out var metadata))
+        {
+            return Task.CompletedTask;
+        }
+
+        return RecordExhaustionAsync(runId, metadata.Boundary, metadata.DispatchId);
+    }
+
+    private async Task RecordExhaustionAsync(
+        string runId,
+        AgentHostDispatchBoundary? boundary,
+        string dispatchId)
+    {
+        if (boundary is null || boundary.IsResumableAssistant || _runStore is null
+            || !RunId.TryParse(boundary.OwningRunId, out var parsed))
+            return;
+
+        var changed = await _runStore.TrySetTerminalOutcomeAsync(
+            parsed,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed,
+                EventTypes.RunFailed,
+                new
+                {
+                    errorCode = "agent_host_unavailable",
+                    retryable = true,
+                    dispatchId,
+                },
+                DateTimeOffset.UtcNow,
+                boundary.LifecycleGeneration),
+            "agent_host_unavailable",
+            CancellationToken.None).ConfigureAwait(false);
+        if (changed)
+            return;
+
+        var current = await _runStore.GetAsync(parsed, CancellationToken.None).ConfigureAwait(false);
+        if (current is not null
+            && current.LifecycleGeneration == boundary.LifecycleGeneration
+            && current.Status == RunStatus.InProgress)
+        {
+            throw new InvalidOperationException(
+                $"AgentHost exhaustion for run '{runId}' could not be durably terminalized.");
+        }
+    }
+
+    private static WorkflowAgentInfrastructureException AgentHostUnavailable(string runId, Exception? inner) =>
+        new(
+            "agent_host_unavailable",
+            $"AgentHost is unavailable for run '{runId}'. Retry the run.",
+            inner,
+            isRetryable: true);
+
 }
 
 /// <summary>

@@ -169,6 +169,12 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// than a newer one placed under the same deterministic name by another API replica.
     /// </summary>
     internal const string HolderTokenAnnotation = "agentweaver.io/agent-host-holder-token";
+    internal const string DispatchIdAnnotation = "agentweaver.io/agent-host-dispatch-id";
+    internal const string LifecycleGenerationAnnotation = "agentweaver.io/run-lifecycle-generation";
+    internal const string DispatchProjectAnnotation = "agentweaver.io/dispatch-project-id";
+    internal const string DispatchUserAnnotation = "agentweaver.io/dispatch-user-id";
+    internal const string DispatchAgentAnnotation = "agentweaver.io/dispatch-agent-name";
+    internal const string ProviderSnapshotAnnotation = "agentweaver.io/provider-snapshot-key";
     private const string ContainerName = "agentweaver-sandbox";
 
     /// <summary>
@@ -503,6 +509,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 $"Cannot launch AgentHost pod for run '{runId}' without a submitting user; " +
                 "the /configure call must scope the pod to the run owner's Key Vault token.");
         }
+        launchContext = await BindDispatchContextAsync(
+            runId,
+            launchContext,
+            submittingUser,
+            configProjectId,
+            configAgentName,
+            effectiveProvider,
+            ct).ConfigureAwait(false);
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: resolved submitting user for run {RunId}; will configure pod via /configure.",
@@ -532,7 +546,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // SandboxTemplate, or warm pool — the pod is already warm and gets its per-run context
             // via the /configure POST below.
             claimCreated = await CreateAgentHostClaimAsync(
-                claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext.HolderToken, ct).ConfigureAwait(false);
+                claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext, ct).ConfigureAwait(false);
 
             if (!claimCreated && launchContext.Purpose == AgentHostPurpose.OperatorAssistant)
             {
@@ -560,7 +574,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     _turnTokenRegistry?.UnregisterTurnToken(runId);
                     await Task.Delay(1000, ct).ConfigureAwait(false);
                     claimCreated = await CreateAgentHostClaimAsync(
-                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext.HolderToken, ct).ConfigureAwait(false);
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext, ct).ConfigureAwait(false);
                     if (!claimCreated)
                     {
                         throw new InvalidOperationException(
@@ -587,7 +601,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 _turnTokenRegistry?.UnregisterTurnToken(runId);
                 await Task.Delay(1000, ct).ConfigureAwait(false);
                 claimCreated = await CreateAgentHostClaimAsync(
-                    claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext.HolderToken, ct).ConfigureAwait(false);
+                    claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext, ct).ConfigureAwait(false);
                 if (!claimCreated)
                 {
                     throw new InvalidOperationException(
@@ -618,7 +632,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     _turnTokenRegistry?.UnregisterTurnToken(runId);
                     await Task.Delay(1000, ct).ConfigureAwait(false);
                     claimCreated = await CreateAgentHostClaimAsync(
-                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext.HolderToken, ct).ConfigureAwait(false);
+                        claimName, _options.AgentHostWarmPoolRef, requestedWorkingDirectory, runId, launchContext, ct).ConfigureAwait(false);
                     if (!claimCreated)
                     {
                         throw new InvalidOperationException(
@@ -767,6 +781,54 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             await RevokeRepositoryCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+    }
+
+    private async Task<AgentHostLaunchContext> BindDispatchContextAsync(
+        string runId,
+        AgentHostLaunchContext context,
+        string? submittingUser,
+        string? projectId,
+        string? agentName,
+        EffectiveModelProviderResult? provider,
+        CancellationToken ct)
+    {
+        var providerKey = provider?.ProviderKey();
+        if (_runStore is null
+            || !RunId.TryParse(CoordinatorSubRunIds.StripSyntheticSuffix(runId), out var owningRunId)
+            || await _runStore.GetAsync(owningRunId, ct).ConfigureAwait(false) is not { } run
+            || string.IsNullOrWhiteSpace(submittingUser)
+            || string.IsNullOrWhiteSpace(providerKey))
+        {
+            return context;
+        }
+
+        var dispatchId = context.DispatchId ?? Guid.NewGuid().ToString("N");
+        var expected = context with
+        {
+            DispatchId = dispatchId,
+            HolderToken = context.HolderToken ?? dispatchId,
+            LifecycleGeneration = run.LifecycleGeneration,
+            DispatchProjectId = projectId,
+            DispatchUserId = submittingUser,
+            DispatchAgentName = agentName,
+            ProviderSnapshotKey = providerKey,
+        };
+        if ((context.LifecycleGeneration is not null && context.LifecycleGeneration != expected.LifecycleGeneration)
+            || (context.DispatchProjectId is not null
+                && !string.Equals(context.DispatchProjectId, expected.DispatchProjectId, StringComparison.Ordinal))
+            || (context.DispatchUserId is not null
+                && !string.Equals(context.DispatchUserId, expected.DispatchUserId, StringComparison.Ordinal))
+            || (context.DispatchAgentName is not null
+                && !string.Equals(context.DispatchAgentName, expected.DispatchAgentName, StringComparison.Ordinal))
+            || (context.ProviderSnapshotKey is not null
+                && !string.Equals(context.ProviderSnapshotKey, expected.ProviderSnapshotKey, StringComparison.Ordinal)))
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "agenthost_dispatch_stale",
+                $"AgentHost dispatch '{runId}' no longer matches its durable run boundary.");
+        }
+
+        return expected;
     }
 
     /// <summary>
@@ -966,6 +1028,39 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         return true;
     }
 
+    public async Task<AgentHostLaunchContext?> GetAgentHostDispatchContextAsync(
+        string runId,
+        CancellationToken ct = default)
+    {
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var dispatchId = await TryGetAgentHostClaimAnnotationAsync(claimName, DispatchIdAnnotation, ct)
+            .ConfigureAwait(false);
+        var generation = await TryGetAgentHostClaimAnnotationAsync(claimName, LifecycleGenerationAnnotation, ct)
+            .ConfigureAwait(false);
+        var userId = await TryGetAgentHostClaimAnnotationAsync(claimName, DispatchUserAnnotation, ct)
+            .ConfigureAwait(false);
+        var providerKey = await TryGetAgentHostClaimAnnotationAsync(claimName, ProviderSnapshotAnnotation, ct)
+            .ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(dispatchId)
+            || !int.TryParse(generation, out var lifecycleGeneration)
+            || string.IsNullOrWhiteSpace(userId)
+            || string.IsNullOrWhiteSpace(providerKey))
+        {
+            return null;
+        }
+
+        return new AgentHostLaunchContext(
+            SharedWorkingDirectory: null,
+            DispatchId: dispatchId,
+            LifecycleGeneration: lifecycleGeneration,
+            DispatchProjectId: await TryGetAgentHostClaimAnnotationAsync(
+                claimName, DispatchProjectAnnotation, ct).ConfigureAwait(false),
+            DispatchUserId: userId,
+            DispatchAgentName: await TryGetAgentHostClaimAnnotationAsync(
+                claimName, DispatchAgentAnnotation, ct).ConfigureAwait(false),
+            ProviderSnapshotKey: providerKey);
+    }
+
     /// <inheritdoc/>
     public async Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
     {
@@ -1060,7 +1155,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// </summary>
     private async Task<bool> CreateAgentHostClaimAsync(
         string claimName, string warmPoolName, string? workingDirectory, string runId,
-        string? holderToken, CancellationToken ct)
+        AgentHostLaunchContext launchContext, CancellationToken ct)
     {
         var annotations = new Dictionary<string, string>
         {
@@ -1077,8 +1172,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // replica, which cold-started a fresh pod under the very same name) would otherwise delete a
         // claim another replica is actively serving a turn from. See
         // IAgentHostPodLifecycle.TryReleaseHeldAgentHostPodAsync.
-        if (!string.IsNullOrWhiteSpace(holderToken))
-            annotations[HolderTokenAnnotation] = holderToken;
+        if (!string.IsNullOrWhiteSpace(launchContext.HolderToken))
+            annotations[HolderTokenAnnotation] = launchContext.HolderToken;
+        if (!string.IsNullOrWhiteSpace(launchContext.DispatchId))
+            annotations[DispatchIdAnnotation] = launchContext.DispatchId;
+        if (launchContext.LifecycleGeneration is { } lifecycleGeneration)
+            annotations[LifecycleGenerationAnnotation] = lifecycleGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(launchContext.DispatchProjectId))
+            annotations[DispatchProjectAnnotation] = launchContext.DispatchProjectId;
+        if (!string.IsNullOrWhiteSpace(launchContext.DispatchUserId))
+            annotations[DispatchUserAnnotation] = launchContext.DispatchUserId;
+        if (!string.IsNullOrWhiteSpace(launchContext.DispatchAgentName))
+            annotations[DispatchAgentAnnotation] = launchContext.DispatchAgentName;
+        if (!string.IsNullOrWhiteSpace(launchContext.ProviderSnapshotKey))
+            annotations[ProviderSnapshotAnnotation] = launchContext.ProviderSnapshotKey;
 
         var manifest = new
         {

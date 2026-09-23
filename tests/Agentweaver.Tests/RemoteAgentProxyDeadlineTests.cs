@@ -4,11 +4,35 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests;
 
 public sealed class RemoteAgentProxyDeadlineTests
 {
+    [Fact]
+    public async Task Delivery_fence_failure_never_sends_or_retries_the_A2A_turn()
+    {
+        var endpoint = new RejectingDeliveryEndpointResolver();
+        var transport = new CountingHttpHandler();
+        var proxy = new RemoteAgentProxy(
+            endpoint,
+            new SingleHttpClientFactory(new HttpClient(transport)),
+            NullLoggerFactory.Instance,
+            "http://agentweaver-api:8080");
+        await proxy.SetupAsync(
+            "", "", "run-delivery-fence", null, null, null, null, "link",
+            null, null, CancellationToken.None, "user-1");
+
+        var act = () => proxy.RunTurnAsync("do not deliver", false, CancellationToken.None);
+
+        var failure = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+        failure.Which.Reason.Should().Be("agenthost_dispatch_stale");
+        endpoint.ValidationCalls.Should().Be(1);
+        transport.Requests.Should().Be(0);
+        await proxy.DisposeAsync();
+    }
+
     [Fact]
     public void DefaultWorkerIdleBackstop_IsStrictlyLongerThanInPodIdleWindow()
     {
@@ -196,6 +220,40 @@ public sealed class RemoteAgentProxyDeadlineTests
         document.RootElement.GetProperty("message").GetString()
             .Should().Be("Run failed with code 'agent_turn_internal_error'. Retry is available.");
         json.Should().NotContain(secret).And.NotContain("rawA2a").And.NotContain("authorization");
+    }
+
+    private sealed class RejectingDeliveryEndpointResolver : ISandboxAgentEndpointResolver
+    {
+        public int ValidationCalls { get; private set; }
+
+        public Task<Uri?> TryResolveEndpointAsync(string runId, CancellationToken ct) =>
+            Task.FromResult<Uri?>(new("http://agenthost:8088/a2a/agent"));
+
+        public Task ValidateDeliveryAsync(string runId, CancellationToken ct)
+        {
+            ValidationCalls++;
+            throw new WorkflowAgentInfrastructureException(
+                "agenthost_dispatch_stale",
+                "The dispatch changed before delivery.");
+        }
+    }
+
+    private sealed class SingleHttpClientFactory(HttpClient client) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => client;
+    }
+
+    private sealed class CountingHttpHandler : HttpMessageHandler
+    {
+        public int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests++;
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
     }
 
     [Theory]

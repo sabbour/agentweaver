@@ -614,6 +614,7 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
         AgentHostA2APath = builder.Configuration["Sandbox:AgentHost:A2APath"] ?? "/a2a/agent",
     };
     builder.Services.AddSingleton(sandboxAgentOptions);
+    builder.Services.AddSingleton<IAgentHostDispatchBoundaryValidator, AgentHostDispatchBoundaryValidator>();
 
     // ISandboxAgentEndpointResolver: Kubernetes-native when in-cluster, no-op otherwise.
     // The no-op resolver causes a clear error if pod-per-run is attempted outside K8s.
@@ -636,10 +637,11 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
             // agent_pod_reconciler_error) on the run when a lazy pod launch fails.
             var runStore = sp.GetService<Agentweaver.Api.Infrastructure.IRunStore>();
             var launchContextResolver = sp.GetService<IRunAgentHostContextResolver>();
+            var dispatchBoundaryValidator = sp.GetRequiredService<IAgentHostDispatchBoundaryValidator>();
             return new KubernetesPodAgentEndpointResolver(
                 k8sClient, podRegistry, ns, sandboxAgentOptions,
                 loggerFactory.CreateLogger<KubernetesPodAgentEndpointResolver>(),
-                podLifecycle, runStore, launchContextResolver);
+                podLifecycle, runStore, launchContextResolver, dispatchBoundaryValidator);
         }
         catch
         {

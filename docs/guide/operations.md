@@ -143,10 +143,10 @@ sandboxes normally run with `kata-vm-isolation` and the `agentweaver-exec` sidec
 the Kata node pool, while non-sandbox control-plane workloads run with the default runc
 runtime.
 
-### AgentHost assembly recovery diagnostics
+### AgentHost pre-delivery recovery diagnostics
 
-Assembly RAI and Build & Test use the coordinator run's warm-pool AgentHost. Recovery is
-bounded and reason-specific:
+Project agents, Assembly RAI, and Build & Test use warm-pool AgentHost claims. Before
+the first A2A request, the dispatch is generation-fenced and recovery is bounded:
 
 - `agenthost_configure_copilot_token_refreshed` means AgentHost explicitly rejected the
   configured Copilot credential, the API rotated that exact user/account scope, and Build &
@@ -154,13 +154,21 @@ bounded and reason-specific:
 - `agenthost_configure_copilot_unauthorized` means no different credential could be
   produced. The failure is not retried; the submitting user must repair GitHub/Copilot
   authorization.
-- `agenthost_pod_reaped` triggers one inline pod redispatch for a non-terminal run.
-  `agenthost_pod_reaped_recovery_exhausted` means the replacement was also unavailable and
-  stops further automatic redispatch.
+- Readiness, one-time configuration, a missing pod endpoint, or a reaped pod permits one
+  fresh claim only while no model turn has been delivered.
+- Exhaustion writes one `agent_host_unavailable` terminal outcome with `retryable: true`.
+  Retry creates a fresh run generation; the failed generation is not left live.
 
 Logs include `RunId`, pod name, reason, recovery action, and bounded attempt counts. Token
-values are never logged. These reasons distinguish pod lifecycle churn from credential
-failure so operators should not treat either path as a generic retryable AgentHost error.
+values are never logged, and the persisted terminal payload contains only the canonical
+error, retryability, and opaque dispatch id. Authorization/provider failures remain their
+specific typed errors rather than being converted to availability failures.
+
+Once `message:stream` delivery starts, Agentweaver does not retry inside
+`RemoteAgentProxy`: request acceptance is uncertain, so replay could execute the same model
+turn twice. Post-acceptance transport and turn failures continue through the structured
+turn-failure reasons below. Operator Assistant conversations remain resumable; an
+AgentHost failure is recorded as a turn error and does not terminalize the conversation.
 
 ## Diagnosing agent turn infrastructure failures
 
