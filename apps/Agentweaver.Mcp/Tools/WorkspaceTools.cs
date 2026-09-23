@@ -11,7 +11,7 @@ public sealed class WorkspaceTools(AgentweaverApiClient api)
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
     [McpServerTool(Name = "list_project_workspace_refs"),
-     Description("List the browsable git refs for a project workspace: the base branch and any active run worktrees.")]
+     Description("List browsable project git refs with their resolved commit revisions: the base branch and any active run worktrees.")]
     public async Task<string> ListProjectWorkspaceRefsAsync(
         [Description("Project ID")] string project_id,
         CancellationToken ct)

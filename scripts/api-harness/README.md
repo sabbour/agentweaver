@@ -49,6 +49,30 @@ console.log(await response.text());
 See `.github/agents/persona-actor.agent.md` for the full turn-by-turn contract
 (pushback grounding, never-blind-approve, stop-at-gate, transcript format).
 
+### Repository provenance for completion-required scenarios
+
+Before dispatching a completion-capable persona against repository work, Harness
+must create a disposable GitHub-origin project through the existing repository
+selection flow, or explicitly select a disposable project already connected to
+the requested `owner/repository`. A blank project is not a substitute.
+
+Re-read the project through `GET /api/projects/{id}` and call
+`GET /api/projects/{id}/workspace/refs`. The base ref includes `revision`, the
+resolved immutable commit SHA for that checkout. Validate the project response,
+workspace refs, and selected workflow/Blueprint with
+`scripts/harness-shared/repository-provenance.mjs` before starting orchestration.
+Repository discovery, project listing, and workspace browsing are setup only; none
+may be reported as scenario execution.
+
+After orchestration creation, call `markRepositoryScenarioRunning()` with the run
+ID. A running result is valid only when it contains `projectUrl`,
+`repositoryIdentity`, `resolvedRevision`, `workflowOrBlueprintId`, and
+`orchestrationUrl`. On any missing or mismatched precondition, do not dispatch the
+persona. Use `buildSetupFailureVerdict()` from `scripts/harness-judge/core.mjs` to
+persist an actionable, schema-valid `agentweaver.persona-judge-verdict/v1` failure.
+The shared redaction boundary applies to both success and failure evidence; selection
+codes, tokens, cookies, and installation identifiers must never be persisted.
+
 ## Run the generation-seam structural check (fixed, non-persona)
 
 ```powershell

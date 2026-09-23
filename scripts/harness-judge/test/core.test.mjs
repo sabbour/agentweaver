@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildJudgePrompt, judgeEvidence } from '../core.mjs';
+import { buildJudgePrompt, buildSetupFailureVerdict, judgeEvidence } from '../core.mjs';
 import { VERDICT_SCHEMA, validateVerdict } from '../verdict-schema.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -149,4 +149,21 @@ test('judgeEvidence redacts descriptor credentials before callbacks and prompts'
   assert.equal(JSON.stringify(callbackEvidence).includes(canary), false);
   assert.equal(result.prompt.includes(canary), false);
   assert.equal(JSON.stringify(result.verdict).includes(canary), false);
+});
+
+test('buildSetupFailureVerdict returns an actionable schema-valid setup failure', () => {
+  const metadata = { ...evidence().metadata, runId: null };
+  const verdict = buildSetupFailureVerdict(metadata, {
+    code: 'resolved_revision_missing',
+    message: 'The project base ref has no immutable revision.',
+    recovery: 'Refresh workspace refs before starting orchestration.',
+  });
+
+  assert.equal(verdict.p0.verdict, 'FAIL');
+  assert.equal(verdict.p1.verdict, 'CANNOT_DETERMINE');
+  assert.equal(verdict.frustration.level, 'not_assessed');
+  assert.equal(verdict.runId, 'setup-scenario-a');
+  assert.match(verdict.p0.evidence, /Refresh workspace refs/i);
+  assert.equal(verdict.findings[0].kind, 'setup');
+  assert.match(verdict.findings[0].title, /resolved_revision_missing/);
 });
