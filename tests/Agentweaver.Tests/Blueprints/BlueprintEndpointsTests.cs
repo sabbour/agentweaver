@@ -137,6 +137,96 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
             .Should().Be(101);
     }
 
+    [Fact]
+    public async Task WorkerClaim_ReclaimsExpiredLeaseWithTenQueuedJobs()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var prefix = Guid.NewGuid().ToString("N");
+        var now = DateTimeOffset.UtcNow;
+        var activeId = $"{prefix}-active";
+        db.BlueprintGenerationJobs.Add(new BlueprintGenerationJobRecord
+        {
+            JobId = activeId,
+            Subject = $"{prefix}-subject",
+            IdempotencyKey = "active",
+            RequestFingerprint = prefix,
+            Description = "active",
+            ProviderKind = "byok",
+            ProviderKey = prefix,
+            ProviderScope = "global",
+            ResolutionScope = "global",
+            QueuedProviderKey = prefix,
+            Status = BlueprintGenerationJobStatuses.Running,
+            LeaseOwner = "active-owner",
+            LeaseExpiresAt = now.AddMinutes(1),
+            CreatedAt = now.AddMinutes(-3),
+            UpdatedAt = now,
+        });
+        var expiredId = $"{prefix}-expired";
+        db.BlueprintGenerationJobs.Add(new BlueprintGenerationJobRecord
+        {
+            JobId = expiredId,
+            Subject = $"{prefix}-subject",
+            IdempotencyKey = "expired",
+            RequestFingerprint = prefix,
+            Description = "expired",
+            ProviderKind = "byok",
+            ProviderKey = prefix,
+            ProviderScope = "global",
+            ResolutionScope = "global",
+            QueuedProviderKey = prefix,
+            Status = BlueprintGenerationJobStatuses.Running,
+            LeaseOwner = "abandoned-owner",
+            LeaseExpiresAt = now.AddMinutes(-1),
+            CreatedAt = now.AddMinutes(-2),
+            UpdatedAt = now.AddMinutes(-1),
+        });
+        for (var index = 0; index < 10; index++)
+        {
+            db.BlueprintGenerationJobs.Add(new BlueprintGenerationJobRecord
+            {
+                JobId = $"{prefix}-queued-{index:D2}",
+                Subject = $"{prefix}-subject",
+                IdempotencyKey = $"queued-{index:D2}",
+                RequestFingerprint = prefix,
+                Description = "queued",
+                ProviderKind = "byok",
+                ProviderKey = prefix,
+                ProviderScope = "global",
+                ResolutionScope = "global",
+                QueuedProviderKey = prefix,
+                Status = BlueprintGenerationJobStatuses.Queued,
+                CreatedAt = now.AddMinutes(-1).AddSeconds(index),
+                UpdatedAt = now,
+            });
+        }
+        await db.SaveChangesAsync();
+
+        var store = scope.ServiceProvider.GetRequiredService<BlueprintGenerationJobStore>();
+        var reclaimed = await store.TryClaimNextAsync(
+            "replacement-owner",
+            TimeSpan.FromMinutes(2),
+            CancellationToken.None);
+        var queued = await store.TryClaimNextAsync(
+            "queued-owner",
+            TimeSpan.FromMinutes(2),
+            CancellationToken.None);
+
+        reclaimed.Should().NotBeNull();
+        reclaimed!.Job.JobId.Should().Be(expiredId);
+        reclaimed.Job.LeaseOwner.Should().Be("replacement-owner");
+        queued.Should().NotBeNull();
+        queued!.Job.Status.Should().Be(BlueprintGenerationJobStatuses.Running);
+        queued.Job.JobId.Should().StartWith($"{prefix}-queued-");
+        var active = await db.BlueprintGenerationJobs.AsNoTracking().SingleAsync(x => x.JobId == activeId);
+        active.LeaseOwner.Should().Be("active-owner");
+        active.LeaseExpiresAt.Should().BeAfter(now);
+        await db.BlueprintGenerationJobs
+            .Where(x => x.ProviderKey == prefix)
+            .ExecuteDeleteAsync();
+    }
+
     private Task<HttpResponseMessage> GetGenerationResultAsync(JsonElement job) =>
         _client.GetAsync(job.GetProperty("result_url").GetString()!);
 

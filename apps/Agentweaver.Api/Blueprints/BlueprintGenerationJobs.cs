@@ -131,24 +131,25 @@ public sealed class BlueprintGenerationJobStore(MemoryDbContext db)
             .ToListAsync(ct)
             .ConfigureAwait(false);
 
-        if (candidates.Count < 10)
+        const int pageSize = 100;
+        var expiredCount = 0;
+        for (var page = 0; expiredCount < 10; page++)
         {
-            const int pageSize = 100;
-            for (var page = 0; candidates.Count < 10; page++)
-            {
-                var runningPage = await db.BlueprintGenerationJobs.AsNoTracking()
-                    .Where(x => x.Status == BlueprintGenerationJobStatuses.Running)
-                    .OrderBy(x => x.JobId)
-                    .Skip(page * pageSize)
-                    .Take(pageSize)
-                    .ToListAsync(ct)
-                    .ConfigureAwait(false);
-                candidates.AddRange(runningPage
-                    .Where(x => x.LeaseExpiresAt is { } leaseExpiresAt && leaseExpiresAt <= now)
-                    .Take(10 - candidates.Count));
-                if (runningPage.Count < pageSize)
-                    break;
-            }
+            var runningPage = await db.BlueprintGenerationJobs.AsNoTracking()
+                .Where(x => x.Status == BlueprintGenerationJobStatuses.Running)
+                .OrderBy(x => x.JobId)
+                .Skip(page * pageSize)
+                .Take(pageSize)
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+            var expired = runningPage
+                .Where(x => x.LeaseExpiresAt is { } leaseExpiresAt && leaseExpiresAt <= now)
+                .Take(10 - expiredCount)
+                .ToList();
+            candidates.AddRange(expired);
+            expiredCount += expired.Count;
+            if (runningPage.Count < pageSize)
+                break;
         }
 
         candidates = candidates.OrderBy(x => x.CreatedAt).ToList();
