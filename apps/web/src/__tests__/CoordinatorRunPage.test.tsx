@@ -78,6 +78,7 @@ vi.mock('../api/apiClient', () => ({
     stopPortForward: vi.fn(),
     pingKeepalive: vi.fn().mockResolvedValue(undefined),
     retryPreviewApproval: vi.fn().mockResolvedValue(undefined),
+    retryRun: vi.fn(),
   },
 }));
 
@@ -486,6 +487,83 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(diagnostic.textContent).toContain("Failure in coordinator. Run failed with code 'assembly_failed'. Retry is available.");
     expect(diagnostic.textContent).toContain('Cause chain: phase:assembly_failed.');
     expect((screen.getByTestId('coordinator-retry-button') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('shows an actionable failed state when coordinator startup terminalizes before any tasks exist', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'failed',
+      coordinator_status: null,
+      coordinator_status_reason: 'coordinator_startup_failed',
+      ended_at: '2026-09-23T08:18:00Z',
+    } as never);
+    vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
+    vi.mocked(apiClient.getRunTerminalDiagnostic).mockResolvedValue({
+      code: 'coordinator_startup_failed',
+      message: "Run failed with code 'coordinator_startup_failed'. Retry is available.",
+      component: 'coordinator',
+      timestamp: '2026-09-23T08:18:00Z',
+      retryable: true,
+      correlation_ids: {
+        correlation_id: '0f8fad5bd9cb469fa16570867728950e',
+      },
+      cause_chain: ['phase:activation:failed'],
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    expect((await screen.findByTestId('run-status-chip', undefined, { timeout: 4000 })).textContent).toContain('Failed');
+    const diagnostic = await screen.findByTestId('terminal-failure-diagnostic');
+    expect(diagnostic.textContent).toContain("Run failed with code 'coordinator_startup_failed'. Retry is available.");
+    expect(diagnostic.textContent).toContain('The run was retained as failed before work could begin.');
+    expect(document.body.textContent).not.toContain('Executing');
+    expect(document.body.textContent).not.toContain('Unknown');
+    expect((screen.getByTestId('coordinator-retry-button') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('opens the retained failed run when a retry terminalizes during startup', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'coord-run-1',
+      status: 'failed',
+      ended_at: '2026-09-23T08:18:00Z',
+    } as never);
+    vi.mocked(apiClient.getRunTerminalDiagnostic).mockResolvedValue({
+      code: 'coordinator_startup_failed',
+      message: "Run failed with code 'coordinator_startup_failed'. Retry is available.",
+      component: 'coordinator',
+      timestamp: '2026-09-23T08:18:00Z',
+      retryable: true,
+      correlation_ids: {},
+      cause_chain: [],
+    });
+    vi.mocked(apiClient.retryRun).mockRejectedValue(new ApiError(
+      500,
+      JSON.stringify({
+        error: 'coordinator_startup_failed',
+        run_id: 'retry-failed-run',
+        retryable: true,
+      }),
+    ));
+
+    render(
+      <AzureFluentProvider density="compact">
+        <MemoryRouter initialEntries={['/projects/p1/orchestrations/coord-run-1']}>
+          <Routes>
+            <Route
+              path="/projects/:projectId/orchestrations/:runId"
+              element={<><CoordinatorRunPage /><LocationProbe /></>}
+            />
+          </Routes>
+        </MemoryRouter>
+      </AzureFluentProvider>,
+    );
+
+    fireEvent.click(await screen.findByTestId('coordinator-retry-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location-probe').textContent)
+        .toBe('/projects/p1/orchestrations/retry-failed-run'),
+    );
   });
 
   it('identifies a missing capability snapshot without claiming provider mismatch or unavailability', async () => {

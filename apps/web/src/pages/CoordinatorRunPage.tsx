@@ -1,7 +1,7 @@
 import '@xyflow/react/dist/style.css';
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
-import { formatApiError, formatApiErrorMessage } from '../api/errors';
+import { formatApiError, formatApiErrorMessage, parseCoordinatorStartupError } from '../api/errors';
 import {
   Button,
   Dialog,
@@ -3888,6 +3888,11 @@ export function CoordinatorRunPage() {
       }
       navigate(`/projects/${projectId}/orchestrations/${res.run_id}`);
     } catch (err) {
+      const startupFailure = parseCoordinatorStartupError(err);
+      if (startupFailure) {
+        navigate(`/projects/${projectId}/orchestrations/${startupFailure.runId}`);
+        return;
+      }
       setRetryError(providerContext.handleInvocationError(err)
         ? 'The AI provider changed. Review the updated provider and retry again.'
         : formatApiErrorMessage(err, 'Could not retry this run.'));
@@ -4639,6 +4644,8 @@ export function CoordinatorRunPage() {
     ? 'Agentweaver could not load the provider snapshot saved for this run. Retry creates a new snapshot; this does not mean the configured provider changed or became unavailable.'
     : terminalDiagnostic?.code === 'github_copilot_capability_snapshot_unavailable'
       ? 'The run-bound GitHub Copilot capability snapshot was missing, expired, or could not be redeemed. Retry creates a new run snapshot; reconnect GitHub only if the new run reports an authorization failure.'
+      : terminalDiagnostic?.code === 'coordinator_startup_failed'
+        ? 'The run was retained as failed before work could begin. Retry creates a fresh run; open the trace if startup fails again.'
       : terminalDiagnostic?.retryable === true
         ? 'Retry the run; open the trace if the failure repeats.'
         : 'Open the trace to investigate the recorded failure.';

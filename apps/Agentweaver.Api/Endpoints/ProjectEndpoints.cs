@@ -1515,6 +1515,10 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         {
             return EndpointHelpers.AiExecutionError(ex);
         }
+        catch (CoordinatorStartupException ex)
+        {
+            return EndpointHelpers.CoordinatorStartupError(ex);
+        }
 
         return Results.Created(
             $"/api/runs/{runId}",

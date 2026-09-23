@@ -1757,6 +1757,10 @@ app.MapPost("/api/runs/{id}/retry", async (
     {
         return EndpointHelpers.AiExecutionError(ex);
     }
+    catch (CoordinatorStartupException ex)
+    {
+        return EndpointHelpers.CoordinatorStartupError(ex);
+    }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to start retry run for source run {RunId}", runId);

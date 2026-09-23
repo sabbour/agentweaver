@@ -75,4 +75,25 @@ public static class CoordinatorFailureCodes
 {
     /// <summary>The coordinator failed while drafting before workflow selection began.</summary>
     public const string OutcomeSpecDraftFailed = "coordinator_outcome_spec_draft_failed";
+
+    /// <summary>The persisted coordinator run could not activate its workflow.</summary>
+    public const string StartupFailed = "coordinator_startup_failed";
+}
+
+/// <summary>
+/// Safe caller-facing failure raised only after a persisted coordinator run has been terminalized.
+/// </summary>
+public sealed class CoordinatorStartupException(
+    string runId,
+    string correlationId,
+    Exception innerException)
+    : Exception("The coordinator could not start. The failed run was retained for diagnostics and can be retried.", innerException)
+{
+    public string RunId { get; } = runId;
+    public string ErrorCode { get; } = CoordinatorFailureCodes.StartupFailed;
+    public bool Retryable => true;
+    public string CorrelationId { get; } = correlationId;
+    public string DiagnosticPath { get; } = $"/api/runs/{runId}/terminal-diagnostic";
+    public string RecoveryGuidance { get; } =
+        "Retry the run. If it fails again, open the run trace and use the correlation id when reporting the failure.";
 }

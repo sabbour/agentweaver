@@ -225,6 +225,38 @@ describe('StartOrchestrationDialog', () => {
     expect(document.body.textContent).not.toContain('API error 409');
   });
 
+  it('opens the retained failed run when startup terminalizes after persistence', async () => {
+    vi.mocked(apiClient.startOrchestration).mockRejectedValue(new ApiError(
+      500,
+      JSON.stringify({
+        error: 'coordinator_startup_failed',
+        run_id: 'failed-run-1',
+        retryable: true,
+        correlation_id: '0f8fad5bd9cb469fa16570867728950e',
+        diagnostic_url: '/api/runs/failed-run-1/terminal-diagnostic',
+      }),
+    ));
+    const onStarted = vi.fn();
+
+    render(
+      <Wrapper>
+        <StartOrchestrationDialog projectId="proj-1" onStarted={onStarted} />
+      </Wrapper>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
+      target: { value: 'Exercise startup failure' },
+    });
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Direct' }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
+
+    await waitFor(() => expect(onStarted).toHaveBeenCalledWith('failed-run-1'));
+    expect(document.body.textContent).not.toContain('API returned a server error');
+  });
+
   it('shows the replacement provider and requires another click after a provider change', async () => {
     vi.mocked(apiClient.startOrchestration).mockRejectedValueOnce(new ApiError(
       409,

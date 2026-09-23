@@ -143,6 +143,41 @@ describe('StartOrchestrationFab', () => {
     expect(navigateMock).toHaveBeenCalledWith('/projects/proj-b/orchestrations/run-77');
   });
 
+  it('navigates to the retained failed run when startup terminalizes after persistence', async () => {
+    vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([
+      makeProject('proj-a', 'Alpha'),
+    ]));
+    vi.mocked(apiClient.startOrchestration).mockRejectedValue(new ApiError(
+      500,
+      JSON.stringify({
+        error: 'coordinator_startup_failed',
+        run_id: 'failed-run-2',
+        retryable: true,
+      }),
+    ));
+
+    render(
+      <Wrapper>
+        <StartOrchestrationFab currentProjectId="proj-a" />
+      </Wrapper>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    await screen.findByRole('combobox', { name: 'Project' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Goal' }), {
+      target: { value: 'Exercise startup failure' },
+    });
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Direct' }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Direct' }));
+
+    await waitFor(() =>
+      expect(navigateMock).toHaveBeenCalledWith('/projects/proj-a/orchestrations/failed-run-2'),
+    );
+    expect(document.body.textContent).not.toContain('API returned a server error');
+  });
+
   it('defaults the project selection to the current project', async () => {
     vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([
       makeProject('proj-a', 'Alpha'),

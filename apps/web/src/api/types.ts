@@ -161,6 +161,7 @@ const TERMINAL_FAILURE_CODES = new Set([
   'assembly_failed',
   'coordinator_execution_failed',
   'coordinator_direct_execution_failed',
+  'coordinator_startup_failed',
   'github_copilot_auth_required',
   'github_copilot_capability_snapshot_unavailable',
   'github_copilot_model_unavailable',
