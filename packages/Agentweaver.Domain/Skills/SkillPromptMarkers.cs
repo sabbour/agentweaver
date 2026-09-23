@@ -5,10 +5,8 @@ namespace Agentweaver.Domain.Skills;
 /// an agent's system-prompt context. Shared between the writer (the API's skill prompt composer) and
 /// the agent-runtime readers that emit observability signals, so the two can never silently drift.
 ///
-/// <para>The <see cref="SectionHeading"/> is what makes a delivered skill block detectable downstream:
-/// the runtime sets a <c>skillsContextIncluded</c> flag on the <c>agent.system_prompt</c> event by
-/// looking for this heading in the assembled context. That flag is the direct, harness-observable
-/// signal for the "skills assigned but not delivered to the agent" class of bug (issue #336).</para>
+/// <para>The <see cref="SectionHeading"/> makes a delivered skill block measurable downstream
+/// without exposing its name or content in runtime-context observability.</para>
 /// </summary>
 public static class SkillPromptMarkers
 {

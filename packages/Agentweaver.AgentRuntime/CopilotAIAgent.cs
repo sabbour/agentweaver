@@ -138,6 +138,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private SandboxPolicy? _sandboxPolicy;
     private IReadOnlyList<string> _registeredToolNames = [];
     private List<AIFunctionDeclaration> _toolDeclarations = [];
+    private AgentPromptComposition? _promptComposition;
     private SessionConfig? _sessionConfig;
     private ShellExecutionTracker? _shellExecutionTracker;
     // Whether this run uses the controlled Build/Test shell surface (purpose == AssemblyBuildTest).
@@ -542,6 +543,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             });
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
         _toolDeclarations = sessionTools.Cast<AIFunctionDeclaration>().ToList();
+        _promptComposition = ComposePrompt(_systemPromptContext, _registeredToolNames);
         const bool denyNativeShell = true;
         // Keep the SDK lifecycle translator aligned with the permission handler: when native
         // shell is denied for this run, any lifecycle start event for the SDK's built-in shell
@@ -576,7 +578,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             SystemMessage = new SystemMessageConfig
             {
                 Mode = SystemMessageMode.Append,
-                Content = ComposeFinalPrompt(_systemPromptContext, _registeredToolNames),
+                Content = _promptComposition.Content,
             },
             Model = ResolveSessionModel(
                 _activeByokProviderConfiguration,
@@ -1483,15 +1485,21 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
     }
 
-    internal void EmitRuntimeContext(string task) =>
-        Emit(EventTypes.AgentRuntimeContext, AgentRuntimeContextMetricsComposer.Compose(
+    internal void EmitRuntimeContext(string task, AgentPromptComposition? promptComposition = null)
+    {
+        promptComposition ??= _promptComposition ?? ComposePrompt(_systemPromptContext, _registeredToolNames);
+        var metrics = AgentRuntimeContextMetricsComposer.Compose(
             provider: "copilot",
             _runId,
             _projectId,
             task,
             _systemPromptContext,
-            _registeredToolNames,
-            _toolDeclarations));
+            promptComposition,
+            _toolDeclarations);
+        Emit(EventTypes.AgentSystemPrompt, AgentSystemPromptMetadata.From(
+            metrics, promptComposition.CallableMemoryGuidanceIncluded));
+        Emit(EventTypes.AgentRuntimeContext, metrics);
+    }
 
     internal void EmitToolCallOnce(string callId, string toolName, object? arguments)
     {
@@ -2376,7 +2384,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
     }
 
-    internal static string ComposeFinalPrompt(
+    internal static AgentPromptComposition ComposePrompt(
         string? systemPromptContext,
         IEnumerable<string> registeredToolNames) =>
         AgentBasePrompt.Compose(systemPromptContext, registeredToolNames);

@@ -43,8 +43,6 @@ import {
   WarningRegular,
 } from '@fluentui/react-icons';
 import { ScheduleTriggerDialog } from './ScheduleTriggerDialog';
-import { TopologyLayoutToggle } from './TopologyLayoutToggle';
-import { useTopologyLayoutEngine } from '../hooks/useTopologyLayoutEngine';
 import {
   layoutWorkflowDefinitionNodes,
   routeGridEdges,
@@ -93,7 +91,6 @@ import type { GraphNodeType, WorkflowDetailDto } from '../api/types';
 import type { WfEdge, WfModel, WfNode } from '../utils/workflowYaml';
 import type { WorkflowNodeData } from './WorkflowGraphPanel';
 import type { WorkflowDefinitionLayoutMode } from '../utils/dagLayout';
-import type { TopologyLayoutEngine } from '../utils/dagLayout';
 import type { Connection, Edge, Node, NodeChange, OnSelectionChangeParams } from '@xyflow/react';
 // US8 — visual execution-graph workflow editor. Extends the read-only ReactFlow
 // render (US6) into a writeable canvas. The on-disk YAML remains the single source
@@ -534,7 +531,6 @@ function buildGraph(
   selectedNodeId: string | null,
   selectedEdgeIndex: number | null,
   validationBadges: Map<string, { label: string; title?: string }> = new Map(),
-  layoutEngine: TopologyLayoutEngine,
   editorActions?: {
     addNext: (nodeId: string) => void;
     rename: (nodeId: string) => void;
@@ -605,7 +601,7 @@ function buildGraph(
     };
   });
 
-  const layout = layoutWorkflowDefinitionNodes(raw, forwardOnly, hints, layoutEngine);
+  const layout = layoutWorkflowDefinitionNodes(raw, forwardOnly, hints);
   const rfNodes = layout.nodes.map((n) => {
     const p = positions.get(n.id);
     return p ? { ...n, position: p } : n;
@@ -697,7 +693,6 @@ export function VisualWorkflowEditor({
   onClose,
 }: VisualWorkflowEditorProps) {
   const styles = useStyles();
-  const [layoutEngine, setLayoutEngine] = useTopologyLayoutEngine();
 
   const [yamlText, setYamlText] = useState(initialYaml);
   const [nodes, setNodes] = useState<Node[]>([]);
@@ -836,7 +831,6 @@ export function VisualWorkflowEditor({
           selectedNodeIdRef.current,
           selectedEdgeIndex,
           validationBadges,
-          layoutEngine,
           {
             addNext: addNextStep,
             rename: promptRenameNode,
@@ -850,7 +844,7 @@ export function VisualWorkflowEditor({
       }
     };
     void syncGraph();
-  }, [addNextStep, deleteNodeById, layoutEngine, promptRenameNode, selectNode, yamlText]);
+  }, [addNextStep, deleteNodeById, promptRenameNode, selectNode, yamlText]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setNodes((nds) => applyNodeChanges(changes, nds));
@@ -1184,13 +1178,11 @@ export function VisualWorkflowEditor({
           className={styles.canvasPane}
           data-testid="workflow-canvas"
           data-layout-mode={layoutMode}
-          data-layout-engine={layoutEngine}
         >
           <div className={styles.canvasToolbar} role="toolbar" aria-label="Workflow canvas actions">
             <Button appearance="primary" size="small" icon={<AddRegular />} onClick={openAddNodeDialog}>
               Add node
             </Button>
-            <TopologyLayoutToggle engine={layoutEngine} onChange={setLayoutEngine} />
           </div>
           <div className={styles.canvasMessages} aria-live="polite">
             {parseError && (

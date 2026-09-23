@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Encodings.Web;
 using k8s;
 using LibGit2Sharp;
@@ -594,13 +595,48 @@ app.MapGet("/api/runs/{id}/events", async (
     if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
         return denied;
 
+    var requestQuery = httpContext.Request.Query;
+    int? after = null;
+    if (requestQuery.TryGetValue("after", out var afterValues))
+    {
+        if (afterValues.Count != 1
+            || !int.TryParse(afterValues[0], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedAfter))
+            return Results.BadRequest(new { error = "after must be one non-negative integer." });
+        after = parsedAfter;
+    }
+
+    int? limit = null;
+    if (requestQuery.TryGetValue("limit", out var limitValues))
+    {
+        if (limitValues.Count != 1
+            || !int.TryParse(limitValues[0], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLimit)
+            || parsedLimit is < 1 or > 1000)
+            return Results.BadRequest(new { error = "limit must be one integer between 1 and 1000." });
+        limit = parsedLimit;
+    }
+
+    string? eventType = null;
+    if (requestQuery.TryGetValue("type", out var typeValues))
+    {
+        if (typeValues.Count != 1 || string.IsNullOrEmpty(typeValues[0]) || typeValues[0]!.Length > 128)
+            return Results.BadRequest(new { error = "type must be one non-empty value of at most 128 characters." });
+        eventType = typeValues[0]!;
+    }
+
     var key = runId.ToString();
-    using var dbScope = httpContext.RequestServices.CreateScope();
+    await using var dbScope = httpContext.RequestServices.CreateAsyncScope();
     var db = dbScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-    var persisted = db.RunEvents
-        .Where(e => e.RunId == key)
-        .OrderBy(e => e.Sequence)
-        .ToList();
+    var persistedQuery = db.RunEvents
+        .AsNoTracking()
+        .Where(e => e.RunId == key);
+    if (after is not null)
+        persistedQuery = persistedQuery.Where(e => e.Sequence > after.Value);
+    if (eventType is not null)
+        persistedQuery = persistedQuery.Where(e => e.EventType == eventType);
+    persistedQuery = persistedQuery.OrderBy(e => e.Sequence);
+    if (limit is not null)
+        persistedQuery = persistedQuery.Take(limit.Value);
+    var persisted = await persistedQuery.ToListAsync(ct);
 
     var result = persisted.Select(rec =>
     {
@@ -617,7 +653,9 @@ app.MapGet("/api/runs/{id}/events", async (
                 : IsToolPayloadEventType(rec.EventType)
                     ? RedactAndBoundToolPayload(rec.EventType, element)
                     : element;
-            durationMs = ReadRecordedEventDuration(element);
+            durationMs = rec.EventType == EventTypes.AgentSystemPrompt
+                ? null
+                : ReadRecordedEventDuration(element);
         }
         catch
         {
@@ -643,7 +681,15 @@ app.MapGet("/api/runs/{id}/events", async (
     }).ToList();
 
     return Results.Ok(result);
-});
+})
+    .WithName("GetRunEvents")
+    .WithDescription(
+        "Returns persisted run events in ascending sequence order. Optional query parameters: " +
+        "after (exclusive non-negative sequence), limit (1-1000), and type (one exact case-sensitive value, maximum 128 characters).")
+    .Produces<PersistedRunEventDto[]>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status400BadRequest)
+    .Produces(StatusCodes.Status403Forbidden)
+    .Produces(StatusCodes.Status404NotFound);
 
 app.MapGet("/api/runs/{id}/pending-approvals", async (
     HttpContext httpContext,
@@ -2898,8 +2944,7 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
 /// </summary>
 static bool IsToolPayloadEventType(string eventType) => eventType is "tool.call" or "tool.result" or "tool.error";
 
-static bool IsPromptPayloadEventType(string eventType) =>
-    eventType is "agent.system_prompt" or "agent.task";
+static bool IsPromptPayloadEventType(string eventType) => eventType is "agent.task";
 
 /// <summary>
 /// Strips NUL, C0 control characters (0x00-0x1F, excluding \t and \n), DEL (0x7F),

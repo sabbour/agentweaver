@@ -15,7 +15,6 @@ import {
   connectorDirectionMarkers,
   graphNodeSize,
   layoutDagBalancedGrid,
-  layoutDagStaircase,
   routeGridEdges,
   SUBTASK_NODE_W,
   SUBTASK_NODE_H,
@@ -60,38 +59,25 @@ const rawEdges: Array<[string, string]> = [
   [MERGE, SCRIBE],
 ];
 
-const engines = [
-  { name: 'legacy staircase', id: 'legacy-staircase' },
-  { name: 'balanced grid', id: 'balanced-grid' },
-] as const;
-
 function size(id: string) {
   return subtaskIds.has(id)
     ? { w: SUBTASK_NODE_W, h: SUBTASK_NODE_H }
     : { w: FIXED_NODE_W, h: FIXED_NODE_H };
 }
 
-function layout(engine: (typeof engines)[number]['id']) {
+function layout() {
   const nodes: Node[] = ids.map((id) => {
     const s = size(id);
     return { id, position: { x: 0, y: 0 }, data: {}, initialWidth: s.w, initialHeight: s.h } as Node;
   });
   const fwdEdges: Edge[] = rawEdges.map(([source, target], i) => ({ id: `e${i}`, source, target, type: 'spine' }));
   const hints = Object.fromEntries(ids.map((id) => [id, { width: size(id).w, height: size(id).h }]));
-  const laid = engine === 'legacy-staircase'
-    ? layoutDagStaircase(nodes, fwdEdges, {
-      rankSep: COORD_GRAPH_RANK_SEP,
-      nodeSep: COORD_GRAPH_NODE_SEP,
-      targetAspect: 1.35,
-      minStepRanks: 3,
-      rankdir: 'LR',
-    }, hints)
-    : layoutDagBalancedGrid(nodes, fwdEdges, {
-      rankSep: COORD_GRAPH_RANK_SEP,
-      nodeSep: COORD_GRAPH_NODE_SEP,
-      minColumns: 1,
-      maxColumns: 4,
-    }, hints);
+  const laid = layoutDagBalancedGrid(nodes, fwdEdges, {
+    rankSep: COORD_GRAPH_RANK_SEP,
+    nodeSep: COORD_GRAPH_NODE_SEP,
+    minColumns: 1,
+    maxColumns: 4,
+  }, hints);
   const byId = new Map(laid.map((n) => [n.id, n]));
   const box = (id: string) => {
     const n = byId.get(id)!;
@@ -160,8 +146,8 @@ describe('FitTrack run 41eb1aa4 graph — Skyler/Hank occlusion', () => {
     expect(rawEdges.some(([s, t]) => s === HANK && t === SKYLER)).toBe(false);
   });
 
-  it.each(engines)('$name: keeps sibling tasks in one band and RAI in the next band', ({ id }) => {
-    const { box } = layout(id);
+  it('keeps sibling tasks in one band and RAI in the next band', () => {
+    const { box } = layout();
     const skyler = box(SKYLER);
     const hank = box(HANK);
     const rai = box(RAI);
@@ -176,14 +162,14 @@ describe('FitTrack run 41eb1aa4 graph — Skyler/Hank occlusion', () => {
     expect(raiAdvanced).toBe(true);
   });
 
-  it.each(engines)('$name: the real Skyler->RAI edge corridor is no longer occluded by Hank', ({ id }) => {
-    const { box } = layout(id);
+  it('keeps the real Skyler->RAI edge corridor clear of Hank', () => {
+    const { box } = layout();
     expect(verticalCorridorBlocked(SKYLER, RAI, ids, box)).toBe(false);
     expect(verticalCorridorBlocked(HANK, RAI, ids, box)).toBe(false);
   });
 
-  it.each(engines)('$name: routed edges do not cross unrelated cards', ({ id }) => {
-    const { nodes, edges, box } = layout(id);
+  it('routes balanced-grid edges without crossing unrelated cards', () => {
+    const { nodes, edges, box } = layout();
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const routed = routeGridEdges(edges, nodes);
 
@@ -211,7 +197,7 @@ describe('FitTrack run 41eb1aa4 graph — Skyler/Hank occlusion', () => {
           if (nodeId === edge.source || nodeId === edge.target) continue;
           expect(
             segmentCrossesRect(points[index], points[index + 1], box(nodeId)),
-            `${id}:${edge.id} crosses ${nodeId}`,
+            `${edge.id} crosses ${nodeId}`,
           ).toBe(false);
         }
       }
@@ -280,7 +266,7 @@ function wanderlySize(id: string) {
     : { w: FIXED_NODE_W, h: FIXED_NODE_H };
 }
 
-function layoutWanderly(engine: (typeof engines)[number]['id']) {
+function layoutWanderly() {
   const nodes: Node[] = wanderlyIds.map((id) => {
     const s = wanderlySize(id);
     return { id, position: { x: 0, y: 0 }, data: {}, initialWidth: s.w, initialHeight: s.h } as Node;
@@ -295,20 +281,12 @@ function layoutWanderly(engine: (typeof engines)[number]['id']) {
     id,
     { width: wanderlySize(id).w, height: wanderlySize(id).h },
   ]));
-  const laid = engine === 'legacy-staircase'
-    ? layoutDagStaircase(nodes, fwdEdges, {
-      rankSep: COORD_GRAPH_RANK_SEP,
-      nodeSep: COORD_GRAPH_NODE_SEP,
-      targetAspect: 1.35,
-      minStepRanks: 3,
-      rankdir: 'LR',
-    }, hints)
-    : layoutDagBalancedGrid(nodes, fwdEdges, {
-      rankSep: COORD_GRAPH_RANK_SEP,
-      nodeSep: COORD_GRAPH_NODE_SEP,
-      minColumns: 1,
-      maxColumns: 4,
-    }, hints);
+  const laid = layoutDagBalancedGrid(nodes, fwdEdges, {
+    rankSep: COORD_GRAPH_RANK_SEP,
+    nodeSep: COORD_GRAPH_NODE_SEP,
+    minColumns: 1,
+    maxColumns: 4,
+  }, hints);
   return { nodes: laid, edges: fwdEdges };
 }
 
@@ -432,8 +410,8 @@ function routedSegments(edge: Edge, points: Array<{ x: number; y: number }>): Ro
 }
 
 describe('Wanderly dense topology connector readability', () => {
-  it.each(engines)('$name: keeps connectors clear of cards they do not terminate at', ({ id }) => {
-    const { nodes, edges } = layoutWanderly(id);
+  it('keeps connectors clear of cards they do not terminate at', () => {
+    const { nodes, edges } = layoutWanderly();
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const routed = routeGridEdges(edges, nodes);
 
@@ -445,15 +423,15 @@ describe('Wanderly dense topology connector readability', () => {
           const distance = segmentDistanceToRect(points[index], points[index + 1], graphRect(node));
           expect(
             distance,
-            `${id}:${edge.id} passes ${distance}px from ${node.id}`,
+            `${edge.id} passes ${distance}px from ${node.id}`,
           ).toBeGreaterThanOrEqual(TOPOLOGY_CONNECTOR_CARD_CLEARANCE - 0.5);
         }
       }
     }
   });
 
-  it.each(engines)('$name: puts shared corridors in separate visible lanes', ({ id }) => {
-    const { nodes, edges } = layoutWanderly(id);
+  it('puts shared corridors in separate visible lanes', () => {
+    const { nodes, edges } = layoutWanderly();
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const routed = routeGridEdges(edges, nodes);
     const segments = routed.flatMap((edge) => routedSegments(edge, routedPoints(edge, byId)));
@@ -469,14 +447,14 @@ describe('Wanderly dense topology connector readability', () => {
         const samePort = left.edge.source === right.edge.source || left.edge.target === right.edge.target;
         expect(
           overlap,
-          `${id}:${left.edge.id} and ${right.edge.id} share a ${left.orientation} lane`,
+          `${left.edge.id} and ${right.edge.id} share a ${left.orientation} lane`,
         ).toBeLessThanOrEqual(samePort ? TOPOLOGY_CONNECTOR_LANE_GAP : TOPOLOGY_CONNECTOR_CARD_CLEARANCE);
       }
     }
   });
 
-  it.each(engines)('$name: gives every connector direction markers at default zoom', ({ id }) => {
-    const { nodes, edges } = layoutWanderly(id);
+  it('gives every connector direction markers at default zoom', () => {
+    const { nodes, edges } = layoutWanderly();
     const byId = new Map(nodes.map((node) => [node.id, node]));
     const routed = routeGridEdges(edges, nodes);
 
@@ -485,7 +463,7 @@ describe('Wanderly dense topology connector readability', () => {
       const expectedMarkerCount = Math.max(1, Math.ceil(routeLength(points) / TOPOLOGY_CONNECTOR_DIRECTION_MARKER_SPACING));
       expect(
         connectorDirectionMarkers(points).length,
-        `${id}:${edge.id} lacks in-path direction markers`,
+        `${edge.id} lacks in-path direction markers`,
       ).toBe(expectedMarkerCount);
     }
   });

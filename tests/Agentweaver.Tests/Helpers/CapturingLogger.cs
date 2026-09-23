@@ -11,6 +11,8 @@ public sealed class CapturingLogger : ILogger, ILogger<object>
 {
     public List<LogEntry> Entries { get; } = new();
 
+    public ILogger<T> For<T>() => new TypedLogger<T>(this);
+
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     public bool IsEnabled(LogLevel logLevel) => true;
 
@@ -24,6 +26,19 @@ public sealed class CapturingLogger : ILogger, ILogger<object>
 
     public bool HasEntryMatching(LogLevel level, string substring) =>
         Entries.Any(e => e.Level == level && e.Message.Contains(substring, StringComparison.OrdinalIgnoreCase));
+
+    private sealed class TypedLogger<T>(CapturingLogger inner) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => inner.BeginScope(state);
+        public bool IsEnabled(LogLevel logLevel) => inner.IsEnabled(logLevel);
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            inner.Log(logLevel, eventId, state, exception, formatter);
+    }
 }
 
 public sealed record LogEntry(LogLevel Level, string Message);

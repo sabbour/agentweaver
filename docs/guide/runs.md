@@ -152,12 +152,14 @@ changed files appear through `GET /api/runs/{id}/assembly/files` once assembly h
 
 You see the **topology view** — a live graph of the entire orchestration.
 
-The run header keeps the operator-facing identity first: status, run ID, start
-time, progress, elapsed time, and actions. The original prompt appears below
-that metadata at a readable width. Long prompts are collapsed by default with
-**Show more** / **Show less** controls; expanding keeps the full prompt
-selectable and preserves paragraph breaks, line breaks, and inline command
-snippets.
+The compact run header keeps the operator-facing identity first: status, run ID,
+start time, progress, elapsed time, provider state, and actions. The submitted
+prompt is not displayed on the run-detail page.
+
+Use **Enter focus mode** to hide the global navigation and Start task row while
+keeping the run tree, selected task, messages, changes, and files available.
+Use **Exit focus mode** to restore the shell. Focus mode is temporary: it resets
+when you leave the run and does not change the saved navigation-rail preference.
 
 The graph shows:
 
@@ -172,18 +174,14 @@ the coordinator is waiting for subtasks that are not ready to assemble yet. A ch
 is **InProgress** stays running in the topology and run tree, not failed. Failure diagnostics and
 retry guidance appear only after the run reaches a failed terminal status.
 
-### Comparing topology layouts
+### Topology layout
 
-The **Topology layout** control is available on the live run graph. **Balanced grid
-(current)** is the default layout engine. It reserves the full rendered card footprint,
-including pod chips. It routes connector lines through gutters around cards. Each line
-keeps a clear gap from cards that it does not terminate at. Lines that use the same
-corridor move into separate lanes. Long row-wrap edges use the reserved channel between
-rows and show in-path direction markers, so the flow stays readable at dense zoom levels.
-Choose **Legacy staircase (comparison)** only to compare card placement while diagnosing a
-rollout. It does not alter the run, its nodes, dependencies, edge direction, or status
-data. The selection is remembered locally and is also available in workflow graph viewer
-and editor canvases.
+Run and workflow topology uses the Balanced grid layout. It reserves the full
+rendered card footprint, including pod chips, and routes connector lines through
+gutters around cards. Each line keeps a clear gap from cards that it does not
+terminate at. Lines that use the same corridor move into separate lanes. Long
+row-wrap edges use the reserved channel between rows and show in-path direction
+markers, so the flow stays readable at dense zoom levels.
 
 Click any agent node to open its individual **execution view** and watch that agent's work in detail.
 

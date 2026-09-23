@@ -234,6 +234,30 @@ Exit codes for `run-persona.mjs`: `0` means deterministic driver checks passed a
 evidence was captured, `1` means a deterministic check failed, `2` is setup or
 harness failure, and `3` is inconclusive. Treat exit `3` as inconclusive, not pass.
 
+### Staging-only context-budget pressure profile
+
+Issue #1501's deterministic deployed acceptance uses a separate operational command,
+not a persona scenario and not `run-persona.mjs`:
+
+```powershell
+node scripts/api-harness/run-context-budget-pressure.mjs `
+  --target https://<staging-host> `
+  --confirm-non-production https://<staging-host> `
+  --kube-context <exact-current-context> `
+  --namespace agentweaver
+```
+
+The target must report `isRelease=false` from public `/api/version`, the selected
+namespace must carry `agentweaver.io/environment=staging`, and the target hostname
+must match that namespace's `agentweaver-api-route`. The namespace label is an
+independent operator-controlled environment identity; do not apply it to production.
+The command locks and
+temporarily changes only `MemoryContext__MaxItems` and `MemoryContext__MaxTokens` on
+the API and worker pod templates, runs three fresh datasets, and restores exact prior
+`value`/`valueFrom`/absence structures through its awaited cleanup path. Never run it
+against a release target, omit its explicit confirmation, or replace it with a
+per-request budget override.
+
 Before changing the harness, run its targeted test suite:
 
 ```powershell

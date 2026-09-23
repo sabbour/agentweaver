@@ -51,3 +51,16 @@ test('API client rejects redirects without forwarding credentials to any redirec
   assert.match(result.responseBody.message, /redirect mode is set to error/);
   assert.equal(calls, 1);
 });
+
+test('API client preserves the cancellation reason instead of returning a status-zero response', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const controller = new AbortController();
+  globalThis.fetch = async (_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+    controller.abort(new Error('SIGTERM'));
+  });
+  const client = new AgentweaverClient({ baseUrl: 'https://api.example.test', token: 'secret' });
+  await assert.rejects(client.get('/api/projects', { signal: controller.signal }), /SIGTERM/);
+  assert.equal(client.calls.length, 0);
+});

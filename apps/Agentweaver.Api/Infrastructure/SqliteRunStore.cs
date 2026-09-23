@@ -564,8 +564,8 @@ public sealed class SqliteRunStore : IRunStore
         insert.CommandText =
             """
             INSERT INTO terminal_run_outcomes
-                (run_id, lifecycle_generation, status, event_type, payload_json, occurred_at, projected_at)
-            SELECT $runId, $generation, $status, $eventType, $payload, $occurredAt, $occurredAt
+                (run_id, lifecycle_generation, status, event_type, payload_json, occurred_at)
+            SELECT $runId, $generation, $status, $eventType, $payload, $occurredAt
               WHERE EXISTS (
                   SELECT 1 FROM runs
                    WHERE run_id = $runId

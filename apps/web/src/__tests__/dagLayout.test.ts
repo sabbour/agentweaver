@@ -899,20 +899,18 @@ describe('adaptive workflow definition layout', () => {
     );
   });
 
-  it('keeps the staircase available only as an explicit comparison engine', () => {
+  it('keeps long linear workflows in the balanced production layout', () => {
     const nodeIds = Array.from({ length: WORKFLOW_LONG_LINEAR_MIN_RANKS }, (_, index) => `step-${index}`);
     const nodes = nodeIds.map(makeNode);
     const edges = nodeIds.slice(1).map((id, index) => makeEdge(nodeIds[index], id));
 
     const analysis = analyzeWorkflowLayout(nodes, edges);
     const result = layoutWorkflowDefinitionNodes(nodes, edges, hintsFor(nodes));
-    const legacy = layoutWorkflowDefinitionNodes(nodes, edges, hintsFor(nodes), 'legacy-staircase');
 
     expect(analysis.isLongLinear).toBe(true);
     expect(result.mode).toBe('balanced-grid');
-    expect(legacy.mode).toBe('legacy-staircase');
-    expect(new Set(legacy.nodes.map((node) => rounded(node.position.y))).size).toBeGreaterThan(1);
-    expect(new Set(result.nodes.map((node) => node.id))).toEqual(new Set(legacy.nodes.map((node) => node.id)));
+    expect(new Set(result.nodes.map((node) => node.id))).toEqual(new Set(nodeIds));
+    expect(new Set(result.nodes.map((node) => rounded(node.position.y))).size).toBeGreaterThan(1);
   });
 
   it('is deterministic and keeps adaptive layouts non-overlapping', () => {

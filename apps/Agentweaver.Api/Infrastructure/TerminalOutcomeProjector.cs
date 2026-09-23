@@ -21,10 +21,7 @@ public sealed class TerminalOutcomeProjector(
             await ProjectAsync(pending, ct, targetStreamStore).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Adopts only legacy terminal rows whose existing durable event has the terminal type
-    /// compatible with the stored status. Missing or contradictory history remains untouched.
-    /// </summary>
+    /// <summary>Reconciles legacy terminal rows through the generation-fenced terminal projector.</summary>
     public async Task AdoptCompatibleLegacyOutcomesAsync(CancellationToken ct = default)
     {
         foreach (var status in TerminalStatuses)
@@ -33,17 +30,31 @@ public sealed class TerminalOutcomeProjector(
             {
                 var events = await eventStream.GetPersistedEventsAsync(run.Id.ToString(), 0, ct)
                     .ConfigureAwait(false);
-                var candidate = events.LastOrDefault(evt => IsCompatible(status, evt.Type));
-                if (candidate is null)
-                    continue;
-                var outcome = new TerminalRunOutcome(
-                    status,
-                    candidate.Type,
-                    JsonSerializer.SerializeToElement(candidate.Payload),
-                    candidate.TimestampUtc == default ? run.EndedAt ?? run.StartedAt : candidate.TimestampUtc,
-                    run.LifecycleGeneration);
+                RunEvent? linkedCandidate = null;
+                TerminalRunOutcome? outcome = null;
+                foreach (var candidate in events.Where(evt => IsCompatible(status, evt.Type)).Reverse())
+                {
+                    var candidateOutcome = new TerminalRunOutcome(
+                        status,
+                        candidate.Type,
+                        JsonSerializer.SerializeToElement(candidate.Payload),
+                        candidate.TimestampUtc == default ? run.EndedAt ?? run.StartedAt : candidate.TimestampUtc,
+                        run.LifecycleGeneration);
+                    if (await eventStream.TryLinkTerminalOutcomeAsync(
+                            run.Id.ToString(), candidateOutcome, candidate, ct).ConfigureAwait(false))
+                    {
+                        linkedCandidate = candidate;
+                        outcome = candidateOutcome;
+                        break;
+                    }
+                }
+
+                outcome ??= CreateRecoveredLegacyOutcome(run);
                 _ = await runStore.TryAdoptLegacyTerminalOutcomeAsync(run.Id, outcome, ct)
                     .ConfigureAwait(false);
+                if (linkedCandidate is not null)
+                    _ = await TryProjectExistingTerminalAsync(
+                        run.Id, run.LifecycleGeneration, linkedCandidate, ct).ConfigureAwait(false);
             }
         }
     }
@@ -169,6 +180,50 @@ public sealed class TerminalOutcomeProjector(
         RunStatus.AssembleReady => eventType == EventTypes.RunAssembleReady,
         _ => false,
     };
+
+    private static TerminalRunOutcome CreateRecoveredLegacyOutcome(Run run)
+    {
+        var (eventType, payload) = run.Status switch
+        {
+            RunStatus.Completed => (EventTypes.RunCompleted, (object)new { result = run.Result }),
+            RunStatus.Failed => (EventTypes.RunFailed, new
+            {
+                reason = run.Result ?? "recovered_missing_terminal_event",
+                retryable = false,
+                recovered = true,
+            }),
+            RunStatus.Merged => (EventTypes.MergeCompleted, new
+            {
+                result = run.Result,
+                mergedCommitHash = run.MergedCommitHash,
+            }),
+            RunStatus.Declined => (EventTypes.ReviewDeclined, new
+            {
+                result = run.Result,
+                reviewer = run.ReviewedBy,
+            }),
+            RunStatus.MergeFailed => (EventTypes.MergeFailed, new
+            {
+                result = run.Result,
+                mergeConflicts = run.MergeConflicts,
+                mergedCommitHash = run.MergedCommitHash,
+            }),
+            RunStatus.AssembleReady => (EventTypes.RunAssembleReady, new
+            {
+                treeHash = run.TreeHash,
+                worktreeBranch = run.WorktreeBranch,
+                diff = run.Diff,
+                stepCount = run.StepCount,
+            }),
+            _ => throw new InvalidOperationException($"Status {run.Status} is not terminal."),
+        };
+        return TerminalRunOutcome.Create(
+            run.Status,
+            eventType,
+            payload,
+            run.EndedAt ?? run.StartedAt,
+            run.LifecycleGeneration);
+    }
 }
 
 /// <summary>Continuously recovers durable terminal-outbox rows that could not be projected.</summary>
@@ -180,6 +235,7 @@ public sealed class TerminalOutcomeRecoveryService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await Task.Yield();
         await RecoverAsync(stoppingToken).ConfigureAwait(false);
         using var timer = new PeriodicTimer(RetryInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
