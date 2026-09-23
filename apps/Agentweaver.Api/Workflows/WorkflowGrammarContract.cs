@@ -38,7 +38,7 @@ internal static class WorkflowGrammarContract
         Node(WorkflowNodeType.BuildTest, "build_test", "build-test", "Build & Test", true, true, ["peer-review"]),
         Node(WorkflowNodeType.OpenPullRequest, "open_pull_request", "open-pull-request", "Open pull request", true, true, ["open-pull-request"]),
         Node(WorkflowNodeType.Publish, "publish", "publish", "Publish", true, true, ["agent"]),
-        Node(WorkflowNodeType.Check, "check", "check", "Check / gate", true, true, ["rai", "human-review", "rubberduck"], ["branches"], ["rai", "human-review", "rubberduck"]),
+        Node(WorkflowNodeType.Check, "check", "check", "Check / gate", true, true, ["rai", "human-review", "rubberduck"], ["branches", "gate_kind"], ["rai", "human-review", "rubberduck"]),
         Node(WorkflowNodeType.FanOut, "fan_out", "fan-out", "Fan-out", true, false, ["fan-out"]),
         Node(WorkflowNodeType.FanIn, "fan_in", "fan-in", "Fan-in", true, false, ["fan-in"]),
         Node(WorkflowNodeType.CoordinatorComposed, "coordinator_composed", "coordinator-composed", "Coordinator-composed", true, false, ["coordinator-composed"]),
