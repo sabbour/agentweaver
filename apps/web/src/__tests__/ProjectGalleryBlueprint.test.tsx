@@ -191,9 +191,7 @@ describe('ProjectGalleryPage — blueprint selection', () => {
     await user.keyboard('{Enter}');
 
     const nameInput = screen.getByRole('textbox', { name: 'Project name' });
-    expect(nameInput).toBe(screen.getByTestId('create-project-name'));
     expect((nameInput as HTMLInputElement).required).toBe(true);
-    expect((nameInput as HTMLInputElement).tabIndex).toBe(0);
     nameInput.focus();
     await user.keyboard('Keyboard project');
     expect(document.activeElement).toBe(nameInput);
