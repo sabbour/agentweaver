@@ -514,7 +514,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             completeSubStream: _workflowFactory.CompleteSubStream,
             apiBaseUrl: _workflowFactory.ApiBaseUrl,
             apiKey: _workflowFactory.ApiKey,
-            agentFactory: _workflowFactory.AgentFactory);
+            agentFactory: _workflowFactory.AgentFactory,
+            finalizeHousekeeping: _workflowFactory.FinalizeScribeHousekeepingAsync);
 
         var input = new ScribeTurnInput(
             RunId: request.CoordinatorRunId,

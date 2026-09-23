@@ -173,6 +173,7 @@ POST /api/projects/{id}/memory/import | PlatformOrMcp
 POST /api/projects/{id}/orchestrations | PlatformOrMcp
 POST /api/projects/{id}/role-assignments | PlatformOrMcp
 POST /api/projects/{id}/runs | PlatformOrMcp
+POST /api/projects/{id}/scribe/finalize | InternalService
 POST /api/projects/{id}/sessions | PlatformOrMcp
 POST /api/projects/{id}/skill-defaults/apply | PlatformOrMcp
 POST /api/projects/{id}/skill-defaults/preview | PlatformOrMcp

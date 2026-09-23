@@ -1065,7 +1065,8 @@ public sealed record FinalizeScribeRequest
 {
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("lifecycle_generation")] public int LifecycleGeneration { get; init; }
-    [JsonPropertyName("authority")] public string? Authority { get; init; }
+    [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
+    [JsonPropertyName("submitting_user")] public string? SubmittingUser { get; init; }
     [JsonPropertyName("terminal_status")] public string? TerminalStatus { get; init; }
 }
 

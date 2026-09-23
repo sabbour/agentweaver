@@ -1,4 +1,6 @@
 using System.Data;
+using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +17,50 @@ public sealed record ScribeHousekeepingRequest(
     Run Run,
     ScribeAuthority Authority,
     string TerminalStatus);
+
+public sealed record ScribeFinalizationResult(bool Completed, string? Error)
+{
+    public static ScribeFinalizationResult Success { get; } = new(true, null);
+    public static ScribeFinalizationResult Failed(string error) => new(false, error);
+}
+
+public sealed class ScribeFinalizationService(
+    IRunStore runStore,
+    ScribeHousekeepingService housekeeping)
+{
+    public async Task<ScribeFinalizationResult> FinalizeAsync(
+        ProjectId projectId,
+        RunId runId,
+        int lifecycleGeneration,
+        string? expectedAgentName,
+        string? expectedSubmittingUser,
+        string? terminalStatus,
+        CancellationToken ct)
+    {
+        var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (run is null)
+            return ScribeFinalizationResult.Failed("scribe_run_not_found");
+        if (run.ProjectId != projectId || run.LifecycleGeneration != lifecycleGeneration)
+            return ScribeFinalizationResult.Failed("scribe_scope_mismatch");
+        if (string.IsNullOrWhiteSpace(run.AgentName)
+            || !string.Equals(run.AgentName, expectedAgentName, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(run.SubmittingUser, expectedSubmittingUser, StringComparison.Ordinal))
+            return ScribeFinalizationResult.Failed("scribe_identity_mismatch");
+
+        var authority = string.Equals(run.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase)
+            ? ScribeAuthority.CoordinatorFinalization
+            : ScribeAuthority.Worker;
+        await housekeeping.RunAsync(
+            new ScribeHousekeepingRequest(
+                run,
+                authority,
+                string.IsNullOrWhiteSpace(terminalStatus)
+                    ? run.Status.ToApiString()
+                    : terminalStatus),
+            ct).ConfigureAwait(false);
+        return ScribeFinalizationResult.Success;
+    }
+}
 
 public sealed class ScribeHousekeepingService(
     MemoryDbContext memoryDb,

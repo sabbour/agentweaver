@@ -1,6 +1,4 @@
 using System.Threading.Channels;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Providers;
@@ -199,10 +197,9 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 input.SubmittingUser).ConfigureAwait(false);
 
             await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
-            if (_finalizeHousekeeping is not null)
-                await _finalizeHousekeeping(input, isCoordinator, ct).ConfigureAwait(false);
-            else
-                await FinalizeHousekeepingAsync(input, isCoordinator, ct).ConfigureAwait(false);
+            if (_finalizeHousekeeping is null)
+                throw new InvalidOperationException("Scribe housekeeping finalizer is unavailable.");
+            await _finalizeHousekeeping(input, isCoordinator, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -228,39 +225,6 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
 
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "completed", "Scribe pass");
         return input;
-    }
-
-    private async Task FinalizeHousekeepingAsync(
-        ScribeTurnInput input,
-        bool isCoordinator,
-        CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(_apiBaseUrl))
-            throw new InvalidOperationException("Scribe API base URL is unavailable.");
-
-        using var http = new HttpClient
-        {
-            BaseAddress = new Uri(_apiBaseUrl.TrimEnd('/') + '/'),
-        };
-        if (!string.IsNullOrWhiteSpace(_apiKey))
-            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-        http.DefaultRequestHeaders.TryAddWithoutValidation(
-            RunAuthorshipHeaders.ScribeCapability,
-            isCoordinator ? "coordinator_finalization" : "worker");
-
-        var response = await http.PostAsJsonAsync(
-            $"api/projects/{Uri.EscapeDataString(input.ProjectId)}/scribe/finalize",
-            new
-            {
-                run_id = input.RunId,
-                lifecycle_generation = input.LifecycleGeneration,
-                authority = isCoordinator ? "coordinator_finalization" : "worker",
-                terminal_status = input.TerminalStatus ?? "completed",
-            },
-            ct).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            throw new HttpRequestException(
-                $"Scribe finalization returned HTTP {(int)response.StatusCode}.");
     }
 
     private static (string Code, bool Retryable) Classify(Exception exception) =>
