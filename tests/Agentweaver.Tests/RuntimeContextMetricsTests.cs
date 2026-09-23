@@ -166,6 +166,39 @@ public sealed class RuntimeContextMetricsTests
             .And.NotContain("context ");
     }
 
+    [Fact]
+    public void OperatorAssistant_ComposesExactScalarOnlyRuntimeContext()
+    {
+        const string secret = "operator-secret-canary";
+        var request = new OperatorAssistantRequest(
+            ConversationId: "conversation-123",
+            Message: $"inspect {secret}",
+            CallerUser: $"user-{secret}",
+            GitHubLogin: secret,
+            ProjectId: "project-456",
+            RunId: "conversation-123",
+            ModelId: null,
+            AgentDefinition: $"operator definition {secret}",
+            McpBrokerToken: secret,
+            History: []);
+        var declarations = Declarations();
+
+        var metrics = OperatorAssistantAgent.ComposeRuntimeContextForTests(request, declarations);
+
+        metrics.Provider.Should().Be("copilot");
+        metrics.RunId.Should().Be("conversation-123");
+        metrics.ProjectId.Should().Be("project-456");
+        metrics.RunContextCharacters.Should().Be(0);
+        metrics.SkillCharacters.Should().Be(0);
+        metrics.SeparatorCharacters.Should().Be(0);
+        metrics.SkillDeliveryMode.Should().Be("none");
+        metrics.TotalCharacters.Should().Be(
+            metrics.BaseCharacters + metrics.TaskCharacters + metrics.ToolDeclarationCharacters);
+        metrics.EstimatedTokens.Should().Be((metrics.TotalCharacters + 3) / 4);
+        JsonSerializer.Serialize(metrics).Should().NotContain(secret)
+            .And.NotContain("safe_tool");
+    }
+
     private static List<AIFunctionDeclaration> Declarations() =>
     [AIFunctionFactory.Create((string value) => value, "safe_tool")];
 }

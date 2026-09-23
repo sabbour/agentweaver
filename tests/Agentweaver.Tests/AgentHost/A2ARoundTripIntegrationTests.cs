@@ -559,12 +559,22 @@ public sealed class A2ARoundTripIntegrationTests
 
             received.Select(r => r.Type).Should().Contain(EventTypes.ToolCall)
                 .And.Contain(EventTypes.AgentMessageDelta)
+                .And.Contain(EventTypes.AgentSystemPrompt)
+                .And.Contain(EventTypes.AgentRuntimeContext)
                 .And.Contain(EventTypes.ToolApprovalRequired)
                 .And.Contain(EventTypes.ToolApprovalResolved)
                 .And.Contain(EventTypes.McpBrokerTokenRefreshRequired)
                 .And.Contain(EventTypes.ToolResult)
                 .And.Contain(EventTypes.AgentTurnEnd,
                     "the operator turn must also emit the definitive completion marker so the worker never reports a phantom-incomplete failure");
+            received.Count(r => r.Type == EventTypes.AgentSystemPrompt).Should().Be(1);
+            received.Count(r => r.Type == EventTypes.AgentRuntimeContext).Should().Be(1);
+            JsonSerializer.Serialize(received.Single(r => r.Type == EventTypes.AgentSystemPrompt).Payload)
+                .Should().Contain("\"RunId\":\"run-operator-roundtrip-1\"")
+                .And.Contain("\"CallableMemoryGuidanceIncluded\":false")
+                .And.NotContain("You are the operator.")
+                .And.NotContain("please run the tool")
+                .And.NotContain("broker-token");
 
             var resolved = received.First(r => r.Type == EventTypes.ToolApprovalResolved);
             JsonSerializer.Serialize(resolved.Payload).Should().Contain("\"approved\":true");
@@ -879,7 +889,26 @@ public sealed class A2ARoundTripIntegrationTests
             LastRequestId = Guid.NewGuid().ToString("n");
 
             if (sink is not null)
+            {
+                var totalCharacters = 200 + request.Message.Length;
+                await sink.OnPromptMetadataAsync(
+                    new AgentRuntimeContextMetrics(
+                        "copilot",
+                        request.ConversationId,
+                        request.ProjectId,
+                        BaseCharacters: 120,
+                        RunContextCharacters: 0,
+                        SkillCharacters: 0,
+                        SeparatorCharacters: 0,
+                        TaskCharacters: request.Message.Length,
+                        ToolDeclarationCharacters: 80,
+                        SkillDeliveryMode: "none",
+                        TotalCharacters: totalCharacters,
+                        EstimatedTokens: (totalCharacters + 3) / 4),
+                    callableMemoryGuidanceIncluded: false,
+                    ct).ConfigureAwait(false);
                 await sink.OnToolCallAsync(ToolName, argumentsJson: null, ct).ConfigureAwait(false);
+            }
 
             var approved = sink is null
                 || await sink.OnApprovalRequiredAsync(LastRequestId, ToolName, argumentsJson: null, ct)
