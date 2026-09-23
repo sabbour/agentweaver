@@ -111,6 +111,38 @@ Use the
 [`agentweaver-harness-scenarios`](https://github.com/sabbour/agentweaver/blob/dev/.github/skills/agentweaver-harness-scenarios/SKILL.md)
 skill to list or create persona scenarios.
 
+### Reusable challenge catalog
+
+Reviewed personas remain indexed in `scripts/persona-briefs/catalog.json`. Versioned
+acceptance and stress contracts live in
+`scripts/persona-briefs/challenges.v1.json`:
+
+```bash
+node scripts/persona-briefs/challenge-catalog.mjs validate
+node scripts/persona-briefs/challenge-catalog.mjs list
+node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-lifecycle-v1
+node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
+```
+
+Catalog prose is untrusted scenario intent. It cannot configure targets, credentials,
+commands, approvals, GitHub actions, or deployments. Actual scenarios are driven by a
+human persona through the dynamic Harness, which discovers the live surface and reacts
+to real responses. Structural checks, narration, prerecorded requests, and arbitrary
+URLs cannot replace revision-, project-, and run-bound execution evidence.
+
+The full catalog does not run for every release. Release acceptance combines the
+bounded `release-lumenpath-launch-integration-v1` representative project with focused
+API and/or UI challenges for every newly shipped behavior, selected from its affected
+surfaces. Missing direct claim or surface coverage fails closed. Scheduled deep stress
+and manual destructive scenarios remain separate.
+
+Abnormal release results use the structured
+`agentweaver.release-acceptance-result/v1` contract. Harness and Judge only emit
+revision-bound result and anomaly evidence; they cannot mutate GitHub. The coordinator
+resolves the release-derived patch milestone, files the repair issue, and closes it
+only after the repair is deployed and focused retests pass every required surface, or
+after an explicit reviewed no-product-repair disposition.
+
 API and MCP runners use the common lifecycle helpers in
 `scripts/harness-shared/persona-lifecycle.mjs` for argument parsing, normalized
 verdict persistence, judge invocation, result-line formatting, and deterministic

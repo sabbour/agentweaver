@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/schemas/persona-briefs/release-feature-manifest-v1.schema.json",
+  "title": "Agentweaver release feature manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "release", "features"],
+  "properties": {
+    "schemaVersion": { "const": "agentweaver.release-feature-manifest/v1" },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "deployedRevision"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "deployedRevision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "features": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "refs", "shippedBehaviors"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "refs": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "shippedBehaviors": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "claimIds", "affectedSurfaces"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "claimIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": { "type": "string", "minLength": 1 }
+                },
+                "affectedSurfaces": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": { "enum": ["api", "ui", "mcp"] }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
