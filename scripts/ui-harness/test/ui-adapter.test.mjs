@@ -69,3 +69,31 @@ test('drag targets and failures remain visible in normalized transcript evidence
     /did not resolve/,
   );
 });
+
+test('UI adapter preserves viewport and responsive assertion evidence', () => {
+  const adapted = adaptUiEvidence({
+    metadata: {},
+    steps: [{
+      action: 'viewport',
+      viewport: { width: 390, height: 844, deviceScaleFactor: 1 },
+      overflow: { horizontal: false, vertical: true, maximumScrollY: 400 },
+      responsive: {
+        navigation: { testId: 'mobile-menu', reachable: true },
+        focusMode: { testId: 'run-focus-toggle', active: true, expected: 'focused' },
+        content: { testId: 'run-operator-console', reachable: true },
+      },
+      assertions: [
+        { category: 'navigation-reachability', target: 'mobile-menu', required: true, observed: true },
+      ],
+    }],
+  });
+
+  assert.deepEqual(adapted.turns[0].objectiveFacts.viewport, {
+    width: 390,
+    height: 844,
+    deviceScaleFactor: 1,
+  });
+  assert.equal(adapted.turns[0].objectiveFacts.overflow.vertical, true);
+  assert.equal(adapted.turns[0].objectiveFacts.responsive.focusMode.active, true);
+  assert.equal(adapted.turns[0].objectiveFacts.assertions[0].category, 'navigation-reachability');
+});

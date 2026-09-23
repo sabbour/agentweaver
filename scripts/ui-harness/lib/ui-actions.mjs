@@ -30,6 +30,46 @@ export function zoomPercent(args) {
   return value;
 }
 
+export const MOBILE_VIEWPORT = Object.freeze({ width: 390, height: 844 });
+
+function viewportDimension(value, name) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 240 || parsed > 7680) {
+    throw new Error(`viewport requires --${name} as an integer between 240 and 7680`);
+  }
+  return parsed;
+}
+
+export function viewportOptions(args) {
+  const mobile = args.mobile === true || args.preset === 'mobile';
+  if (args.preset && args.preset !== 'mobile') {
+    throw new Error('viewport --preset supports only "mobile"');
+  }
+  if (mobile && (args.width != null || args.height != null)) {
+    throw new Error('viewport --mobile/--preset mobile cannot be combined with --width or --height');
+  }
+  const size = mobile
+    ? MOBILE_VIEWPORT
+    : {
+        width: viewportDimension(args.width, 'width'),
+        height: viewportDimension(args.height, 'height'),
+      };
+  const focusMode = args['focus-mode'] ?? 'available';
+  if (!['available', 'standard', 'focused'].includes(focusMode)) {
+    throw new Error('viewport --focus-mode must be available, standard, or focused');
+  }
+  return {
+    size: { ...size },
+    mode: mobile ? 'mobile' : 'custom',
+    responsiveTargets: {
+      navigationTestId: args['navigation-test-id'] ?? 'app-navigation-menu',
+      focusTestId: args['focus-test-id'] ?? 'run-focus-toggle',
+      contentTestId: args['content-test-id'] ?? 'run-operator-console',
+      focusMode,
+    },
+  };
+}
+
 export async function navigateForAppEvidence(runtime, destination, options) {
   await runtime.goto(destination);
   return waitForAppReadiness(runtime.page, options);
@@ -58,6 +98,7 @@ export async function executeUiAction({
   const command = args._[0];
   let readiness = null;
   let target = { testId: args['test-id'], role: args.role, name: args.name };
+  let responsiveTargets = null;
 
   try {
     if (command === 'goto') {
@@ -100,6 +141,11 @@ export async function executeUiAction({
       };
       target = { percent, viewport };
       await runtime.page.setViewportSize(viewport);
+    } else if (command === 'viewport') {
+      const viewport = viewportOptions(args);
+      target = { mode: viewport.mode, viewport: viewport.size };
+      responsiveTargets = viewport.responsiveTargets;
+      await runtime.page.setViewportSize(viewport.size);
     } else if (command === 'resolve-approval') {
       assertApprovalAllowed({
         adapterText: session.persona.text,
@@ -146,5 +192,6 @@ export async function executeUiAction({
     target,
     outcome: 'succeeded',
     readiness,
+    responsiveTargets,
   });
 }
