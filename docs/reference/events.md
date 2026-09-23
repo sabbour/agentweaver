@@ -143,7 +143,8 @@ SDK-internal tools (`report_outcome`, `glob`) are suppressed from the event stre
 
 ### `agent.runtime_context`
 
-Both GitHub Copilot execution paths emit the same bounded composition record once per agent turn.
+All supported GitHub Copilot execution paths emit the same bounded composition record once per agent
+turn, including coordinator/project turns and the AgentHost-backed operator assistant.
 It contains only scalar character counts, the stable run/project correlation, provider name, and the
 fixed delivery-mode token; it never contains prompt or task text, skill names or content, tool names,
 tool arguments or declarations, credentials, or exception text. This is separate from
@@ -151,7 +152,9 @@ tool arguments or declarations, credentials, or exception text. This is separate
 
 The counts measure the exact assembled fragments. `separatorCharacters` includes the base-to-context
 and run-context-to-skill separators. Provider tool declarations are measured from the declaration list
-passed to the SDK. The invariant is:
+passed to the SDK. The operator assistant reports its complete assistant system message under
+`baseCharacters`; its run-context, skill, and separator counts are zero because that lighter path does
+not use the project-run prompt sectioning scheme. The invariant is:
 
 `totalCharacters = baseCharacters + runContextCharacters + skillCharacters + separatorCharacters + taskCharacters + toolDeclarationCharacters`
 
@@ -159,11 +162,13 @@ passed to the SDK. The invariant is:
 
 ### `agent.system_prompt`
 
-Both GitHub Copilot execution paths emit this durable metadata-only event once per provider turn,
-using the same composition evidence as `agent.runtime_context`. Its payload contains the same
+All supported GitHub Copilot execution paths emit this durable metadata-only event once per provider
+turn, using the same composition evidence as `agent.runtime_context`. Its payload contains the same
 run/project correlation, scalar character counts, fixed skill-delivery token, total, and planning
 estimate, plus `callableMemoryGuidanceIncluded`. That boolean is computed by the branch that decides
-whether the callable project-memory guidance is included in the actual provider prompt.
+whether the callable project-memory guidance is included in the actual provider prompt. It is `false`
+for the operator assistant, whose MCP-only prompt does not use the project-run callable-memory
+guidance block.
 
 The event never stores or returns prompt text or hashes, task text, tool names or schemas, skill or
 charter text, credentials, PII, or arbitrary extension fields. Public REST and SSE projections
