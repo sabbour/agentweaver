@@ -569,6 +569,8 @@ public sealed class A2ARoundTripIntegrationTests
                     "the operator turn must also emit the definitive completion marker so the worker never reports a phantom-incomplete failure");
             received.Count(r => r.Type == EventTypes.AgentSystemPrompt).Should().Be(1);
             received.Count(r => r.Type == EventTypes.AgentRuntimeContext).Should().Be(1);
+            received.Count(r => r.Type == EventTypes.AgentTurnEnd).Should().Be(1,
+                "prompt metadata must not add or replace the turn's single completion marker");
             JsonSerializer.Serialize(received.Single(r => r.Type == EventTypes.AgentSystemPrompt).Payload)
                 .Should().Contain("\"RunId\":\"run-operator-roundtrip-1\"")
                 .And.Contain("\"CallableMemoryGuidanceIncluded\":false")

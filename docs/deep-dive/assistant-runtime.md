@@ -30,6 +30,13 @@ for each turn and uses a separately issued MCP broker token, not the browser's E
 4. **Go idle, or move pods.** Two independent timers, because a conversation and its pod have very different costs. The **pod-idle** sweep releases a conversation's held AgentHost pod after 5 minutes of quiet (`AssistantRunOptions.PodIdleTimeout`) — the conversation stays fully alive and resumable, the next message just pays one cold start again. The much later **conversation-idle** sweep parks the run after 30 minutes without activity (`AssistantRunOptions.IdleTimeout`), releasing any still-held pod and freeing its concurrency slot. Neither sweep touches a run that is blocked on an armed tool-approval. Separately, because there is no session affinity between the UI and API replicas, a later message for the same run can land on a pod that never held it in memory at all.
 5. **Resume.** A cache miss can be rehydrated from durable state after authorization. History is bounded to the latest 24 messages (`MaxHistoryMessages`). An idle sweep parks the run as nonterminal `Idle`; a compare-and-swap wake returns it to `InProgress`. `Completed`, or a durable `run.completed`, is closed and rejects further messages with `409 operator_run_closed`. Rehydration is not permission to revive a completed conversation or a blanket exactly-once-turn guarantee.
 
+Each provider turn also forwards one `agent.system_prompt` and one `agent.runtime_context` event from
+the AgentHost to the API-owned conversation stream. These events contain only run/project correlation,
+scalar character counts, a fixed delivery-mode token, and the callable-memory-guidance decision. The
+assistant definition, user message, replay history, MCP tool names/schemas, broker credential, and
+provider credential never enter either payload. The API persists them through the same authorized run
+stream and retains the existing single `agent.turn.end` completion marker for the turn.
+
 ## Caller identity across API, AgentHost, and MCP
 
 The browser request authenticates to the API with its Entra identity. For each turn, `AssistantRunService` obtains a separate short-lived Agentweaver MCP broker token and a renewal callback. `RemoteOperatorAssistantAgent` requires both; it does not forward the raw browser bearer to MCP. The initial token travels in the one-shot internal `/configure` payload, and subsequent turns refresh the held pod's broker context through per-turn setup. Credentials are not conversation history or durable run-event content.
