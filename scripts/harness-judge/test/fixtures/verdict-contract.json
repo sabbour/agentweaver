@@ -1,0 +1,36 @@
+{
+  "valid": {
+    "pass": {
+      "p0": { "verdict": "PASS", "evidence": "All required mechanics completed successfully." },
+      "p1": { "verdict": "PASS", "evidence": "All authored criteria were met.", "criteriaCoverage": ["Create plan: MET - turn 2 shows the saved plan."] },
+      "frustration": { "level": "none", "score": 0, "signals": [], "rationale": "The flow completed without observed friction." },
+      "cannotDetermine": []
+    },
+    "fail": {
+      "p0": { "verdict": "FAIL", "evidence": "The required save operation returned an error." },
+      "p1": { "verdict": "FAIL", "evidence": "The persona could not complete the authored goal.", "criteriaCoverage": ["Save plan: MISSED - turn 3 returned an error."] },
+      "frustration": { "level": "moderate", "score": 2, "signals": [{ "kind": "retry-loop", "evidence": "Turns 3-5 repeated the failed save." }], "rationale": "Repeated failed saves created substantial friction." },
+      "cannotDetermine": []
+    },
+    "cannotDetermine": {
+      "p0": { "verdict": "CANNOT_DETERMINE", "evidence": "The response body needed to verify completion was not captured." },
+      "p1": { "verdict": "CANNOT_DETERMINE", "evidence": "The authored criteria cannot be assessed from the available evidence.", "criteriaCoverage": [] },
+      "frustration": { "level": "not_assessed", "score": null, "signals": [], "rationale": "The available evidence is insufficient to assess frustration." },
+      "cannotDetermine": ["The final response body was not captured."]
+    }
+  },
+  "invalid": {
+    "arrayEvidence": {
+      "p0": { "verdict": "PASS", "evidence": ["turn 1", "turn 2"] }
+    },
+    "emptyEvidence": {
+      "p1": { "verdict": "PASS", "evidence": "   ", "criteriaCoverage": [] }
+    },
+    "criteriaCoverage": {
+      "p1": { "verdict": "PASS", "evidence": "Goal met.", "criteriaCoverage": { "criterion": "MET" } }
+    },
+    "frustrationSignals": {
+      "frustration": { "level": "mild", "score": 1, "signals": ["turn 2 was confusing"], "rationale": "One confusing response was observed." }
+    }
+  }
+}
