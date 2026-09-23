@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.33.1
+
+### Patch Changes
+
+- 0a15ba4: Add a staging-only acceptance profile that safely forces and restores deployed memory-context budgets.
+- b1270a8: Simplify run details with a compact private header, reversible focus mode, contained collapsed navigation, and Balanced-only topology.
+- 16f1597: Prevent worker startup crash loops by moving historical terminal-outcome reconciliation off the synchronous recovery path.
+- 62266de: Record durable system-prompt composition metadata for Copilot runs without exposing prompt or tool content.
+- 09431f2: Add bounded sequence pagination and exact event-type filtering to persisted run-event retrieval.
+- ecb1fb2: Keep the API running when a transient coordinator-heartbeat dependency fails, record a redacted failed tick, and retry on the next configured interval.
+
 ## 0.33.0
 
 ### Minor Changes
