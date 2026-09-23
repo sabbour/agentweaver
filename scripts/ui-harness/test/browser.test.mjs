@@ -5,8 +5,29 @@ import {
   browserLaunchOptions,
   guardedUrl,
   installedChromeLaunchOptions,
+  keyedLocator,
   openBrowserSession,
 } from '../lib/browser.mjs';
+
+test('semantic project-name automation uses the exact accessible textbox target', () => {
+  const locator = {};
+  const calls = [];
+  const page = {
+    getByRole: (role, options) => {
+      calls.push({ role, options });
+      return locator;
+    },
+  };
+
+  assert.equal(
+    keyedLocator(page, { role: 'textbox', name: 'Project name' }),
+    locator,
+  );
+  assert.deepEqual(calls, [{
+    role: 'textbox',
+    options: { name: 'Project name', exact: true },
+  }]);
+});
 
 test('UI sessions launch installed Google Chrome rather than Playwright Chromium', () => {
   const launch = installedChromeLaunchOptions(
