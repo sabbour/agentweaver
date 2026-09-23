@@ -87,6 +87,24 @@ public sealed class OpenApiEndpointsTests : IDisposable
             .Should().Contain("guarded endpoint");
         AiOperationCatalog.Names.Should().Contain("orchestration");
 
+        var generateBlueprint = paths.GetProperty("/api/blueprints/generate").GetProperty("post");
+        generateBlueprint.GetProperty("parameters").EnumerateArray()
+            .Should().Contain(parameter =>
+                parameter.GetProperty("name").GetString() == "Idempotency-Key"
+                && parameter.GetProperty("in").GetString() == "header"
+                && parameter.GetProperty("required").GetBoolean());
+        generateBlueprint.GetProperty("responses").GetProperty("202").GetProperty("content")
+            .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString()
+            .Should().EndWith("/BlueprintGenerationJobResponse");
+        paths.TryGetProperty("/api/blueprints/generation-jobs/{jobId}", out _).Should().BeTrue();
+        var generationResult = paths.GetProperty("/api/blueprints/generation-jobs/{jobId}/result")
+            .GetProperty("get");
+        generationResult.GetProperty("responses").GetProperty("200").GetProperty("content")
+            .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString()
+            .Should().EndWith("/BlueprintGenerationResultResponse");
+        paths.TryGetProperty("/api/blueprints/generation-jobs/{jobId}/cancel", out _).Should().BeTrue();
+        paths.TryGetProperty("/api/blueprints/generation-jobs/{jobId}/retry", out _).Should().BeTrue();
+
         var outcomeSpec = paths.GetProperty("/api/runs/{id}/outcome-spec").GetProperty("get");
         outcomeSpec.GetProperty("operationId").GetString().Should().Be("GetCoordinatorOutcomeSpec");
         outcomeSpec.GetProperty("summary").GetString().Should().Contain("Returns the coordinator's current drafted outcome spec");

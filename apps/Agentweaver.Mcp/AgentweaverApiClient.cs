@@ -419,7 +419,8 @@ public sealed class AgentweaverApiClient
         string operation,
         string? projectId = null,
         string? runId = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? idempotencyKey = null)
     {
         var context = await PostAsync<JsonElement>(
             "/api/ai/execution-context",
@@ -472,6 +473,8 @@ public sealed class AgentweaverApiClient
         };
         message.Headers.Authorization = GetAuthHeader();
         message.Headers.Add("If-Model-Provider-Key", providerKey);
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            message.Headers.Add("Idempotency-Key", idempotencyKey);
         using var response = await _http.SendAsync(message, ct).ConfigureAwait(false);
         return await ReadJsonAsync<T>(response, path, ct).ConfigureAwait(false);
     }

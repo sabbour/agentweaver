@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **107 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **111 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -50,7 +50,11 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
-| `blueprint_generate` | Generate a project blueprint from a natural language description of the team and goals. Returns the generated blueprint including roster and workflow assignments. The agent can inspect before creating a project. |
+| `blueprint_generate` | Start durable asynchronous Blueprint generation. Returns a job id and status/result/cancel/retry URLs immediately; use the Blueprint generation job tools to follow it. |
+| `blueprint_generation_cancel` | Cancel an authorized queued or running Blueprint generation job. |
+| `blueprint_generation_result` | Get the immutable Blueprint artifact for a completed generation job. |
+| `blueprint_generation_retry` | Retry an authorized failed or cancelled Blueprint generation job without creating another artifact identity. |
+| `blueprint_generation_status` | Get the authorized status of a durable Blueprint generation job. |
 | `list_blueprints` | List the predefined Agentweaver blueprints. Each blueprint specifies a team roster, workflow, review policy, and sandbox profile ready to apply at project creation. |
 | `validate_blueprint` | Validate a blueprint object against the schema and role constraints. Returns valid:true with an empty errors array on success, or valid:false with a list of validation errors. |
 

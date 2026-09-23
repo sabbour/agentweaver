@@ -421,7 +421,11 @@ export function GenerateBlueprintBox({
   description,
   onDescriptionChange,
   onGenerate,
+  onCancel,
+  onRetry,
   generating,
+  canRetry,
+  jobStatus,
   error,
   executionContext,
   providerLoading,
@@ -430,7 +434,11 @@ export function GenerateBlueprintBox({
   description: string;
   onDescriptionChange: (value: string) => void;
   onGenerate: () => void;
+  onCancel: () => void;
+  onRetry: () => void;
   generating: boolean;
+  canRetry: boolean;
+  jobStatus?: string;
   error: string | null;
   executionContext: AiExecutionContext | null;
   providerLoading: boolean;
@@ -454,8 +462,11 @@ export function GenerateBlueprintBox({
             {generating ? 'Generating' : 'Generate Blueprint'}
           </Button>
         </AiExecutionProviderHint>
+        {generating && <Button appearance="secondary" onClick={onCancel}>Cancel</Button>}
+        {!generating && canRetry && <Button appearance="secondary" onClick={onRetry}>Retry</Button>}
         <AiProviderChangeAnnouncement message={providerAnnouncement} />
       </div>
+      {generating && jobStatus && <Text className={styles.subtle}>Generation job: {jobStatus}</Text>}
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
     </div>
   );
@@ -629,7 +640,11 @@ export function BlueprintPanel({
   targetRepository,
   generated,
   onGenerate,
+  onCancel,
+  onRetry,
   generating,
+  canRetry,
+  jobStatus,
   generationError,
   generateDescription,
   onGenerateDescriptionChange,
@@ -644,7 +659,11 @@ export function BlueprintPanel({
   targetRepository?: string | null;
   generated: { blueprint: Blueprint; generatedWorkflowYaml?: string | null } | null;
   onGenerate: () => void;
+  onCancel: () => void;
+  onRetry: () => void;
   generating: boolean;
+  canRetry: boolean;
+  jobStatus?: string;
   generationError: string | null;
   generateDescription: string;
   onGenerateDescriptionChange: (value: string) => void;
@@ -692,7 +711,11 @@ export function BlueprintPanel({
               description={generateDescription}
               onDescriptionChange={onGenerateDescriptionChange}
               onGenerate={onGenerate}
+              onCancel={onCancel}
+              onRetry={onRetry}
               generating={generating}
+              canRetry={canRetry}
+              jobStatus={jobStatus}
               error={generationError}
               executionContext={executionContext}
               providerLoading={providerLoading}
@@ -724,7 +747,12 @@ export function BlueprintPicker({ active, value, onChange, targetRepository }: {
       targetRepository={targetRepository}
       generated={generation.generated}
       onGenerate={() => void generation.generate(description)}
+      onCancel={() => void generation.cancel()}
+      onRetry={() => void generation.retry()}
       generating={generation.generating}
+      canRetry={generation.job?.status === 'cancelled'
+        || (generation.job?.status === 'failed' && generation.job.failure?.retryable === true)}
+      jobStatus={generation.job?.status}
       generationError={generation.error}
       generateDescription={description}
       onGenerateDescriptionChange={setDescription}

@@ -572,6 +572,202 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("automation_project_guards", (string)null);
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.BlueprintGenerationArtifactRecord", b =>
+                {
+                    b.Property<string>("ArtifactId")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("artifact_id");
+
+                    b.Property<string>("BlueprintJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("blueprint_json");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("GeneratedWorkflowYaml")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("generated_workflow_yaml");
+
+                    b.Property<string>("JobId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("job_id");
+
+                    b.Property<string>("LogicalId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("logical_id");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("version");
+
+                    b.Property<string>("WarningsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("warnings_json");
+
+                    b.HasKey("ArtifactId");
+
+                    b.HasIndex("JobId")
+                        .IsUnique();
+
+                    b.ToTable("blueprint_generation_artifacts", (string)null);
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.BlueprintGenerationJobRecord", b =>
+                {
+                    b.Property<string>("JobId")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("job_id");
+
+                    b.Property<int>("Attempt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("attempt");
+
+                    b.Property<string>("BlueprintModel")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("blueprint_model");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CredentialBindingVersion")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("credential_binding_version");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("description");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("failure_code");
+
+                    b.Property<string>("FailureMessage")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("failure_message");
+
+                    b.Property<bool>("FailureRetryable")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("failure_retryable");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("lease_expires_at");
+
+                    b.Property<string>("LeaseOwner")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("lease_owner");
+
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_key");
+
+                    b.Property<string>("ProviderKind")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_kind");
+
+                    b.Property<string>("ProviderScope")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_scope");
+
+                    b.Property<string>("ProviderType")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider_type");
+
+                    b.Property<string>("QueuedProviderKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("queued_provider_key");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("request_fingerprint");
+
+                    b.Property<string>("ResolutionScope")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("resolution_scope");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("subject");
+
+                    b.Property<string>("TargetRepository")
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("target_repository");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("WorkflowModel")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT")
+                        .HasColumnName("workflow_model");
+
+                    b.HasKey("JobId");
+
+                    b.HasIndex("Subject", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "LeaseExpiresAt", "CreatedAt");
+
+                    b.ToTable("blueprint_generation_jobs", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.Decision", b =>
                 {
                     b.Property<int>("Id")
@@ -2429,6 +2625,15 @@ namespace Agentweaver.Api.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("FK_automation_invocations_projects_project_id");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.BlueprintGenerationArtifactRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.BlueprintGenerationJobRecord", null)
+                        .WithOne()
+                        .HasForeignKey("Agentweaver.Api.Memory.BlueprintGenerationArtifactRecord", "JobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.Decision", b =>

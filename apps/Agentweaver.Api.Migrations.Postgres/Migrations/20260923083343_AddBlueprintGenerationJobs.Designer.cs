@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260923083343_AddBlueprintGenerationJobs")]
+    partial class AddBlueprintGenerationJobs
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2505,61 +2508,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasKey("RunId", "RevisionNumber");
 
                     b.ToTable("run_revisions", (string)null);
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Memory.ScribeOperationAttempt", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
-
-                    b.Property<DateTimeOffset?>("CompletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("FailureCode")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<int>("LifecycleGeneration")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("OperationKey")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("OperationType")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("ProjectId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("RunId")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<DateTimeOffset>("StartedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OperationKey")
-                        .IsUnique()
-                        .HasFilter("\"Status\" IN ('started', 'completed')");
-
-                    b.ToTable("scribe_operation_attempts", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.SessionContext", b =>

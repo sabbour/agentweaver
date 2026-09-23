@@ -47,6 +47,7 @@ import type {
   DecomposeResponse,
   DetailedSystemDiagnosticsDto,
   GenerateBlueprintResponse,
+  BlueprintGenerationJob,
   GitHubRepositorySelectionCodeResponse,
   GitHubRepositorySelectionListResponse,
   GraphDescriptor,
@@ -448,11 +449,47 @@ export class AgentweaverApiClient {
       .then(normalizeBlueprintList);
   }
 
-  generateBlueprint(description: string, targetRepository?: string | null, providerKey?: string): Promise<GenerateBlueprintResponse> {
-    return this.request<GenerateBlueprintResponse>('POST', '/blueprints/generate', {
+  generateBlueprint(
+    description: string,
+    targetRepository?: string | null,
+    providerKey?: string,
+    idempotencyKey = crypto.randomUUID(),
+  ): Promise<BlueprintGenerationJob> {
+    return this.request<BlueprintGenerationJob>('POST', '/blueprints/generate', {
       description,
       target_repository: targetRepository || undefined,
-    }, undefined, providerHeaders(providerKey));
+    }, undefined, {
+      ...providerHeaders(providerKey),
+      'Idempotency-Key': idempotencyKey,
+    });
+  }
+
+  getBlueprintGenerationJob(jobId: string): Promise<BlueprintGenerationJob> {
+    return this.request<BlueprintGenerationJob>(
+      'GET',
+      `/blueprints/generation-jobs/${encodeURIComponent(jobId)}`,
+    );
+  }
+
+  getBlueprintGenerationResult(jobId: string): Promise<GenerateBlueprintResponse> {
+    return this.request<GenerateBlueprintResponse>(
+      'GET',
+      `/blueprints/generation-jobs/${encodeURIComponent(jobId)}/result`,
+    );
+  }
+
+  cancelBlueprintGeneration(jobId: string): Promise<BlueprintGenerationJob> {
+    return this.request<BlueprintGenerationJob>(
+      'POST',
+      `/blueprints/generation-jobs/${encodeURIComponent(jobId)}/cancel`,
+    );
+  }
+
+  retryBlueprintGeneration(jobId: string): Promise<BlueprintGenerationJob> {
+    return this.request<BlueprintGenerationJob>(
+      'POST',
+      `/blueprints/generation-jobs/${encodeURIComponent(jobId)}/retry`,
+    );
   }
 
   suggestBlueprint(repository: string): Promise<SuggestBlueprintResponse> {
