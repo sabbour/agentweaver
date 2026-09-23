@@ -102,6 +102,7 @@ export function abnormalTriggers(manifest) {
           || evidence.runId !== challenge?.runId
           || evidence.challengeId !== challenge?.challengeId
           || evidence.challengeVersion !== challenge?.challengeVersion
+          || evidence.catalogVersion !== challenge?.catalogVersion
           || evidence.surface !== result.surface) {
           addTrigger(triggers, 'EVIDENCE_BINDING_MISMATCH', claim.claimId, result.surface);
         }
@@ -124,7 +125,8 @@ export function abnormalTriggers(manifest) {
       || evidence.executionId !== challenge?.executionId
       || evidence.runId !== challenge?.runId
       || evidence.challengeId !== challenge?.challengeId
-      || evidence.challengeVersion !== challenge?.challengeVersion) {
+      || evidence.challengeVersion !== challenge?.challengeVersion
+      || evidence.catalogVersion !== challenge?.catalogVersion) {
       for (const claim of manifest?.claimResults ?? []) {
         addTrigger(triggers, 'EVIDENCE_BINDING_MISMATCH', claim.claimId, evidence.surface);
       }

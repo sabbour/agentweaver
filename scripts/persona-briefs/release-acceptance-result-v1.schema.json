@@ -141,6 +141,7 @@
         "runId",
         "challengeId",
         "challengeVersion",
+        "catalogVersion",
         "surface"
       ],
       "properties": {
@@ -179,6 +180,7 @@
         "runId": { "type": "string", "minLength": 1 },
         "challengeId": { "type": "string", "minLength": 1 },
         "challengeVersion": { "type": "integer", "minimum": 1 },
+        "catalogVersion": { "type": "integer", "minimum": 1 },
         "surface": { "enum": ["api", "ui", "mcp"] }
       }
     },

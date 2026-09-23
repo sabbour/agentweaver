@@ -249,7 +249,7 @@ function fakeExec() {
 
 function deployOpts({ dir, argv, order, failVerify = false, buildResult }) {
   return {
-    argv,
+    argv: [...argv, "--feature-manifest", "feature.json", "--result", "result.json"],
     repoRoot: "/repo",
     exec: fakeExec(),
     log,
@@ -259,12 +259,18 @@ function deployOpts({ dir, argv, order, failVerify = false, buildResult }) {
       IMAGE_TAG: "v1.2.3",
       ACR_NAME: "acr",
       ACR_LOGIN_SERVER: "acr.azurecr.io",
+      SUBSCRIPTION_ID: "sub",
       RESOURCE_GROUP: "rg",
+      CLUSTER_NAME: "cluster",
       NAMESPACE: "agentweaver",
     }),
     resolveGitHubRepository: async () => ({ owner: "sabbour", repo: "agentweaver" }),
     checkpointIo: { dir },
     env: {},
+    acceptance: {
+      runReleaseDeclarationGate: () => ({ ok: true }),
+      runReleaseAcceptanceGate: () => ({ ok: true }),
+    },
     steps: {
       buildImages: {
         run: async () => {

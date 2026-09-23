@@ -35,13 +35,16 @@ export function validateReleaseAcceptance({
   catalog = loadChallengeCatalog(),
   featureManifest,
   results,
+  expectedDeployment = null,
 }) {
   const errors = [];
-  const featureValidation = validateReleaseFeatureManifest(featureManifest);
-  if (!featureValidation.ok) return { ok: false, errors: featureValidation.errors };
-
-  const selection = selectReleaseChallenges(catalog, featureManifest);
-  if (!selection.ok) return { ok: false, errors: selection.errors };
+  const declaration = validateReleaseDeclaration({
+    catalog,
+    featureManifest,
+    expectedDeployment,
+  });
+  if (!declaration.ok) return declaration;
+  const { selection } = declaration;
   if (!Array.isArray(results) || results.length === 0) {
     return { ok: false, errors: ['release acceptance requires at least one result manifest'] };
   }
@@ -117,7 +120,42 @@ export function validateReleaseAcceptance({
   };
 }
 
-export function runReleaseAcceptanceGate({ featureManifestPath, resultPaths }) {
+export function validateReleaseDeclaration({
+  catalog = loadChallengeCatalog(),
+  featureManifest,
+  expectedDeployment = null,
+}) {
+  const featureValidation = validateReleaseFeatureManifest(featureManifest);
+  if (!featureValidation.ok) return { ok: false, errors: featureValidation.errors };
+  const selection = selectReleaseChallenges(catalog, featureManifest);
+  if (!selection.ok) return { ok: false, errors: selection.errors };
+  const errors = [];
+  if (expectedDeployment) {
+    for (const field of ['version', 'deployedRevision', 'deploymentIdentity']) {
+      if (featureManifest.release[field] !== expectedDeployment[field]) {
+        errors.push(`release feature manifest ${field} does not match the verified deployment`);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors, selection, release: featureManifest.release };
+}
+
+export function runReleaseDeclarationGate({
+  featureManifestPath,
+  expectedDeployment,
+}) {
+  if (!featureManifestPath) throw new Error('--feature-manifest is required');
+  const featureManifest = loadJson(featureManifestPath);
+  const result = validateReleaseDeclaration({ featureManifest, expectedDeployment });
+  if (!result.ok) throw new Error(result.errors.join('\n'));
+  return { ...result, featureManifest };
+}
+
+export function runReleaseAcceptanceGate({
+  featureManifestPath,
+  resultPaths,
+  expectedDeployment = null,
+}) {
   if (!featureManifestPath) throw new Error('--feature-manifest is required');
   if (!Array.isArray(resultPaths) || resultPaths.length === 0) {
     throw new Error('at least one --result is required');
@@ -125,6 +163,7 @@ export function runReleaseAcceptanceGate({ featureManifestPath, resultPaths }) {
   const result = validateReleaseAcceptance({
     featureManifest: loadJson(featureManifestPath),
     results: resultPaths.map(loadJson),
+    expectedDeployment,
   });
   if (!result.ok) throw new Error(result.errors.join('\n'));
   return result;
@@ -144,7 +183,12 @@ function parseArgs(argv) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const result = runReleaseAcceptanceGate(parseArgs(process.argv.slice(2)));
-    process.stdout.write(`${JSON.stringify({ accepted: true, ...result }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({
+      valid: true,
+      authoritative: false,
+      note: 'Release acceptance closes only at azure:deploy-from-release.',
+      ...result,
+    }, null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;

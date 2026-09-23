@@ -11,8 +11,8 @@ Repository release identity and Azure deployment are separate operations.
 | `npm run azure:deploy-from-local` | Current HEAD short SHA | Deploy local work to an existing environment. No release identity is created or consumed. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
 | `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag, wait for GHCR images, then create the GitHub Release. No Azure work. |
-| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source acr-build]` | Existing published semver tag | Import already-published GHCR images by default (or, with `--image-source acr-build`, rebuild from source) and deploy that exact release to the configured environment. |
-| `npm run azure:release` | Prepared `vX.Y.Z` | Publish and deploy the same release, then require post-deployment acceptance evidence before reporting completion. |
+| `npm run azure:deploy-from-release -- vX.Y.Z --feature-manifest <path> [--image-source acr-build]` | Existing published semver tag | Validate declared release coverage, import/build and deploy that exact release, then keep acceptance pending until exact post-deployment results close it at this same boundary. |
+| `npm run azure:release -- --feature-manifest <path>` | Prepared `vX.Y.Z` | Publish and deploy the same release through the same two-phase acceptance boundary. |
 | `npm run azure:verify` | Running environment | Read-only health verification. |
 
 ```text
@@ -27,7 +27,7 @@ arbitrary branch / PR tip / commit
 prepared exact main SHA
   └─ release:publish
        └─ annotated vX.Y.Z tag + GHCR images + GitHub Release
-            └─ azure:deploy-from-release -- vX.Y.Z
+            └─ azure:deploy-from-release -- vX.Y.Z --feature-manifest <path>
                  └─ image:vX.Y.Z → running versioned environment
 ```
 
@@ -154,8 +154,9 @@ the release:
 # Repository identity only: tag + GHCR images + GitHub Release
 npm run release:publish
 
-# Deploy that already-published release now or later
-npm run azure:deploy-from-release -- vX.Y.Z
+# Validate coverage and deploy that already-published release now or later
+npm run azure:deploy-from-release -- vX.Y.Z \
+  --feature-manifest <release-feature-manifest.json>
 ```
 
 For the normal first shipment to the default environment, the composite command
@@ -163,34 +164,32 @@ publishes and deploys, then deliberately remains blocked until post-deployment
 acceptance evidence is supplied:
 
 ```bash
-npm run azure:release
+npm run azure:release -- \
+  --feature-manifest <release-feature-manifest.json>
 ```
 
-Run the selected representative and feature-specific Harness scenarios against that
-deployment. The release feature manifest must name the exact deployed revision and
-deployment identity. Then complete the gate either directly:
+The first deployment phase validates the closed feature manifest and selected
+representative/feature-specific coverage before any deployment mutation. The manifest
+must name the exact tag commit and target deployment identity. After deployment and
+live verification, the command intentionally stops with acceptance pending.
+
+Run the selected Harness scenarios against that verified deployment. Close acceptance
+only by resuming the release deployment boundary with exact result manifests:
 
 ```bash
-npm run release:acceptance -- \
+npm run azure:deploy-from-release -- vX.Y.Z --resume \
   --feature-manifest <release-feature-manifest.json> \
   --result <representative-result.json> \
   --result <focused-result.json>
 ```
 
-or through the resumable composite:
-
-```bash
-npm run azure:release -- --resume vX.Y.Z \
-  --feature-manifest <release-feature-manifest.json> \
-  --result <representative-result.json> \
-  --result <focused-result.json>
-```
-
-The gate validates declared manifests; it does not execute Harnesses. It requires the
+For the composite workflow, use the same arguments with `azure:release -- --resume
+vX.Y.Z`. The gate validates declared manifests; it does not execute Harnesses. It requires the
 selected representative challenge, direct API/UI/MCP coverage for every shipped
 behavior and affected surface, non-empty typed evidence bound to the exact deployment,
-project, challenge execution, run, and surface, successful cleanup, and no unresolved
-abnormal anomalies. A no-evidence result cannot complete acceptance.
+project, challenge execution, run, catalog version, and surface, successful cleanup,
+and no unresolved abnormal anomalies. A no-evidence result cannot complete acceptance.
+The standalone schema helper is diagnostic only; it cannot close release acceptance.
 
 The composite is resumable orchestration, not a transaction. If deployment
 or acceptance fails after publication, the tag and GitHub Release remain durable:
@@ -212,8 +211,9 @@ npm run release:publish -- --resume vX.Y.Z
 To deploy the same release to another configured environment, check out the
 exact tag commit and run `azure:deploy-from-release` with that tag. The command
 requires a clean checkout whose `HEAD` equals the annotated tag, verifies that
-the GitHub Release and prepared metadata exist, and then builds/deploys/verifies
-the release without publishing anything new.
+the GitHub Release and prepared metadata exist, validates that environment's feature
+manifest, and then builds/deploys/verifies the release without publishing anything new.
+Each target environment requires its own post-deployment acceptance closure.
 
 By default, `azure:deploy-from-release` imports the release images that
 `.github/workflows/publish-images.yml` already published for this exact tag
@@ -221,7 +221,9 @@ By default, `azure:deploy-from-release` imports the release images that
 images from source into ACR instead, add `--image-source acr-build`:
 
 ```bash
-npm run azure:deploy-from-release -- vX.Y.Z --image-source acr-build
+npm run azure:deploy-from-release -- vX.Y.Z \
+  --feature-manifest <release-feature-manifest.json> \
+  --image-source acr-build
 ```
 
 The GHCR ref is always the release tag itself, and the GHCR owner/repository

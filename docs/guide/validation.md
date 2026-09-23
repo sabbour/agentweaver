@@ -122,7 +122,8 @@ node scripts/persona-briefs/challenge-catalog.mjs validate
 node scripts/persona-briefs/challenge-catalog.mjs list
 node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-lifecycle-v1
 node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
-npm run release:acceptance -- --feature-manifest <release-feature-manifest.json> \
+npm run azure:deploy-from-release -- vX.Y.Z --resume \
+  --feature-manifest <release-feature-manifest.json> \
   --result <representative-result.json> --result <focused-result.json>
 ```
 
@@ -141,10 +142,14 @@ surfaces. Missing direct claim or surface coverage fails closed. Scheduled deep 
 and manual destructive scenarios remain separate.
 
 Release planning selects and documents the required scenarios but does not execute them.
-After the exact release revision is deployed, run the selected Harness scenarios and
-pass their result manifests to `npm run release:acceptance`. The gate fails closed unless
+Before release deployment, the deployment boundary validates the declared scenario
+selection and binds it to the target tag commit and deployment identity. After that exact
+revision is deployed, run the selected Harness scenarios and resume
+`azure:deploy-from-release` with their result manifests. The boundary fails closed unless
 the representative challenge and every feature-specific affected surface have passing
 exact-revision evidence, cleanup succeeded, and no abnormal anomaly remains unresolved.
+Evidence also binds to the catalog version. The standalone manifest validator is
+diagnostic only and cannot close acceptance.
 
 Abnormal release results use the structured
 `agentweaver.release-acceptance-result/v1` contract. Harness and Judge only emit

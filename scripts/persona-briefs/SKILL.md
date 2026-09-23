@@ -24,7 +24,8 @@ node scripts/persona-briefs/challenge-catalog.mjs list --tier release-integratio
 node scripts/persona-briefs/challenge-catalog.mjs list --surface ui
 node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-lifecycle-v1
 node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
-npm run release:acceptance -- --feature-manifest <release-feature-manifest.json> `
+npm run azure:deploy-from-release -- vX.Y.Z --resume `
+  --feature-manifest <release-feature-manifest.json> `
   --result <representative-result.json> --result <focused-result.json>
 ```
 
@@ -42,7 +43,7 @@ responses. Do not turn a challenge entry into a fixed request sequence.
 
 Structural checks and actor narration may support a claim but cannot satisfy an
 actual-execution challenge. Actual claims require non-empty typed evidence bound to the deployed revision,
-project, challenge execution, run, and surface. Preview challenges additionally require a Harness-owned
+project, challenge execution, run, catalog version, and surface. Preview challenges additionally require a Harness-owned
 disposable project, real preview publication, and independent validation. Blog
 publishing means a durable internal artifact; the catalog never authorizes external
 publication.
@@ -74,11 +75,13 @@ structured category, rationale, evidence, and immutable references to coordinato
 records. The local closure helper reports structural eligibility only; it never authorizes
 closure from caller-supplied identities or booleans.
 
-The post-deployment `release:acceptance` gate validates the closed feature and result
-schemas before semantic checks. It requires the selected representative challenge,
+The release deployment boundary validates the closed feature declaration before
+deployment, then validates result schemas after live verification on a resumed run.
+It requires the selected representative challenge,
 direct feature-specific coverage for every affected surface, exact deployed-revision
 evidence, successful cleanup, and no unresolved abnormal anomalies. It validates
-declared results only; it never executes a Harness.
+declared results only; it never executes a Harness. The standalone manifest helper is
+diagnostic and cannot close release acceptance.
 
 Oracle's MCP adapter is intentionally retained: multiple explicit catalog challenges
 select Oracle on MCP, including cross-surface homepage and release-relevant promises.

@@ -30,6 +30,7 @@ function evidence(surface, type = 'surface-transcript') {
     runId: RUN_ID,
     challengeId: 'release-repair-disposition-v1',
     challengeVersion: 1,
+    catalogVersion: 1,
     surface,
   };
 }
@@ -183,12 +184,19 @@ test('schema validation rejects P0 PARTIAL and every required nested execution f
     'runId',
     'challengeId',
     'challengeVersion',
+    'catalogVersion',
     'surface',
   ]) {
     const value = manifest();
     delete value.claimResults[0].surfaceResults[0].evidence[0][field];
     assert.equal(validateReleaseAcceptanceManifest(value).ok, false, `evidence.${field}`);
   }
+
+  const mismatchedCatalog = manifest();
+  mismatchedCatalog.claimResults[0].surfaceResults[0].evidence[0].catalogVersion = 2;
+  const mismatch = validateReleaseAcceptanceManifest(mismatchedCatalog);
+  assert.equal(mismatch.ok, false);
+  assert.ok(mismatch.triggers.some((trigger) => trigger.code === 'EVIDENCE_BINDING_MISMATCH'));
 });
 
 test('stable anomaly identity deduplicates by feature, challenge version, surface, and claim', () => {
@@ -375,7 +383,15 @@ test('post-deployment release gate requires representative and focused exact-rev
     catalog,
     featureManifest,
     results: [result],
+    expectedDeployment: featureManifest.release,
   }).ok, true);
+
+  assert.equal(validateReleaseAcceptance({
+    catalog,
+    featureManifest,
+    results: [result],
+    expectedDeployment: { ...featureManifest.release, deploymentIdentity: 'other-environment' },
+  }).ok, false);
 
   result.claimResults[0].surfaceResults[0].evidence = [];
   assert.equal(validateReleaseAcceptance({

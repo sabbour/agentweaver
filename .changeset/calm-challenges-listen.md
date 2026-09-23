@@ -3,4 +3,5 @@
 ---
 
 Add a versioned Harness challenge catalog plus a fail-closed post-deployment release
-acceptance gate with exact-revision evidence and coordinator-authenticated repair records.
+acceptance boundary with exact deployment/catalog evidence and coordinator-authenticated
+repair records.

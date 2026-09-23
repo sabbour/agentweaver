@@ -40,6 +40,7 @@ import {
   recordStage,
   saveCheckpoint,
 } from "./lib/deploy-checkpoint.mjs";
+import * as acceptanceDefault from "../persona-briefs/release-acceptance-gate.mjs";
 
 export class PublishedReleaseError extends Error {}
 
@@ -53,6 +54,8 @@ export function parseArgs(argv = []) {
   let ghcrToken;
   let resume = false;
   let restart = false;
+  let featureManifestPath;
+  const resultPaths = [];
 
   const takeValue = (i, name) => {
     const raw = argv[i];
@@ -81,6 +84,14 @@ export function parseArgs(argv = []) {
       const { value, consumed } = takeValue(i, "--ghcr-token");
       ghcrToken = value;
       i += consumed;
+    } else if (arg === "--feature-manifest" || arg.startsWith("--feature-manifest=")) {
+      const { value, consumed } = takeValue(i, "--feature-manifest");
+      featureManifestPath = value;
+      i += consumed;
+    } else if (arg === "--result" || arg.startsWith("--result=")) {
+      const { value, consumed } = takeValue(i, "--result");
+      resultPaths.push(value);
+      i += consumed;
     } else if (!tag && !arg.startsWith("-")) {
       tag = arg;
     } else {
@@ -100,7 +111,17 @@ export function parseArgs(argv = []) {
     throw new Error("--resume and --restart are mutually exclusive.");
   }
 
-  return { tag, dryRun, help, imageSource, ghcrToken, resume, restart };
+  return {
+    tag,
+    dryRun,
+    help,
+    imageSource,
+    ghcrToken,
+    resume,
+    restart,
+    featureManifestPath,
+    resultPaths,
+  };
 }
 
 export const HELP_TEXT = `deploy-from-release -- deploy an existing published Agentweaver release
@@ -108,7 +129,10 @@ export const HELP_TEXT = `deploy-from-release -- deploy an existing published Ag
 Usage:
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--dry-run]
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source acr-build
-  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --resume
+  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z \
+    --feature-manifest <path> [--result <path>...]
+  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --resume \
+    --feature-manifest <path> --result <path> [--result <path>...]
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --recover-repo-app-private-key
 
 Requires an existing annotated git tag and matching GitHub Release. The
@@ -121,6 +145,13 @@ needed for private-package auth. Pass --image-source acr-build to build
 vX.Y.Z images from source into ACR instead. Either way, this deploys them,
 verifies live provenance against the tag, waits for the AgentHost warm pool,
 and runs health verification.
+
+Every non-dry-run release deployment requires a feature manifest before
+deployment. After deployment and verification, acceptance remains blocked
+until exact deployment-bound result manifests are supplied. Re-run with
+--resume and the same feature manifest plus repeated --result arguments to
+re-verify the deployment and close release acceptance without repeating
+completed build/deploy stages.
 
 Transient Azure CLI failures (connection resets, throttling, timeouts) are
 retried automatically for idempotent registry operations. Completed build and
@@ -207,6 +238,18 @@ export async function validatePublishedRelease({
   return { tag, version, commit: tagCommit };
 }
 
+export function releaseDeploymentIdentity(cfg) {
+  const fields = ["SUBSCRIPTION_ID", "RESOURCE_GROUP", "CLUSTER_NAME", "NAMESPACE"];
+  for (const field of fields) {
+    if (!String(cfg[field] ?? "").trim()) {
+      throw new PublishedReleaseError(
+        `${field} is required to bind release acceptance to the target deployment.`,
+      );
+    }
+  }
+  return `azure:${cfg.SUBSCRIPTION_ID}/${cfg.RESOURCE_GROUP}/${cfg.CLUSTER_NAME}/${cfg.NAMESPACE}`;
+}
+
 export async function run(opts = {}) {
   const {
     argv = [],
@@ -223,6 +266,7 @@ export async function run(opts = {}) {
     env: baseEnv = process.env,
     recoverRepoAppPrivateKey = false,
     checkpointIo = {},
+    acceptance = acceptanceDefault,
   } = opts;
   const parsed = parseArgs(argv);
   const dryRun = parsed.dryRun || baseEnv.DRY_RUN === "true";
@@ -291,6 +335,17 @@ export async function run(opts = {}) {
         : {}),
       repoRoot,
     };
+    const expectedDeployment = dryRun ? null : {
+      version: release.version,
+      deployedRevision: release.commit,
+      deploymentIdentity: releaseDeploymentIdentity(cfg),
+    };
+    if (!dryRun) {
+      acceptance.runReleaseDeclarationGate({
+        featureManifestPath: parsed.featureManifestPath,
+        expectedDeployment,
+      });
+    }
     log.field("Image source", cfg.IMAGE_SOURCE);
     if (parsed.imageSource === "ghcr") {
       log.field("GHCR owner", cfg.GHCR_OWNER);
@@ -389,10 +444,26 @@ export async function run(opts = {}) {
       );
     }
     const verify = await verifyStep.run(deployCfg, { exec, log });
+    let releaseAcceptance = dryRun
+      ? { ok: false, status: "NOT_EVALUATED_DRY_RUN" }
+      : { ok: false, status: "BLOCKED_ON_DEPLOYMENT_VERIFICATION" };
+    if (!dryRun && verify.ok) {
+      if (parsed.resultPaths.length === 0) {
+        throw new Error(
+          "Release deployment verified, but acceptance remains pending. Run the selected Harness "
+          + "scenarios, then re-run with --resume, the same --feature-manifest, and --result paths.",
+        );
+      }
+      releaseAcceptance = acceptance.runReleaseAcceptanceGate({
+        featureManifestPath: parsed.featureManifestPath,
+        resultPaths: parsed.resultPaths,
+        expectedDeployment,
+      });
+    }
 
     // A fully verified deployment must not leave a checkpoint behind, or the
     // next --resume for this tag would skip stages that should run again.
-    if (dryRun || verify.ok) {
+    if (dryRun || (verify.ok && releaseAcceptance.ok)) {
       clearCheckpoint(resumeKey, checkpointIo);
     }
 
@@ -407,6 +478,7 @@ export async function run(opts = {}) {
       provenance,
       warmPool: { ...warmPoolStatus, imageCheck: warmPoolImageCheck },
       verify,
+      releaseAcceptance,
       dryRun,
     };
   } catch (error) {
