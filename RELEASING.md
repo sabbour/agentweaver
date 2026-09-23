@@ -12,7 +12,7 @@ Repository release identity and Azure deployment are separate operations.
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
 | `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag, wait for GHCR images, then create the GitHub Release. No Azure work. |
 | `npm run azure:deploy-from-release -- vX.Y.Z [--image-source acr-build]` | Existing published semver tag | Import already-published GHCR images by default (or, with `--image-source acr-build`, rebuild from source) and deploy that exact release to the configured environment. |
-| `npm run azure:release` | Prepared `vX.Y.Z` | First-shipment convenience command: publish, then deploy the same release. |
+| `npm run azure:release` | Prepared `vX.Y.Z` | Publish and deploy the same release, then require post-deployment acceptance evidence before reporting completion. |
 | `npm run azure:verify` | Running environment | Read-only health verification. |
 
 ```text
@@ -159,17 +159,47 @@ npm run azure:deploy-from-release -- vX.Y.Z
 ```
 
 For the normal first shipment to the default environment, the composite command
-performs both operations:
+publishes and deploys, then deliberately remains blocked until post-deployment
+acceptance evidence is supplied:
 
 ```bash
 npm run azure:release
 ```
 
-The composite is resumable orchestration, not a transaction. If deployment
-fails after publication, the tag and GitHub Release remain durable:
+Run the selected representative and feature-specific Harness scenarios against that
+deployment. The release feature manifest must name the exact deployed revision and
+deployment identity. Then complete the gate either directly:
 
 ```bash
-npm run azure:release -- --resume vX.Y.Z
+npm run release:acceptance -- \
+  --feature-manifest <release-feature-manifest.json> \
+  --result <representative-result.json> \
+  --result <focused-result.json>
+```
+
+or through the resumable composite:
+
+```bash
+npm run azure:release -- --resume vX.Y.Z \
+  --feature-manifest <release-feature-manifest.json> \
+  --result <representative-result.json> \
+  --result <focused-result.json>
+```
+
+The gate validates declared manifests; it does not execute Harnesses. It requires the
+selected representative challenge, direct API/UI/MCP coverage for every shipped
+behavior and affected surface, non-empty typed evidence bound to the exact deployment,
+project, challenge execution, run, and surface, successful cleanup, and no unresolved
+abnormal anomalies. A no-evidence result cannot complete acceptance.
+
+The composite is resumable orchestration, not a transaction. If deployment
+or acceptance fails after publication, the tag and GitHub Release remain durable:
+
+```bash
+npm run azure:release -- --resume vX.Y.Z \
+  --feature-manifest <release-feature-manifest.json> \
+  --result <representative-result.json> \
+  --result <focused-result.json>
 ```
 
 If the image build fails, `release:publish` stops before it creates the

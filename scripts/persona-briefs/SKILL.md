@@ -24,6 +24,8 @@ node scripts/persona-briefs/challenge-catalog.mjs list --tier release-integratio
 node scripts/persona-briefs/challenge-catalog.mjs list --surface ui
 node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-lifecycle-v1
 node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
+npm run release:acceptance -- --feature-manifest <release-feature-manifest.json> `
+  --result <representative-result.json> --result <focused-result.json>
 ```
 
 The output is deterministic JSON. Validation fails closed on unknown fields, dangling
@@ -39,8 +41,8 @@ must discover the live API, UI, or MCP contract and choose each action from actu
 responses. Do not turn a challenge entry into a fixed request sequence.
 
 Structural checks and actor narration may support a claim but cannot satisfy an
-actual-execution challenge. Actual claims require typed evidence bound to the deployed
-revision, project, and run. Preview challenges additionally require a Harness-owned
+actual-execution challenge. Actual claims require non-empty typed evidence bound to the deployed revision,
+project, challenge execution, run, and surface. Preview challenges additionally require a Harness-owned
 disposable project, real preview publication, and independent validation. Blog
 publishing means a durable internal artifact; the catalog never authorizes external
 publication.
@@ -68,7 +70,18 @@ GitHub authority: the coordinator validates evidence, resolves the release-deriv
 patch milestone, files or updates the repair issue, and closes it only after the
 intended repair revision is deployed and focused retests pass on every required
 surface. Merge auto-close is forbidden. A no-product-repair result requires a
-structured category, rationale, evidence, reviewer identity, and coordinator approval.
+structured category, rationale, evidence, and immutable references to coordinator-authenticated
+records. The local closure helper reports structural eligibility only; it never authorizes
+closure from caller-supplied identities or booleans.
+
+The post-deployment `release:acceptance` gate validates the closed feature and result
+schemas before semantic checks. It requires the selected representative challenge,
+direct feature-specific coverage for every affected surface, exact deployed-revision
+evidence, successful cleanup, and no unresolved abnormal anomalies. It validates
+declared results only; it never executes a Harness.
+
+Oracle's MCP adapter is intentionally retained: multiple explicit catalog challenges
+select Oracle on MCP, including cross-surface homepage and release-relevant promises.
 
 ## Retrieve existing scenarios
 

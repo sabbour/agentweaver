@@ -2,5 +2,5 @@
 "agentweaver": patch
 ---
 
-Add a versioned, validated Harness challenge catalog with release-focused selection,
-full product-management lifecycle coverage, and structured release-repair evidence.
+Add a versioned Harness challenge catalog plus a fail-closed post-deployment release
+acceptance gate with exact-revision evidence and coordinator-authenticated repair records.

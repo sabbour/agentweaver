@@ -7,11 +7,14 @@
 import * as logDefault from "./lib/log.mjs";
 import * as publishDefault from "./release-publish.mjs";
 import * as deployFromReleaseDefault from "./deploy-from-release.mjs";
+import * as acceptanceDefault from "../persona-briefs/release-acceptance-gate.mjs";
 
 export function parseArgs(argv = []) {
   let resumeTag;
   let dryRun = false;
   let help = false;
+  let featureManifestPath;
+  const resultPaths = [];
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -25,23 +28,42 @@ export function parseArgs(argv = []) {
         throw new Error("Missing release tag after --resume.");
       }
       index += 1;
+    } else if (arg === "--feature-manifest") {
+      featureManifestPath = argv[index + 1];
+      if (!featureManifestPath || featureManifestPath.startsWith("-")) {
+        throw new Error("Missing path after --feature-manifest.");
+      }
+      index += 1;
+    } else if (arg === "--result") {
+      const resultPath = argv[index + 1];
+      if (!resultPath || resultPath.startsWith("-")) {
+        throw new Error("Missing path after --result.");
+      }
+      resultPaths.push(resultPath);
+      index += 1;
     } else {
-      throw new Error(`Unknown argument: ${arg}. release accepts only --dry-run and --resume vX.Y.Z.`);
+      throw new Error(
+        `Unknown argument: ${arg}. release accepts --dry-run, --resume vX.Y.Z, `
+        + "--feature-manifest <path>, and repeated --result <path>.",
+      );
     }
   }
 
-  return { resumeTag, dryRun, help };
+  return { resumeTag, dryRun, help, featureManifestPath, resultPaths };
 }
 
 export const HELP_TEXT = `release -- publish and deploy a prepared Agentweaver release
 
 Usage:
   node scripts/azure/cli.mjs release [--dry-run]
-  node scripts/azure/cli.mjs release --resume vX.Y.Z [--dry-run]
+  node scripts/azure/cli.mjs release --resume vX.Y.Z \
+    --feature-manifest <path> --result <path> [--result <path>...]
 
 Composes publish-release followed by deploy-from-release. Publication creates
 the annotated tag and GitHub Release; deployment builds or retags that exact
-release, deploys it, and verifies the running environment.
+release, deploys it, and verifies the running environment. A non-dry-run release
+only completes after the post-deployment acceptance manifests pass the fail-closed
+release acceptance gate.
 `;
 
 export async function run(opts = {}) {
@@ -50,14 +72,14 @@ export async function run(opts = {}) {
     log = logDefault,
     publish = publishDefault,
     deployFromRelease = deployFromReleaseDefault,
+    acceptance = acceptanceDefault,
   } = opts;
-  const { resumeTag, dryRun, help } = parseArgs(argv);
+  const { resumeTag, dryRun, help, featureManifestPath, resultPaths } = parseArgs(argv);
 
   if (help) {
     log.info(HELP_TEXT);
     return { ok: true, help: true };
   }
-
   const publishArgs = [];
   if (resumeTag) publishArgs.push("--resume", resumeTag);
   if (dryRun) publishArgs.push("--dry-run");
@@ -75,10 +97,20 @@ export async function run(opts = {}) {
       commit: published.commit,
     },
   });
+  if (!dryRun && (!featureManifestPath || resultPaths.length === 0)) {
+    throw new Error(
+      "Deployment completed, but release acceptance remains blocked: run the declared Harness "
+      + "scenarios, then resume with --feature-manifest <path> and at least one --result <path>.",
+    );
+  }
+  const acceptanceResult = dryRun
+    ? { ok: false, status: "NOT_EVALUATED_DRY_RUN" }
+    : acceptance.runReleaseAcceptanceGate({ featureManifestPath, resultPaths });
 
   return {
     ...deployed,
     published,
     deployed,
+    acceptance: acceptanceResult,
   };
 }

@@ -41,6 +41,8 @@
         "featureId": { "type": "string", "minLength": 1 },
         "refs": {
           "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
           "items": { "type": "string", "minLength": 1 }
         },
         "behaviorId": { "type": "string", "minLength": 1 }
@@ -49,12 +51,21 @@
     "challenge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["challengeId", "challengeVersion", "catalogVersion", "executionId"],
+      "required": [
+        "challengeId",
+        "challengeVersion",
+        "catalogVersion",
+        "projectId",
+        "executionId",
+        "runId"
+      ],
       "properties": {
         "challengeId": { "type": "string", "minLength": 1 },
         "challengeVersion": { "type": "integer", "minimum": 1 },
         "catalogVersion": { "type": "integer", "minimum": 1 },
-        "executionId": { "type": "string", "minLength": 1 }
+        "projectId": { "type": "string", "minLength": 1 },
+        "executionId": { "type": "string", "minLength": 1 },
+        "runId": { "type": "string", "minLength": 1 }
       }
     },
     "claimResults": {
@@ -70,6 +81,7 @@
         "root": { "type": "string", "minLength": 1 },
         "items": {
           "type": "array",
+          "minItems": 1,
           "items": { "$ref": "#/$defs/evidenceItem" }
         }
       }
@@ -119,11 +131,55 @@
     "evidenceItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["path", "sha256", "deployedRevision"],
+      "required": [
+        "type",
+        "path",
+        "sha256",
+        "deployedRevision",
+        "projectId",
+        "executionId",
+        "runId",
+        "challengeId",
+        "challengeVersion",
+        "surface"
+      ],
       "properties": {
+        "type": {
+          "enum": [
+            "deployed-release-revision",
+            "project-record",
+            "run-record",
+            "outcome-spec-revision",
+            "work-plan",
+            "topology-record",
+            "event-query",
+            "surface-transcript",
+            "artifact-file",
+            "artifact-hash",
+            "repository-revision",
+            "memory-record",
+            "decision-record",
+            "review-record",
+            "preview-publication",
+            "preview-validation",
+            "source-manifest",
+            "backlog-record",
+            "usage-record",
+            "cleanup-record",
+            "deployment-record",
+            "authorization-record",
+            "structural-validation"
+          ]
+        },
         "path": { "type": "string", "minLength": 1 },
         "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "deployedRevision": { "type": "string", "minLength": 1 }
+        "deployedRevision": { "type": "string", "minLength": 1 },
+        "projectId": { "type": "string", "minLength": 1 },
+        "executionId": { "type": "string", "minLength": 1 },
+        "runId": { "type": "string", "minLength": 1 },
+        "challengeId": { "type": "string", "minLength": 1 },
+        "challengeVersion": { "type": "integer", "minimum": 1 },
+        "surface": { "enum": ["api", "ui", "mcp"] }
       }
     },
     "surfaceResult": {
@@ -145,6 +201,7 @@
         },
         "evidence": {
           "type": "array",
+          "minItems": 1,
           "items": { "$ref": "#/$defs/evidenceItem" }
         }
       }
@@ -174,6 +231,7 @@
         },
         "surfaceResults": {
           "type": "array",
+          "minItems": 1,
           "items": { "$ref": "#/$defs/surfaceResult" }
         },
         "evidenceIntegrity": {
@@ -190,21 +248,21 @@
             "required": { "type": "boolean" },
             "status": { "enum": ["NOT_REQUIRED", "SUCCEEDED", "FAILED", "INDETERMINATE"] }
           }
-        },
-        "allOf": [
-          {
-            "if": {
-              "properties": { "priority": { "const": "P0" } },
-              "required": ["priority"]
-            },
-            "then": {
-              "properties": {
-                "verdict": { "enum": ["PASS", "FAIL", "INDETERMINATE"] }
-              }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "priority": { "const": "P0" } },
+            "required": ["priority"]
+          },
+          "then": {
+            "properties": {
+              "verdict": { "enum": ["PASS", "FAIL", "INDETERMINATE"] }
             }
           }
-        ]
-      }
+        }
+      ]
     }
   }
 }

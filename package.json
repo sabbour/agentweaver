@@ -43,12 +43,15 @@
     "release:plan": "node scripts/changesets/plan-release.mjs",
     "release:prepare": "node scripts/changesets/prepare-release.mjs",
     "release:publish": "node scripts/azure/cli.mjs publish-release",
+    "release:acceptance": "node scripts/persona-briefs/release-acceptance-gate.mjs",
     "release:sync-dev": "node scripts/changesets/sync-dev.mjs"
   },
   "devDependencies": {
     "@bradygaster/squad-sdk": "0.13.1",
     "@changesets/cli": "^3.0.0",
     "@types/node": "^26.2.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "elkjs": "0.11.0",
     "playwright": "^1.62.1",
     "yaml": "^2.9.0"
