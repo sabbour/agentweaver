@@ -24,6 +24,46 @@ public sealed record ScribeFinalizationResult(bool Completed, string? Error)
     public static ScribeFinalizationResult Failed(string error) => new(false, error);
 }
 
+public interface IScribeExportOperation
+{
+    Task<bool> IsAppliedAsync(
+        string workingDirectory,
+        string defaultBranch,
+        string operationKey,
+        CancellationToken ct);
+
+    Task ApplyAsync(
+        string projectId,
+        string workingDirectory,
+        string defaultBranch,
+        string operationKey,
+        CancellationToken ct);
+}
+
+public sealed class ScribeExportOperation(MemoryDbContext memoryDb) : IScribeExportOperation
+{
+    public Task<bool> IsAppliedAsync(
+        string workingDirectory,
+        string defaultBranch,
+        string operationKey,
+        CancellationToken ct) =>
+        MemoryLedgerExporter.HasCommittedOperationAsync(
+            workingDirectory, defaultBranch, operationKey, ct);
+
+    public async Task ApplyAsync(
+        string projectId,
+        string workingDirectory,
+        string defaultBranch,
+        string operationKey,
+        CancellationToken ct)
+    {
+        await MemoryLedgerExporter.ExportAsync(
+            projectId, workingDirectory, memoryDb, ct).ConfigureAwait(false);
+        await MemoryLedgerExporter.CommitExportAsync(
+            workingDirectory, defaultBranch, ct, operationKey).ConfigureAwait(false);
+    }
+}
+
 public sealed class ScribeFinalizationService(
     IRunStore runStore,
     ScribeHousekeepingService housekeeping)
@@ -65,11 +105,15 @@ public sealed class ScribeFinalizationService(
 public sealed class ScribeHousekeepingService(
     MemoryDbContext memoryDb,
     IProjectStore? projectStore,
-    ILogger<ScribeHousekeepingService> logger)
+    ILogger<ScribeHousekeepingService> logger,
+    IScribeExportOperation? exportOperation = null)
 {
+    private static readonly TimeSpan AbandonedExportClaimAge = TimeSpan.FromMinutes(10);
     private static readonly string[] WorkerMergeTypes = ["learning", "pattern", "update"];
     private static readonly string[] CoordinatorMergeTypes =
         ["learning", "pattern", "update", "architectural", "scope"];
+    private readonly IScribeExportOperation _exportOperation =
+        exportOperation ?? new ScribeExportOperation(memoryDb);
 
     public async Task RunAsync(ScribeHousekeepingRequest request, CancellationToken ct)
     {
@@ -162,23 +206,139 @@ public sealed class ScribeHousekeepingService(
             _ => Task.CompletedTask,
             ct).ConfigureAwait(false);
 
-        await ExecuteAsync(
-            request,
-            "export",
-            "export",
-            async token =>
+        await ExecuteExportAsync(request, projectId, ct).ConfigureAwait(false);
+    }
+
+    private async Task ExecuteExportAsync(
+        ScribeHousekeepingRequest request,
+        string projectId,
+        CancellationToken ct)
+    {
+        if (projectStore is null)
+        {
+            await ExecuteAsync(request, "export", "export", _ => Task.CompletedTask, ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var project = await projectStore.GetAsync(request.Run.ProjectId!.Value, ct)
+            .ConfigureAwait(false);
+        if (project is null || string.IsNullOrWhiteSpace(project.WorkingDirectory))
+        {
+            await ExecuteAsync(request, "export", "export", _ => Task.CompletedTask, ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        var operationKey =
+            $"scribe:{request.Run.Id}:generation:{request.Run.LifecycleGeneration}:export";
+
+        while (true)
+        {
+            var attempt = new ScribeOperationAttempt
             {
-                if (projectStore is null)
+                OperationKey = operationKey,
+                ProjectId = projectId,
+                RunId = request.Run.Id.ToString(),
+                LifecycleGeneration = request.Run.LifecycleGeneration,
+                OperationType = "export",
+                Status = "started",
+                StartedAt = DateTimeOffset.UtcNow,
+            };
+            memoryDb.ScribeOperationAttempts.Add(attempt);
+            var claimed = true;
+
+            try
+            {
+                await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+            }
+            catch (DbUpdateException)
+            {
+                memoryDb.ChangeTracker.Clear();
+                claimed = false;
+            }
+
+            if (claimed)
+            {
+                if (await _exportOperation.IsAppliedAsync(
+                        project.WorkingDirectory, project.DefaultBranch, operationKey, ct)
+                    .ConfigureAwait(false))
+                {
+                    attempt.Status = "completed";
+                    attempt.CompletedAt = DateTimeOffset.UtcNow;
+                    await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
                     return;
-                var project = await projectStore.GetAsync(run.ProjectId.Value, token).ConfigureAwait(false);
-                if (project is null || string.IsNullOrWhiteSpace(project.WorkingDirectory))
-                    return;
-                await MemoryLedgerExporter.ExportAsync(
-                    projectId, project.WorkingDirectory, memoryDb, token).ConfigureAwait(false);
-                await MemoryLedgerExporter.CommitExportAsync(
-                    project.WorkingDirectory, project.DefaultBranch, token).ConfigureAwait(false);
-            },
-            ct).ConfigureAwait(false);
+                }
+
+                await ApplyClaimedExportAsync(
+                    attempt, project.WorkingDirectory, project.DefaultBranch, ct).ConfigureAwait(false);
+                return;
+            }
+
+            var active = await memoryDb.ScribeOperationAttempts
+                .SingleOrDefaultAsync(candidate =>
+                    candidate.OperationKey == operationKey
+                    && (candidate.Status == "started" || candidate.Status == "completed"), ct)
+                .ConfigureAwait(false);
+            if (active is null)
+                continue;
+            if (active.Status == "completed")
+                return;
+
+            if (await _exportOperation.IsAppliedAsync(
+                    project.WorkingDirectory, project.DefaultBranch, operationKey, ct)
+                .ConfigureAwait(false))
+            {
+                active.Status = "completed";
+                active.CompletedAt = DateTimeOffset.UtcNow;
+                await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+                return;
+            }
+
+            if (active.StartedAt <= DateTimeOffset.UtcNow - AbandonedExportClaimAge)
+            {
+                active.Status = "failed";
+                active.FailureCode = "scribe_abandoned_claim";
+                active.CompletedAt = DateTimeOffset.UtcNow;
+                await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+                continue;
+            }
+
+            memoryDb.Entry(active).State = EntityState.Detached;
+            await Task.Delay(TimeSpan.FromMilliseconds(25), ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ApplyClaimedExportAsync(
+        ScribeOperationAttempt attempt,
+        string workingDirectory,
+        string defaultBranch,
+        CancellationToken ct)
+    {
+        try
+        {
+            await _exportOperation.ApplyAsync(
+                attempt.ProjectId,
+                workingDirectory,
+                defaultBranch,
+                attempt.OperationKey,
+                ct).ConfigureAwait(false);
+            attempt.Status = "completed";
+            attempt.CompletedAt = DateTimeOffset.UtcNow;
+            await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            attempt.Status = "failed";
+            attempt.FailureCode = ScribeFailureClassifier.Classify(ex).Code;
+            attempt.CompletedAt = DateTimeOffset.UtcNow;
+            await memoryDb.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+            logger.LogWarning(
+                "Scribe housekeeping failed for run {RunId}; operation=export; code={FailureCode}",
+                attempt.RunId,
+                attempt.FailureCode);
+            throw;
+        }
     }
 
     private async Task ExecuteAsync(

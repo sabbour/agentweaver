@@ -180,6 +180,23 @@ public sealed class WorktreeMemoryMirrorTests : IDisposable
                 && change.State.HasFlag(FileStatus.NewInWorkdir));
     }
 
+    [Fact]
+    public async Task ScribeExportMarker_IsCommittedEvenWhenLedgerTreeIsUnchanged()
+    {
+        const string operationKey = "scribe:run:generation:3:export";
+        string priorTip;
+        using (var before = new Repository(_repoPath))
+            priorTip = before.Branches["main"]!.Tip!.Sha;
+
+        await MemoryLedgerExporter.CommitExportAsync(
+            _repoPath, "main", CancellationToken.None, operationKey);
+
+        (await MemoryLedgerExporter.HasCommittedOperationAsync(
+            _repoPath, "main", operationKey, CancellationToken.None)).Should().BeTrue();
+        using var after = new Repository(_repoPath);
+        after.Branches["main"]!.Tip!.Sha.Should().NotBe(priorTip);
+    }
+
     private WorktreeManager CreateWorktreeManager()
     {
         var config = new ConfigurationBuilder()

@@ -2359,7 +2359,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("OperationKey", "Status");
+                    b.HasIndex("OperationKey")
+                        .IsUnique()
+                        .HasFilter("\"Status\" IN ('started', 'completed')");
 
                     b.ToTable("scribe_operation_attempts", (string)null);
                 });

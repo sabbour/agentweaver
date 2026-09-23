@@ -1092,6 +1092,7 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
 }
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();
+builder.Services.AddScoped<IScribeExportOperation, ScribeExportOperation>();
 builder.Services.AddScoped<ScribeHousekeepingService>();
 builder.Services.AddScoped<ScribeFinalizationService>();
 builder.Services.AddSingleton<Agentweaver.Api.Projects.ProjectWorkspaceService>();
