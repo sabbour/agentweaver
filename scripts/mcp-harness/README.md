@@ -41,9 +41,10 @@ There are two entry points:
   automate a one-time browser handoff.
 - Prompt construction, MCP client results, JSONL serialization, verdict inputs, and
   process reports recursively redact sensitive headers/keys, bearer values, URL
-  userinfo/query/fragment data, and secret canaries. Drivers must append JSONL with
-  `appendRedactedJsonLine` from `scripts/harness-shared/safe-jsonl.mjs`; raw copies
-  are forbidden.
+  userinfo/query/fragment data, descriptor/value credentials (including nested arrays
+  and JSON strings), and secret canaries before persistence or hashing. Drivers must
+  append JSONL with `appendRedactedJsonLine` from
+  `scripts/harness-shared/safe-jsonl.mjs`; raw copies are forbidden.
 - Project ownership: `--project-id` / `AGENTWEAVER_SMOKE_PROJECT_ID` requires
   `--project-is-disposable`; the run is archived but that caller-owned project
   is never deleted. Without an ID, local stdio smoke creates a unique owned

@@ -8,7 +8,10 @@ export function redact(value) {
 }
 
 export function evidenceHash(value) {
-  return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
+  const sanitized = Buffer.isBuffer(value) ? value : redact(value);
+  return createHash('sha256').update(typeof sanitized === 'string' || Buffer.isBuffer(sanitized)
+    ? sanitized
+    : JSON.stringify(sanitized)).digest('hex');
 }
 
 export async function structuredDomSnapshot(page) {

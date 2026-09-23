@@ -73,3 +73,23 @@ test('judgeEvidence falls back when the judge command exits unsuccessfully', asy
   assert.equal(result.verdict.judgeError.kind, 'nonzero_exit');
   assert.equal(result.verdict.judgeError.exitCode, 7);
 });
+
+test('judgeEvidence redacts descriptor credentials before callbacks and prompts', async () => {
+  const canary = 'credential-canary-judge-42';
+  const input = evidence();
+  input.turns[0].evidence.push({
+    kind: 'execution-context',
+    evidence: { name: 'provider key', value: canary },
+  });
+  let callbackEvidence;
+  const result = await judgeEvidence(input, {
+    retries: 0,
+    judge: async ({ evidence: value }) => {
+      callbackEvidence = value;
+      return { ok: false, error: { kind: 'test', message: 'fixture stop' } };
+    },
+  });
+  assert.equal(JSON.stringify(callbackEvidence).includes(canary), false);
+  assert.equal(result.prompt.includes(canary), false);
+  assert.equal(JSON.stringify(result.verdict).includes(canary), false);
+});

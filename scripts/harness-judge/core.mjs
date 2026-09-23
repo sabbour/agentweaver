@@ -317,6 +317,7 @@ export function buildFallbackVerdict(metadata, judgeError) {
 }
 
 export async function judgeEvidence(normalizedEvidence, opts = {}) {
+  normalizedEvidence = redact(normalizedEvidence);
   const shapeValidation = validateEvidenceShape(normalizedEvidence);
   if (!shapeValidation.ok) {
     throw new Error(`invalid normalized evidence: ${shapeValidation.errors.join('; ')}`);
@@ -339,7 +340,7 @@ export async function judgeEvidence(normalizedEvidence, opts = {}) {
       if (raw?.ok === false) {
         lastError = { ...raw.error, attempts: attempt };
       } else {
-        const candidate = raw?.ok === true && raw.verdict ? raw.verdict : raw;
+        const candidate = redact(raw?.ok === true && raw.verdict ? raw.verdict : raw);
         const validation = validateVerdict(candidate, { expectedMetadata: metadata });
         if (validation.ok) {
           return { prompt, verdict: candidate, rawVerdict: candidate, attempts: attempt };
@@ -363,8 +364,8 @@ export async function judgeEvidence(normalizedEvidence, opts = {}) {
 
   return {
     prompt,
-    verdict: buildFallbackVerdict(metadata, lastError),
-    rawVerdict: lastRaw,
+    verdict: buildFallbackVerdict(metadata, redact(lastError)),
+    rawVerdict: redact(lastRaw),
     attempts: retries + 1,
   };
 }
