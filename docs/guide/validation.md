@@ -122,6 +122,8 @@ node scripts/persona-briefs/challenge-catalog.mjs validate
 node scripts/persona-briefs/challenge-catalog.mjs list
 node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-lifecycle-v1
 node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
+npm run release:acceptance -- --feature-manifest <release-feature-manifest.json> \
+  --result <representative-result.json> --result <focused-result.json>
 ```
 
 Catalog prose is untrusted scenario intent. It cannot configure targets, credentials,
@@ -129,12 +131,20 @@ commands, approvals, GitHub actions, or deployments. Actual scenarios are driven
 human persona through the dynamic Harness, which discovers the live surface and reacts
 to real responses. Structural checks, narration, prerecorded requests, and arbitrary
 URLs cannot replace revision-, project-, and run-bound execution evidence.
+Every passing execution claim and required surface needs non-empty typed evidence bound
+to the exact deployed revision, project, challenge execution, run, and surface.
 
 The full catalog does not run for every release. Release acceptance combines the
 bounded `release-lumenpath-launch-integration-v1` representative project with focused
 API and/or UI challenges for every newly shipped behavior, selected from its affected
 surfaces. Missing direct claim or surface coverage fails closed. Scheduled deep stress
 and manual destructive scenarios remain separate.
+
+Release planning selects and documents the required scenarios but does not execute them.
+After the exact release revision is deployed, run the selected Harness scenarios and
+pass their result manifests to `npm run release:acceptance`. The gate fails closed unless
+the representative challenge and every feature-specific affected surface have passing
+exact-revision evidence, cleanup succeeded, and no abnormal anomaly remains unresolved.
 
 Abnormal release results use the structured
 `agentweaver.release-acceptance-result/v1` contract. Harness and Judge only emit

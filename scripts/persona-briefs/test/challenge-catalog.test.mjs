@@ -113,7 +113,11 @@ test('release selector returns only the representative project and directly link
   const catalog = loadChallengeCatalog();
   const result = selectReleaseChallenges(catalog, {
     schemaVersion: 'agentweaver.release-feature-manifest/v1',
-    release: { version: '0.34.0', deployedRevision: 'revision-1' },
+    release: {
+      version: '0.34.0',
+      deployedRevision: 'revision-1',
+      deploymentIdentity: 'staging-a',
+    },
     features: [{
       id: 'issue-1519',
       refs: ['sabbour/agentweaver#1519'],
@@ -132,6 +136,12 @@ test('release selector returns only the representative project and directly link
     requiredSurfaces: ['api'],
     featureIds: ['issue-1519'],
     behaviorIds: ['repair-contract'],
+    coverage: [{
+      featureId: 'issue-1519',
+      behaviorId: 'repair-contract',
+      claimId: 'release-repair-contract-deterministic-v1',
+      requiredSurfaces: ['api'],
+    }],
   }]);
 });
 
@@ -139,7 +149,11 @@ test('release selector fails closed on unknown claims, feature-link mismatches, 
   const catalog = loadChallengeCatalog();
   const base = {
     schemaVersion: 'agentweaver.release-feature-manifest/v1',
-    release: { version: '0.34.0', deployedRevision: 'revision-1' },
+    release: {
+      version: '0.34.0',
+      deployedRevision: 'revision-1',
+      deploymentIdentity: 'staging-a',
+    },
     features: [{
       id: 'issue-1519',
       refs: ['sabbour/agentweaver#1519'],
@@ -161,4 +175,40 @@ test('release selector fails closed on unknown claims, feature-link mismatches, 
   missingSurface.features[0].shippedBehaviors[0].claimIds = ['homepage-blog-topic-and-source-binding-v1'];
   missingSurface.features[0].shippedBehaviors[0].affectedSurfaces = ['mcp'];
   assert.match(selectReleaseChallenges(catalog, missingSurface).errors.join('\n'), /lacks required surface coverage: mcp/);
+});
+
+test('release selector enforces every nested feature-manifest schema requirement', () => {
+  const catalog = loadChallengeCatalog();
+  const value = {
+    schemaVersion: 'agentweaver.release-feature-manifest/v1',
+    release: {
+      version: '0.34.0',
+      deployedRevision: 'revision-1',
+      deploymentIdentity: 'staging-a',
+    },
+    features: [{
+      id: 'issue-1519',
+      refs: ['sabbour/agentweaver#1519'],
+      shippedBehaviors: [{
+        id: 'repair-contract',
+        claimIds: ['release-repair-contract-deterministic-v1'],
+        affectedSurfaces: ['api'],
+      }],
+    }],
+  };
+  for (const [target, field] of [
+    [value.release, 'deploymentIdentity'],
+    [value.features[0], 'refs'],
+    [value.features[0].shippedBehaviors[0], 'claimIds'],
+    [value.features[0].shippedBehaviors[0], 'affectedSurfaces'],
+  ]) {
+    const invalid = structuredClone(value);
+    const clonedTarget = target === value.release
+      ? invalid.release
+      : target === value.features[0]
+        ? invalid.features[0]
+        : invalid.features[0].shippedBehaviors[0];
+    delete clonedTarget[field];
+    assert.equal(selectReleaseChallenges(catalog, invalid).ok, false, field);
+  }
 });

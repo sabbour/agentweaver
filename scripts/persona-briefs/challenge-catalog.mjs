@@ -4,10 +4,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadCatalog as loadPersonaCatalog } from './find-similar.mjs';
+import { validateJsonSchema } from './schema-validator.mjs';
 
 export const PACKAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const CHALLENGE_CATALOG_PATH = path.join(PACKAGE_DIR, 'challenges.v1.json');
 export const CHALLENGE_SCHEMA_PATH = path.join(PACKAGE_DIR, 'challenge-catalog-v1.schema.json');
+export const RELEASE_FEATURE_SCHEMA_PATH = path.join(
+  PACKAGE_DIR,
+  'release-feature-manifest-v1.schema.json',
+);
 
 const SURFACES = new Set(['api', 'ui', 'mcp']);
 const EXECUTION_CONTRACTS = new Set(['dynamic-human-v1', 'structural-observability-v1']);
@@ -443,17 +448,22 @@ export function getChallenge(catalog, id) {
   return catalog.entries.find((entry) => entry.id === id) ?? null;
 }
 
+export function validateReleaseFeatureManifest(manifest) {
+  return validateJsonSchema(RELEASE_FEATURE_SCHEMA_PATH, manifest, 'release manifest');
+}
+
 export function selectReleaseChallenges(catalog, manifest) {
+  const schemaValidation = validateReleaseFeatureManifest(manifest);
+  if (!schemaValidation.ok) {
+    return {
+      ok: false,
+      errors: schemaValidation.errors,
+      release: manifest?.release ?? null,
+      representativeChallengeId: null,
+      focusedChallenges: [],
+    };
+  }
   const errors = [];
-  if (manifest?.schemaVersion !== 'agentweaver.release-feature-manifest/v1') {
-    errors.push('release manifest schemaVersion must equal agentweaver.release-feature-manifest/v1');
-  }
-  if (!nonEmpty(manifest?.release?.version) || !nonEmpty(manifest?.release?.deployedRevision)) {
-    errors.push('release manifest requires version and deployedRevision');
-  }
-  if (!Array.isArray(manifest?.features) || manifest.features.length === 0) {
-    errors.push('release manifest requires at least one feature');
-  }
 
   const focused = new Map();
   for (const [featureIndex, feature] of (manifest?.features ?? []).entries()) {
@@ -495,6 +505,7 @@ export function selectReleaseChallenges(catalog, manifest) {
           requiredSurfaces: [],
           featureIds: [],
           behaviorIds: [],
+          coverage: [],
         };
         if (!selected.claimIds.includes(claimId)) selected.claimIds.push(claimId);
         for (const surface of requiredSurfaces) {
@@ -502,6 +513,12 @@ export function selectReleaseChallenges(catalog, manifest) {
         }
         if (!selected.featureIds.includes(feature.id)) selected.featureIds.push(feature.id);
         if (!selected.behaviorIds.includes(behavior.id)) selected.behaviorIds.push(behavior.id);
+        selected.coverage.push({
+          featureId: feature.id,
+          behaviorId: behavior.id,
+          claimId,
+          requiredSurfaces,
+        });
         focused.set(challenge.id, selected);
       }
     }
@@ -516,6 +533,9 @@ export function selectReleaseChallenges(catalog, manifest) {
       requiredSurfaces: item.requiredSurfaces.sort(),
       featureIds: item.featureIds.sort(),
       behaviorIds: item.behaviorIds.sort(),
+      coverage: item.coverage.sort((a, b) =>
+        `${a.featureId}/${a.behaviorId}/${a.claimId}`
+          .localeCompare(`${b.featureId}/${b.behaviorId}/${b.claimId}`)),
     }))
     .sort((a, b) => a.challengeId.localeCompare(b.challengeId));
   return {

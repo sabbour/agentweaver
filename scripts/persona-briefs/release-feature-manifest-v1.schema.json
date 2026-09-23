@@ -10,10 +10,11 @@
     "release": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "deployedRevision"],
+      "required": ["version", "deployedRevision", "deploymentIdentity"],
       "properties": {
         "version": { "type": "string", "minLength": 1 },
-        "deployedRevision": { "type": "string", "minLength": 1 }
+        "deployedRevision": { "type": "string", "minLength": 1 },
+        "deploymentIdentity": { "type": "string", "minLength": 1 }
       }
     },
     "features": {
