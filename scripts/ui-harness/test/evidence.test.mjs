@@ -30,9 +30,14 @@ test('evidence hash is deterministic', () => {
 test('evidence hash is identical for descriptor-equivalent secret values', () => {
   const fixture = (value) => ({
     executionContext: { name: 'execution-key', value },
+    detail: `credential=${value}`,
+    pluralDetail: `credentials: ${value}`,
     status: 'completed',
     correlationId: 'corr-42',
   });
+  const redacted = redact(fixture('alpha-value'));
+  assert.equal(redacted.detail, 'credential=[REDACTED]');
+  assert.equal(redacted.pluralDetail, 'credentials: [REDACTED]');
   assert.equal(evidenceHash(fixture('credential-canary-hash-one')), evidenceHash(fixture('credential-canary-hash-two')));
   assert.equal(
     evidenceHash(JSON.stringify(fixture('credential-canary-json-hash-one'))),
