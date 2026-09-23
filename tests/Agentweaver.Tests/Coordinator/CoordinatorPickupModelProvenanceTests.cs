@@ -64,7 +64,11 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
             _owner, "orchestration", projectId, ensureProvider: false);
         var response = await _owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/orchestrations",
-            new { goal = "Define Outcome must keep its accepted Azure BYOK provider after the request ends." });
+            new
+            {
+                goal = "Define Outcome must keep its accepted Azure BYOK provider after the request ends.",
+                modelId = "claude-sonnet-5",
+            });
         response.EnsureSuccessStatusCode();
         var runId = (await response.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("runId").GetString()!;
@@ -73,6 +77,8 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         run.Should().NotBeNull();
         run!.ModelSource.Should().Be(ModelSource.Byok,
             "the persisted source must be the resolver's actual result, never a hardcoded Copilot literal");
+        run.ModelId.Should().Be(provider.Model,
+            "the durable run must report the frozen BYOK execution model instead of a requested role model");
 
         var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
             .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
@@ -84,6 +90,8 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
             "the background Define Outcome workflow must invoke its drafter");
         drafter.LastInput!.ModelSource.Should().Be(ModelSource.Byok.ToApiString(),
             "background drafting must select the persisted accepted BYOK source, not a disposed request-local plan");
+        drafter.LastInput.ModelId.Should().Be(provider.Model,
+            "work-plan model selection must inherit the effective BYOK execution model");
         drafter.LastInput.ByokProviderFingerprint.Should().Be(provider.ExecutionFingerprint(),
             "the drafting client must validate the durable accepted Azure provider identity before invocation");
 
@@ -91,9 +99,64 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         entry.Should().NotBeNull();
         var provenance = entry!.GetSnapshotSince(0).Events
             .Single(e => e.Type == EventTypes.RunModelProviderResolved);
-        JsonSerializer.SerializeToElement(provenance.Payload)
-            .GetProperty("modelSource").GetString()
+        var provenancePayload = JsonSerializer.SerializeToElement(provenance.Payload);
+        provenancePayload.GetProperty("modelSource").GetString()
             .Should().Be(ModelSource.Byok.ToApiString());
+        provenancePayload.GetProperty("modelId").GetString().Should().Be(provider.Model);
+
+        (await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", content: null))
+            .EnsureSuccessStatusCode();
+        WorkPlan? plan = null;
+        var planDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (plan is null && DateTime.UtcNow < planDeadline)
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            plan = db.WorkPlans.SingleOrDefault(candidate => candidate.CoordinatorRunId == runId);
+            if (plan is null)
+                await Task.Delay(50);
+        }
+        plan.Should().NotBeNull("confirming the deterministic draft must persist a work plan");
+
+        List<string> selectedModels = [];
+        var subtaskDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (selectedModels.Count == 0 && DateTime.UtcNow < subtaskDeadline)
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            selectedModels = db.Subtasks
+                .Where(subtask => subtask.WorkPlanId == plan!.Id)
+                .Select(subtask => subtask.SelectedModelId)
+                .ToList();
+            if (selectedModels.Count == 0)
+                await Task.Delay(50);
+        }
+        selectedModels.Should().NotBeEmpty();
+        selectedModels.Should().OnlyContain(model => model == provider.Model,
+            "BYOK work-plan and topology metadata must report the frozen execution model");
+
+        await using var graphScope = _factory.Services.CreateAsyncScope();
+        var graphDb = graphScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var persistedSubtasks = graphDb.Subtasks
+            .Where(subtask => subtask.WorkPlanId == plan.Id)
+            .ToList();
+        var subtaskIds = persistedSubtasks.Select(subtask => subtask.Id).ToHashSet();
+        var dependencies = graphDb.SubtaskDependencies
+            .Where(edge => subtaskIds.Contains(edge.SubtaskId))
+            .Select(edge => new ValueTuple<int, int>(edge.SubtaskId, edge.DependsOnSubtaskId))
+            .ToList();
+        var graph = CoordinatorGraphDescriptor.Build(
+            runId,
+            persistedSubtasks,
+            dependencies,
+            coordinatorModel: run.ModelId);
+        var attributedNodes = graph.Nodes
+            .Where(node => node.Role is "coordinator" or "subtask")
+            .ToList();
+        attributedNodes.Should().NotBeEmpty();
+        attributedNodes.Should().OnlyContain(
+            node => node.Model == provider.Model,
+            "the topology must display the same effective model as the run and work plan");
     }
 
     [Fact]

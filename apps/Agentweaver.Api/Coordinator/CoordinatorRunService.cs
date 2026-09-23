@@ -154,7 +154,9 @@ public sealed class CoordinatorRunService
 
         // The resolver — not a hardcoded literal — decides the run's durable ModelSource, so a BYOK
         // run is persisted (and rendered) as BYOK instead of always claiming GitHub Copilot.
-        var effectiveProvider = await ResolveEffectiveProviderForInvocationAsync(projectId, ct).ConfigureAwait(false);
+        var effectiveProviderBoundary = await ResolveEffectiveProviderBoundaryForInvocationAsync(projectId, ct)
+            .ConfigureAwait(false);
+        var effectiveProvider = effectiveProviderBoundary.Provider;
 
         var approvalSnapshot = new RunApprovalPolicySnapshot(
             approvalPolicy,
@@ -172,14 +174,15 @@ public sealed class CoordinatorRunService
             Status = RunStatus.InProgress,
             StartedAt = now,
             ProjectId = projectId,
-            ModelId = modelId,
+            ModelId = effectiveProviderBoundary.ResolveEffectiveModelId(modelId),
             AgentName = "Coordinator",
             ParentRunId = null,
             SubtaskId = null,
             RetriedFrom = retriedFrom,
         }.WithApprovalPolicySnapshot(approvalSnapshot);
 
-        var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProvider, ct).ConfigureAwait(false);
+        var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProviderBoundary, ct)
+            .ConfigureAwait(false);
         try
         {
             await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
@@ -200,6 +203,7 @@ public sealed class CoordinatorRunService
                 direct: startMode == CoordinatorStartMode.Direct,
                 submittingUserDisplayName: submittingUserDisplayName,
                 effectiveProvider: effectiveProvider,
+                effectiveProviderBoundary: effectiveProviderBoundary,
                 providerSnapshotCaptured: capturedSnapshot is not null,
                 approvalPolicySource: approvalSnapshot.Source,
                 approvalPolicyCapturedAt: approvalSnapshot.CapturedAt,
@@ -331,7 +335,7 @@ public sealed class CoordinatorRunService
             RepositoryPath = source.RepositoryPath,
             OriginatingBranch = source.OriginatingBranch,
             ModelSource = effectiveProvider.ToModelSource(),
-            ModelId = source.ModelId,
+            ModelId = effectiveProviderBoundary.ResolveEffectiveModelId(source.ModelId),
             Task = source.Task,
             SubmittingUser = source.SubmittingUser,    // accountable human carried through (Principle IX)
             Status = RunStatus.InProgress,
@@ -684,17 +688,44 @@ public sealed class CoordinatorRunService
         return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
     }
 
-    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderForInvocationAsync(
+    private async Task<ResolvedRunModelProviderBoundary> ResolveEffectiveProviderBoundaryForInvocationAsync(
         ProjectId projectId,
         CancellationToken ct)
     {
+        EffectiveModelProviderResult provider;
         if (_executionPlanAccessor?.Current is { Operation: "orchestration" } accepted)
         {
             using var scope = _scopeFactory.CreateScope();
             var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
-            return (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
+            provider = (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
         }
-        return await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
+        else
+        {
+            provider = await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
+        }
+
+        if (provider is not EffectiveModelProviderResult.Byok expectedByok)
+            return new ResolvedRunModelProviderBoundary(provider, null);
+
+        var configuration = _executionPlanAccessor?.FrozenByokConfiguration;
+        if (configuration is null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            configuration = await scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>()
+                .GetAsync(ct).ConfigureAwait(false);
+        }
+        if (configuration is null || !GenerationModelProviderExecutor.Matches(configuration, expectedByok))
+            throw new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.Configuration,
+                "model_provider_changed",
+                "The effective BYOK provider changed before coordinator launch.",
+                isRetryable: true);
+
+        return new ResolvedRunModelProviderBoundary(
+            provider,
+            expectedByok.ConfigurationFingerprint,
+            configuration);
     }
 
     /// <summary>
