@@ -88,6 +88,22 @@ The selector warns when the strongest keyword match stops at a gate and lists
 gate-stopping candidates under `rejectedMatches`, which is a scenario-selection
 problem, not evidence of a product regression.
 
+For any completion-required scenario that will execute against a repository, require
+an explicit `owner/repository` target and preflight it before dispatch. Create a
+Harness-owned disposable project with the existing repository-selection/project
+creation APIs, or explicitly select a disposable project connected to the exact
+repository. Fetch the canonical project plus `/api/projects/{id}/workspace/refs`,
+then validate them with
+`scripts/harness-shared/repository-provenance.mjs`. The base ref must contain an
+immutable `revision`, and a workflow or applied Blueprint ID must be selected. Never
+substitute a blank project or count read-only discovery as a running scenario.
+
+If preflight fails, persist the helper's actionable recovery through
+`buildSetupFailureVerdict()` from `scripts/harness-judge/core.mjs`; do not dispatch
+PersonaActor. After orchestration creation, `markRepositoryScenarioRunning()` must
+produce the project URL, repository identity, resolved revision, workflow/Blueprint
+ID, and orchestration URL before Harness reports `running`.
+
 There is no curated list of named scenario subcommands, no per-persona fixed
 step sequence, and no scripted HTTP-calling layer standing between the driving
 actor and the target. Harness dispatches a fresh **`PersonaActor`** sub-agent

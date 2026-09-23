@@ -325,6 +325,52 @@ export function buildFallbackVerdict(metadata, judgeError) {
   };
 }
 
+export function buildSetupFailureVerdict(metadata, setupFailure) {
+  const normalizedMetadata = normalizeMetadata({
+    ...metadata,
+    runId: metadata?.runId || `setup-${metadata?.scenarioId ?? 'scenario'}`,
+  });
+  const join = extractJoinKey(normalizedMetadata);
+  const failure = redact(setupFailure ?? {});
+  const message = failure.message ?? 'Harness setup failed before scenario execution.';
+  const recovery = failure.recovery ?? 'Resolve the setup failure and rerun the scenario.';
+  const code = failure.code ?? 'setup_failed';
+  const verdict = {
+    schema: VERDICT_SCHEMA,
+    persona: normalizedMetadata.persona ?? null,
+    ...join,
+    p0: {
+      verdict: 'FAIL',
+      evidence: `${message} Recovery: ${recovery}`,
+    },
+    p1: {
+      verdict: 'CANNOT_DETERMINE',
+      evidence: 'The scenario did not execute, so output quality was not assessed.',
+      criteriaCoverage: [],
+    },
+    frustration: {
+      level: 'not_assessed',
+      score: FRUSTRATION_SCORES.not_assessed,
+      signals: [],
+      rationale: 'The scenario stopped during setup before persona behavior could be assessed.',
+    },
+    pushback: {
+      count: 0,
+      requirementMet: false,
+      each: [],
+    },
+    cannotDetermine: ['Output quality and persona behavior were not assessed because setup failed.'],
+    findings: [{
+      title: `Scenario setup failed: ${code}`,
+      kind: 'setup',
+      evidence: `${message} Recovery: ${recovery}`,
+    }],
+  };
+  const validation = validateVerdict(verdict, { expectedMetadata: normalizedMetadata });
+  if (!validation.ok) throw new Error(`invalid setup failure verdict: ${validation.errors.join('; ')}`);
+  return verdict;
+}
+
 export async function judgeEvidence(normalizedEvidence, opts = {}) {
   normalizedEvidence = redact(normalizedEvidence);
   const shapeValidation = validateEvidenceShape(normalizedEvidence);
