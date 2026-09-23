@@ -2,6 +2,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using FluentAssertions;
+using LibGit2Sharp;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -102,6 +103,7 @@ public sealed class ScribeHousekeepingServiceTests
     public async Task ConcurrentExport_ClaimsBeforeInvokingSideEffect()
     {
         var path = Path.Combine(Path.GetTempPath(), $"scribe-export-{Guid.NewGuid():N}.db");
+        var repositoryPath = CreateRepository();
         try
         {
             Run seededRun;
@@ -112,10 +114,12 @@ public sealed class ScribeHousekeepingServiceTests
                 await setup.SaveChangesAsync();
             }
 
-            var project = ProjectFor(seededRun);
-            var exporter = new FakeExportOperation(blockApply: true);
             await using var db1 = CreateContext($"Data Source={path};Default Timeout=5");
             await using var db2 = CreateContext($"Data Source={path};Default Timeout=5");
+            var project = ProjectFor(seededRun, repositoryPath);
+            var exporter = new RecordingExportOperation(
+                new ScribeExportOperation(db1),
+                blockApply: true);
             var service1 = new ScribeHousekeepingService(
                 db1,
                 new SingleProjectStore(project),
@@ -138,6 +142,11 @@ public sealed class ScribeHousekeepingServiceTests
             await Task.WhenAll(first, second);
 
             exporter.ApplyCount.Should().Be(1);
+            CountOperationCommits(
+                repositoryPath,
+                project.DefaultBranch,
+                $"scribe:{seededRun.Id}:generation:{seededRun.LifecycleGeneration}:export")
+                .Should().Be(1);
             await using var verify = CreateContext($"Data Source={path}");
             (await verify.ScribeOperationAttempts.CountAsync(attempt =>
                 attempt.OperationType == "export" && attempt.Status == "completed")).Should().Be(1);
@@ -147,12 +156,14 @@ public sealed class ScribeHousekeepingServiceTests
             SqliteConnection.ClearAllPools();
             if (File.Exists(path))
                 File.Delete(path);
+            DeleteRepository(repositoryPath);
         }
     }
 
     [Fact]
     public async Task AppliedExportRecovery_CompletesClaimWithoutInvokingSideEffectAgain()
     {
+        var repositoryPath = CreateRepository();
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
         await using var db = CreateContext(connection);
@@ -171,22 +182,90 @@ public sealed class ScribeHousekeepingServiceTests
         });
         await db.SaveChangesAsync();
 
-        var exporter = new FakeExportOperation();
-        exporter.MarkApplied();
+        var project = ProjectFor(run, repositoryPath);
+        var realExporter = new ScribeExportOperation(db);
+        await realExporter.ApplyAsync(
+            run.ProjectId!.Value.ToString(),
+            repositoryPath,
+            project.DefaultBranch,
+            operationKey,
+            CancellationToken.None);
+        var exporter = new RecordingExportOperation(realExporter);
         var service = new ScribeHousekeepingService(
             db,
-            new SingleProjectStore(ProjectFor(run)),
+            new SingleProjectStore(project),
             NullLogger<ScribeHousekeepingService>.Instance,
             exporter);
 
-        await service.RunAsync(
-            new ScribeHousekeepingRequest(run, ScribeAuthority.Worker, "completed"),
-            CancellationToken.None);
+        try
+        {
+            await service.RunAsync(
+                new ScribeHousekeepingRequest(run, ScribeAuthority.Worker, "completed"),
+                CancellationToken.None);
 
-        exporter.ApplyCount.Should().Be(0);
-        (await db.ScribeOperationAttempts.SingleAsync(attempt =>
-            attempt.OperationKey == operationKey && attempt.Status == "completed"))
-            .CompletedAt.Should().NotBeNull();
+            exporter.ApplyCount.Should().Be(0);
+            CountOperationCommits(repositoryPath, project.DefaultBranch, operationKey)
+                .Should().Be(1);
+            (await db.ScribeOperationAttempts.SingleAsync(attempt =>
+                attempt.OperationKey == operationKey && attempt.Status == "completed"))
+                .CompletedAt.Should().NotBeNull();
+        }
+        finally
+        {
+            DeleteRepository(repositoryPath);
+        }
+    }
+
+    [Fact]
+    public async Task AbandonedExportClaim_IsFailedBeforeBoundedRecovery()
+    {
+        var repositoryPath = CreateRepository();
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = CreateContext(connection);
+        await db.Database.EnsureCreatedAsync();
+        var run = Seed(db, "worker");
+        var operationKey = $"scribe:{run.Id}:generation:{run.LifecycleGeneration}:export";
+        db.ScribeOperationAttempts.Add(new ScribeOperationAttempt
+        {
+            OperationKey = operationKey,
+            ProjectId = run.ProjectId!.Value.ToString(),
+            RunId = run.Id.ToString(),
+            LifecycleGeneration = run.LifecycleGeneration,
+            OperationType = "export",
+            Status = "started",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-11),
+        });
+        await db.SaveChangesAsync();
+
+        var project = ProjectFor(run, repositoryPath);
+        var exporter = new RecordingExportOperation(new ScribeExportOperation(db));
+        var service = new ScribeHousekeepingService(
+            db,
+            new SingleProjectStore(project),
+            NullLogger<ScribeHousekeepingService>.Instance,
+            exporter);
+
+        try
+        {
+            await service.RunAsync(
+                new ScribeHousekeepingRequest(run, ScribeAuthority.Worker, "completed"),
+                CancellationToken.None);
+
+            exporter.ApplyCount.Should().Be(1);
+            (await db.ScribeOperationAttempts.CountAsync(attempt =>
+                attempt.OperationKey == operationKey
+                && attempt.Status == "failed"
+                && attempt.FailureCode == "scribe_abandoned_claim")).Should().Be(1);
+            (await db.ScribeOperationAttempts.CountAsync(attempt =>
+                attempt.OperationKey == operationKey && attempt.Status == "completed")).Should().Be(1);
+            CountOperationCommits(repositoryPath, project.DefaultBranch, operationKey)
+                .Should().Be(1);
+        }
+        finally
+        {
+            DeleteRepository(repositoryPath);
+        }
     }
 
     private static async Task<Exception?> Capture(Task task)
@@ -232,13 +311,13 @@ public sealed class ScribeHousekeepingServiceTests
         return run;
     }
 
-    private static Project ProjectFor(Run run) => new()
+    private static Project ProjectFor(Run run, string workingDirectory) => new()
     {
         Id = run.ProjectId!.Value,
         Name = "test",
         Origin = ProjectOrigin.Blank(),
-        WorkingDirectory = Path.GetTempPath(),
-        DefaultBranch = "main",
+        WorkingDirectory = workingDirectory,
+        DefaultBranch = GetCurrentBranch(workingDirectory),
         Owner = "owner",
         ProviderSettings = new ProjectProviderSettings
         {
@@ -290,13 +369,52 @@ public sealed class ScribeHousekeepingServiceTests
     private static MemoryDbContext CreateContext(string connectionString) =>
         new(new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(connectionString).Options);
 
-    private sealed class FakeExportOperation(bool blockApply = false) : IScribeExportOperation
+    private static string CreateRepository()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"scribe-export-repo-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        Repository.Init(path);
+        using var repo = new Repository(path);
+        File.WriteAllText(Path.Combine(path, "README.md"), "test");
+        Commands.Stage(repo, "README.md");
+        var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+        repo.Commit("initial", signature, signature);
+        return path;
+    }
+
+    private static string GetCurrentBranch(string repositoryPath)
+    {
+        using var repo = new Repository(repositoryPath);
+        return repo.Head.FriendlyName;
+    }
+
+    private static void DeleteRepository(string repositoryPath)
+    {
+        foreach (var file in Directory.EnumerateFiles(
+                     repositoryPath, "*", SearchOption.AllDirectories))
+            File.SetAttributes(file, FileAttributes.Normal);
+        Directory.Delete(repositoryPath, recursive: true);
+    }
+
+    private static int CountOperationCommits(
+        string repositoryPath,
+        string branch,
+        string operationKey)
+    {
+        using var repo = new Repository(repositoryPath);
+        var marker = $"Agentweaver-Scribe-Operation: {operationKey}";
+        return repo.Branches[branch]!.Commits.Count(
+            commit => commit.Message.Contains(marker, StringComparison.Ordinal));
+    }
+
+    private sealed class RecordingExportOperation(
+        IScribeExportOperation inner,
+        bool blockApply = false) : IScribeExportOperation
     {
         private readonly TaskCompletionSource _entered =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _applied;
         private int _applyCount;
 
         public int ApplyCount => Volatile.Read(ref _applyCount);
@@ -306,7 +424,7 @@ public sealed class ScribeHousekeepingServiceTests
             string defaultBranch,
             string operationKey,
             CancellationToken ct) =>
-            Task.FromResult(Volatile.Read(ref _applied) == 1);
+            inner.IsAppliedAsync(workingDirectory, defaultBranch, operationKey, ct);
 
         public async Task ApplyAsync(
             string projectId,
@@ -319,12 +437,12 @@ public sealed class ScribeHousekeepingServiceTests
             _entered.TrySetResult();
             if (blockApply)
                 await _release.Task.WaitAsync(ct);
-            Volatile.Write(ref _applied, 1);
+            await inner.ApplyAsync(
+                projectId, workingDirectory, defaultBranch, operationKey, ct);
         }
 
         public Task WaitUntilInvokedAsync() => _entered.Task;
         public void Release() => _release.TrySetResult();
-        public void MarkApplied() => Volatile.Write(ref _applied, 1);
     }
 
     private sealed class SingleProjectStore(Project project) : IProjectStore
