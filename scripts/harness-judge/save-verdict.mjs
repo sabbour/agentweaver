@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildFallbackVerdict, parseVerdictText } from './core.mjs';
+import { redact } from '../harness-shared/redaction.mjs';
 import { validateVerdict } from './verdict-schema.mjs';
 
 function loadJson(file) {
@@ -35,14 +36,16 @@ function normalizeMetadata(metadata = {}) {
 export function saveVerdict(rawText, metadata) {
   const parsed = parseVerdictText(rawText);
   if (!parsed.ok) {
-    return { ok: false, verdict: buildFallbackVerdict(metadata, parsed.error), error: parsed.error };
+    const error = redact(parsed.error);
+    return { ok: false, verdict: redact(buildFallbackVerdict(metadata, error)), error };
   }
-  const validation = validateVerdict(parsed.verdict, { expectedMetadata: metadata });
+  const verdict = redact(parsed.verdict);
+  const validation = validateVerdict(verdict, { expectedMetadata: metadata });
   if (!validation.ok) {
-    const error = { kind: 'schema_invalid', message: validation.errors.join('; ') };
-    return { ok: false, verdict: buildFallbackVerdict(metadata, error), error };
+    const error = redact({ kind: 'schema_invalid', message: validation.errors.join('; ') });
+    return { ok: false, verdict: redact(buildFallbackVerdict(metadata, error)), error };
   }
-  return { ok: true, verdict: parsed.verdict };
+  return { ok: true, verdict };
 }
 
 function isMain() {
