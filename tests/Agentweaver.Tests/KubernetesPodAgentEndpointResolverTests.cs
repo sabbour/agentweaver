@@ -13,6 +13,7 @@ using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using k8s;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests;
@@ -176,15 +177,16 @@ public sealed class KubernetesPodAgentEndpointResolverTests
         await store.InsertAsync(run);
         var registry = new PodNameRegistry();
         var lifecycle = new RecoveringDispatchLifecycle(registry);
+        var logger = new SensitiveCapturingLogger<KubernetesPodAgentEndpointResolver>();
         var client = new Kubernetes(
             new KubernetesClientConfiguration { Host = "http://localhost:8080" },
-            new ThrowingPodHandler(new HttpRequestException("secret-do-not-persist")));
+            new ThrowingPodHandler(new SensitiveTransportException("secret-do-not-persist")));
         var resolver = new KubernetesPodAgentEndpointResolver(
             client,
             registry,
             "agentweaver",
             new SandboxAgentOptions { RequireMtls = false },
-            NullLogger<KubernetesPodAgentEndpointResolver>.Instance,
+            logger,
             lifecycle,
             store,
             new StaticLaunchContextResolver(),
@@ -205,6 +207,21 @@ public sealed class KubernetesPodAgentEndpointResolverTests
         outcome.Outcome.Payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
         outcome.Outcome.Payload.GetRawText().Should().NotContain("secret-do-not-persist");
         (await store.GetAsync(run.Id))!.Status.Should().Be(RunStatus.Failed);
+        logger.Entries.Should().ContainSingle(entry =>
+            entry.Level == LogLevel.Warning
+            && entry.Message.Contains("redispatching once", StringComparison.Ordinal)
+            && entry.Message.Contains("errorCode=agent_host_unavailable", StringComparison.Ordinal)
+            && entry.Message.Contains("exceptionType=SensitiveTransportException", StringComparison.Ordinal));
+        logger.Entries.Should().ContainSingle(entry =>
+            entry.Level == LogLevel.Error
+            && entry.Message.Contains("recovery exhausted", StringComparison.Ordinal)
+            && entry.Message.Contains("errorCode=agent_host_unavailable", StringComparison.Ordinal)
+            && entry.Message.Contains("exceptionType=SensitiveTransportException", StringComparison.Ordinal));
+        logger.Entries.Should().OnlyContain(entry => entry.ExceptionText == null);
+        string.Join(
+                Environment.NewLine,
+                logger.Entries.Select(entry => $"{entry.Message}{Environment.NewLine}{entry.ExceptionText}"))
+            .Should().NotContain("secret-do-not-persist");
     }
 
     [Fact]
@@ -701,6 +718,37 @@ public sealed class KubernetesPodAgentEndpointResolverTests
             CancellationToken cancellationToken) =>
             Task.FromException<HttpResponseMessage>(failure);
     }
+
+    private sealed class SensitiveTransportException(string message) : HttpRequestException(message)
+    {
+        public override string ToString() =>
+            $"{base.ToString()}{Environment.NewLine}   at secret-do-not-persist";
+    }
+
+    private sealed class SensitiveCapturingLogger<T> : ILogger<T>
+    {
+        public List<SensitiveLogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add(new SensitiveLogEntry(
+                logLevel,
+                formatter(state, exception),
+                exception?.ToString()));
+    }
+
+    private sealed record SensitiveLogEntry(
+        LogLevel Level,
+        string Message,
+        string? ExceptionText);
 
     private sealed class ReadyPodHandler(string podName, string podIp) : DelegatingHandler
     {

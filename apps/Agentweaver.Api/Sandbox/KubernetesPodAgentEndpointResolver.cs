@@ -153,11 +153,13 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                 {
                     await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
                     _logger.LogWarning(
-                        ex,
                         "KubernetesPodAgentEndpointResolver: AgentHost pod {PodName} for non-terminal run {RunId} " +
-                        "was reaped; redispatching once (reason=agenthost_pod_reaped, recoveryAttempt={Attempt}, maxRecoveryAttempts={MaxAttempts}).",
+                        "was reaped; redispatching once (errorCode={ErrorCode}, exceptionType={ExceptionType}, " +
+                        "recoveryAttempt={Attempt}, maxRecoveryAttempts={MaxAttempts}).",
                         podName,
                         runId,
+                        "agenthost_pod_reaped",
+                        ex.GetType().Name,
                         recoveryAttempt + 1,
                         maxEndpointRecoveries);
                     continue;
@@ -189,23 +191,31 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                 {
                     await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
                     _logger.LogWarning(
-                        ex,
                         "KubernetesPodAgentEndpointResolver: failed to resolve AgentHost endpoint for run {RunId} " +
                         "(pod={PodName}); redispatching once before delivery " +
-                        "(recoveryAttempt={Attempt}, maxRecoveryAttempts={MaxAttempts}).",
+                        "(errorCode={ErrorCode}, category={FailureCategory}, exceptionType={ExceptionType}, " +
+                        "recoveryAttempt={Attempt}, maxRecoveryAttempts={MaxAttempts}).",
                         runId,
                         podName,
+                        "agent_host_unavailable",
+                        "endpoint_lookup_failed",
+                        ex.GetType().Name,
                         recoveryAttempt + 1,
                         maxEndpointRecoveries);
                     continue;
                 }
 
                 _logger.LogError(
-                    ex,
                     "KubernetesPodAgentEndpointResolver: failed to resolve AgentHost endpoint for run {RunId} " +
-                    "(pod={PodName}); recovery exhausted.",
+                    "(pod={PodName}); recovery exhausted " +
+                    "(errorCode={ErrorCode}, category={FailureCategory}, exceptionType={ExceptionType}, " +
+                    "recoveryAttempts={RecoveryAttempts}).",
                     runId,
-                    podName);
+                    podName,
+                    "agent_host_unavailable",
+                    "endpoint_lookup_failed",
+                    ex.GetType().Name,
+                    maxEndpointRecoveries);
                 await RecordExhaustionAsync(runId).ConfigureAwait(false);
                 await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
                 throw AgentHostUnavailable(runId, ex);
@@ -296,9 +306,13 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             // admission/scheduling/queueing is Kubernetes' job (issue #217) — a Pending pod is not a
             // failure here; LaunchAgentHostPodAsync simply waits (emitting provisioning heartbeats)
             // until the claim binds, so there is no capacity/quota exception to translate anymore.
-            _logger.LogError(ex,
-                "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId}",
-                runId);
+            _logger.LogError(
+                "KubernetesPodAgentEndpointResolver: failed to launch AgentHost pod for run {RunId} " +
+                "(errorCode={ErrorCode}, category={FailureCategory}, exceptionType={ExceptionType})",
+                runId,
+                "agent_host_unavailable",
+                "agenthost_launch_failed",
+                ex.GetType().Name);
             if (ex is WorkflowAgentInfrastructureException infrastructure)
                 throw infrastructure;
             throw new WorkflowAgentInfrastructureException(
