@@ -28,6 +28,10 @@ call at a time. Its recorder-session provider reuses the target-matched cached s
 created by `scripts/ui-harness/login-chrome-default.mjs`; it does not start another
 Chrome sign-in. Raw tokens never enter prompts, argv, or transcripts. Missing,
 expired, or wrong-origin UI state fails with the login command needed to refresh it.
+Transcript, lifecycle, Judge, hash, finding, and evidence boundaries use the shared
+redactor before persistence or hashing. Sensitive descriptor/value pairs such as
+`{ "name": "Authorization", "value": "..." }` are retained structurally while their
+values are replaced, including nested arrays and JSON-encoded strings.
 
 ```powershell
 @'

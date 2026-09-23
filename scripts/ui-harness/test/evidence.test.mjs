@@ -17,7 +17,7 @@ test('strips userinfo, query strings, fragments, and nested URL canaries from UI
       error: { message: `failed at https://example.test/path?q=${canary}#${canary}` },
     });
     const serialized = JSON.stringify(result);
-    assert.doesNotMatch(serialized, new RegExp(canary));
+    assert.equal(serialized.includes(canary), false);
     assert.equal(result.url, 'https://example.test/projects');
     assert.equal(result.network[0].url, 'https://example.test/api/projects');
     assert.equal(result.error.message, 'failed at https://example.test/path');
@@ -25,4 +25,17 @@ test('strips userinfo, query strings, fragments, and nested URL canaries from UI
 
 test('evidence hash is deterministic', () => {
   assert.equal(evidenceHash('evidence'), evidenceHash('evidence'));
+});
+
+test('evidence hash is identical for descriptor-equivalent secret values', () => {
+  const fixture = (value) => ({
+    executionContext: { name: 'execution-key', value },
+    status: 'completed',
+    correlationId: 'corr-42',
+  });
+  assert.equal(evidenceHash(fixture('credential-canary-hash-one')), evidenceHash(fixture('credential-canary-hash-two')));
+  assert.equal(
+    evidenceHash(JSON.stringify(fixture('credential-canary-json-hash-one'))),
+    evidenceHash(JSON.stringify(fixture('credential-canary-json-hash-two'))),
+  );
 });

@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 import { AgentweaverClient } from '../lib/client.mjs';
+import { writeFinding } from '../lib/reporter.mjs';
 import { parseArgs, resolveAuthProvider, resolveTargetRevision } from '../run-persona.mjs';
+import { serializeRedactedJsonLine } from '../../harness-shared/safe-jsonl.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 test('API runner defaults to the managed-browser recorder session', () => {
   assert.equal(resolveAuthProvider({}, 'https://agentweaver.example.test').name, 'recorder-session');
@@ -63,4 +71,28 @@ test('API client preserves the cancellation reason instead of returning a status
   const client = new AgentweaverClient({ baseUrl: 'https://api.example.test', token: 'secret' });
   await assert.rejects(client.get('/api/projects', { signal: controller.signal }), /SIGTERM/);
   assert.equal(client.calls.length, 0);
+});
+
+test('API transcript fixture and packaged finding redact descriptor credentials', async () => {
+  const directory = join(HERE, '..', 'verdicts', `test-${randomUUID()}`);
+  const findingPath = join(directory, 'finding.json');
+  const canary = 'credential-canary-api-package-42';
+  const exchange = {
+    request: {
+      executionContext: { name: 'provider key', value: canary },
+      safe: { correlationId: 'corr-42' },
+    },
+    response: JSON.stringify([{ header: 'Authorization', value: `Bearer ${canary}`, status: 200 }]),
+  };
+  const transcript = serializeRedactedJsonLine(exchange);
+  try {
+    await writeFinding({ transcript: exchange, status: 'completed' }, findingPath);
+    const packaged = await readFile(findingPath, 'utf8');
+    assert.equal(transcript.includes(canary), false);
+    assert.equal(packaged.includes(canary), false);
+    assert.match(transcript, /"name":"provider key"/);
+    assert.match(packaged, /"correlationId": "corr-42"/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

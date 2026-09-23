@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { redact } from './redaction.mjs';
 
 /**
  * Parse a surface CLI while leaving its option names and argument contract in the
@@ -24,7 +25,7 @@ export function parseLifecycleArgs(argv, { initial = {}, options }) {
 /** Persist redacted/normalized evidence or verdict JSON with the established path. */
 export async function writeLifecycleJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await writeFile(path, `${JSON.stringify(redact(value), null, 2)}\n`, 'utf8');
   return path;
 }
 
@@ -40,7 +41,7 @@ export async function loadLifecyclePersona(loadPersona, scenario, surface, { opt
 
 /** Keep the common judge invocation at the lifecycle boundary, not in a transport adapter. */
 export function judgeLifecycleEvidence(evidence, judgeEvidence, { timeoutMs, judge } = {}) {
-  return judgeEvidence(evidence, { timeoutMs, judge });
+  return judgeEvidence(redact(evidence), { timeoutMs, judge });
 }
 
 /** Shared deterministic/inconclusive process-code policy for every persona surface. */

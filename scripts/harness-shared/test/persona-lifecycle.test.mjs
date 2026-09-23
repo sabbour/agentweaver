@@ -1,13 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 import {
   formatLifecycleLines,
+  judgeLifecycleEvidence,
   loadLifecyclePersona,
   lifecycleExitCode,
   parseLifecycleArgs,
   runLifecycleCli,
+  writeLifecycleJson,
 } from '../persona-lifecycle.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 test('shared lifecycle parser retains each adapter option names and aliases', () => {
   const options = {
@@ -44,4 +52,30 @@ test('shared lifecycle delegates persona loading to the selected surface adapter
   const load = async (scenario, surface) => ({ scenario, surface });
   assert.deepEqual(await loadLifecyclePersona(load, 'priya', 'mcp'), { scenario: 'priya', surface: 'mcp' });
   assert.equal(await loadLifecyclePersona(async () => { throw new Error('absent'); }, 'seam', 'api', { optional: true }), null);
+});
+
+test('shared lifecycle redacts descriptor credentials before persistence and judging', async () => {
+  const directory = join(HERE, `tmp-${randomUUID()}`);
+  const path = join(directory, 'lifecycle.json');
+  const canary = 'credential-canary-lifecycle-42';
+  const evidence = {
+    metadata: { status: 'completed', correlationId: 'corr-42' },
+    executionContext: { name: 'Authorization', value: `Bearer ${canary}` },
+  };
+  try {
+    await writeLifecycleJson(path, evidence);
+    const persisted = await readFile(path, 'utf8');
+    assert.equal(persisted.includes(canary), false);
+    assert.match(persisted, /"name": "Authorization"/);
+
+    let judgedEvidence;
+    await judgeLifecycleEvidence(evidence, async (value) => {
+      judgedEvidence = value;
+      return { verdict: 'PASS' };
+    });
+    assert.equal(JSON.stringify(judgedEvidence).includes(canary), false);
+    assert.deepEqual(judgedEvidence.metadata, evidence.metadata);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

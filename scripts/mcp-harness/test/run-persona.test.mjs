@@ -199,8 +199,8 @@ test('dispatch and normalized transcript artifacts never contain bearer or query
     },
     response: { rawContent: `Bearer ${canary}`, error: { token: canary } },
   }));
-  assert.doesNotMatch(prompt, new RegExp(canary));
-  assert.doesNotMatch(JSON.stringify(parsed), new RegExp(canary));
+  assert.equal(prompt.includes(canary), false);
+  assert.equal(JSON.stringify(parsed).includes(canary), false);
 });
 
 test('MCP prompt, JSONL, normalized evidence, and Judge input recursively redact secrets', () => {
@@ -213,7 +213,14 @@ test('MCP prompt, JSONL, normalized evidence, and Judge input recursively redact
       arguments: { callbackUrl: secretUrl },
     },
     response: {
-      structuredContent: { nested: [{ token: canary }, { url: secretUrl }] },
+      structuredContent: {
+        nested: [
+          { token: canary },
+          { url: secretUrl },
+          { name: 'Authorization', value: canary },
+          JSON.stringify([{ key: 'Cookie', value: canary }]),
+        ],
+      },
       rawContent: `token=${canary}; request failed at ${secretUrl}`,
       error: new Error(`Bearer ${canary}`),
     },
@@ -235,8 +242,8 @@ test('MCP prompt, JSONL, normalized evidence, and Judge input recursively redact
     },
   });
   for (const artifact of [line, driverPrompt, JSON.stringify(prepared.normalized), prepared.prompt]) {
-    assert.doesNotMatch(artifact, new RegExp(canary));
-    assert.doesNotMatch(artifact, /[?#]secret-canary/i);
+    assert.equal(artifact.includes(canary), false);
+    assert.equal(/[?#]secret-canary/i.test(artifact), false);
   }
   assert.match(line, /https:\/\/example\.test\/path/);
 });
