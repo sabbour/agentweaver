@@ -1060,7 +1060,14 @@ function frontendNodeModulesPaths(repoRoot) {
 function removeStaleFrontendNodeModulesStashes(repoRoot, backupDir, fsImpl) {
   const parentDir = path.dirname(repoRoot);
   const prefix = `${path.basename(repoRoot)}.frontend-node_modules.`;
-  for (const entry of fsImpl.readdirSync(parentDir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = fsImpl.readdirSync(parentDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of entries) {
     const candidate = path.join(parentDir, entry.name);
     if (entry.isDirectory() && entry.name.startsWith(prefix) && candidate !== backupDir) {
       fsImpl.rmSync(candidate, { recursive: true, force: true });
