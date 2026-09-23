@@ -290,19 +290,61 @@ public sealed record GenerateWorkflowRequest
     [JsonPropertyName("content_only")] public bool ContentOnly { get; init; }
 }
 
-/// <summary>Response body for a generated workflow draft (US10). The YAML is unsaved — the client opens
-/// it in the editor for review before any save. <c>wasCorrected</c> reports whether the single
-/// correction pass (FR-060) was needed.</summary>
-public sealed record GenerateWorkflowResponse
+public sealed record WorkflowGenerationProviderSnapshotDto
 {
+    [JsonPropertyName("provider_kind")] public required string ProviderKind { get; init; }
+    [JsonPropertyName("provider_type")] public string? ProviderType { get; init; }
+    [JsonPropertyName("provider_key")] public required string ProviderKey { get; init; }
+    [JsonPropertyName("provider_scope")] public required string ProviderScope { get; init; }
+    [JsonPropertyName("resolution_scope")] public required string ResolutionScope { get; init; }
+    [JsonPropertyName("workflow_model")] public string? WorkflowModel { get; init; }
+    [JsonPropertyName("credential_binding_version")] public string? CredentialBindingVersion { get; init; }
+}
+
+public sealed record WorkflowGenerationFailureDto
+{
+    [JsonPropertyName("code")] public required string Code { get; init; }
+    [JsonPropertyName("message")] public required string Message { get; init; }
+    [JsonPropertyName("retryable")] public bool Retryable { get; init; }
+}
+
+public sealed record WorkflowGenerationArtifactDto
+{
+    [JsonPropertyName("artifact_id")] public required string ArtifactId { get; init; }
+    [JsonPropertyName("workflow_id")] public required string WorkflowId { get; init; }
+    [JsonPropertyName("version")] public int Version { get; init; }
+}
+
+public sealed record WorkflowGenerationJobResponse
+{
+    [JsonPropertyName("job_id")] public required string JobId { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("attempt")] public int Attempt { get; init; }
+    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
+    [JsonPropertyName("provider_snapshot")] public required WorkflowGenerationProviderSnapshotDto ProviderSnapshot { get; init; }
+    [JsonPropertyName("artifact")] public WorkflowGenerationArtifactDto? Artifact { get; init; }
+    [JsonPropertyName("failure")] public WorkflowGenerationFailureDto? Failure { get; init; }
+    [JsonPropertyName("created_at")] public DateTimeOffset CreatedAt { get; init; }
+    [JsonPropertyName("updated_at")] public DateTimeOffset UpdatedAt { get; init; }
+    [JsonPropertyName("status_url")] public required string StatusUrl { get; init; }
+    [JsonPropertyName("result_url")] public required string ResultUrl { get; init; }
+    [JsonPropertyName("cancel_url")] public required string CancelUrl { get; init; }
+    [JsonPropertyName("retry_url")] public required string RetryUrl { get; init; }
+    [JsonPropertyName("ai_execution_context")] public AiExecutionContextResponse? AiExecutionContext { get; init; }
+}
+
+public sealed record WorkflowGenerationResultResponse
+{
+    [JsonPropertyName("job_id")] public required string JobId { get; init; }
+    [JsonPropertyName("artifact_id")] public required string ArtifactId { get; init; }
+    [JsonPropertyName("workflow_id")] public required string WorkflowId { get; init; }
+    [JsonPropertyName("version")] public int Version { get; init; }
     [JsonPropertyName("yaml")] public required string Yaml { get; init; }
-    [JsonPropertyName("workflowId")] public required string WorkflowId { get; init; }
-    [JsonPropertyName("wasCorrected")] public required bool WasCorrected { get; init; }
-    [JsonPropertyName("mode")] public string Mode { get; init; } = "create";
+    [JsonPropertyName("was_corrected")] public bool WasCorrected { get; init; }
+    [JsonPropertyName("mode")] public required string Mode { get; init; }
     [JsonPropertyName("base_workflow_id")] public string? BaseWorkflowId { get; init; }
     [JsonPropertyName("base_workflow_is_built_in")] public bool BaseWorkflowIsBuiltIn { get; init; }
-    [JsonPropertyName("ai_execution_context")]
-    public AiExecutionContextResponse? AiExecutionContext { get; init; }
+    [JsonPropertyName("graph")] public required WorkflowGraphDto Graph { get; init; }
 }
 
 /// <summary>Maps the workflow domain model to API DTOs (server-side only, Principles III/IV).</summary>

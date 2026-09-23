@@ -389,7 +389,11 @@ Example trigger payload:
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/graph` | Get a workflow graph |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/yaml` | Get workflow YAML |
 | `PUT` | `/api/projects/{projectId}/workflows/{workflowId}` | Replace a workflow definition |
-| `POST` | `/api/projects/{projectId}/workflows/generate` | Generate a workflow definition |
+| `POST` | `/api/projects/{projectId}/workflows/generate` | Accept a durable workflow-generation job (`Idempotency-Key` required) |
+| `GET` | `/api/projects/{projectId}/workflows/generation-jobs/{jobId}` | Read authorized workflow-generation status |
+| `GET` | `/api/projects/{projectId}/workflows/generation-jobs/{jobId}/result` | Read immutable workflow YAML, version, and graph |
+| `POST` | `/api/projects/{projectId}/workflows/generation-jobs/{jobId}/cancel` | Cancel queued or running generation |
+| `POST` | `/api/projects/{projectId}/workflows/generation-jobs/{jobId}/retry` | Retry cancelled or retryable failed generation |
 
 ### Workflow trigger configuration
 
