@@ -6,6 +6,9 @@ streaming, review, and merge. Every client is a thin layer over these endpoints.
 Base path: `/api`. Each endpoint declares one authorization classification; there is no
 path-based authentication allowlist.
 
+The generated OpenAPI documents are available at `/openapi/v1.json` and
+`/openapi/v1.yaml`.
+
 ## Authentication
 
 Browser and API clients send a Microsoft Entra access token:
@@ -52,6 +55,14 @@ family. Anonymous registration accepts only literal loopback and constrained
 private-use callbacks; HTTPS callbacks must be administered as static clients.
 
 ## Endpoints
+
+### GET /api/workflows/grammar
+
+Returns the versioned, machine-readable YAML workflow grammar used by runtime validation and
+binding. The response publishes required and optional fields, limits, YAML and API node type names,
+runtime bindability, gate kinds, edge conditions and supported transitions, and trigger vocabulary.
+OpenAPI-guided clients can use this contract to construct a workflow that passes both parsing and
+runtime bindability checks.
 
 ### POST /api/runs
 

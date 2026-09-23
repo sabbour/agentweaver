@@ -24,6 +24,15 @@ public static class WorkflowDefinitionEndpoints
 {
     public static void MapWorkflowDefinitionEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/workflows/grammar", () => Results.Ok(WorkflowGrammarContract.ToDto()))
+            .WithName("GetWorkflowGrammar")
+            .WithTags("Workflows")
+            .WithDescription(
+                "Returns the versioned YAML workflow grammar accepted by runtime validation, including " +
+                "node types, bindability, edge conditions, transition rules, triggers, and limits.")
+            .Produces<WorkflowGrammarDto>(StatusCodes.Status200OK)
+            .OperationalAnonymous();
+
         // GET /api/projects/{projectId}/workflows — list discovered workflows + validation status.
         app.MapGet("/api/projects/{projectId}/workflows", async (
             HttpContext httpContext,

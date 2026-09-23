@@ -35,6 +35,12 @@ public sealed class WorkflowNodeTypeContractTests
             })
             .ToArray();
 
+        contract.Should().Equal(
+            WorkflowGrammarContract.NodeTypes.Select(entry => new ContractEntry(
+                entry.YamlType,
+                entry.ApiType,
+                entry.Label,
+                entry.Authorable)));
         contract!.Select(entry => (entry.YamlType, entry.ApiType))
             .Should().Equal(serverTypes.Select(entry => (entry.YamlType, entry.ApiType)));
     }

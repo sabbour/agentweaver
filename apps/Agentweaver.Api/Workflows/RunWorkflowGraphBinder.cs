@@ -780,55 +780,7 @@ internal static class RunWorkflowGraphBinder
         var toKind = EffectiveKind(definition, toNode);
         var when = edge.When;
 
-        return (fromKind, toKind, when) switch
-        {
-            (NodeKind.Agent, NodeKind.Rai, null) => true,
-            (NodeKind.Rai, NodeKind.Agent, "revise") => true,
-            (NodeKind.Rai, NodeKind.Terminal, "safety-failed") => true,
-            (NodeKind.Rai, NodeKind.Terminal, "no-changes") => true,
-            (NodeKind.Rai, NodeKind.Terminal, "review") => true,
-            (NodeKind.Rai, NodeKind.Scribe, "no-changes") => true,
-            (NodeKind.Rai, NodeKind.HumanReview, "review") => true,
-            (NodeKind.HumanReview, NodeKind.Merge, "approved") => true,
-            (NodeKind.HumanReview, NodeKind.Agent, "request-changes") => true,
-            (NodeKind.HumanReview, NodeKind.Terminal, "declined") => true,
-            (NodeKind.Merge, NodeKind.Scribe, "merged") => true,
-            (NodeKind.Merge, NodeKind.OpenPullRequest, "merged") => true,
-            (NodeKind.Merge, NodeKind.HumanReview, "blocked") => true,
-            (NodeKind.Scribe, NodeKind.Terminal, null) => true,
-            (NodeKind.Agent, NodeKind.Agent, null) => true,
-            (NodeKind.Agent, NodeKind.PeerReview, null) => true,
-            (NodeKind.Agent, NodeKind.Scribe, null) => true,
-            (NodeKind.Agent, NodeKind.Terminal, null) => true,
-            (NodeKind.Agent, NodeKind.HumanReview, null) => true,
-            (NodeKind.Agent, NodeKind.Rubberduck, null) => true,
-            (NodeKind.Agent, NodeKind.OpenPullRequest, null) => true,
-            (NodeKind.PeerReview, NodeKind.OpenPullRequest, "approved" or "pass") => true,
-            (NodeKind.OpenPullRequest, NodeKind.Scribe, null) => true,
-            (NodeKind.Rai, NodeKind.Merge, "review") => true,
-            (NodeKind.Rai, NodeKind.Agent, "review") => true,
-            (NodeKind.Rai, NodeKind.PeerReview, "approved" or "pass" or "review") => true,
-            (NodeKind.Rai, NodeKind.Rubberduck, "review") => true,
-            (NodeKind.PeerReview, NodeKind.Merge, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.PeerReview, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.HumanReview, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Rai, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Rubberduck, "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Agent, "request-changes" or "fail") => true,
-            (NodeKind.PeerReview, NodeKind.Agent, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Terminal, "approved" or "pass" or "declined") => true,
-            (NodeKind.HumanReview, NodeKind.Agent, "approved") => true,
-            (NodeKind.HumanReview, NodeKind.Scribe, "approved") => true,
-            (NodeKind.HumanReview, NodeKind.Terminal, "approved") => true,
-            (NodeKind.Rubberduck, NodeKind.HumanReview, "pass") => true,
-            (NodeKind.Rubberduck, NodeKind.Merge, "pass") => true,
-            (NodeKind.Rubberduck, NodeKind.Terminal, "pass") => true,
-            (NodeKind.Rubberduck, NodeKind.Agent, "pass") => true,
-            (NodeKind.Rubberduck, NodeKind.Agent, "revise") => true,
-            (NodeKind.Merge, NodeKind.PeerReview, "blocked") => true,
-            (NodeKind.Merge, NodeKind.Agent, "blocked") => true,
-            _ => false,
-        };
+        return WorkflowGrammarContract.SupportsTransition(fromKind, toKind, when);
     }
 
     private static ExecutorBinding ResolveRai(WorkflowNode node, RunWorkflowBindings b) =>

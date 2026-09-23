@@ -110,6 +110,7 @@ GET /api/server/info | OperationalAnonymous
 GET /api/skill-marketplaces | PlatformOrMcp
 GET /api/system/runtime | PlatformOrMcp
 GET /api/version | OperationalAnonymous
+GET /api/workflows/grammar | OperationalAnonymous
 GET /auth/entra/authorize | ProtocolManaged
 GET /auth/entra/callback | ProtocolManaged
 GET /auth/github/copilot-app/callback | ProtocolManaged

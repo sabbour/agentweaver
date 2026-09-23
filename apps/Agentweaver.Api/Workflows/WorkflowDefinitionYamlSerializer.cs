@@ -19,7 +19,7 @@ public static class WorkflowDefinitionYamlSerializer
         foreach (var node in definition.Nodes)
         {
             Line(sb, "  - id", node.Id);
-            Line(sb, "    type", NodeType(node.Type));
+            Line(sb, "    type", WorkflowGrammarContract.YamlType(node.Type));
             Line(sb, "    label", node.Label);
             Line(sb, "    role", node.Role);
             Line(sb, "    kind", node.Kind);
@@ -116,24 +116,6 @@ public static class WorkflowDefinitionYamlSerializer
         }
         return value;
     }
-
-    private static string NodeType(WorkflowNodeType type) => type switch
-    {
-        WorkflowNodeType.Prompt => "prompt",
-        WorkflowNodeType.PeerReview => "peer_review",
-        WorkflowNodeType.BuildTest => "build_test",
-        WorkflowNodeType.OpenPullRequest => "open_pull_request",
-        WorkflowNodeType.Publish => "publish",
-        WorkflowNodeType.Check => "check",
-        WorkflowNodeType.FanOut => "fan_out",
-        WorkflowNodeType.FanIn => "fan_in",
-        WorkflowNodeType.CoordinatorComposed => "coordinator_composed",
-        WorkflowNodeType.Serial => "serial",
-        WorkflowNodeType.Merge => "merge",
-        WorkflowNodeType.Scribe => "scribe",
-        WorkflowNodeType.Terminal => "terminal",
-        _ => throw new ArgumentOutOfRangeException(nameof(type), type, null),
-    };
 
     private static string TriggerType(WorkflowTriggerType type) => type switch
     {
