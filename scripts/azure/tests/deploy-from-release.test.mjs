@@ -107,7 +107,7 @@ test("deploy-from-release requires one vX.Y.Z tag", () => {
     resume: false,
     restart: false,
     featureManifestPath: undefined,
-    resultPaths: [],
+    acceptanceBundlePath: undefined,
   });
   assert.throws(() => parseArgs([]), /Usage/);
   assert.throws(() => parseArgs(["1.2.3"]), /Usage/);
@@ -123,7 +123,7 @@ test("deploy-from-release accepts --image-source ghcr and --ghcr-token", () => {
     resume: false,
     restart: false,
     featureManifestPath: undefined,
-    resultPaths: [],
+    acceptanceBundlePath: undefined,
   });
   assert.deepEqual(parseArgs(["v1.2.3", "--image-source=ghcr"]).imageSource, "ghcr");
   assert.throws(() => parseArgs(["v1.2.3", "--image-source", "bogus"]), /--image-source must be one of/);
@@ -201,7 +201,7 @@ test("deploy-from-release builds, deploys, verifies provenance, waits, then veri
     argv: [
       "v1.2.3", "--image-source", "acr-build",
       "--feature-manifest", "feature.json",
-      "--result", "result.json",
+      "--acceptance-bundle", "bundle.json",
     ],
     repoRoot: "/repo",
     exec,
@@ -229,7 +229,8 @@ test("deploy-from-release builds, deploys, verifies provenance, waits, then veri
         });
         return { ok: true };
       },
-      runReleaseAcceptanceGate: ({ expectedDeployment }) => {
+      runCanonicalReleaseAcceptanceGate: ({ expectedDeployment, bundlePath }) => {
+        assert.equal(bundlePath, "bundle.json");
         assert.deepEqual(expectedDeployment, {
           version: "1.2.3",
           deployedRevision: "abc",
@@ -279,7 +280,7 @@ test("deploy-from-release --image-source ghcr pins AgentHost only to its returne
     argv: [
       "v1.2.3", "--image-source", "ghcr", "--ghcr-token", "tok",
       "--feature-manifest", "feature.json",
-      "--result", "result.json",
+      "--acceptance-bundle", "bundle.json",
     ],
     repoRoot: "/repo",
     exec,
@@ -304,7 +305,7 @@ test("deploy-from-release --image-source ghcr pins AgentHost only to its returne
     resolveGitHubRepository: async () => ({ owner: "sabbour", repo: "agentweaver" }),
     acceptance: {
       runReleaseDeclarationGate: () => ({ ok: true }),
-      runReleaseAcceptanceGate: () => ({ ok: true }),
+      runCanonicalReleaseAcceptanceGate: () => ({ ok: true }),
     },
     steps,
   });
@@ -339,7 +340,7 @@ test("verified standalone deployment remains blocked until post-deploy results c
       }),
       acceptance: {
         runReleaseDeclarationGate: () => { order.push("declaration"); return { ok: true }; },
-        runReleaseAcceptanceGate: () => assert.fail("must not close without result manifests"),
+        runCanonicalReleaseAcceptanceGate: () => assert.fail("must not close without a canonical bundle"),
       },
       steps: {
         buildImages: { run: async () => { order.push("build"); return {}; } },

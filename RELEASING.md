@@ -179,8 +179,7 @@ only by resuming the release deployment boundary with exact result manifests:
 ```bash
 npm run azure:deploy-from-release -- vX.Y.Z --resume \
   --feature-manifest <release-feature-manifest.json> \
-  --result <representative-result.json> \
-  --result <focused-result.json>
+  --acceptance-bundle <canonical-harness-judge-bundle.json>
 ```
 
 For the composite workflow, use the same arguments with `azure:release -- --resume
@@ -189,7 +188,17 @@ selected representative challenge, direct API/UI/MCP coverage for every shipped
 behavior and affected surface, non-empty typed evidence bound to the exact deployment,
 project, challenge execution, run, catalog version, and surface, successful cleanup,
 and no unresolved abnormal anomalies. A no-evidence result cannot complete acceptance.
-The standalone schema helper is diagnostic only; it cannot close release acceptance.
+The bundle manifest binds immutable bundle, batch, result, scenario, and execution IDs.
+Every referenced result and evidence artifact must resolve beneath the bundle directory;
+the deployment boundary recomputes SHA-256 and compares path/media metadata before
+acceptance can close. Missing, outside-root, or hash-mismatched artifacts fail closed.
+
+This is an integrity boundary inside the repository's trusted-operator model, not a
+cryptographic defense against a malicious release operator. The operator controls the
+local files and is trusted, while the verifier prevents accidental omissions and simple
+fabricated result JSON from becoming authoritative. Only a verified canonical
+Harness/Judge bundle passed through `azure:deploy-from-release` can close acceptance.
+Direct helper execution is diagnostic only.
 
 The composite is resumable orchestration, not a transaction. If deployment
 or acceptance fails after publication, the tag and GitHub Release remain durable:
@@ -197,8 +206,7 @@ or acceptance fails after publication, the tag and GitHub Release remain durable
 ```bash
 npm run azure:release -- --resume vX.Y.Z \
   --feature-manifest <release-feature-manifest.json> \
-  --result <representative-result.json> \
-  --result <focused-result.json>
+  --acceptance-bundle <canonical-harness-judge-bundle.json>
 ```
 
 If the image build fails, `release:publish` stops before it creates the

@@ -26,7 +26,7 @@ node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-li
 node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
 npm run azure:deploy-from-release -- vX.Y.Z --resume `
   --feature-manifest <release-feature-manifest.json> `
-  --result <representative-result.json> --result <focused-result.json>
+  --acceptance-bundle <canonical-harness-judge-bundle.json>
 ```
 
 The output is deterministic JSON. Validation fails closed on unknown fields, dangling
@@ -82,6 +82,13 @@ direct feature-specific coverage for every affected surface, exact deployed-revi
 evidence, successful cleanup, and no unresolved abnormal anomalies. It validates
 declared results only; it never executes a Harness. The standalone manifest helper is
 diagnostic and cannot close release acceptance.
+
+Only the deployment boundary can make a canonical Harness/Judge bundle authoritative.
+It resolves every referenced file beneath the bundle root, recomputes SHA-256, compares
+path/media metadata, and binds immutable bundle, batch, result, scenario, and execution
+IDs to the verified deployment. This prevents accidental or simple fabricated JSON
+closure within the trusted-operator model; it is not protection from a malicious release
+operator who controls the bundle files.
 
 Oracle's MCP adapter is intentionally retained: multiple explicit catalog challenges
 select Oracle on MCP, including cross-surface homepage and release-relevant promises.

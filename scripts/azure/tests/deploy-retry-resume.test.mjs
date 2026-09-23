@@ -249,7 +249,7 @@ function fakeExec() {
 
 function deployOpts({ dir, argv, order, failVerify = false, buildResult }) {
   return {
-    argv: [...argv, "--feature-manifest", "feature.json", "--result", "result.json"],
+    argv: [...argv, "--feature-manifest", "feature.json", "--acceptance-bundle", "bundle.json"],
     repoRoot: "/repo",
     exec: fakeExec(),
     log,
@@ -269,7 +269,7 @@ function deployOpts({ dir, argv, order, failVerify = false, buildResult }) {
     env: {},
     acceptance: {
       runReleaseDeclarationGate: () => ({ ok: true }),
-      runReleaseAcceptanceGate: () => ({ ok: true }),
+      runCanonicalReleaseAcceptanceGate: () => ({ ok: true }),
     },
     steps: {
       buildImages: {

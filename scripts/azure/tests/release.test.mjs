@@ -10,19 +10,18 @@ test("release accepts dry-run, resume, and acceptance manifest options", () => {
     dryRun: true,
     help: false,
     featureManifestPath: undefined,
-    resultPaths: [],
+    acceptanceBundlePath: undefined,
   });
   assert.deepEqual(parseArgs([
     "--resume", "v1.2.3",
     "--feature-manifest", "feature.json",
-    "--result", "representative.json",
-    "--result", "focused.json",
+    "--acceptance-bundle", "bundle.json",
   ]), {
     resumeTag: "v1.2.3",
     dryRun: false,
     help: false,
     featureManifestPath: "feature.json",
-    resultPaths: ["representative.json", "focused.json"],
+    acceptanceBundlePath: "bundle.json",
   });
   assert.throws(() => parseArgs(["patch"]), /Unknown argument/);
 });
@@ -45,7 +44,7 @@ test("release composes publication followed by deployment", async () => {
     argv: [
       "--resume", "v1.2.3",
       "--feature-manifest", "feature.json",
-      "--result", "representative.json",
+      "--acceptance-bundle", "bundle.json",
     ],
     log,
     publish,
@@ -63,7 +62,7 @@ test("release composes publication followed by deployment", async () => {
   assert.deepEqual(calls[1].argv, [
     "v1.2.3",
     "--feature-manifest", "feature.json",
-    "--result", "representative.json",
+    "--acceptance-bundle", "bundle.json",
   ]);
 });
 
