@@ -411,7 +411,6 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
     <>
       <Field label="Project name" required>
         <Input
-          data-testid="create-project-name"
           required
           value={d.name}
           onChange={(_, v) => { const slug = slugify(v.value); d.setName(v.value); if (!folderEdited) setWorkspaceSlug(slug); }}
