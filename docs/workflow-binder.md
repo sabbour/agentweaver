@@ -125,11 +125,18 @@ See the [current workflow library](workflow-library.md).
 | `(Merge, PeerReview, blocked)` | Merge blocked → re-enter peer-review gate |
 | `(Merge, Agent, blocked)` | Merge blocked → re-enter producer turn |
 
-These tables are illustrative, not an exhaustive allowlist: the binder also handles
-`build_test` review routing and `Merge → OpenPullRequest → Scribe` publication wiring.
-Only a transition unsupported by the current `RunWorkflowGraphBinder` fails closed with
-a `WorkflowBindException`. `NodeClassifier.NormalizeGateKind` also retains a legacy
-check-node-id fallback when `gate_kind` is absent; ordinary executor selection is by type.
+The authoritative exhaustive allowlist lives in `WorkflowTransitionContract`. Both
+`RunWorkflowGraphBinder` and the generation prompt consume that contract, and the binder
+guards its wiring switch with it. In particular, the supported advanced review sequence is
+`Rai --pass/approved/review--> PeerReview(BuildTest)
+--pass/approved--> PeerReview --pass/approved--> HumanReview`. A condition such as
+`Rai --no-changes--> PeerReview` is not runtime wiring and is rejected with supported
+outgoing alternatives rather than being discovered during execution. `build_test` is
+classified as `PeerReview`, so the same matrix governs build/test and authored peer-review
+gates.
+
+`NodeClassifier.NormalizeGateKind` also retains a legacy check-node-id fallback when
+`gate_kind` is absent; ordinary executor selection is by type.
 
 ## 3. How to author a new node type (extension point)
 

@@ -52,6 +52,20 @@ public record WorkflowGenerationResult(
 /// </summary>
 public sealed class WorkflowGenerationException : Exception
 {
-    public WorkflowGenerationException(string message) : base(message) { }
+    public WorkflowGenerationException(
+        string message,
+        string code = "workflow_generation_failed",
+        IReadOnlyList<string>? validationErrors = null,
+        IReadOnlyList<WorkflowTransitionIssue>? transitionIssues = null) : base(message)
+    {
+        Code = code;
+        ValidationErrors = validationErrors ?? [message];
+        TransitionIssues = transitionIssues ?? [];
+    }
+
     public WorkflowGenerationException(string message, Exception inner) : base(message, inner) { }
+
+    public string Code { get; } = "workflow_generation_failed";
+    public IReadOnlyList<string> ValidationErrors { get; } = [];
+    public IReadOnlyList<WorkflowTransitionIssue> TransitionIssues { get; } = [];
 }
