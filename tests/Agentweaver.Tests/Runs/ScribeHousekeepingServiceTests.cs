@@ -138,6 +138,7 @@ public sealed class ScribeHousekeepingServiceTests
             var first = service1.RunAsync(request1, CancellationToken.None);
             await exporter.WaitUntilInvokedAsync();
             var second = service2.RunAsync(request2, CancellationToken.None);
+            await exporter.WaitUntilActiveClaimObservedAsync();
             exporter.Release();
             await Task.WhenAll(first, second);
 
@@ -413,18 +414,26 @@ public sealed class ScribeHousekeepingServiceTests
     {
         private readonly TaskCompletionSource _entered =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _activeClaimObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _isAppliedCount;
         private int _applyCount;
 
         public int ApplyCount => Volatile.Read(ref _applyCount);
 
-        public Task<bool> IsAppliedAsync(
+        public async Task<bool> IsAppliedAsync(
             string workingDirectory,
             string defaultBranch,
             string operationKey,
-            CancellationToken ct) =>
-            inner.IsAppliedAsync(workingDirectory, defaultBranch, operationKey, ct);
+            CancellationToken ct)
+        {
+            if (Interlocked.Increment(ref _isAppliedCount) >= 2)
+                _activeClaimObserved.TrySetResult();
+            return await inner.IsAppliedAsync(
+                workingDirectory, defaultBranch, operationKey, ct);
+        }
 
         public async Task ApplyAsync(
             string projectId,
@@ -442,6 +451,8 @@ public sealed class ScribeHousekeepingServiceTests
         }
 
         public Task WaitUntilInvokedAsync() => _entered.Task;
+        public Task WaitUntilActiveClaimObservedAsync() =>
+            _activeClaimObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
         public void Release() => _release.TrySetResult();
     }
 
