@@ -168,6 +168,46 @@ public sealed class KubernetesPodAgentEndpointResolverTests
     }
 
     [Fact]
+    public async Task Endpoint_read_failure_relaunches_once_then_records_canonical_exhaustion()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = MakeRun();
+        await store.InsertAsync(run);
+        var registry = new PodNameRegistry();
+        var lifecycle = new RecoveringDispatchLifecycle(registry);
+        var client = new Kubernetes(
+            new KubernetesClientConfiguration { Host = "http://localhost:8080" },
+            new ThrowingPodHandler(new HttpRequestException("secret-do-not-persist")));
+        var resolver = new KubernetesPodAgentEndpointResolver(
+            client,
+            registry,
+            "agentweaver",
+            new SandboxAgentOptions { RequireMtls = false },
+            NullLogger<KubernetesPodAgentEndpointResolver>.Instance,
+            lifecycle,
+            store,
+            new StaticLaunchContextResolver(),
+            new MutableDispatchValidator(Boundary(run.Id.ToString(), run.LifecycleGeneration)));
+
+        var failure = await CaptureFailureAsync(resolver, run.Id.ToString());
+
+        failure.Reason.Should().Be("agent_host_unavailable");
+        failure.IsRetryable.Should().BeTrue();
+        lifecycle.LaunchCalls.Should().Be(2, "one failed endpoint read receives exactly one fresh launch");
+        lifecycle.Contexts.Select(context => context.DispatchId).Distinct().Should().HaveCount(2);
+        lifecycle.Contexts.Should().OnlyContain(context =>
+            context.LifecycleGeneration == run.LifecycleGeneration);
+        registry.TryGet(run.Id.ToString()).Should().BeNull();
+        var outcome = (await store.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle().Subject;
+        outcome.LifecycleGeneration.Should().Be(run.LifecycleGeneration);
+        outcome.Outcome.Payload.GetProperty("errorCode").GetString().Should().Be("agent_host_unavailable");
+        outcome.Outcome.Payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+        outcome.Outcome.Payload.GetRawText().Should().NotContain("secret-do-not-persist");
+        (await store.GetAsync(run.Id))!.Status.Should().Be(RunStatus.Failed);
+    }
+
+    [Fact]
     public async Task Assistant_exhaustion_remains_resumable_and_does_not_write_terminal_outcome()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();
@@ -652,6 +692,14 @@ public sealed class KubernetesPodAgentEndpointResolverTests
                 Content = new StringContent("""{"kind":"Status","code":404}"""),
                 RequestMessage = request,
             });
+    }
+
+    private sealed class ThrowingPodHandler(Exception failure) : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(failure);
     }
 
     private sealed class ReadyPodHandler(string podName, string podIp) : DelegatingHandler

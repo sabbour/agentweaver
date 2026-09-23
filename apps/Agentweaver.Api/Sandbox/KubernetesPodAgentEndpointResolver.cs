@@ -79,7 +79,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
     /// <inheritdoc />
     public async Task<Uri?> TryResolveEndpointAsync(string runId, CancellationToken ct)
     {
-        const int maxReapedPodRecoveries = 1;
+        const int maxEndpointRecoveries = 1;
         for (var recoveryAttempt = 0; ; recoveryAttempt++)
         {
             var podName = _podRegistry.TryGet(runId);
@@ -149,7 +149,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                     return null;
                 }
 
-                if (_podLifecycle is not null && recoveryAttempt < maxReapedPodRecoveries)
+                if (_podLifecycle is not null && recoveryAttempt < maxEndpointRecoveries)
                 {
                     await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
                     _logger.LogWarning(
@@ -159,7 +159,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                         podName,
                         runId,
                         recoveryAttempt + 1,
-                        maxReapedPodRecoveries);
+                        maxEndpointRecoveries);
                     continue;
                 }
 
@@ -170,7 +170,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
             catch (WorkflowAgentInfrastructureException ex)
                 when (ex.Reason == "agenthost_ip_not_ready" && _podLifecycle is not null)
             {
-                if (recoveryAttempt < maxReapedPodRecoveries)
+                if (recoveryAttempt < maxEndpointRecoveries)
                 {
                     await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
                     continue;
@@ -185,10 +185,30 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                 if (ex is WorkflowAgentInfrastructureException)
                     throw;
 
-                _logger.LogError(ex,
-                    "KubernetesPodAgentEndpointResolver: failed to resolve pod IP for run {RunId} (pod={PodName})",
-                    runId, podName);
-                return null;
+                if (_podLifecycle is not null && recoveryAttempt < maxEndpointRecoveries)
+                {
+                    await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
+                    _logger.LogWarning(
+                        ex,
+                        "KubernetesPodAgentEndpointResolver: failed to resolve AgentHost endpoint for run {RunId} " +
+                        "(pod={PodName}); redispatching once before delivery " +
+                        "(recoveryAttempt={Attempt}, maxRecoveryAttempts={MaxAttempts}).",
+                        runId,
+                        podName,
+                        recoveryAttempt + 1,
+                        maxEndpointRecoveries);
+                    continue;
+                }
+
+                _logger.LogError(
+                    ex,
+                    "KubernetesPodAgentEndpointResolver: failed to resolve AgentHost endpoint for run {RunId} " +
+                    "(pod={PodName}); recovery exhausted.",
+                    runId,
+                    podName);
+                await RecordExhaustionAsync(runId).ConfigureAwait(false);
+                await ClearDispatchForFreshLaunchAsync(runId).ConfigureAwait(false);
+                throw AgentHostUnavailable(runId, ex);
             }
         }
     }
