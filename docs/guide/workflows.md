@@ -281,6 +281,13 @@ trigger shapes, and a few-shot set of natural-language → trigger examples, the
 with the same loader the runtime uses. If the first draft is malformed, the server allows exactly one
 correction pass before failing closed.
 
+Review edges are constrained by the runtime binder's transition contract. A software release-readiness
+chain can run `RAI → Build & Test → peer review → human review`; approval/pass advances to the next
+gate, request-changes/revise returns to an agent step, and decline routes to a terminal. Unsupported
+edge conditions are rejected before the draft is saved, with the failing edge and supported outgoing
+alternatives returned in `transition_issues`. An unbindable `base_yaml` edit is rejected before any
+generation model call.
+
 If the project was created from GitHub — or your prompt includes a GitHub repository or issue URL —
 generation keeps that target repository in the prompt context so the draft acts against the intended repo.
 

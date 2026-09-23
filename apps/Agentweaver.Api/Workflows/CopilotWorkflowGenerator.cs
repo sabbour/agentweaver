@@ -79,9 +79,13 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         if (defSecond is not null)
             return new WorkflowGenerationResult(defSecond, yamlSecond, WasCorrected: true);
 
+        var transitionIssues = GetTransitionIssues(yamlSecond);
         throw new WorkflowGenerationException(
             "The generated workflow could not be validated after one correction pass. " +
-            $"Unresolved problem: {errorSecond}");
+            $"Unresolved problem: {errorSecond}",
+            transitionIssues.Count > 0 ? "workflow_not_bindable" : "workflow_generation_failed",
+            [errorSecond ?? "The generated workflow did not validate."],
+            transitionIssues);
     }
 
     /// <summary>Cleans model output, ensures a valid id, and validates it. Returns the cleaned YAML, the
@@ -126,6 +130,14 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         return (yaml, result.Definition, null);
     }
 
+    private static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(string yaml)
+    {
+        var load = WorkflowDefinitionLoader.Load(yaml, "generated");
+        return load.Definition is null
+            ? []
+            : RunWorkflowGraphBinder.GetTransitionIssues(load.Definition);
+    }
+
     private static string? ValidateSoftwareReviewGate(
         WorkflowDefinition workflow,
         bool contentOnly)
@@ -150,8 +162,11 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                            IsApprovalVerdict(edge.When))
             .ToArray();
         if (successfulBuildTestEdges.Length == 0 || successfulBuildTestEdges.Any(edge =>
-                !string.Equals(edge.To, humanReviewId, StringComparison.OrdinalIgnoreCase)))
-            return "Every approved or pass build_test route in a software workflow must target the human-review sign-off gate.";
+                !string.Equals(edge.To, humanReviewId, StringComparison.OrdinalIgnoreCase) &&
+                workflow.Nodes.Single(node =>
+                    string.Equals(node.Id, edge.To, StringComparison.OrdinalIgnoreCase)).Type !=
+                    WorkflowNodeType.PeerReview))
+            return "Every approved or pass build_test route in a software workflow must target the human-review sign-off gate or a peer-review chain that ends there.";
 
         var reachableNodeIds = GetReachableNodeIds(workflow, workflow.Start);
         var reachableSafetyGates = workflow.Nodes
@@ -254,6 +269,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         var examples = BuildFewShotExamples();
         var gateRequirement = request.ContentOnly ? WorkflowGatePromptGuidance.ContentOnlyExemption : WorkflowGatePromptGuidance.SoftwareBuildTestRequirement;
+        var transitionMatrix = WorkflowGrammarContract.ToGenerationPromptMatrix();
 
         // SECURITY: the description is untrusted human input. Fence it and instruct the model to treat
         // the fenced content as data describing the workflow to author, never as instructions to follow.
@@ -313,6 +329,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
 
             {{gateRequirement}}
+
+            SUPPORTED REVIEW TRANSITIONS — this matrix is runtime-owned. Emit only these combinations:
+            {{transitionMatrix}}
 
             VALIDATION RULES (your output MUST satisfy all):
             - id, name, start, and at least one node are required.
@@ -384,6 +403,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         var rolesList = roles.Count == 0 ? "(none — preserve existing agent fields when possible)" : string.Join("\n", roles);
         var baseId = string.IsNullOrWhiteSpace(request.BaseWorkflowId) ? "(unsaved draft)" : request.BaseWorkflowId!.Trim();
         var gateRequirement = request.ContentOnly ? WorkflowGatePromptGuidance.ContentOnlyExemption : WorkflowGatePromptGuidance.SoftwareBuildTestRequirement;
+        var transitionMatrix = WorkflowGrammarContract.ToGenerationPromptMatrix();
         var builtInRule = request.BaseWorkflowIsBuiltIn
             ? $"The base workflow '{baseId}' is built-in/library and immutable. You MUST fork it into a project-owned customized copy: change `id` to a new kebab-case id that is NOT '{baseId}', keep the name recognizable, and preserve the original intent except for the requested edit."
             : $"The base workflow '{baseId}' is project-owned or an unsaved draft. Keep its `id` unchanged unless the edit explicitly asks to rename it.";
@@ -409,6 +429,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               its hardcoded tail after authored gates.
 
             {{gateRequirement}}
+
+            SUPPORTED REVIEW TRANSITIONS — preserve or emit only these runtime-bindable combinations:
+            {{transitionMatrix}}
 
             Available roles for `agent`/`role` fields:
             {{rolesList}}

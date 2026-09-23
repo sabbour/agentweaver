@@ -44,6 +44,14 @@ internal sealed record RunWorkflowBindings(
     int MaxIterations,
     IRunWorkflowWiringSupport Wiring);
 
+public sealed record WorkflowTransitionIssue(
+    string From,
+    string To,
+    string? When,
+    string FromKind,
+    string ToKind,
+    IReadOnlyList<string> Alternatives);
+
 /// <summary>
 /// Binds a <see cref="WorkflowDefinition"/> onto the live MAF graph (Feature 010 wf-maf-binding,
 /// generalized in Feature 015 US1). The full run pipeline is assembled by ITERATING the definition's
@@ -230,6 +238,37 @@ internal static class RunWorkflowGraphBinder
         return errors;
     }
 
+    public static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var issues = new List<WorkflowTransitionIssue>();
+        foreach (var edge in definition.Edges)
+        {
+            var fromNode = definition.Nodes.FirstOrDefault(
+                node => string.Equals(node.Id, edge.From, StringComparison.Ordinal));
+            var toNode = definition.Nodes.FirstOrDefault(
+                node => string.Equals(node.Id, edge.To, StringComparison.Ordinal));
+            if (fromNode is null || toNode is null)
+                continue;
+
+            var fromKind = EffectiveKind(definition, fromNode);
+            var toKind = EffectiveKind(definition, toNode);
+            if (WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
+                continue;
+
+            issues.Add(new WorkflowTransitionIssue(
+                edge.From,
+                edge.To,
+                edge.When,
+                WorkflowGrammarContract.TransitionKindName(fromKind),
+                WorkflowGrammarContract.TransitionKindName(toKind),
+                WorkflowGrammarContract.TransitionAlternatives(fromKind)));
+        }
+
+        return issues;
+    }
+
     /// <summary>
     /// The graph entry plumbing supplies <see cref="AgentTurnInput"/>. Verdict-style peer-review and
     /// build-test nodes instead consume a produced <see cref="AgentTurnOutput"/>; they can only be reached
@@ -324,6 +363,9 @@ internal static class RunWorkflowGraphBinder
         WireContext ctx, WorkflowEdge edge, WorkflowNode fromNode, WorkflowNode toNode,
         NodeKind fromKind, NodeKind toKind)
     {
+        if (!WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
+            return false;
+
         var g = ctx.G;
         var b = ctx.B;
         var s = ctx.S;
@@ -711,6 +753,16 @@ internal static class RunWorkflowGraphBinder
                 g.AddEdge<WorkflowReviewDecision>(ResolveRubberduck(fromNode, b), adapter,
                     decision => decision is not null && decision.Approved)
                  .AddEdge(adapter, b.MergeBinding);
+                return true;
+            }
+
+            // Rubber-duck PASS -> terminal.
+            case (NodeKind.Rubberduck, NodeKind.Terminal, "pass"):
+            {
+                var terminal = s.ReviewToTerminalAdapter(edge);
+                g.AddEdge<WorkflowReviewDecision>(ResolveRubberduck(fromNode, b), terminal,
+                    decision => decision is not null && decision.Approved);
+                ctx.DirectTerminalOutputs.Add(terminal);
                 return true;
             }
 

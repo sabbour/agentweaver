@@ -315,6 +315,11 @@ public sealed class WorkflowGeneratorTests
             label: Build & Test
             role: review
             agent: qa-engineer
+          - id: peer-review
+            type: peer_review
+            label: Peer Review
+            role: backend-engineer
+            prompt: "Review the tested implementation for release readiness."
           - id: human-review
             type: check
             label: Human Review
@@ -340,12 +345,21 @@ public sealed class WorkflowGeneratorTests
             to: implement
             when: revise
           - from: build-test
-            to: human-review
+            to: peer-review
             when: approved
           - from: build-test
             to: implement
             when: request-changes
           - from: build-test
+            to: declined
+            when: declined
+          - from: peer-review
+            to: human-review
+            when: approved
+          - from: peer-review
+            to: implement
+            when: request-changes
+          - from: peer-review
             to: declined
             when: declined
           - from: human-review
@@ -535,6 +549,10 @@ public sealed class WorkflowGeneratorTests
         CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
         CountOccurrences(prompt, "`from`/`to` MUST reference existing node ids").Should().Be(1);
         CountOccurrences(prompt, "at most one schedule trigger").Should().Be(1);
+        prompt.Should().Contain("SUPPORTED REVIEW TRANSITIONS");
+        prompt.Should().Contain("rai -> peer-review/build-test (when: approved | pass | review)");
+        prompt.Should().Contain("peer-review/build-test -> peer-review/build-test (when: approved | pass)");
+        prompt.Should().NotContain("rai -> peer-review/build-test (when: no-changes)");
     }
 
     [Fact]
@@ -763,6 +781,42 @@ public sealed class WorkflowGeneratorTests
         result.WasCorrected.Should().BeFalse();
         runner.CallCount.Should().Be(1);
         RunWorkflowGraphBinder.GetBindabilityErrors(result.Workflow).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_UnbindableBaseYaml_ReturnsAlternativesBeforeGeneratorExecution()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"WfUnbindableEdit Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        var unsupported = SoftwareWorkflowWithRaiBeforeBuildTestYaml
+            .Replace("  - pass", "  - no-changes", StringComparison.Ordinal)
+            .Replace("    when: pass", "    when: no-changes", StringComparison.Ordinal);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/generate",
+            new { description = "Keep this review chain.", base_yaml = unsupported });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_not_bindable");
+        body.GetProperty("transition_issues").GetArrayLength().Should().Be(1);
+        body.GetProperty("transition_issues")[0].GetProperty("alternatives").GetArrayLength()
+            .Should().BeGreaterThan(0);
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.CallCount.Should().Be(0);
     }
 
     [Fact]

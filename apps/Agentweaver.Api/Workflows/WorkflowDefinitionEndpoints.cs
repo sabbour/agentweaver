@@ -516,7 +516,13 @@ public static class WorkflowDefinitionEndpoints
             }
             catch (WorkflowBindException ex)
             {
-                return Results.UnprocessableEntity(new { error = ex.Message, line = errorLine });
+                return Results.UnprocessableEntity(new
+                {
+                    error = "workflow_not_bindable",
+                    validation_errors = new[] { ex.Message },
+                    transition_issues = RunWorkflowGraphBinder.GetTransitionIssues(definition),
+                    line = errorLine,
+                });
             }
 
             // Step 5: Write to the project workspace.
@@ -625,16 +631,6 @@ public static class WorkflowDefinitionEndpoints
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.
             var teamRoles = TryReadTeamRoles(project!);
             var caller = httpContext.GetCaller();
-            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
-                httpContext,
-                "workflow_generation",
-                project!.Id,
-                executionPlans,
-                executionPlanAccessor,
-                ct).ConfigureAwait(false);
-            execution.Activate();
-            if (execution.Error is not null)
-                return execution.Error;
             var baseWorkflowId = Normalize(request.BaseWorkflowId);
             var baseYaml = string.IsNullOrWhiteSpace(request.BaseYaml) ? null : request.BaseYaml;
             var baseWorkflowIsBuiltIn = false;
@@ -653,8 +649,9 @@ public static class WorkflowDefinitionEndpoints
                 if (bindErrors.Count > 0)
                     return Results.BadRequest(new
                     {
-                        error = "base_yaml is not runnable.",
+                        error = "workflow_not_bindable",
                         validation_errors = bindErrors,
+                        transition_issues = RunWorkflowGraphBinder.GetTransitionIssues(load.Definition),
                     });
 
                 baseWorkflowId ??= load.Definition.Id;
@@ -675,6 +672,17 @@ public static class WorkflowDefinitionEndpoints
                     ct);
                 baseYaml ??= WorkflowDefinitionYamlSerializer.Serialize(baseWorkflow.Definition);
             }
+
+            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "workflow_generation",
+                project!.Id,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            execution.Activate();
+            if (execution.Error is not null)
+                return execution.Error;
 
             try
             {
@@ -705,7 +713,13 @@ public static class WorkflowDefinitionEndpoints
             }
             catch (WorkflowGenerationException ex)
             {
-                return Results.BadRequest(new { error = ex.Message });
+                return Results.BadRequest(new
+                {
+                    error = ex.Code,
+                    message = ex.Message,
+                    validation_errors = ex.ValidationErrors,
+                    transition_issues = ex.TransitionIssues,
+                });
             }
             catch (AgentProviderException ex)
             {

@@ -60,7 +60,9 @@ contains:
    `serial`, `fan_out`, `fan_in`, and `coordinator_composed`, which load but cannot bind.
 3. **Validation rules** — required fields, edge/`start` node-reference integrity,
    `check` nodes needing `branches:` with a matching outgoing edge per verdict, and
-   the binder's supported runtime topology. Schema acceptance alone is insufficient.
+   the binder's supported runtime topology. The review-transition matrix is rendered
+   directly from `WorkflowTransitionContract`, the same allowlist used by runtime
+   binding. Schema acceptance alone is insufficient.
 4. **Available roles** — the project's **actual cast roles** when a team exists,
    otherwise the full catalog (FR-061). Constraining the `agent`/`role` fields to
    castable roles keeps the generated workflow immediately runnable without
@@ -103,8 +105,14 @@ Fix the YAML and return only the corrected YAML.
 
 - If the corrected output validates → it is returned with `wasCorrected = true`.
 - If it is still invalid → the generator throws `WorkflowGenerationException`, which
-  the endpoint maps to `400 { error }` naming the unresolved problem rather than
-  surfacing a broken draft. The mechanism never loops or retries indefinitely.
+  the endpoint maps to a structured `400` with `error`, `message`,
+  `validation_errors`, and `transition_issues`. Each transition issue identifies the
+  rejected edge/kinds/condition and lists supported outgoing alternatives. The
+  mechanism never loops or retries indefinitely.
+
+An edit request with unbindable `base_yaml` is rejected with the same transition
+details before the AI execution context is activated, so no model call or persistence
+occurs for a topology the runtime cannot execute.
 
 ## Output cleanup and id generation
 

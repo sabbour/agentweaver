@@ -296,6 +296,109 @@ public sealed class RunWorkflowGraphBinderTests
             .Which.NodeId.Should().Be("review");
     }
 
+    [Fact]
+    public void TransitionContract_RejectsEdgesWithoutRuntimeWiring_AndReturnsAlternatives()
+    {
+        var definition = new WorkflowDefinition
+        {
+            Id = "unsupported-review-edge",
+            Name = "Unsupported review edge",
+            Start = "implement",
+            Nodes =
+            [
+                Node("implement", WorkflowNodeType.Prompt),
+                Node("rai", WorkflowNodeType.Check, "rai"),
+                Node("build-test", WorkflowNodeType.BuildTest),
+                Node("done", WorkflowNodeType.Terminal),
+            ],
+            Edges =
+            [
+                new WorkflowEdge { From = "implement", To = "rai" },
+                new WorkflowEdge { From = "rai", To = "build-test", When = "no-changes" },
+                new WorkflowEdge { From = "build-test", To = "done", When = "approved" },
+            ],
+        };
+
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().Contain(error =>
+            error.Contains("'Rai'->'PeerReview'", StringComparison.Ordinal));
+
+        var issue = RunWorkflowGraphBinder.GetTransitionIssues(definition).Should().ContainSingle().Subject;
+        issue.From.Should().Be("rai");
+        issue.To.Should().Be("build-test");
+        issue.When.Should().Be("no-changes");
+        issue.Alternatives.Should().Contain("rai -> peer-review/build-test (when: approved | pass | review)");
+    }
+
+    [Fact]
+    public void AdvancedReleaseReviewChain_BuildsThroughTheFullRuntimeBinder()
+    {
+        using var factory = new WorkflowWebApplicationFactory();
+        var workflowFactory = factory.Services.GetRequiredService<RunWorkflowFactory>();
+        var definition = new WorkflowDefinition
+        {
+            Id = "release-readiness",
+            Name = "Release readiness",
+            Start = "implement",
+            Nodes =
+            [
+                Node("implement", WorkflowNodeType.Prompt),
+                Node("rai", WorkflowNodeType.Check, "rai"),
+                Node("build-test", WorkflowNodeType.BuildTest),
+                Node("peer-review", WorkflowNodeType.PeerReview),
+                Node("human-review", WorkflowNodeType.Check, "human-review"),
+                Node("declined", WorkflowNodeType.Terminal),
+                Node("done", WorkflowNodeType.Terminal),
+            ],
+            Edges =
+            [
+                new WorkflowEdge { From = "implement", To = "rai" },
+                new WorkflowEdge { From = "rai", To = "build-test", When = "pass" },
+                new WorkflowEdge { From = "rai", To = "implement", When = "revise" },
+                new WorkflowEdge { From = "build-test", To = "peer-review", When = "approved" },
+                new WorkflowEdge { From = "build-test", To = "implement", When = "request-changes" },
+                new WorkflowEdge { From = "build-test", To = "declined", When = "declined" },
+                new WorkflowEdge { From = "peer-review", To = "human-review", When = "approved" },
+                new WorkflowEdge { From = "peer-review", To = "implement", When = "request-changes" },
+                new WorkflowEdge { From = "peer-review", To = "declined", When = "declined" },
+                new WorkflowEdge { From = "human-review", To = "done", When = "approved" },
+                new WorkflowEdge { From = "human-review", To = "implement", When = "request-changes" },
+                new WorkflowEdge { From = "human-review", To = "declined", When = "declined" },
+            ],
+        };
+
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().BeEmpty();
+        var (_, descriptor) = workflowFactory.BuildWorkflowForTest(isChild: false, definition);
+
+        var edges = descriptor.Edges.Select(edge => (edge.From, edge.To)).ToList();
+        edges.Should().Contain(("rai", "build-test"));
+        edges.Should().Contain(("build-test", "peer-review"));
+        edges.Should().Contain(("peer-review", "human-review"));
+    }
+
+    [Fact]
+    public void DirectAgentCompletion_ClaimedByContract_BuildsThroughTheFullRuntimeBinder()
+    {
+        using var factory = new WorkflowWebApplicationFactory();
+        var workflowFactory = factory.Services.GetRequiredService<RunWorkflowFactory>();
+        var definition = new WorkflowDefinition
+        {
+            Id = "direct-completion",
+            Name = "Direct completion",
+            Start = "work",
+            Nodes =
+            [
+                Node("work", WorkflowNodeType.Prompt),
+                Node("done", WorkflowNodeType.Terminal),
+            ],
+            Edges = [new WorkflowEdge { From = "work", To = "done" }],
+        };
+
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().BeEmpty();
+        var act = () => workflowFactory.BuildWorkflowForTest(isChild: false, definition);
+
+        act.Should().NotThrow();
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────────────────────────────
 
     private static void AssertCanonicalDefaultGraph(GraphDescriptor descriptor)

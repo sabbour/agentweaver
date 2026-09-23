@@ -86,6 +86,7 @@ internal static class WorkflowGrammarContract
         Transition(NodeKind.PeerReview, NodeKind.Terminal, "approved", "pass", "declined"),
         Transition(NodeKind.Rubberduck, NodeKind.HumanReview, "pass"),
         Transition(NodeKind.Rubberduck, NodeKind.Merge, "pass"),
+        Transition(NodeKind.Rubberduck, NodeKind.Terminal, "pass"),
         Transition(NodeKind.Rubberduck, NodeKind.Agent, "pass", "revise"),
     ];
 
@@ -105,6 +106,33 @@ internal static class WorkflowGrammarContract
         Transitions.Any(rule => rule.From == from
             && rule.To == to
             && rule.Conditions.Contains(condition, StringComparer.Ordinal));
+
+    public static IReadOnlyList<string> TransitionAlternatives(NodeKind from) =>
+        Transitions.Where(rule => rule.From == from)
+            .Select(DescribeTransition)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToList();
+
+    public static string ToGenerationPromptMatrix()
+    {
+        var authorableKinds = new HashSet<NodeKind>
+        {
+            NodeKind.Agent,
+            NodeKind.Rai,
+            NodeKind.PeerReview,
+            NodeKind.HumanReview,
+            NodeKind.Rubberduck,
+            NodeKind.Terminal,
+        };
+
+        return string.Join("\n", Transitions
+            .Where(rule => authorableKinds.Contains(rule.From) && authorableKinds.Contains(rule.To))
+            .Select(rule => $"- {DescribeTransition(rule)}"));
+    }
+
+    public static string TransitionKindName(NodeKind kind) =>
+        kind == NodeKind.PeerReview ? "peer-review/build-test" : KindName(kind);
 
     public static WorkflowGrammarDto ToDto() => new()
     {
@@ -203,6 +231,14 @@ internal static class WorkflowGrammarContract
 
     private static WorkflowTransitionGrammar Unconditional(NodeKind from, NodeKind to) =>
         new(from, to, [null]);
+
+    private static string DescribeTransition(WorkflowTransitionGrammar rule)
+    {
+        var conditions = rule.Conditions.Contains(null)
+            ? "unconditional"
+            : $"when: {string.Join(" | ", rule.Conditions.OfType<string>())}";
+        return $"{TransitionKindName(rule.From)} -> {TransitionKindName(rule.To)} ({conditions})";
+    }
 
     private static string Normalize(string raw) =>
         raw.Trim().Replace('-', '_').Replace(' ', '_').ToLowerInvariant();
