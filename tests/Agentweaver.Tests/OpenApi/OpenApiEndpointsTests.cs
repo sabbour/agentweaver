@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Workflows;
 using FluentAssertions;
 using Agentweaver.Tests.Helpers;
 
@@ -109,11 +110,67 @@ public sealed class OpenApiEndpointsTests : IDisposable
         outcomeSpec.GetProperty("operationId").GetString().Should().Be("GetCoordinatorOutcomeSpec");
         outcomeSpec.GetProperty("summary").GetString().Should().Contain("Returns the coordinator's current drafted outcome spec");
 
+        var grammarOperation = paths.GetProperty("/api/workflows/grammar").GetProperty("get");
+        grammarOperation.GetProperty("operationId").GetString().Should().Be("GetWorkflowGrammar");
+        grammarOperation.GetProperty("responses").GetProperty("200").GetProperty("content")
+            .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString()
+            .Should().EndWith("/WorkflowGrammarDto");
+
+        var runEvents = paths.GetProperty("/api/runs/{id}/events").GetProperty("get");
+        var eventParameters = runEvents.GetProperty("parameters").EnumerateArray()
+            .Where(parameter => parameter.GetProperty("in").GetString() == "query")
+            .ToDictionary(parameter => parameter.GetProperty("name").GetString()!, parameter => parameter);
+        eventParameters.Keys.Should().BeEquivalentTo("type", "after", "limit");
+        eventParameters["type"].GetProperty("schema").GetProperty("type").GetString().Should().Be("string");
+        eventParameters["type"].GetProperty("schema").GetProperty("minLength").GetInt32().Should().Be(1);
+        eventParameters["type"].GetProperty("schema").GetProperty("maxLength").GetInt32().Should().Be(128);
+        eventParameters["after"].GetProperty("schema").GetProperty("type").GetString().Should().Be("integer");
+        eventParameters["after"].GetProperty("schema").GetProperty("minimum").GetInt32().Should().Be(0);
+        eventParameters["limit"].GetProperty("schema").GetProperty("minimum").GetInt32().Should().Be(1);
+        eventParameters["limit"].GetProperty("schema").GetProperty("maximum").GetInt32().Should().Be(1000);
+
         var securitySchemes = root.GetProperty("components").GetProperty("securitySchemes");
         var bearer = securitySchemes.GetProperty("Bearer");
         bearer.GetProperty("type").GetString().Should().Be("http");
         bearer.GetProperty("scheme").GetString().Should().Be("bearer");
         bearer.GetProperty("description").GetString().Should().Contain("Authorization: Bearer");
+    }
+
+    [Fact]
+    public async Task WorkflowGrammar_MatchesRuntimeValidationAndBindability()
+    {
+        var response = await _client.GetAsync("/api/workflows/grammar");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var grammar = document.RootElement;
+        grammar.GetProperty("grammar_version").GetString().Should().Be(WorkflowGrammarContract.Version);
+        grammar.GetProperty("node_types").EnumerateArray()
+            .Select(node => node.GetProperty("yaml_type").GetString())
+            .Should().Equal(WorkflowGrammarContract.NodeTypes.Select(node => node.YamlType));
+
+        var bindable = WorkflowDefinitionLoader.Load("""
+            id: contract-client
+            name: Contract client
+            version: "1"
+            start: author
+            nodes:
+              - id: author
+                type: prompt
+              - id: done
+                type: terminal
+            edges:
+              - from: author
+                to: done
+            """, "contract-client");
+        bindable.IsValid.Should().BeTrue(bindable.Error);
+        RunWorkflowGraphBinder.GetBindabilityErrors(bindable.Definition!).Should().BeEmpty();
+
+        var promptToTerminal = grammar.GetProperty("edge").GetProperty("transitions").EnumerateArray()
+            .Single(transition =>
+                transition.GetProperty("from_kind").GetString() == "agent"
+                && transition.GetProperty("to_kind").GetString() == "terminal");
+        promptToTerminal.GetProperty("unconditional").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

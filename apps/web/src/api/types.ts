@@ -1670,6 +1670,53 @@ export interface WorkflowYamlResponse {
   yaml: string;
 }
 
+export interface WorkflowGrammar {
+  grammar_version: string;
+  format: 'yaml';
+  root: {
+    required_fields: string[];
+    optional_fields: string[];
+    maximum_document_characters: number;
+    maximum_nodes: number;
+    maximum_edges: number;
+    maximum_triggers: number;
+  };
+  node_fields: {
+    required_fields: string[];
+    optional_fields: string[];
+    maximum_prompt_characters: number;
+    maximum_charter_characters: number;
+  };
+  node_types: Array<{
+    yaml_type: string;
+    api_type: string;
+    label: string;
+    authorable: boolean;
+    runtime_bindable: boolean;
+    runtime_kinds: string[];
+    required_fields: string[];
+    allowed_gate_kinds: string[];
+  }>;
+  edge: {
+    required_fields: string[];
+    optional_fields: string[];
+    conditions_are_case_sensitive: boolean;
+    transitions: Array<{
+      from_kind: string;
+      to_kind: string;
+      unconditional: boolean;
+      when: string[];
+    }>;
+  };
+  triggers: {
+    types: string[];
+    schedule_intervals: string[];
+    review_states: string[];
+    ref_match_modes: string[];
+    predicate_types: string[];
+  };
+}
+
 // A workflow in the project's list response: identity, validation.
 export interface WorkflowSummaryDto {
   id: string | null;

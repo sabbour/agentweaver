@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Microsoft.OpenApi;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Metrics;
@@ -686,6 +687,51 @@ app.MapGet("/api/runs/{id}/events", async (
     .WithDescription(
         "Returns persisted run events in ascending sequence order. Optional query parameters: " +
         "after (exclusive non-negative sequence), limit (1-1000), and type (one exact case-sensitive value, maximum 128 characters).")
+    .AddOpenApiOperationTransformer((operation, _, _) =>
+    {
+        operation.Parameters ??= [];
+        operation.Parameters.Add(new OpenApiParameter
+        {
+            Name = "type",
+            In = ParameterLocation.Query,
+            Required = false,
+            Description = "Exact case-sensitive event type. Must contain 1-128 characters.",
+            Schema = new OpenApiSchema
+            {
+                Type = JsonSchemaType.String,
+                MinLength = 1,
+                MaxLength = 128,
+            },
+        });
+        operation.Parameters.Add(new OpenApiParameter
+        {
+            Name = "after",
+            In = ParameterLocation.Query,
+            Required = false,
+            Description = "Exclusive non-negative event sequence cursor.",
+            Schema = new OpenApiSchema
+            {
+                Type = JsonSchemaType.Integer,
+                Format = "int32",
+                Minimum = "0",
+            },
+        });
+        operation.Parameters.Add(new OpenApiParameter
+        {
+            Name = "limit",
+            In = ParameterLocation.Query,
+            Required = false,
+            Description = "Maximum events to return, from 1 through 1000.",
+            Schema = new OpenApiSchema
+            {
+                Type = JsonSchemaType.Integer,
+                Format = "int32",
+                Minimum = "1",
+                Maximum = "1000",
+            },
+        });
+        return Task.CompletedTask;
+    })
     .Produces<PersistedRunEventDto[]>(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status400BadRequest)
     .Produces(StatusCodes.Status403Forbidden)

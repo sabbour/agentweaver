@@ -82,6 +82,13 @@ If you edit a workflow YAML file on disk or add a new one, click **Sync** on the
 
 ## Authoring a workflow
 
+Clients can discover the exact supported YAML contract from
+`GET /api/workflows/grammar`. The versioned machine-readable response lists required and optional
+fields, size limits, YAML and API node-type names, which node types are currently runtime-bindable,
+allowed gate kinds, edge conditions and transitions, and trigger vocabulary. The same runtime-owned
+catalog drives YAML parsing, serialization, binding, and the published OpenAPI response, so a client
+does not need hidden workflow grammar knowledge.
+
 ### YAML editor
 
 Click **New workflow** to open the visual editor with a YAML-backed template. Use **Edit** on an existing project workflow when you prefer to edit its YAML directly.

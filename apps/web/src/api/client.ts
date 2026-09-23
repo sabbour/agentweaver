@@ -329,8 +329,13 @@ export class AgentweaverApiClient {
   // Persisted run events (FR-022). Seeds the execution timeline for terminal/parked
   // runs whose live SSE stream is closed (e.g. a finished coordinator child). The
   // backend persists and replays the events here; 404 until the log exists.
-  getRunEvents(runId: string): Promise<PersistedRunEvent[]> {
-    return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events`);
+  getRunEvents(runId: string, options?: { type?: string; after?: number; limit?: number }): Promise<PersistedRunEvent[]> {
+    const query = new URLSearchParams();
+    if (options?.type != null) query.set('type', options.type);
+    if (options?.after != null) query.set('after', String(options.after));
+    if (options?.limit != null) query.set('limit', String(options.limit));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events${suffix}`);
   }
 
   getPendingApprovals(runId: string): Promise<import('./types').PendingApprovalsResponse> {
@@ -1446,6 +1451,10 @@ export class AgentweaverApiClient {
   // List discovered workflows + validation status; Sync re-reads .agentweaver/
   // workflows/ from disk and returns the refreshed set; Get returns one full
   // definition.
+  getWorkflowGrammar(): Promise<import('./types').WorkflowGrammar> {
+    return this.request<import('./types').WorkflowGrammar>('GET', '/workflows/grammar');
+  }
+
   listWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
     return this.request<import('./types').WorkflowListResponse>('GET', `/projects/${encodeURIComponent(projectId)}/workflows`);
   }
