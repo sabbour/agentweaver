@@ -206,4 +206,4 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | --- | --- |
 | `get_project_workspace_file` | Get the content of a file in a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace` | List the flat file tree for a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
-| `list_project_workspace_refs` | List the browsable git refs for a project workspace: the base branch and any active run worktrees. |
+| `list_project_workspace_refs` | List browsable project git refs with their resolved commit revisions: the base branch and any active run worktrees. |
