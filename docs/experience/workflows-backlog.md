@@ -112,8 +112,9 @@ While generation runs, the primary button reads **Generating…**. On success, t
 
 The generated YAML is constrained to the project's castable roles when the project has a team. Agent
 nodes are bound to the matching confirmed member name before the draft is returned. If a role has no
-cast mapping, generation, save, and manual run return `workflow_team_binding_required` with structured
-`unresolved_roles`; nothing is saved or submitted until the team is recast or the workflow is mapped.
+cast mapping, including when the team is missing or unreadable, generation, save, and manual run
+return `workflow_team_binding_required` with structured `unresolved_roles`; nothing is saved or
+submitted until the team is recast or the workflow is mapped.
 
 `workflow_save` persists YAML into the project workspace. It validates YAML, verifies the declared `id` matches the `workflow_id`, dry-run binds the definition to the runtime graph, writes it under `.agentweaver/workflows/`, syncs the registry, and returns the parsed workflow definition.
 

@@ -1376,6 +1376,42 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateEndpoint_WithoutTeam_ReturnsRequirementsWithoutPersistingArtifact()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, _) = await CreateProjectAsync(factory, client, "WfGen NoTeam Test");
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.ResponseFactory = _ => SimpleRoleWorkflowYaml("lead-researcher");
+
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+        var (accepted, job) = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description = "Create a role-bound workflow.", content_only = true });
+        accepted.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+
+        var status = await client.GetFromJsonAsync<JsonElement>(job.GetProperty("status_url").GetString()!);
+        status.GetProperty("status").GetString().Should().Be("failed");
+        var failure = status.GetProperty("failure");
+        failure.GetProperty("code").GetString().Should().Be("workflow_team_binding_required");
+        var unresolved = failure.GetProperty("unresolved_roles")[0];
+        unresolved.GetProperty("nodeId").GetString().Should().Be("worker");
+        unresolved.GetProperty("availableRoles").GetArrayLength().Should().Be(0);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var jobId = job.GetProperty("job_id").GetString()!;
+        (await db.BlueprintGenerationArtifacts.CountAsync(x => x.JobId == jobId)).Should().Be(0);
+    }
+
+    [Fact]
     public async Task SaveEndpoint_WithMissingTeamRole_ReturnsRequirementsBeforeWriting()
     {
         await using var factory = new StubWorkflowGeneratorFactory();
@@ -1393,6 +1429,28 @@ public sealed class WorkflowGeneratorTests
         body.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
         body.GetProperty("unresolved_roles")[0].GetProperty("nodeId").GetString().Should().Be("worker");
         File.Exists(Path.Combine(dir, ".agentweaver", "workflows", "missing-role.yaml"))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SaveEndpoint_WithoutTeam_ReturnsRequirementsBeforeWriting()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, dir) = await CreateProjectAsync(factory, client, "WfGen SaveNoTeam Test");
+
+        var yaml = SimpleRoleWorkflowYaml("lead-researcher");
+        var response = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/no-team",
+            new { yaml = yaml.Replace("id: role-bound", "id: no-team", StringComparison.Ordinal) });
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
+        var unresolved = body.GetProperty("unresolved_roles")[0];
+        unresolved.GetProperty("nodeId").GetString().Should().Be("worker");
+        unresolved.GetProperty("availableRoles").GetArrayLength().Should().Be(0);
+        File.Exists(Path.Combine(dir, ".agentweaver", "workflows", "no-team.yaml"))
             .Should().BeFalse();
     }
 
@@ -1418,6 +1476,35 @@ public sealed class WorkflowGeneratorTests
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
         body.GetProperty("unresolved_roles")[0].GetProperty("nodeId").GetString().Should().Be("worker");
+    }
+
+    [Fact]
+    public async Task RunEndpoint_WithoutTeam_ReturnsRequirementsBeforePublishingReadyTask()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, dir) = await CreateProjectAsync(factory, client, "WfGen RunNoTeam Test");
+
+        var workflowsDir = Path.Combine(dir, ".agentweaver", "workflows");
+        Directory.CreateDirectory(workflowsDir);
+        await File.WriteAllTextAsync(
+            Path.Combine(workflowsDir, "no-team.yaml"),
+            SimpleRoleWorkflowYaml("lead-researcher").Replace("id: role-bound", "id: no-team", StringComparison.Ordinal));
+
+        var response = await client.PostAsync(
+            $"/api/projects/{projectId}/workflows/no-team/run",
+            content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
+        var unresolved = body.GetProperty("unresolved_roles")[0];
+        unresolved.GetProperty("nodeId").GetString().Should().Be("worker");
+        unresolved.GetProperty("availableRoles").GetArrayLength().Should().Be(0);
+
+        var tasks = await factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .ListByProjectAsync(ProjectId.Parse(projectId));
+        tasks.Should().BeEmpty();
     }
 
     [Fact]
