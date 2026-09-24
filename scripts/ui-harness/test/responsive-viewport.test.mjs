@@ -73,6 +73,10 @@ const rootOverflowFixture = (overflowY) => `<!doctype html>
   </body>
 </html>`;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
+const TEST_BROWSER_ENV = {
+  NODE_ENV: 'test',
+  AGENTWEAVER_UI_HARNESS_TEST_BROWSER: '1',
+};
 
 async function listen(server) {
   await new Promise((resolve, reject) => {
@@ -96,23 +100,24 @@ test('desktop, constrained-height, and mobile viewport evidence is deterministic
     response.end(fixture);
   });
   const port = await listen(server);
-  const runtime = await openBrowserSession({
-    baseUrl: `http://127.0.0.1:${port}`,
-    headless: true,
-  }, { chromium });
   const directory = path.join(HERE, `.responsive-${randomUUID()}`);
-  const capture = attachPageCapture(runtime.page);
-  const session = { persona: { text: 'Test persona' } };
-  const execute = (eventId, args) => executeUiAction({
-    runtime,
-    capture,
-    session,
-    args,
-    eventId,
-    transcriptDirectory: directory,
-  });
+  let runtime;
 
   try {
+    runtime = await openBrowserSession({
+      baseUrl: `http://127.0.0.1:${port}`,
+      headless: true,
+    }, { chromium, environment: TEST_BROWSER_ENV });
+    const capture = attachPageCapture(runtime.page);
+    const session = { persona: { text: 'Test persona' } };
+    const execute = (eventId, args) => executeUiAction({
+      runtime,
+      capture,
+      session,
+      args,
+      eventId,
+      transcriptDirectory: directory,
+    });
     await runtime.goto('/runs/fixture?credential=viewport-canary#responsive');
     const desktop = await execute(1, {
       _: ['viewport'], width: '1280', height: '900', 'focus-mode': 'standard',
@@ -146,7 +151,7 @@ test('desktop, constrained-height, and mobile viewport evidence is deterministic
     assert.equal(mobile.assertions.every((assertion) => assertion.observed), true);
     assert.equal(JSON.stringify([desktop, constrained, mobile]).includes('viewport-canary'), false);
   } finally {
-    await runtime.close();
+    if (runtime) await runtime.close();
     await rm(directory, { recursive: true, force: true });
     await close(server);
   }
@@ -162,23 +167,24 @@ test('target-specific scrolling distinguishes reachable and nested-clipped conte
     response.end(reachabilityFixture);
   });
   const port = await listen(server);
-  const runtime = await openBrowserSession({
-    baseUrl: `http://127.0.0.1:${port}`,
-    headless: true,
-  }, { chromium });
   const directory = path.join(HERE, `.responsive-${randomUUID()}`);
-  const capture = attachPageCapture(runtime.page);
-  const session = { persona: { text: 'Test persona' } };
-  const execute = (eventId, args) => executeUiAction({
-    runtime,
-    capture,
-    session,
-    args,
-    eventId,
-    transcriptDirectory: directory,
-  });
+  let runtime;
 
   try {
+    runtime = await openBrowserSession({
+      baseUrl: `http://127.0.0.1:${port}`,
+      headless: true,
+    }, { chromium, environment: TEST_BROWSER_ENV });
+    const capture = attachPageCapture(runtime.page);
+    const session = { persona: { text: 'Test persona' } };
+    const execute = (eventId, args) => executeUiAction({
+      runtime,
+      capture,
+      session,
+      args,
+      eventId,
+      transcriptDirectory: directory,
+    });
     await runtime.goto('/reachability');
     const reachable = await execute(1, {
       _: ['viewport'],
@@ -215,7 +221,7 @@ test('target-specific scrolling distinguishes reachable and nested-clipped conte
       false,
     );
   } finally {
-    await runtime.close();
+    if (runtime) await runtime.close();
     await rm(directory, { recursive: true, force: true });
     await close(server);
   }
@@ -233,26 +239,27 @@ test('root vertical overflow requires a reversible user-scrollable overflow mode
     response.end(html);
   });
   const port = await listen(server);
-  const runtime = await openBrowserSession({
-    baseUrl: `http://127.0.0.1:${port}`,
-    headless: true,
-  }, { chromium });
   const directory = path.join(HERE, `.responsive-${randomUUID()}`);
-  const capture = attachPageCapture(runtime.page);
-  const session = { persona: { text: 'Test persona' } };
-  const execute = (eventId, args) => executeUiAction({
-    runtime,
-    capture,
-    session,
-    args,
-    eventId,
-    transcriptDirectory: directory,
-  });
+  let runtime;
   const overflowAssertion = (step) => step.assertions.find(
     (assertion) => assertion.target === 'vertical-overflow-scroll-reachable',
   );
 
   try {
+    runtime = await openBrowserSession({
+      baseUrl: `http://127.0.0.1:${port}`,
+      headless: true,
+    }, { chromium, environment: TEST_BROWSER_ENV });
+    const capture = attachPageCapture(runtime.page);
+    const session = { persona: { text: 'Test persona' } };
+    const execute = (eventId, args) => executeUiAction({
+      runtime,
+      capture,
+      session,
+      args,
+      eventId,
+      transcriptDirectory: directory,
+    });
     const results = {};
     for (const [index, mode] of ['auto', 'hidden', 'clip'].entries()) {
       await runtime.goto(`/${mode}`);
@@ -275,7 +282,7 @@ test('root vertical overflow requires a reversible user-scrollable overflow mode
       assert.equal(overflowAssertion(results[mode]).observed, false);
     }
   } finally {
-    await runtime.close();
+    if (runtime) await runtime.close();
     await rm(directory, { recursive: true, force: true });
     await close(server);
   }
