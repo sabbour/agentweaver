@@ -194,7 +194,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
-| `workflow_generate` | Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. Returns YAML draft — not yet saved. Use workflow_save to persist. Publication requests fail with an unsupported_capability response; they are never converted to agent prompts. The agent can inspect the YAML before saving. |
+| `workflow_generate` | Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. Returns YAML draft — not yet saved. Use workflow_save to persist. Publication requests fail with an unsupported_capability response; they are never converted to agent prompts. Generated roles bind to confirmed team members; missing roles return workflow_team_binding_required with unresolved_roles. The agent can inspect the YAML before saving. |
 | `workflow_get` | Get the full definition of a single workflow by ID, including its nodes, edges, and trigger. MCP has no separate trigger-configure tool yet. |
 | `workflow_save` | Save a workflow YAML to the project workspace. This is the current MCP write path for trigger changes; there is no separate workflow_set_trigger tool. Validates and dry-run binds before saving. Returns the parsed workflow definition. |
 | `workflows_list` | List all discovered workflow definitions for a project, including their validation status, effective default, and any configured trigger. |

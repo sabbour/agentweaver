@@ -266,6 +266,10 @@ public static class WorkflowDefinitionEndpoints
                 if (candidate is null)
                     return Results.BadRequest(new { error = "unknown_workflow_id" });
 
+                var binding = WorkflowTeamBinding.Bind(project!, candidate);
+                if (!binding.IsResolved)
+                    return TeamBindingRequired(binding);
+
                 // Binder dry-run: a workflow may be loader-valid yet fail at runtime (e.g.
                 // agent-evaluation's fan_out/fan_in have no executor). Reject it as a default before it is
                 // ever selected for a run, with a 422 naming the runtime problem.
@@ -316,6 +320,10 @@ public static class WorkflowDefinitionEndpoints
                 var candidate = registry.Get(project!, workflowId)?.Definition;
                 if (candidate is null)
                     return Results.BadRequest(new { error = "unknown_workflow_id" });
+
+                var binding = WorkflowTeamBinding.Bind(project!, candidate);
+                if (!binding.IsResolved)
+                    return TeamBindingRequired(binding);
 
                 var validationErrors = RunWorkflowGraphBinder.GetBindabilityErrors(candidate);
                 if (validationErrors.Count > 0)
@@ -415,6 +423,10 @@ public static class WorkflowDefinitionEndpoints
 
             var definition = registry.Get(project!, workflowId)?.Definition;
             if (definition is null) return Results.NotFound();
+
+            var binding = WorkflowTeamBinding.Bind(project!, definition);
+            if (!binding.IsResolved)
+                return TeamBindingRequired(binding);
 
             var bindErrors = RunWorkflowGraphBinder.GetBindabilityErrors(definition);
             if (bindErrors.Count > 0)
@@ -538,6 +550,14 @@ public static class WorkflowDefinitionEndpoints
                 });
             }
 
+            var binding = WorkflowTeamBinding.Bind(project!, definition);
+            if (!binding.IsResolved)
+                return TeamBindingRequired(binding);
+            definition = binding.Workflow;
+            var persistedYaml = binding.WasBound
+                ? WorkflowDefinitionYamlSerializer.Serialize(definition)
+                : request.Yaml;
+
             // Step 5: Write to the project workspace.
             var workflowsDir = Path.Combine(project!.WorkingDirectory, ".agentweaver", "workflows");
             try
@@ -553,7 +573,7 @@ public static class WorkflowDefinitionEndpoints
                 if (!WorkspacePathGuard.TryResolveContainedPath(workspaceRoot, filePath, out var safePath))
                     return Results.BadRequest(new { error = "Invalid workflow id." });
 
-                await File.WriteAllTextAsync(safePath, request.Yaml, ct);
+                await File.WriteAllTextAsync(safePath, persistedYaml, ct);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -646,7 +666,7 @@ public static class WorkflowDefinitionEndpoints
 
             // FR-061: constrain generated nodes to the project's actual cast roles so the workflow is
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.
-            var teamRoles = TryReadTeamRoles(project!);
+            var teamRoles = WorkflowTeamBinding.ReadRoles(project!);
             var caller = httpContext.GetCaller();
             var baseWorkflowId = Normalize(request.BaseWorkflowId);
             var baseYaml = string.IsNullOrWhiteSpace(request.BaseYaml) ? null : request.BaseYaml;
@@ -827,6 +847,18 @@ public static class WorkflowDefinitionEndpoints
             return Results.NotFound();
         if (snapshot.Artifact is null)
         {
+            if (string.Equals(
+                    snapshot.Job.FailureCode,
+                    "workflow_team_binding_required",
+                    StringComparison.Ordinal))
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = snapshot.Job.FailureCode,
+                    unresolved_roles = ReadBindingRequirements(snapshot.Job),
+                });
+            }
+
             return Results.Conflict(new
             {
                 error = "workflow_generation_not_complete",
@@ -965,13 +997,42 @@ public static class WorkflowDefinitionEndpoints
         };
     }
 
-    private static WorkflowGenerationFailureDto ToWorkflowFailure(BlueprintGenerationJobRecord job) =>
-        new()
+    private static WorkflowGenerationFailureDto ToWorkflowFailure(BlueprintGenerationJobRecord job)
+    {
+        var bindingRequirements = string.Equals(
+                job.FailureCode,
+                "workflow_team_binding_required",
+                StringComparison.Ordinal)
+            ? ReadBindingRequirements(job)
+            : null;
+        return new WorkflowGenerationFailureDto
         {
             Code = job.FailureCode!,
-            Message = job.FailureMessage ?? "Workflow generation failed.",
+            Message = bindingRequirements is null
+                ? job.FailureMessage ?? "Workflow generation failed."
+                : "Generated workflow roles must be cast or mapped before the draft can be returned.",
             Retryable = job.FailureRetryable,
+            UnresolvedRoles = bindingRequirements,
         };
+    }
+
+    private static IReadOnlyList<WorkflowRoleRequirement> ReadBindingRequirements(
+        BlueprintGenerationJobRecord job)
+    {
+        if (string.IsNullOrWhiteSpace(job.FailureMessage))
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<IReadOnlyList<WorkflowRoleRequirement>>(
+                    job.FailureMessage)
+                ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
 
     private static string CreateWorkflowGenerationFingerprint(
         WorkflowGenerationJobPayload request,
@@ -996,28 +1057,12 @@ public static class WorkflowDefinitionEndpoints
             .ToLowerInvariant();
     }
 
-    /// <summary>Reads the project's cast role ids from its squad team, or null when none can be read.
-    /// Used to constrain generated workflow nodes to roles the project can cast (FR-061). Reserved
-    /// orchestration roles (Scribe, Work Monitor, Rai, Coordinator) are always present on every team's
-    /// squad file but must never be offered to the generator as an assignable domain role.</summary>
-    private static IReadOnlyList<string>? TryReadTeamRoles(Project project)
-    {
-        try
+    private static IResult TeamBindingRequired(WorkflowTeamBindingResult binding) =>
+        Results.UnprocessableEntity(new
         {
-            var team = new SquadReader(project.WorkingDirectory).ReadTeam();
-            if (team is null) return null;
-            var roles = team.Members
-                .Select(m => m.Role.Id)
-                .Where(r => !string.IsNullOrWhiteSpace(r) && !ReservedRoles.IsReserved(r))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            return roles.Count == 0 ? null : roles;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
+            error = "workflow_team_binding_required",
+            unresolved_roles = binding.UnresolvedRoles,
+        });
 
     /// <summary>Normalizes an incoming workflow id: trims and treats empty/whitespace as null (clear).</summary>
     private static string? Normalize(string? workflowId) =>
@@ -1132,6 +1177,11 @@ public static class WorkflowDefinitionEndpoints
         var load = WorkflowDefinitionLoader.Load(yaml, workflowId);
         if (!load.IsValid || load.Definition is null)
             return Results.BadRequest(new { error = load.Error ?? "Workflow validation failed.", warnings = load.Warnings });
+
+        var binding = WorkflowTeamBinding.Bind(project, load.Definition);
+        if (!binding.IsResolved)
+            return TeamBindingRequired(binding);
+        yaml = WorkflowDefinitionYamlSerializer.Serialize(binding.Workflow);
 
         try
         {

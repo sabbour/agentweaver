@@ -22,8 +22,8 @@ This document covers the server-side generation capability behind
 | `CopilotWorkflowGenerator` | Builds the prompt, resolves the effective generation provider via `GenerationModelProviderExecutor`, calls `IAgentRunner`, validates, and runs one correction pass. |
 | `WorkflowDefinitionLoader` | Validates the model output with the **same** schema/structural rules the runtime loader enforces. |
 | `RunWorkflowGraphBinder.ValidateBindable` | Dry-runs runtime binding after schema validation; rejects loadable but unrunnable node/edge combinations. |
-| `WorkflowDefinitionEndpoints` | Accepts durable generation jobs, resolves the project's cast roles, and exposes authorized status, result, cancellation, and retry endpoints. |
-| `BlueprintGenerationJobWorker` | Runs both Blueprint and workflow generation through the existing leased durable-job queue, with provider snapshots, bounded execution, and exactly-once artifact persistence. |
+| `WorkflowDefinitionEndpoints` | Accepts durable generation jobs, resolves the project's cast roles for the request, and exposes authorized status, result, cancellation, and retry endpoints. |
+| `BlueprintGenerationJobWorker` | Runs both Blueprint and workflow generation through the existing leased durable-job queue, binds generated worker nodes to confirmed cast members, and persists exactly one artifact only after binding succeeds. |
 
 All prompt construction, schema context, and LLM invocation live **server-side**
 (FR-057). The client sends a description plus project target-repository context
@@ -47,7 +47,10 @@ Poll `status_url`; a completed job exposes immutable YAML, workflow ID, version,
 retryable failure. Reusing the same `Idempotency-Key` with the identical request returns the same
 job; using it for different input returns `409`. A provider timeout becomes the canonical
 retryable `workflow_provider_timeout` failure instead of a disconnected request with ambiguous
-progress. The returned YAML remains an unsaved draft — the MCP server and Web UI use the same
+progress. Before artifact persistence, generated worker and peer-review nodes bind to confirmed
+cast members. An unmapped role fails the job with `workflow_team_binding_required` and structured
+`unresolved_roles`; `result_url` returns the same requirements with `422`, and no artifact is
+created. The returned YAML remains an unsaved draft — the MCP server and Web UI use the same
 server-side generation contract (FR-059), and project workspace persistence still requires an
 explicit save.
 

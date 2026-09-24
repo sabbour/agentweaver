@@ -306,6 +306,9 @@ public sealed record WorkflowGenerationFailureDto
     [JsonPropertyName("code")] public required string Code { get; init; }
     [JsonPropertyName("message")] public required string Message { get; init; }
     [JsonPropertyName("retryable")] public bool Retryable { get; init; }
+    [JsonPropertyName("unresolved_roles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<WorkflowRoleRequirement>? UnresolvedRoles { get; init; }
 }
 
 public sealed record WorkflowGenerationArtifactDto

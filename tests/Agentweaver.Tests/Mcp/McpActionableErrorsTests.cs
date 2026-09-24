@@ -302,6 +302,95 @@ public sealed class McpActionableErrorsTests
         calls.Should().Be(2);
     }
 
+    [Fact]
+    public async Task WorkflowGenerate_MissingTeamRole_PreservesStructuredRequirements()
+    {
+        var calls = 0;
+        var tools = new WorkflowTools(CreateApiClient((request, _) =>
+        {
+            calls++;
+            return request.RequestUri!.AbsolutePath switch
+            {
+                "/api/ai/execution-context" => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        ai_required = true,
+                        operation = "workflow_generation",
+                        phase = "prepared",
+                        execution_key = "opaque-provider-key",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
+                        effective_model_provider = new
+                        {
+                            state = "resolved",
+                            provider_kind = "github_copilot",
+                            resolution_scope = "project",
+                            provider_scope = "project",
+                            model_id = "gpt-5",
+                            provider_key = "provider-fingerprint",
+                        },
+                    }),
+                }),
+                "/api/projects/proj-456/workflows/generate" => Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.Accepted)
+                    {
+                        Content = JsonContent.Create(new
+                        {
+                            job_id = "job-123",
+                            status = "queued",
+                            status_url = "/api/projects/proj-456/workflows/generation-jobs/job-123",
+                            result_url = "/api/projects/proj-456/workflows/generation-jobs/job-123/result",
+                            retry_url = "/api/projects/proj-456/workflows/generation-jobs/job-123/retry",
+                            failure = (object?)null,
+                        }),
+                    }),
+                "/api/projects/proj-456/workflows/generation-jobs/job-123" => Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = JsonContent.Create(new
+                        {
+                            job_id = "job-123",
+                            status = "failed",
+                            status_url = "/api/projects/proj-456/workflows/generation-jobs/job-123",
+                            result_url = "/api/projects/proj-456/workflows/generation-jobs/job-123/result",
+                            retry_url = "/api/projects/proj-456/workflows/generation-jobs/job-123/retry",
+                            failure = new
+                            {
+                                code = "workflow_team_binding_required",
+                                message = "Generated workflow roles must be cast or mapped before the draft can be returned.",
+                                retryable = false,
+                                unresolved_roles = new[]
+                                {
+                                    new
+                                    {
+                                        nodeId = "worker",
+                                        role = "lead-researcher",
+                                        agent = (string?)null,
+                                        availableRoles = new[] { "backend-engineer" },
+                                    },
+                                },
+                            },
+                        }),
+                    }),
+                _ => throw new InvalidOperationException($"Unexpected request: {request.RequestUri}"),
+            };
+        }));
+
+        var act = () => tools.WorkflowGenerateAsync(
+            "proj-456",
+            "Create a role-bound workflow.",
+            ct: CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<McpApiException>();
+        ex.Which.StatusCode.Should().Be(422);
+        ex.Which.ApiErrorCode.Should().Be("workflow_team_binding_required");
+        using var payload = JsonDocument.Parse(ex.Which.Message);
+        payload.RootElement.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
+        payload.RootElement.GetProperty("unresolved_roles")[0]
+            .GetProperty("nodeId").GetString().Should().Be("worker");
+        calls.Should().Be(3);
+    }
+
 
     private static ProjectTools CreateProjectTools(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
         new(CreateApiClient(handler));
