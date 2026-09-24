@@ -58,6 +58,20 @@ const reachabilityFixture = `<!doctype html>
     </main>
   </body>
 </html>`;
+const rootOverflowFixture = (overflowY) => `<!doctype html>
+<html style="overflow-y: ${overflowY}">
+  <head>
+    <style>
+      html, body { margin: 0; }
+      main { height: 1600px; }
+    </style>
+  </head>
+  <body>
+    <nav data-testid="app-navigation-menu">Runs</nav>
+    <button data-testid="run-focus-toggle" aria-label="Enter focus mode" aria-pressed="false">Focus</button>
+    <main data-testid="run-operator-console">Run content</main>
+  </body>
+</html>`;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 async function listen(server) {
@@ -120,11 +134,11 @@ test('desktop, constrained-height, and mobile viewport evidence is deterministic
     assert.equal(mobile.overflow.horizontal, false);
     assert.equal(mobile.responsive.focusMode.active, true);
     assert.equal(mobile.responsive.navigation.scroll.attempted, true);
-    assert.equal(mobile.responsive.navigation.visibility.intersectsViewport, true);
+    assert.equal(mobile.responsive.navigation.inViewport, true);
     assert.equal(mobile.responsive.focusMode.scroll.attempted, true);
-    assert.equal(mobile.responsive.focusMode.visibility.unclippedByAncestors, true);
+    assert.deepEqual(mobile.responsive.focusMode.clippedBy, []);
     assert.equal(mobile.responsive.content.scroll.attempted, true);
-    assert.equal(mobile.responsive.content.visibility.intersectsViewport, true);
+    assert.equal(mobile.responsive.content.inViewport, true);
     assert.deepEqual(
       mobile.assertions.map((assertion) => assertion.category),
       ['navigation-reachability', 'overflow', 'overflow', 'focus-mode', 'content-visibility'],
@@ -181,9 +195,9 @@ test('target-specific scrolling distinguishes reachable and nested-clipped conte
 
     assert.equal(reachable.responsive.content.scroll.attempted, true);
     assert.equal(reachable.responsive.content.scroll.changed, true);
-    assert.equal(reachable.responsive.content.scroll.before.intersectsViewport, false);
-    assert.equal(reachable.responsive.content.scroll.after.intersectsViewport, true);
-    assert.equal(reachable.responsive.content.visibility.unclippedByAncestors, true);
+    assert.equal(reachable.responsive.content.scroll.startedInViewport, false);
+    assert.deepEqual(reachable.responsive.content.scroll.changedContainers.map((item) => item.label), ['document']);
+    assert.deepEqual(reachable.responsive.content.clippedBy, []);
     assert.equal(reachable.responsive.content.reachable, true);
     assert.equal(
       reachable.assertions.find((assertion) => assertion.category === 'content-visibility').observed,
@@ -191,14 +205,75 @@ test('target-specific scrolling distinguishes reachable and nested-clipped conte
     );
 
     assert.equal(clipped.responsive.content.scroll.attempted, true);
-    assert.equal(clipped.responsive.content.visibility.intersectsViewport, true);
-    assert.equal(clipped.responsive.content.visibility.unclippedByAncestors, false);
+    assert.equal(clipped.responsive.content.inViewport, true);
     assert.equal(clipped.responsive.content.reachable, false);
-    assert.equal(clipped.responsive.content.visibility.clippedBy[0].testId, 'clipped-container');
+    assert.equal(clipped.responsive.content.clippedBy[0].testId, 'clipped-container');
+    assert.equal('containers' in clipped.responsive.content.scroll, false);
+    assert.equal('clippingAncestors' in clipped.responsive.content, false);
     assert.equal(
       clipped.assertions.find((assertion) => assertion.category === 'content-visibility').observed,
       false,
     );
+  } finally {
+    await runtime.close();
+    await rm(directory, { recursive: true, force: true });
+    await close(server);
+  }
+});
+
+test('root vertical overflow requires a reversible user-scrollable overflow mode', { timeout: 180_000 }, async () => {
+  const server = createServer((request, response) => {
+    const mode = new URL(request.url, 'http://fixture.test').pathname.slice(1);
+    const html = rootOverflowFixture(mode);
+    response.writeHead(200, {
+      connection: 'close',
+      'content-length': Buffer.byteLength(html),
+      'content-type': 'text/html; charset=utf-8',
+    });
+    response.end(html);
+  });
+  const port = await listen(server);
+  const runtime = await openBrowserSession({
+    baseUrl: `http://127.0.0.1:${port}`,
+    headless: true,
+  }, { chromium });
+  const directory = path.join(HERE, `.responsive-${randomUUID()}`);
+  const capture = attachPageCapture(runtime.page);
+  const session = { persona: { text: 'Test persona' } };
+  const execute = (eventId, args) => executeUiAction({
+    runtime,
+    capture,
+    session,
+    args,
+    eventId,
+    transcriptDirectory: directory,
+  });
+  const overflowAssertion = (step) => step.assertions.find(
+    (assertion) => assertion.target === 'vertical-overflow-scroll-reachable',
+  );
+
+  try {
+    const results = {};
+    for (const [index, mode] of ['auto', 'hidden', 'clip'].entries()) {
+      await runtime.goto(`/${mode}`);
+      results[mode] = await execute(index + 1, {
+        _: ['viewport'], width: '800', height: '480',
+      });
+    }
+
+    assert.equal(results.auto.overflow.vertical, true);
+    assert.equal(results.auto.overflow.verticalScroll.scrollableMode, true);
+    assert.equal(results.auto.overflow.verticalScroll.changed, true);
+    assert.equal(results.auto.overflow.verticalScroll.restored, true);
+    assert.equal(overflowAssertion(results.auto).observed, true);
+
+    for (const mode of ['hidden', 'clip']) {
+      assert.equal(results[mode].overflow.vertical, true);
+      assert.equal(results[mode].overflow.verticalScroll.overflowY, mode);
+      assert.equal(results[mode].overflow.verticalScroll.scrollableMode, false);
+      assert.equal(results[mode].overflow.verticalScroll.restored, true);
+      assert.equal(overflowAssertion(results[mode]).observed, false);
+    }
   } finally {
     await runtime.close();
     await rm(directory, { recursive: true, force: true });
