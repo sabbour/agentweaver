@@ -81,6 +81,8 @@ GET /api/projects/{projectId}/board | PlatformOrMcp
 GET /api/projects/{projectId}/team/sync | PlatformOrMcp
 GET /api/projects/{projectId}/workflow-stages | PlatformOrMcp
 GET /api/projects/{projectId}/workflows | PlatformOrMcp
+GET /api/projects/{projectId}/workflows/generation-jobs/{jobId} | PlatformOrMcp
+GET /api/projects/{projectId}/workflows/generation-jobs/{jobId}/result | PlatformOrMcp
 GET /api/projects/{projectId}/workflows/{workflowId} | PlatformOrMcp
 GET /api/projects/{projectId}/workflows/{workflowId}/graph | PlatformOrMcp
 GET /api/projects/{projectId}/workflows/{workflowId}/trigger | PlatformOrMcp
@@ -201,6 +203,8 @@ POST /api/projects/{projectId}/backlog/tasks/{taskId}/reorder | PlatformOrMcp
 POST /api/projects/{projectId}/team/sync | PlatformOrMcp
 POST /api/projects/{projectId}/workflow-events | PlatformOrMcp
 POST /api/projects/{projectId}/workflows/generate | PlatformOrMcp
+POST /api/projects/{projectId}/workflows/generation-jobs/{jobId}/cancel | PlatformOrMcp
+POST /api/projects/{projectId}/workflows/generation-jobs/{jobId}/retry | PlatformOrMcp
 POST /api/projects/{projectId}/workflows/sync | PlatformOrMcp
 POST /api/projects/{projectId}/workflows/{workflowId}/run | PlatformOrMcp
 POST /api/runs | PlatformOrMcp

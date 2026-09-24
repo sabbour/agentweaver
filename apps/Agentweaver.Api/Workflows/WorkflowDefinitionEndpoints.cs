@@ -629,11 +629,6 @@ public static class WorkflowDefinitionEndpoints
 
             if (request is null || string.IsNullOrWhiteSpace(request.Description))
                 return Results.BadRequest(new { error = "description is required." });
-            var idempotencyKey = httpContext.Request.Headers["Idempotency-Key"].ToString().Trim();
-            if (string.IsNullOrWhiteSpace(idempotencyKey))
-                return Results.BadRequest(new { error = "idempotency_key_required", message = "Idempotency-Key is required." });
-            if (idempotencyKey.Length > 256)
-                return Results.BadRequest(new { error = "idempotency_key_invalid", message = "Idempotency-Key must be 256 characters or fewer." });
 
             // FR-061: constrain generated nodes to the project's actual cast roles so the workflow is
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.
@@ -680,6 +675,12 @@ public static class WorkflowDefinitionEndpoints
                     ct);
                 baseYaml ??= WorkflowDefinitionYamlSerializer.Serialize(baseWorkflow.Definition);
             }
+
+            var idempotencyKey = httpContext.Request.Headers["Idempotency-Key"].ToString().Trim();
+            if (string.IsNullOrWhiteSpace(idempotencyKey))
+                return Results.BadRequest(new { error = "idempotency_key_required", message = "Idempotency-Key is required." });
+            if (idempotencyKey.Length > 256)
+                return Results.BadRequest(new { error = "idempotency_key_invalid", message = "Idempotency-Key must be 256 characters or fewer." });
 
             using var execution = await EndpointHelpers.BeginAiExecutionAsync(
                 httpContext,
