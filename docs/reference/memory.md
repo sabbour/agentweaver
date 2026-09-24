@@ -103,6 +103,23 @@ Rows that existed before provenance tracking migrate as `SourceKind = legacy` an
 `TrustState = legacy`. They remain queryable but are excluded from prompt compilation
 until a project owner or verified Coordinator explicitly approves them.
 
+### Exact-write convergence
+
+Memory and active-decision writes are idempotent at the database boundary. Repeating the
+same logical write, including concurrent requests, resolves to one durable record and one
+stable id. The first request returns `201 Created`; retries that resolve the existing
+record return `200 OK`. Exports therefore contain one entry for that identity.
+
+Identity includes the project, author/agent, content fields, normalized tags, and source
+provenance. Memory identity also includes its session, type, and importance. Decision
+identity includes its type, status, and supersession link. Approval metadata and
+timestamps do not create a new identity, so separate identical inbox entries and Scribe
+retries converge on the same promoted decision.
+
+Superseding or archiving a decision changes its identity. A later write may therefore
+create a new active version with the same content without reviving or overwriting the
+historical record.
+
 ### `AgentMemory`
 
 Per-agent long-term memory. New entries are written through `record_memory` and retain

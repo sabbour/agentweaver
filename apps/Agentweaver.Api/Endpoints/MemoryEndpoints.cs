@@ -155,17 +155,21 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
         CreatedAt = now,
         UpdatedAt = now,
     };
-    memoryDb.AgentMemory.Add(memory);
-    await memoryDb.SaveChangesAsync(ct);
+    var (storedMemory, created) = await MemoryWriteDeduplicator
+        .GetOrCreateMemoryAsync(memoryDb, memory, ct);
     // The database write is the durable record. Filesystem export rewrites the full project
     // memory snapshot and may target a remote workspace volume, so it must not delay this
     // latency-sensitive agent tool call. Scribe invokes /memory/export explicitly at run end.
-    return Results.Created($"/api/projects/{id}/agents/{name}/memory/{memory.Id}", new
+    var response = new
     {
-        memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
-        memory.SourceKind, memory.SourceIdentity, memory.SourceRunId, memory.TrustState,
-        created_at = memory.CreatedAt,
-    });
+        storedMemory.Id, storedMemory.AgentName, storedMemory.SessionId, storedMemory.Type,
+        storedMemory.Importance, storedMemory.Content, storedMemory.Tags, storedMemory.SourceKind,
+        storedMemory.SourceIdentity, storedMemory.SourceRunId, storedMemory.TrustState,
+        created_at = storedMemory.CreatedAt,
+    };
+    return created
+        ? Results.Created($"/api/projects/{id}/agents/{name}/memory/{storedMemory.Id}", response)
+        : Results.Ok(response);
 });
 
 // POST /api/projects/{id}/agents/{name}/memory/{memId}/promote

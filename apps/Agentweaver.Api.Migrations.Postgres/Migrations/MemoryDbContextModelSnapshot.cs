@@ -365,6 +365,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("IdentityKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("Importance")
                         .IsRequired()
                         .HasColumnType("text");
@@ -405,6 +409,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("IdentityKey")
+                        .IsUnique();
 
                     b.HasIndex("ProjectId", "AgentName");
 
@@ -1138,6 +1145,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("IdentityKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("ProjectId")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1185,6 +1196,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("IdentityKey")
+                        .IsUnique();
 
                     b.HasIndex("SupersededById");
 

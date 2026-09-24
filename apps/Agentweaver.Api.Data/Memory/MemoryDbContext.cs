@@ -88,6 +88,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.UseOpenIddict();
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.Status });
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.AgentName });
+        model.Entity<Decision>().Property(d => d.IdentityKey).HasMaxLength(64);
+        model.Entity<Decision>().HasIndex(d => d.IdentityKey).IsUnique();
         model.Entity<Decision>().Property(d => d.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<Decision>().Property(d => d.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
         model.Entity<Decision>()
@@ -105,6 +107,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .IsRequired(false);
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.AgentName });
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.Type });
+        model.Entity<AgentMemory>().Property(m => m.IdentityKey).HasMaxLength(64);
+        model.Entity<AgentMemory>().HasIndex(m => m.IdentityKey).IsUnique();
         model.Entity<AgentMemory>().Property(m => m.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<AgentMemory>().Property(m => m.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
         model.Entity<RunAuthorshipCapability>().ToTable("run_authorship_capabilities");

@@ -57,6 +57,35 @@ public sealed class ScribeHousekeepingServiceTests
     }
 
     [Fact]
+    public async Task DuplicateInboxEntriesPromoteToOneDecisionAcrossScribeRetries()
+    {
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = CreateContext(connection);
+        await db.Database.EnsureCreatedAsync();
+        var run = Seed(db, "worker");
+        var duplicate = Entry(run, "learning", "learning-retry");
+        duplicate.Title = "learning";
+        duplicate.Content = "learning";
+        db.DecisionInbox.Add(duplicate);
+        await db.SaveChangesAsync();
+        var service = new ScribeHousekeepingService(
+            db, projectStore: null, NullLogger<ScribeHousekeepingService>.Instance);
+        var request = new ScribeHousekeepingRequest(run, ScribeAuthority.Worker, "completed");
+
+        await service.RunAsync(request, CancellationToken.None);
+        await service.RunAsync(request, CancellationToken.None);
+
+        (await db.Decisions.CountAsync()).Should().Be(1);
+        var entries = await db.DecisionInbox
+            .Where(entry => entry.Type == "learning")
+            .OrderBy(entry => entry.Id)
+            .ToListAsync();
+        entries.Should().HaveCount(2).And.OnlyContain(entry => entry.Status == "merged");
+        entries.Select(entry => entry.DecisionId).Distinct().Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task ConcurrentRecovery_KeepsDecisionAndSessionUnique()
     {
         var path = Path.Combine(Path.GetTempPath(), $"scribe-{Guid.NewGuid():N}.db");
