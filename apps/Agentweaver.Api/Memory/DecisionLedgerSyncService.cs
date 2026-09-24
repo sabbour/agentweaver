@@ -93,6 +93,8 @@ public sealed class DecisionLedgerSyncService(
                 var promoted = 0;
                 foreach (var entry in reconciled.Entries.Where(entry => entry.Status == "pending"))
                 {
+                    if (entry.SourceKind == MemorySourceKinds.Legacy)
+                        continue;
                     var promotion = await DecisionPromotion.PromoteEntryAsync(
                         memoryDb,
                         project.Id.ToString(),

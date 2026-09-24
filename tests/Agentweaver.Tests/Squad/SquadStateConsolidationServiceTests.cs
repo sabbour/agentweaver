@@ -81,11 +81,10 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
     }
 
     // =========================================================================
-    // A tick appends every inbox entry into decisions.md, clears the inbox, and
-    // leaves the checked-out working tree clean.
+    // Repository-controlled Markdown is imported for review, never approved by a background tick.
     // =========================================================================
     [Fact]
-    public async Task RunTick_AppendsInboxEntries_ClearsInbox_AndKeepsWorkingTreeClean()
+    public async Task RunTick_ImportsRepositoryEntriesAsPendingReview_AndKeepsWorkingTreeClean()
     {
         var repoPath = CreateSquadRepo(
             decisions: "# Squad Decisions\n\n## existing\n",
@@ -102,29 +101,27 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
         using var repo = new Repository(repoPath);
         var decisions = ReadTreeText(repo, ".squad/decisions.md");
 
-        decisions.Should().Contain("Externalized Squad state.");
-        decisions.Should().Contain("UI polish decision.");
-        decisions.Should().Contain("## existing", "existing ledger content must be preserved");
-        (await _memoryDb.Decisions.CountAsync()).Should().Be(3);
+        decisions.Should().Be("# Team Decisions\n\n");
+        (await _memoryDb.Decisions.CountAsync()).Should().Be(0);
+        (await _memoryDb.DecisionInbox.CountAsync(entry => entry.Status == "pending")).Should().Be(3);
 
-        // Inbox entries removed from the committed tree.
-        repo.Head.Tip.Tree[".squad/decisions/inbox/dozer-first-decision.md"].Should().BeNull();
-        repo.Head.Tip.Tree[".squad/decisions/inbox/trinity-second-decision.md"].Should().BeNull();
+        // Repository entries remain in the review inbox until an Owner or Coordinator promotes them.
+        repo.Head.Tip.Tree[".squad/decisions/inbox/dozer-first-decision.md"].Should().NotBeNull();
+        repo.Head.Tip.Tree[".squad/decisions/inbox/trinity-second-decision.md"].Should().NotBeNull();
 
         // Working tree reconciled (no dangling staged/untracked changes for the touched paths).
         var status = repo.RetrieveStatus(new StatusOptions { IncludeUntracked = true, RecurseUntrackedDirs = true });
         status.IsDirty.Should().BeFalse(
             "the consolidation commit must reconcile the checked-out working tree so git status is clean");
 
-        // The inbox files are gone from disk too.
-        File.Exists(Path.Combine(repoPath, ".squad", "decisions", "inbox", "dozer-first-decision.md")).Should().BeFalse();
+        File.Exists(Path.Combine(repoPath, ".squad", "decisions", "inbox", "dozer-first-decision.md")).Should().BeTrue();
     }
 
     // =========================================================================
-    // Re-running consolidation is a no-op: no duplicated content, nothing to do.
+    // Re-running consolidation must not promote repository content without approval.
     // =========================================================================
     [Fact]
-    public async Task Consolidate_IsIdempotent_SecondPassIsNoOp()
+    public async Task Consolidate_LeavesRepositoryInboxPendingAcrossRepeatedPasses()
     {
         var repoPath = CreateSquadRepo(
             decisions: "# Squad Decisions\n",
@@ -133,21 +130,19 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
         var project = await SeedActiveProjectAsync(repoPath);
 
         var firstAppended = await _service.ConsolidateProjectAsync(project, CancellationToken.None);
-        firstAppended.Should().Be(1);
+        firstAppended.Should().Be(0);
 
         using (var repo = new Repository(repoPath))
         {
-            var occurrences = CountOccurrences(ReadTreeText(repo, ".squad/decisions.md"), "Only-once content.");
-            occurrences.Should().Be(1);
+            ReadTreeText(repo, ".squad/decisions.md").Should().NotContain("Only-once content.");
         }
 
         var secondAppended = await _service.ConsolidateProjectAsync(project, CancellationToken.None);
-        secondAppended.Should().Be(0, "the inbox is already drained; a re-tick appends nothing");
+        secondAppended.Should().Be(0);
 
         using (var repo = new Repository(repoPath))
         {
-            var occurrences = CountOccurrences(ReadTreeText(repo, ".squad/decisions.md"), "Only-once content.");
-            occurrences.Should().Be(1, "content must never be duplicated across ticks");
+            ReadTreeText(repo, ".squad/decisions.md").Should().NotContain("Only-once content.");
         }
     }
 
@@ -166,7 +161,7 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task ConcurrentScribeAndConsolidation_PreserveAcceptedDecisionsAndConverge()
+    public async Task ConcurrentScribeAndConsolidation_KeepRepositoryContentPendingForReview()
     {
         var repoPath = CreateSquadRepo(
             decisions: "# Squad Decisions\n\n## existing\n\nExisting accepted decision.\n",
@@ -204,17 +199,13 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
         var decisions = await verify.Decisions
             .Where(decision => decision.ProjectId == project.Id.ToString())
             .ToListAsync();
-        decisions.Should().HaveCount(2);
-        decisions.Should().Contain(decision => decision.Content.Contains(
-            "Existing accepted decision.", StringComparison.Ordinal));
-        decisions.Should().Contain(decision => decision.Content.Contains(
-            "Preserve this accepted decision.", StringComparison.Ordinal));
+        decisions.Should().BeEmpty();
+        (await verify.DecisionInbox.CountAsync(entry => entry.Status == "pending")).Should().Be(2);
 
         using var repo = new Repository(repoPath);
         var ledger = ReadTreeText(repo, ".squad/decisions.md");
-        ledger.Should().Contain("Existing accepted decision.");
-        ledger.Should().Contain("Preserve this accepted decision.");
-        repo.Head.Tip.Tree[".squad/decisions/inbox/scribe-race.md"].Should().BeNull();
+        ledger.Should().Be("# Team Decisions\n\n");
+        repo.Head.Tip.Tree[".squad/decisions/inbox/scribe-race.md"].Should().NotBeNull();
     }
 
     [Fact]
@@ -252,6 +243,78 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
             .Should().Contain("Repository content");
         using var repo = new Repository(repoPath);
         ReadTreeText(repo, ".squad/decisions.md").Should().NotContain("Database content");
+    }
+
+    [Fact]
+    public async Task Refresh_ReplacesExporterOwnedStaleMirrorAfterDatabaseDecisionUpdate()
+    {
+        var repoPath = CreateSquadRepo("# Team Decisions\n", new());
+        var project = await SeedActiveProjectAsync(repoPath);
+        var now = DateTimeOffset.UtcNow;
+        var decision = new Decision
+        {
+            ProjectId = project.Id.ToString(),
+            AgentName = "owner",
+            Type = "technical",
+            Status = "active",
+            Title = "Stable identity",
+            Content = "original content",
+            SourceKind = MemorySourceKinds.Human,
+            SourceIdentity = "owner",
+            TrustState = MemoryTrustStates.Approved,
+            ApprovedBy = "owner",
+            ApprovedAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _memoryDb.Decisions.Add(decision);
+        await _memoryDb.SaveChangesAsync();
+        var sync = new DecisionLedgerSyncService(_memoryDb, _mergeLock, NullLogger<DecisionLedgerSyncService>.Instance);
+        await sync.RefreshAsync(project.Id.ToString(), repoPath, CancellationToken.None);
+
+        decision.Content = "database updated content";
+        decision.UpdatedAt = DateTimeOffset.UtcNow;
+        await _memoryDb.SaveChangesAsync();
+        await sync.RefreshAsync(project.Id.ToString(), repoPath, CancellationToken.None);
+
+        File.ReadAllText(Path.Combine(repoPath, ".squad", "decisions.md"))
+            .Should().Contain("database updated content")
+            .And.NotContain("original content");
+    }
+
+    [Fact]
+    public async Task Refresh_ReportsModifiedExporterOwnedMirrorWithoutOverwritingIt()
+    {
+        var repoPath = CreateSquadRepo("# Team Decisions\n", new());
+        var project = await SeedActiveProjectAsync(repoPath);
+        var now = DateTimeOffset.UtcNow;
+        _memoryDb.Decisions.Add(new Decision
+        {
+            ProjectId = project.Id.ToString(),
+            AgentName = "owner",
+            Type = "technical",
+            Status = "active",
+            Title = "Stable identity",
+            Content = "canonical content",
+            SourceKind = MemorySourceKinds.Human,
+            SourceIdentity = "owner",
+            TrustState = MemoryTrustStates.Approved,
+            ApprovedBy = "owner",
+            ApprovedAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _memoryDb.SaveChangesAsync();
+        var sync = new DecisionLedgerSyncService(_memoryDb, _mergeLock, NullLogger<DecisionLedgerSyncService>.Instance);
+        await sync.RefreshAsync(project.Id.ToString(), repoPath, CancellationToken.None);
+        var ledgerPath = Path.Combine(repoPath, ".squad", "decisions.md");
+        File.WriteAllText(ledgerPath, File.ReadAllText(ledgerPath).Replace(
+            "canonical content", "externally modified content", StringComparison.Ordinal));
+
+        var refresh = () => sync.RefreshAsync(project.Id.ToString(), repoPath, CancellationToken.None);
+
+        await refresh.Should().ThrowAsync<MemoryLedgerExporter.DecisionLedgerConflictException>();
+        File.ReadAllText(ledgerPath).Should().Contain("externally modified content");
     }
 
     // -------------------------------------------------------------------------

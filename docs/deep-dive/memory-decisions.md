@@ -86,12 +86,13 @@ interoperability mirror:
 This mirror makes memory inspectable and git-friendly without making markdown parsing the primary consistency mechanism.
 
 All canonical sync paths use one ownership contract. API import/export, scheduled inbox
-consolidation, and Scribe acquire the same repository lock, reconcile repository-only accepted
-decisions and inbox entries into the database, then regenerate and optionally commit the mirror.
-Matching reruns are idempotent. If a Markdown entry and a database row use the same identity but
-have different content, synchronization reports `decision_ledger_conflict` and leaves both sources
-unchanged instead of choosing a winner. This preserves accepted decisions when older repositories
-already contain Markdown-only ledger entries while keeping the database authoritative afterward.
+consolidation, and Scribe acquire the same repository lock, then regenerate and optionally commit
+the mirror. Each exported decision has an exporter-owned record id and content hash, so headings
+inside a decision body are content rather than record boundaries. A valid older exported record is
+recognized as a stale mirror and regenerated from the database; a changed marked record reports
+`decision_ledger_conflict` and leaves both sources unchanged. Repository-only Markdown is imported
+as a pending inbox item for Owner or Coordinator review, never as an active approved decision.
+Inbox and ledger scans reject symbolic links and reparse points before reading them.
 
 ## Why a shared ledger?
 

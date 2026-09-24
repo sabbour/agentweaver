@@ -79,7 +79,7 @@ public static class MemoryLedgerExporter
         var exporter = new SquadMemoryExporter(targetDirectory);
         var files = await exporter.ExportAsync(
             decisions.Select(d => new DecisionExportDto(
-                d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList(),
+                d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList(),
             inbox.Select(e => new InboxExportDto(
                 e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale)).ToList(),
             memories.Select(m => new MemoryExportDto(
@@ -168,18 +168,21 @@ public static class MemoryLedgerExporter
     {
         var candidates = new SquadMemoryImporter(targetDirectory).ScanAcceptedDecisions();
         var existing = await memoryDb.Decisions
-            .Where(decision => decision.ProjectId == projectId
-                            && decision.TrustState == MemoryTrustStates.Approved)
-            .ToListAsync(ct).ConfigureAwait(false);
+            .Where(decision => decision.ProjectId == projectId)
+            .ToDictionaryAsync(decision => decision.Id, ct)
+            .ConfigureAwait(false);
         var conflicts = new List<string>();
         foreach (var candidate in candidates)
         {
-            var sameTitle = existing
-                .Where(decision => string.Equals(
-                    decision.Title, candidate.Title, StringComparison.Ordinal))
-                .ToList();
-            if (sameTitle.Count > 0 && sameTitle.All(decision => !Same(candidate, decision)))
-                conflicts.Add($"{candidate.Title}: Markdown and DB decisions have different content");
+            if (!candidate.IsExporterOwned)
+                continue;
+            if (candidate.RecordId is not { } recordId || !existing.TryGetValue(recordId, out var stored))
+            {
+                conflicts.Add($"{candidate.Title}: Markdown references an unknown exporter decision record");
+                continue;
+            }
+            if (!string.Equals(candidate.ContentHash, Hash(candidate), StringComparison.Ordinal))
+                conflicts.Add($"{candidate.Title}: exporter-owned Markdown record was modified outside Agentweaver");
         }
 
         if (conflicts.Count > 0)
@@ -188,36 +191,36 @@ public static class MemoryLedgerExporter
         var imported = 0;
         foreach (var candidate in candidates)
         {
-            if (existing.Any(decision => Same(candidate, decision)))
+            if (candidate.IsExporterOwned)
                 continue;
 
             var now = DateTimeOffset.UtcNow;
-            var decision = new Decision
+            var slug = $"repository-ledger-{Hash(candidate.Content)[..16]}";
+            var existingInbox = await memoryDb.DecisionInbox
+                .FirstOrDefaultAsync(entry => entry.ProjectId == projectId && entry.Slug == slug, ct)
+                .ConfigureAwait(false);
+            if (existingInbox is not null)
+                continue;
+            memoryDb.DecisionInbox.Add(new DecisionInboxEntry
             {
                 ProjectId = projectId,
                 AgentName = candidate.AgentName,
+                Slug = slug,
                 Type = candidate.Type,
-                Status = "active",
+                Status = "pending",
                 Title = candidate.Title,
                 Content = candidate.Content,
                 Rationale = candidate.Rationale,
                 SourceKind = MemorySourceKinds.Legacy,
                 SourceIdentity = "repository:.squad/decisions.md",
-                TrustState = MemoryTrustStates.Approved,
-                ApprovedBy = "repository:.squad/decisions.md",
-                ApprovedAt = now,
                 CreatedAt = now,
                 UpdatedAt = now,
-            };
-            var (_, created) = await MemoryWriteDeduplicator
-                .GetOrCreateDecisionAsync(memoryDb, decision, ct).ConfigureAwait(false);
-            if (created)
-            {
-                existing.Add(decision);
-                imported++;
-            }
+            });
+            imported++;
         }
 
+        if (imported > 0)
+            await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
         return new AcceptedReconcileResult(imported);
     }
 
@@ -404,10 +407,13 @@ public static class MemoryLedgerExporter
         && string.Equals(candidate.Content, stored.Content, StringComparison.Ordinal)
         && string.Equals(candidate.Rationale, stored.Rationale, StringComparison.Ordinal);
 
-    private static bool Same(DecisionImportDto candidate, Decision stored) =>
-        string.Equals(candidate.AgentName, stored.AgentName, StringComparison.Ordinal)
-        && string.Equals(candidate.Type, stored.Type, StringComparison.Ordinal)
-        && string.Equals(candidate.Title, stored.Title, StringComparison.Ordinal)
-        && string.Equals(candidate.Content, stored.Content, StringComparison.Ordinal)
-        && string.Equals(candidate.Rationale, stored.Rationale, StringComparison.Ordinal);
+    private static string Hash(DecisionImportDto decision) =>
+        Hash(string.Join("\n", decision.AgentName, decision.Type, decision.Title, decision.Content, decision.Rationale ?? ""));
+
+    private static string Hash(Decision decision) =>
+        Hash(string.Join("\n", decision.AgentName, decision.Type, decision.Title, decision.Content, decision.Rationale ?? ""));
+
+    private static string Hash(string content) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 }
