@@ -498,6 +498,18 @@ public sealed class BlueprintGenerationJobWorker(
         try
         {
             var result = await execution.ConfigureAwait(false);
+            if (result.UnresolvedRoles is { Count: > 0 })
+            {
+                _ = await store.FailAsync(
+                    snapshot.Job.JobId,
+                    leaseOwner,
+                    "workflow_team_binding_required",
+                    JsonSerializer.Serialize(result.UnresolvedRoles),
+                    retryable: false,
+                    ct).ConfigureAwait(false);
+                return true;
+            }
+
             if (result.Workflow is not null)
             {
                 _ = await store.CompleteWorkflowAsync(
@@ -628,7 +640,8 @@ public sealed class BlueprintGenerationJobWorker(
     private sealed record ClaimedGenerationResult(
         BlueprintGenerationResult? Blueprint,
         WorkflowGenerationResult? Workflow,
-        WorkflowGenerationJobPayload? WorkflowRequest);
+        WorkflowGenerationJobPayload? WorkflowRequest,
+        IReadOnlyList<WorkflowRoleRequirement>? UnresolvedRoles = null);
 
     private static async Task<ClaimedGenerationResult> ExecuteClaimedAsync(
         IServiceProvider services,
@@ -665,7 +678,25 @@ public sealed class BlueprintGenerationJobWorker(
                     workflowRequest.GenerationModel,
                     workflowRequest.ContentOnly),
                 ct).ConfigureAwait(false);
-            return new(null, result, workflowRequest);
+            var projects = services.GetRequiredService<IProjectStore>();
+            var project = projectId is null
+                ? null
+                : await projects.GetAsync(projectId.Value, ct).ConfigureAwait(false);
+            if (project is null)
+                throw new InvalidOperationException("Workflow generation project was not found.");
+
+            var binding = WorkflowTeamBinding.Bind(project, result.Workflow);
+            if (!binding.IsResolved)
+                return new(null, null, workflowRequest, binding.UnresolvedRoles);
+
+            return new(
+                null,
+                result with
+                {
+                    Workflow = binding.Workflow,
+                    GeneratedYaml = WorkflowDefinitionYamlSerializer.Serialize(binding.Workflow),
+                },
+                workflowRequest);
         }
 
         var blueprints = services.GetRequiredService<BlueprintService>();

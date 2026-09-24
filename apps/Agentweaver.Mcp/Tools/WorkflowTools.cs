@@ -8,7 +8,8 @@ namespace Agentweaver.Mcp.Tools;
 internal sealed record WorkflowGenerationFailure(
     [property: JsonPropertyName("code")] string Code,
     [property: JsonPropertyName("message")] string Message,
-    [property: JsonPropertyName("retryable")] bool Retryable);
+    [property: JsonPropertyName("retryable")] bool Retryable,
+    [property: JsonPropertyName("unresolved_roles")] JsonElement? UnresolvedRoles);
 
 internal sealed record WorkflowGenerationJobResponse(
     [property: JsonPropertyName("job_id")] string JobId,
@@ -73,6 +74,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     [McpServerTool(Name = "workflow_generate"), Description(
         "Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. " +
         "Returns YAML draft — not yet saved. Use workflow_save to persist. Publication requests fail with an unsupported_capability response; they are never converted to agent prompts. " +
+        "Generated roles bind to confirmed team members; missing roles return workflow_team_binding_required with unresolved_roles. " +
         "The agent can inspect the YAML before saving.")]
     public async Task<string> WorkflowGenerateAsync(
         [Description("Project ID")] string project_id,
@@ -103,12 +105,28 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
             }
             if (job.Status != "completed")
             {
+                var failure = job.Failure;
+                if (string.Equals(
+                        failure?.Code,
+                        "workflow_team_binding_required",
+                        StringComparison.Ordinal)
+                    && failure is not null)
+                {
+                    throw new McpApiException(
+                        422,
+                        failure.Message,
+                        job.StatusUrl,
+                        failure.Code,
+                        "Cast the missing roles or map the workflow to confirmed team members, then retry.",
+                        failure.UnresolvedRoles);
+                }
+
                 throw new McpApiException(
                     503,
-                    $"{job.Failure?.Message ?? "Workflow generation failed."} Job {job.JobId}; retry via {job.RetryUrl}.",
+                    $"{failure?.Message ?? "Workflow generation failed."} Job {job.JobId}; retry via {job.RetryUrl}.",
                     job.StatusUrl,
-                    job.Failure?.Code,
-                    job.Failure?.Retryable == true ? "Retry the durable generation job." : null);
+                    failure?.Code,
+                    failure?.Retryable == true ? "Retry the durable generation job." : null);
             }
             var result = await api.GetAsync<JsonElement>(job.ResultUrl, ct).ConfigureAwait(false);
             return JsonSerializer.Serialize(result, JsonOpts);

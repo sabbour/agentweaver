@@ -28,9 +28,16 @@ public sealed class McpApiException : McpException
     public string Hint { get; }
     public string? RawMessage { get; }
     public string? Path { get; }
+    public JsonElement? Details { get; }
 
-    public McpApiException(int statusCode, string message, string? path = null, string? errorCode = null, string? hint = null)
-        : this(BuildPayload(statusCode, message, path, errorCode, hint) with { ErrorCode = errorCode })
+    public McpApiException(
+        int statusCode,
+        string message,
+        string? path = null,
+        string? errorCode = null,
+        string? hint = null,
+        JsonElement? details = null)
+        : this(BuildPayload(statusCode, message, path, errorCode, hint, details) with { ErrorCode = errorCode })
     {
     }
 
@@ -43,6 +50,7 @@ public sealed class McpApiException : McpException
         Hint = payload.Hint;
         RawMessage = payload.RawMessage;
         Path = payload.Path;
+        Details = payload.Details;
     }
 
     private static string SerializePayload(McpErrorPayload payload) =>
@@ -50,12 +58,45 @@ public sealed class McpApiException : McpException
             ? JsonSerializer.Serialize(
                 new { error = payload.ErrorCode, message = payload.Error, hint = payload.Hint },
                 ErrorJsonOptions)
-            : JsonSerializer.Serialize(new { error = payload.Error, hint = payload.Hint }, ErrorJsonOptions);
+            : string.Equals(
+                payload.ErrorCode,
+                "workflow_team_binding_required",
+                StringComparison.Ordinal)
+                ? JsonSerializer.Serialize(
+                    new
+                    {
+                        error = payload.ErrorCode,
+                        message = payload.Error,
+                        unresolved_roles = payload.Details,
+                        hint = payload.Hint,
+                    },
+                    ErrorJsonOptions)
+                : JsonSerializer.Serialize(
+                    new { error = payload.Error, hint = payload.Hint },
+                    ErrorJsonOptions);
 
-    private static McpErrorPayload BuildPayload(int statusCode, string message, string? path, string? errorCode, string? explicitHint)
+    private static McpErrorPayload BuildPayload(
+        int statusCode,
+        string message,
+        string? path,
+        string? errorCode,
+        string? explicitHint,
+        JsonElement? details)
     {
         var normalizedPath = string.IsNullOrWhiteSpace(path) ? null : path;
         var normalizedMessage = NormalizeMessage(message);
+
+        if (string.Equals(errorCode, "workflow_team_binding_required", StringComparison.Ordinal))
+        {
+            return new McpErrorPayload(
+                statusCode,
+                normalizedMessage,
+                explicitHint ?? "Cast the missing roles or map the workflow to confirmed team members, then retry.",
+                normalizedMessage,
+                normalizedPath,
+                errorCode,
+                details);
+        }
 
         if (IsMemoryError(errorCode))
         {
@@ -342,7 +383,8 @@ public sealed class McpApiException : McpException
         string Hint,
         string? RawMessage,
         string? Path,
-        string? ErrorCode = null);
+        string? ErrorCode = null,
+        JsonElement? Details = null);
 }
 
 /// <summary>Typed thin wrapper over the Agentweaver backend API.</summary>
