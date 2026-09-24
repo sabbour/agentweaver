@@ -1,4 +1,5 @@
 using System.Text;
+using System.Security.Cryptography;
 using Agentweaver.SandboxFs;
 
 namespace Agentweaver.Squad.Memory;
@@ -55,6 +56,7 @@ public sealed class SquadMemoryExporter
         sb.AppendLine();
         foreach (var d in decisions)
         {
+            sb.AppendLine($"<!-- agentweaver-decision:id={d.RecordId};sha256={DecisionContentHash(d)} -->");
             sb.AppendLine($"## {d.Title}");
             sb.AppendLine($"**Type:** {d.Type} | **By:** {d.AgentName} | **Status:** {d.Status}");
             sb.AppendLine();
@@ -70,6 +72,18 @@ public sealed class SquadMemoryExporter
         {
             foreach (var staleFile in Directory.GetFiles(inboxDir, "*.md"))
                 File.Delete(staleFile);
+        }
+
+        static string DecisionContentHash(DecisionExportDto decision)
+        {
+            var content = string.Join(
+                "\n",
+                decision.AgentName,
+                decision.Type,
+                decision.Title,
+                decision.Content,
+                decision.Rationale ?? "");
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
         }
 
         foreach (var e in inboxEntries)

@@ -90,7 +90,14 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
             exists.SourceRunId = author.SourceRunId;
             exists.UpdatedAt = DateTimeOffset.UtcNow;
             await memoryDb.SaveChangesAsync(ct);
-            await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
+            try
+            {
+                await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
+            }
+            catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+            {
+                return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
+            }
             return Results.Ok(new
             {
                 exists.Id, exists.AgentName, exists.Slug, exists.Type, exists.Title, exists.Content,
@@ -443,7 +450,14 @@ app.MapPost("/api/projects/{id}/decisions", async (
     };
     var (storedDecision, created) = await MemoryWriteDeduplicator
         .GetOrCreateDecisionAsync(memoryDb, decision, ct);
-    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
+    try
+    {
+        await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
+    }
+    catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+    {
+        return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
+    }
     var response = new
     {
         storedDecision.Id, storedDecision.AgentName, storedDecision.Type, storedDecision.Status,
@@ -505,7 +519,14 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     decision.UpdatedAt = DateTimeOffset.UtcNow;
     MemoryWriteDeduplicator.RefreshDecisionIdentity(decision);
     await memoryDb.SaveChangesAsync(ct);
-    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
+    try
+    {
+        await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
+    }
+    catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+    {
+        return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
+    }
     return Results.Ok(new
     {
         decision.Id, decision.Status, decision.Content, decision.Rationale,
