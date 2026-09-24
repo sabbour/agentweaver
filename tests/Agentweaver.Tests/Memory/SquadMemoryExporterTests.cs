@@ -107,7 +107,7 @@ public sealed class SquadMemoryExporterTests : IDisposable
         finally
         {
             if (Directory.Exists(inbox) || new DirectoryInfo(inbox).LinkTarget is not null)
-                Directory.Delete(inbox);
+                File.Delete(inbox);
         }
     }
 
