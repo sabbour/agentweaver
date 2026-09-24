@@ -62,7 +62,7 @@ serialization.
 | `agent.question_answered` | When a pending `ask_question` request is answered (or resolved by timeout) and the agent resumes | `requestId`, `answer`, `timedOut` |
 | `run.completed` | When the watch loop determines the run is terminal with no file changes (watch-loop only; never emitted by the runner) | `result` |
 | `run.outcome` | Agent self-assessment of task completion, emitted just before `run.completed` | `achieved` (bool), `reason` |
-| `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `message`, `errorCode`, `retryable` — bounded normalized public contract |
+| `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `message`, `errorCode`, `retryable`, plus optional server-generated `correlationId`, active `traceId`, and bounded exception-type `causeChain` — normalized public contract |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
 | `run.approval_policy_selected` | When a coordinator run persists its immutable launch approval policy | `autoApproveTools`, `autopilot`, `source` (`direct`, `backlog_pickup`, or `retry`), `capturedAt`, `settingsUpdatedAt` (heartbeat-derived policies), `inheritedFromRunId` (retries), `safeTools` |

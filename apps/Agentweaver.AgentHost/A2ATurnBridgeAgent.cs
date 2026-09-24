@@ -3,6 +3,7 @@ using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading.Channels;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using Microsoft.Agents.AI;
@@ -286,32 +287,31 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
                     turnFailure.Throw();
                 }
 
-                // #267 root-cause guard: the pod turn threw without a structured RunFailed reaching
-                // the worker. Emit a synthetic structured terminal so the worker recovers a real
-                // errorCode instead of the misleading, context-free a2a_protocol_event_unsupported.
+                // The pod turn threw without a structured RunFailed reaching the worker. Emit a
+                // classified structured terminal so the worker preserves known provider/runtime
+                // failures instead of collapsing them into a context-free internal error.
                 // The exception is still propagated (rethrown) so the stream terminates abnormally,
                 // exactly as before — only the diagnosis carried to the worker is improved.
                 if (!sawStructuredTerminalFailure)
                 {
                     var correlationId = Guid.NewGuid().ToString("n");
-                    _logger.LogWarning(
+                    var terminal = CreateTurnFailureTerminal(
                         turnFailure.SourceException,
+                        correlationId);
+                    var failure = StructuredRunFailureTerminal.TryRead(terminal)!;
+                    _logger.LogWarning(
                         "A2ATurnBridgeAgent: turn aborted without a structured RunFailed; emitting " +
-                        "synthetic agent_turn_internal_error terminal so the worker avoids a bare " +
-                        "'Received: None' classification (#267). CorrelationId={CorrelationId}",
+                        "{ErrorCode} so the worker avoids a bare 'Received: None' classification (#267). " +
+                        "ExceptionType={ExceptionType} CorrelationId={CorrelationId}",
+                        failure.ErrorCode,
+                        turnFailure.SourceException.GetType().Name,
                         correlationId);
 
                     yield return new AgentResponseUpdate(
                         ChatRole.Assistant,
                         new List<AIContent>
                         {
-                            RunEventDataPartCodec.EncodeRunEvent(
-                                StructuredRunFailureTerminal.CreateInternalError(
-                                    "Agent turn aborted before reporting a structured terminal failure.",
-                                    $"{turnFailure.SourceException.GetType().Name}: " +
-                                    turnFailure.SourceException.Message,
-                                    turnFailure.SourceException,
-                                    correlationId)),
+                            RunEventDataPartCodec.EncodeRunEvent(terminal),
                         });
                 }
 
@@ -368,6 +368,7 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
                     });
             }
         }
+
         finally
         {
             if (!turnTask.IsCompleted)
@@ -395,6 +396,38 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
             }
             _runner.SetTurnStreamWriter(null);
         }
+    }
+
+    private static RunEvent CreateTurnFailureTerminal(Exception exception, string correlationId)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is WorkflowAgentInfrastructureException infrastructure)
+            {
+                return StructuredRunFailureTerminal.CreateFailure(
+                    infrastructure.Reason,
+                    infrastructure.Message,
+                    infrastructure.IsRetryable,
+                    exception,
+                    correlationId);
+            }
+
+            if (current is AgentProviderException provider)
+            {
+                return StructuredRunFailureTerminal.CreateFailure(
+                    provider.ErrorCode,
+                    provider.UserMessage,
+                    provider.IsRetryable,
+                    exception,
+                    correlationId);
+            }
+        }
+
+        return StructuredRunFailureTerminal.CreateInternalError(
+            "Agent turn aborted before reporting a structured terminal failure.",
+            $"{exception.GetType().Name}: {exception.Message}",
+            exception,
+            correlationId);
     }
 
     private static async Task<bool> WaitForCompletionAsync(Task turnTask, TimeSpan timeout) =>

@@ -220,6 +220,27 @@ public static class StructuredRunFailureTerminal
             CreatePayload(errorCode, message, diagnostic, retryable),
             timestampUtc);
 
+    internal static RunEvent CreateFailure(
+        string errorCode,
+        string message,
+        bool? retryable,
+        Exception exception,
+        string correlationId,
+        int sequence = 0,
+        DateTimeOffset timestampUtc = default) =>
+        new(
+            sequence,
+            EventTypes.RunFailed,
+            CreatePayload(
+                errorCode,
+                message,
+                diagnostic: null,
+                retryable,
+                correlationId,
+                Activity.Current?.TraceId.ToHexString(),
+                BuildExceptionCauseChain(exception)),
+            timestampUtc);
+
     public static string NormalizeErrorCode(string? errorCode) =>
         errorCode is not null && TerminalErrorCodes.Contains(errorCode)
             ? errorCode
