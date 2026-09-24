@@ -36,11 +36,7 @@ internal static class WorkflowTeamBinding
 
     public static WorkflowTeamBindingResult Bind(Project project, WorkflowDefinition workflow)
     {
-        var team = ReadTeam(project);
-        if (team is null)
-            return new WorkflowTeamBindingResult(workflow, [], WasBound: false);
-
-        var members = team.Members.Where(IsDispatchable).ToList();
+        var members = ReadTeam(project)?.Members.Where(IsDispatchable).ToList() ?? [];
         var availableRoles = members
             .Select(member => member.Role.Id)
             .Distinct(StringComparer.OrdinalIgnoreCase)

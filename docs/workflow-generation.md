@@ -48,11 +48,11 @@ retryable failure. Reusing the same `Idempotency-Key` with the identical request
 job; using it for different input returns `409`. A provider timeout becomes the canonical
 retryable `workflow_provider_timeout` failure instead of a disconnected request with ambiguous
 progress. Before artifact persistence, generated worker and peer-review nodes bind to confirmed
-cast members. An unmapped role fails the job with `workflow_team_binding_required` and structured
-`unresolved_roles`; `result_url` returns the same requirements with `422`, and no artifact is
-created. The returned YAML remains an unsaved draft — the MCP server and Web UI use the same
-server-side generation contract (FR-059), and project workspace persistence still requires an
-explicit save.
+cast members. A missing or unreadable team, or an unmapped role, fails the job with
+`workflow_team_binding_required` and structured `unresolved_roles`; `result_url` returns the same
+requirements with `422`, and no artifact is created. The returned YAML remains an unsaved draft —
+the MCP server and Web UI use the same server-side generation contract (FR-059), and project
+workspace persistence still requires an explicit save.
 
 The production provider can be Copilot or BYOK; the class name is not a provider guarantee.
 Prepare the `workflow_generation` AI execution context and send its `execution_key` in
