@@ -310,7 +310,10 @@ public sealed class BlueprintService
         WorkflowDefinition? generatedDefinition = null;
         if (!string.IsNullOrWhiteSpace(generatedWorkflowYaml))
         {
-            var loadResult = WorkflowDefinitionLoader.Load(generatedWorkflowYaml, "generated");
+            var loadResult = WorkflowDefinitionLoader.Load(
+                generatedWorkflowYaml,
+                "generated",
+                validationMode: WorkflowDefinitionValidationMode.Authoring);
             if (loadResult.IsValid && loadResult.Definition is not null)
             {
                 var wfIdError = ValidateWorkflowFileId(loadResult.Definition.Id);

@@ -5,6 +5,12 @@ using Agentweaver.Squad.Catalog;
 
 namespace Agentweaver.Api.Workflows;
 
+public enum WorkflowDefinitionValidationMode
+{
+    LegacyCompatible,
+    Authoring,
+}
+
 /// <summary>
 /// Parses and validates a single workflow YAML document into a <see cref="WorkflowDefinition"/>
 /// (Feature 010, FR-001/002/003/004). All discovery, validation, and composition is server-side; a
@@ -20,7 +26,11 @@ public static class WorkflowDefinitionLoader
         .Build();
 
     /// <summary>Parses+validates a YAML document. Always returns a result (never throws).</summary>
-    public static WorkflowLoadResult Load(string yaml, string source, bool isBuiltIn = false)
+    public static WorkflowLoadResult Load(
+        string yaml,
+        string source,
+        bool isBuiltIn = false,
+        WorkflowDefinitionValidationMode validationMode = WorkflowDefinitionValidationMode.LegacyCompatible)
     {
         if (yaml.Length > WorkflowGrammarContract.MaxDocumentCharacters)
             return WorkflowLoadResult.Invalid(source, $"{source}: workflow resource exceeds the {WorkflowGrammarContract.MaxDocumentCharacters} character limit.");
@@ -38,7 +48,14 @@ public static class WorkflowDefinitionLoader
         if (dto is null)
             return WorkflowLoadResult.Invalid(source, $"{source}: empty or null workflow document.");
 
-        if (!TryMapAndValidate(dto, source, isBuiltIn, out var definition, out var error, out var loadWarnings))
+        if (!TryMapAndValidate(
+                dto,
+                source,
+                isBuiltIn,
+                validationMode,
+                out var definition,
+                out var error,
+                out var loadWarnings))
             return WorkflowLoadResult.Invalid(source, error!);
 
         return WorkflowLoadResult.Valid(source, definition!, isBuiltIn, loadWarnings);
@@ -48,6 +65,7 @@ public static class WorkflowDefinitionLoader
         WorkflowYamlDto dto,
         string source,
         bool isBuiltIn,
+        WorkflowDefinitionValidationMode validationMode,
         out WorkflowDefinition? definition,
         out string? error,
         out IReadOnlyList<string> warnings)
@@ -147,6 +165,22 @@ public static class WorkflowDefinitionLoader
             switch (node.Type)
             {
                 case WorkflowNodeType.Check:
+                    if (validationMode == WorkflowDefinitionValidationMode.Authoring)
+                    {
+                        if (string.IsNullOrWhiteSpace(node.GateKind))
+                            return Fail(source, $"check node '{node.Id}' must declare explicit 'gate_kind' for authoring.", out error);
+                        if (!NodeClassifier.IsCanonicalGateKind(node.GateKind))
+                            return Fail(
+                                source,
+                                $"check node '{node.Id}' has non-canonical gate_kind '{node.GateKind}'; expected rai, human-review, or rubberduck.",
+                                out error);
+                    }
+                    else if (NodeClassifier.LegacyGateKindFromId(node) is { } legacyGateKind)
+                    {
+                        collectedWarnings.Add(
+                            $"{source}: legacy check node '{node.Id}' inferred gate_kind '{legacyGateKind}' from its id; save the workflow with explicit gate_kind to migrate it.");
+                    }
+
                     // FR-016: a check must route on at least one verdict, and every declared verdict
                     // must have a matching outgoing edge.
                     var outgoing = edges.Where(x => string.Equals(x.From, node.Id, StringComparison.Ordinal)).ToList();

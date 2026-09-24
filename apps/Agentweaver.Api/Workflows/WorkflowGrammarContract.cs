@@ -23,7 +23,7 @@ internal sealed record WorkflowTransitionGrammar(
 /// </summary>
 internal static class WorkflowGrammarContract
 {
-    public const string Version = "1.0";
+    public const string Version = "1.1";
     public const int MaxDocumentCharacters = 262_144;
     public const int MaxNodes = 128;
     public const int MaxEdges = 512;
@@ -166,6 +166,19 @@ internal static class WorkflowGrammarContract
                 "has_label", "is_not_labeled_with", "base_branch", "review_state", "ref",
                 "category", "comment_matches", "or", "not",
             ],
+        },
+        Compatibility = new WorkflowCompatibilityGrammarDto
+        {
+            LegacyLoadingOnly = true,
+            CheckGateIdMatching = "trimmed, case-insensitive, with underscores and spaces normalized to hyphens",
+            CheckGateIdFallbacks = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["rai"] = "rai",
+                ["review"] = "human-review",
+                ["human-review"] = "human-review",
+                ["rubberduck"] = "rubberduck",
+                ["rubber-duck"] = "rubberduck",
+            },
         },
     };
 

@@ -481,7 +481,10 @@ public static class WorkflowDefinitionEndpoints
             }
 
             // Step 2: Full load + structural validation via the real loader.
-            var loadResult = WorkflowDefinitionLoader.Load(request.Yaml, workflowId);
+            var loadResult = WorkflowDefinitionLoader.Load(
+                request.Yaml,
+                workflowId,
+                validationMode: WorkflowDefinitionValidationMode.Authoring);
             if (!loadResult.IsValid || loadResult.Definition is null)
                 return Results.BadRequest(new
                 {

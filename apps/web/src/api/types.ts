@@ -1715,6 +1715,11 @@ export interface WorkflowGrammar {
     ref_match_modes: string[];
     predicate_types: string[];
   };
+  compatibility: {
+    legacy_loading_only: boolean;
+    check_gate_id_matching: string;
+    check_gate_id_fallbacks: Record<string, string>;
+  };
 }
 
 // A workflow in the project's list response: identity, validation.
