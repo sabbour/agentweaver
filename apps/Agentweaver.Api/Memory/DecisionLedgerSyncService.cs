@@ -93,13 +93,15 @@ public sealed class DecisionLedgerSyncService(
                 var promoted = 0;
                 foreach (var entry in reconciled.Entries.Where(entry => entry.Status == "pending"))
                 {
-                    await DecisionPromotion.PromoteEntry(
+                    var promotion = await DecisionPromotion.PromoteEntryAsync(
                         memoryDb,
-                        entry,
+                        project.Id.ToString(),
+                        entry.Id,
                         DateTimeOffset.UtcNow,
                         entry.SourceIdentity ?? "repository",
                         ct).ConfigureAwait(false);
-                    promoted++;
+                    if (promotion?.Promoted == true)
+                        promoted++;
                 }
 
                 var export = await MemoryLedgerExporter.ExportAsync(
