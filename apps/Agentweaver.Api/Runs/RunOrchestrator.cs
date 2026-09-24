@@ -1136,34 +1136,40 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         // into session-state/.copilot paths that don't exist inside a child's worktree, which the
         // sandbox correctly rejected and stalled the child (Defect C).
         //
-        // EXCEPTION: active architectural/scope DECISIONS are injected (decisions only — never the
-        // core_context/learnings/session layers). Decisions are non-negotiable team boundaries
-        // (highest-value context) and do not duplicate the charter or carry artifact-write
-        // instructions, so they are safe for child workers and ensure scope constraints reach the
-        // agents doing the actual work.
+        // EXCEPTION: active architectural/scope decisions plus task-relevant high-importance memory
+        // are injected. Core context and session state remain excluded because they duplicate the
+        // charter and previously carried coordinator artifact-write instructions into child worktrees.
         if (!string.IsNullOrEmpty(run.ParentRunId))
         {
             var childCharter = !string.IsNullOrEmpty(run.AgentCharter)
                 ? run.AgentCharter
                 : ResolveAgentCharter(run);
 
-            string? childDecisions = null;
+            MemoryContextCompilation? childCompilation = null;
             if (run.ProjectId.HasValue)
             {
                 try
                 {
                     using var scope = _scopeFactory.CreateScope();
                     var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
-                    childDecisions = (await memoryCompiler.CompileDecisionsAsync(
-                        run.ProjectId.Value.ToString(), ct))?.Text;
+                    childCompilation = string.IsNullOrEmpty(run.AgentName)
+                        ? await memoryCompiler.CompileDecisionsAsync(run.ProjectId.Value.ToString(), ct)
+                        : await memoryCompiler.CompileForRunAsync(
+                            run.ProjectId.Value.ToString(),
+                            run.AgentName,
+                            run.Task,
+                            includeCoreMemories: false,
+                            includeSession: false,
+                            ct: ct);
+                    EmitMemoryContextComposition(run.Id.ToString(), childCompilation);
                 }
                 catch (Exception ex) when (ex is not MandatoryContextBudgetExceededException)
                 {
-                    _logger.LogWarning(ex, "Decision compilation failed for child run {RunId} — proceeding without", run.Id);
+                    _logger.LogWarning(ex, "Memory context compilation failed for child run {RunId} — proceeding without", run.Id);
                 }
             }
 
-            var childPrompt = ComposeChildSystemPrompt(childCharter, childDecisions);
+            var childPrompt = ComposeChildSystemPrompt(childCharter, childCompilation?.Text);
             // Progressive disclosure: coordinator-dispatched workers ARE child runs (ParentRunId set)
             // and do the actual work, so their assigned skills must reach them too. Child runs carry
             // AgentName/ProjectId/WorktreePath — everything the composer needs.
@@ -1179,8 +1185,13 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             {
                 using var scope = _scopeFactory.CreateScope();
                 var memoryCompiler = scope.ServiceProvider.GetRequiredService<MemoryContextCompiler>();
-                var compilation = await memoryCompiler.CompileAsync(
-                    run.ProjectId.Value.ToString(), run.AgentName, ct);
+                var compilation = await memoryCompiler.CompileForRunAsync(
+                    run.ProjectId.Value.ToString(),
+                    run.AgentName,
+                    run.Task,
+                    includeCoreMemories: true,
+                    includeSession: true,
+                    ct: ct);
                 systemPromptContext = compilation?.Text;
                 EmitMemoryContextComposition(run.Id.ToString(), compilation);
             }
@@ -1370,15 +1381,12 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
 
     /// <summary>
     /// Builds the LEAN system prompt for a coordinator CHILD run: the agent <paramref name="charter"/>
-    /// EXACTLY ONCE (when present), followed by any active architectural/scope <paramref name="decisions"/>
-    /// (team-wide boundaries — decisions only, never the full memory stack), followed by an explicit
-    /// working-directory sandbox boundary. A child ALWAYS receives the boundary even when it has no
-    /// charter — this is never null. The boundary is what prevents the Defect C/#2/#5 stall where a
-    /// child tried to write a findings brief to a session-state path, was sandbox-rejected as outside
-    /// its worktree, and hung. The coordinator core_context/learnings/session stack is deliberately
-    /// NOT included here — only the high-value decisions layer.
+    /// EXACTLY ONCE (when present), followed by task-relevant project <paramref name="context"/>,
+    /// followed by an explicit working-directory sandbox boundary. A child ALWAYS receives the
+    /// boundary even when it has no charter — this is never null. Core context and session state are
+    /// deliberately omitted from delegated runs to prevent the Defect C/#2/#5 sandbox stall.
     /// </summary>
-    internal static string ComposeChildSystemPrompt(string? charter, string? decisions = null)
+    internal static string ComposeChildSystemPrompt(string? charter, string? context = null)
     {
         const string deliverableCapture =
             "## Deliverable files\n" +
@@ -1393,8 +1401,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         var sb = new StringBuilder();
         if (!string.IsNullOrEmpty(charter))
             sb.Append(charter).Append("\n\n---\n\n");
-        if (!string.IsNullOrEmpty(decisions))
-            sb.Append(decisions.TrimEnd()).Append("\n\n---\n\n");
+        if (!string.IsNullOrEmpty(context))
+            sb.Append(context.TrimEnd()).Append("\n\n---\n\n");
         sb.Append(deliverableCapture);
         return sb.ToString();
     }
