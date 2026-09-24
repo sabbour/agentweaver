@@ -1,5 +1,5 @@
 import { apiClient } from '../api/apiClient';
-import { ApiError } from '../api/client';
+import { ApiError, type WorkflowGenerationHandle, type WorkflowGenerationOutcome } from '../api/client';
 import {
   Badge,
   Button,
@@ -325,6 +325,8 @@ export function WorkflowsPage() {
   const [generateContentOnly, setGenerateContentOnly] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [pendingGeneration, setPendingGeneration] = useState<WorkflowGenerationHandle | null>(null);
+  const [generateStatus, setGenerateStatus] = useState<string | null>(null);
 
   const formatError = (err: unknown): string =>
     err instanceof ApiError
@@ -560,11 +562,31 @@ export function WorkflowsPage() {
   }, [data, handleEdit, handleOpenEvent, handleOpenSchedule, projectId]);
 
   const handleOpenGenerate = useCallback(() => {
-    setGenerateDescription('');
-    setGenerateContentOnly(false);
+    if (!pendingGeneration) {
+      setGenerateDescription('');
+      setGenerateContentOnly(false);
+    }
     setGenerateError(null);
     setGenerateOpen(true);
-  }, []);
+  }, [pendingGeneration]);
+
+  const applyGenerationOutcome = useCallback((result: WorkflowGenerationOutcome) => {
+    if (result.status === 'pending') {
+      setPendingGeneration(result.job);
+      setGenerateStatus(`Generation job ${result.job.jobId} is still running. Check its status to continue.`);
+      return;
+    }
+    setPendingGeneration(null);
+    setGenerateStatus(null);
+    generationContext.applyCompletedContext(result.ai_execution_context);
+    setGenerateOpen(false);
+    setEditorState({ workflowId: result.workflowId, initialYaml: result.yaml });
+    setSyncMessage(
+      result.wasCorrected
+        ? 'Workflow generated (one correction pass applied). Review and save the draft.'
+        : 'Workflow generated. Review and save the draft.',
+    );
+  }, [generationContext]);
 
   const handleGenerate = useCallback(async () => {
     if (!projectId || !generateDescription.trim()) return;
@@ -577,14 +599,7 @@ export function WorkflowsPage() {
         generationContext.providerKey,
         generateContentOnly,
       );
-      generationContext.applyCompletedContext(result.ai_execution_context);
-      setGenerateOpen(false);
-      setEditorState({ workflowId: result.workflowId, initialYaml: result.yaml });
-      setSyncMessage(
-        result.wasCorrected
-          ? 'Workflow generated (one correction pass applied). Review and save the draft.'
-          : 'Workflow generated. Review and save the draft.',
-      );
+      applyGenerationOutcome(result);
     } catch (err) {
       setGenerateError(generationContext.handleInvocationError(err)
         ? 'The AI provider changed. Review the updated provider and generate again.'
@@ -595,9 +610,25 @@ export function WorkflowsPage() {
   }, [
     generateContentOnly,
     generateDescription,
+    applyGenerationOutcome,
     generationContext,
     projectId,
   ]);
+
+  const handleResumeGeneration = useCallback(async () => {
+    if (!pendingGeneration) return;
+    setGenerating(true);
+    setGenerateError(null);
+    try {
+      applyGenerationOutcome(await apiClient.resumeWorkflowGeneration(pendingGeneration));
+    } catch (err) {
+      setPendingGeneration(null);
+      setGenerateStatus(null);
+      setGenerateError(formatError(err));
+    } finally {
+      setGenerating(false);
+    }
+  }, [applyGenerationOutcome, pendingGeneration]);
 
   const handleEditorSave = useCallback((saved: WorkflowDetailDto) => {
     // Refresh the workflow list so the saved workflow is visible.
@@ -972,10 +1003,15 @@ export function WorkflowsPage() {
                 onChange={(_, d) => { setGenerateDescription(d.value); setGenerateError(null); }}
                 placeholder="e.g. A workflow that triages incoming bugs, fixes them, runs QA verification, then merges and records the outcome."
                 rows={5}
-                disabled={generating}
+                disabled={generating || pendingGeneration !== null}
               />
             </Field>
-            <Checkbox label="Content-only workflow" checked={generateContentOnly} onChange={(_, data) => setGenerateContentOnly(data.checked === true)} disabled={generating} />
+            <Checkbox label="Content-only workflow" checked={generateContentOnly} onChange={(_, data) => setGenerateContentOnly(data.checked === true)} disabled={generating || pendingGeneration !== null} />
+            {generateStatus && (
+              <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
+                <MessageBarBody>{generateStatus}</MessageBarBody>
+              </MessageBar>
+            )}
             {generateError && (
               <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
                 <MessageBarBody>{generateError}</MessageBarBody>
@@ -986,16 +1022,27 @@ export function WorkflowsPage() {
             <Button appearance="subtle" disabled={generating} onClick={() => setGenerateOpen(false)}>
               Cancel
             </Button>
-            <AiExecutionProviderHint context={generationContext.context}>
+            {pendingGeneration ? (
               <Button
                 appearance="primary"
-                disabled={generating || !generateDescription.trim() || generationContext.loading || !generationContext.available}
-                icon={generating ? <Spinner size="extra-tiny" aria-hidden="true" /> : <SparkleRegular />}
-                onClick={() => { void handleGenerate(); }}
+                disabled={generating}
+                icon={generating ? <Spinner size="extra-tiny" aria-hidden="true" /> : <ArrowSyncRegular />}
+                onClick={() => { void handleResumeGeneration(); }}
               >
-                {generating ? 'Generating…' : 'Generate'}
+                {generating ? 'Checking…' : 'Check status'}
               </Button>
-            </AiExecutionProviderHint>
+            ) : (
+              <AiExecutionProviderHint context={generationContext.context}>
+                <Button
+                  appearance="primary"
+                  disabled={generating || !generateDescription.trim() || generationContext.loading || !generationContext.available}
+                  icon={generating ? <Spinner size="extra-tiny" aria-hidden="true" /> : <SparkleRegular />}
+                  onClick={() => { void handleGenerate(); }}
+                >
+                  {generating ? 'Generating…' : 'Generate'}
+                </Button>
+              </AiExecutionProviderHint>
+            )}
             <AiProviderChangeAnnouncement message={generationContext.announcement || runContext.announcement} />
           </DialogActions>
         </DialogBody>

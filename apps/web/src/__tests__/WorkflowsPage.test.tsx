@@ -23,6 +23,7 @@ vi.mock('../api/apiClient', () => ({
     saveWorkflowYaml: vi.fn(),
     runWorkflowNow: vi.fn(),
     generateWorkflow: vi.fn(),
+    resumeWorkflowGeneration: vi.fn(),
   },
 }));
 
@@ -372,13 +373,47 @@ trigger:
 
   it('forwards the content-only option when generating a draft', async () => {
     vi.mocked(apiClient.listWorkflows).mockResolvedValue(sampleList);
-    vi.mocked(apiClient.generateWorkflow).mockResolvedValue({ yaml: 'id: newsletter', workflowId: 'newsletter', wasCorrected: false });
+    vi.mocked(apiClient.generateWorkflow).mockResolvedValue({ status: 'completed', yaml: 'id: newsletter', workflowId: 'newsletter', wasCorrected: false });
     renderPage('proj-1');
     fireEvent.click(await screen.findByRole('button', { name: 'Generate workflow' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Describe the workflow you need' }), { target: { value: 'Draft a newsletter' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Content-only workflow' }));
     fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
     await waitFor(() => expect(apiClient.generateWorkflow).toHaveBeenCalledWith('proj-1', 'Draft a newsletter', 'signed-provider-key', true));
+  });
+
+  it('resumes a still-running generation job without submitting duplicate work', async () => {
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue(sampleList);
+    const handle = {
+      jobId: 'job-1540',
+      statusUrl: '/api/projects/proj-1/workflows/generation-jobs/job-1540',
+      resultUrl: '/api/projects/proj-1/workflows/generation-jobs/job-1540/result',
+    };
+    vi.mocked(apiClient.generateWorkflow).mockResolvedValue({ status: 'pending', job: handle });
+    vi.mocked(apiClient.resumeWorkflowGeneration).mockResolvedValue({
+      status: 'completed',
+      yaml: 'id: resumed-workflow',
+      workflowId: 'resumed-workflow',
+      wasCorrected: false,
+    });
+
+    renderPage('proj-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate workflow' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Describe the workflow you need' }), {
+      target: { value: 'Generate a long-running workflow' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+
+    expect(await screen.findByText(/Generation job job-1540 is still running/)).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText(/Generation job job-1540 is still running/)).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Generate workflow' }));
+    expect(await screen.findByText(/Generation job job-1540 is still running/)).toBeDefined();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check status' }));
+
+    await waitFor(() => expect(apiClient.resumeWorkflowGeneration).toHaveBeenCalledWith(handle));
+    expect(apiClient.generateWorkflow).toHaveBeenCalledTimes(1);
+    expect(await screen.findByDisplayValue('id: resumed-workflow')).toBeDefined();
   });
 
   it('queues a workflow-bound run from Run now', async () => {

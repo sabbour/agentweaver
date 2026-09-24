@@ -286,6 +286,35 @@ export class RetriableReviewError extends Error {
   }
 }
 
+export interface WorkflowGenerationHandle {
+  jobId: string;
+  statusUrl: string;
+  resultUrl: string;
+  aiExecutionContext?: AiExecutionContext | null;
+}
+
+export type WorkflowGenerationOutcome =
+  | {
+      status: 'completed';
+      yaml: string;
+      workflowId: string;
+      wasCorrected: boolean;
+      ai_execution_context?: AiExecutionContext | null;
+    }
+  | {
+      status: 'pending';
+      job: WorkflowGenerationHandle;
+    };
+
+interface WorkflowGenerationJob {
+  job_id: string;
+  status: string;
+  status_url: string;
+  result_url: string;
+  failure?: { code: string; message: string; retryable: boolean } | null;
+  ai_execution_context?: AiExecutionContext | null;
+}
+
 export class AgentweaverApiClient {
   private readonly baseUrl: string;
   private readonly sessionTokenProvider: () => string | null;
@@ -1509,28 +1538,21 @@ export class AgentweaverApiClient {
   }
 
   // Accept durable workflow generation, then poll the job while preserving the existing UI result shape.
-  async generateWorkflow(projectId: string, description: string, providerKey?: string, contentOnly = false): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }> {
+  async generateWorkflow(projectId: string, description: string, providerKey?: string, contentOnly = false): Promise<WorkflowGenerationOutcome> {
     const idempotencyKey = globalThis.crypto?.randomUUID?.()
       ?? `workflow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const headers = {
       ...providerHeaders(providerKey),
       'Idempotency-Key': idempotencyKey,
     };
-    type Job = {
-      status: string;
-      status_url: string;
-      result_url: string;
-      failure?: { code: string; message: string; retryable: boolean } | null;
-      ai_execution_context?: AiExecutionContext | null;
-    };
-    const submit = () => this.request<Job>(
+    const submit = () => this.request<WorkflowGenerationJob>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/workflows/generate`,
       { description, content_only: contentOnly },
       undefined,
       headers,
     );
-    let job: Job;
+    let job: WorkflowGenerationJob;
     try {
       job = await submit();
     } catch (error) {
@@ -1541,11 +1563,41 @@ export class AgentweaverApiClient {
     const deadline = Date.now() + 5 * 60_000 + 30_000;
     while (job.status === 'queued' || job.status === 'running') {
       if (Date.now() >= deadline) {
-        throw new Error('Workflow generation is still running. Reopen the workflow generator to check again.');
+        return {
+          status: 'pending',
+          job: {
+            jobId: job.job_id,
+            statusUrl: job.status_url,
+            resultUrl: job.result_url,
+            aiExecutionContext: executionContext,
+          },
+        };
       }
       await new Promise(resolve => setTimeout(resolve, 500));
-      job = await this.request<Job>('GET', job.status_url.replace(/^\/api/, ''));
+      job = await this.request<WorkflowGenerationJob>('GET', job.status_url.replace(/^\/api/, ''));
     }
+    return this.resolveWorkflowGeneration(job, executionContext);
+  }
+
+  async resumeWorkflowGeneration(handle: WorkflowGenerationHandle): Promise<WorkflowGenerationOutcome> {
+    const job = await this.request<WorkflowGenerationJob>('GET', handle.statusUrl.replace(/^\/api/, ''));
+    if (job.status === 'queued' || job.status === 'running') {
+      return {
+        status: 'pending',
+        job: {
+          ...handle,
+          statusUrl: job.status_url,
+          resultUrl: job.result_url,
+        },
+      };
+    }
+    return this.resolveWorkflowGeneration(job, handle.aiExecutionContext);
+  }
+
+  private async resolveWorkflowGeneration(
+    job: WorkflowGenerationJob,
+    executionContext?: AiExecutionContext | null,
+  ): Promise<WorkflowGenerationOutcome> {
     if (job.status !== 'completed') {
       throw new Error(job.failure?.message ?? 'Workflow generation failed before producing a draft.');
     }
@@ -1555,6 +1607,7 @@ export class AgentweaverApiClient {
       was_corrected: boolean;
     }>('GET', job.result_url.replace(/^\/api/, ''));
     return {
+      status: 'completed',
       yaml: result.yaml,
       workflowId: result.workflow_id,
       wasCorrected: result.was_corrected,
