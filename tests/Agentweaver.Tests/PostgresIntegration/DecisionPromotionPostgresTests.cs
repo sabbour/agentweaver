@@ -37,34 +37,37 @@ public sealed class DecisionPromotionPostgresTests(PostgresFixture pg)
         }
 
         const int replicaCount = 100;
-        const int maxConcurrentDatabaseConnections = 8;
         var readyCount = 0;
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var connectionGate = new SemaphoreSlim(maxConcurrentDatabaseConnections);
+
+        await using var lockHolder = await pg.CreateDbContextAsync();
+        await using var lockTransaction = await lockHolder.Database.BeginTransactionAsync();
+        await lockHolder.Database.ExecuteSqlRawAsync(
+            "SELECT pg_advisory_xact_lock(hashtextextended({0}, 0));",
+            [$"decision-inbox:{projectId}:{entryId}"]);
+
         async Task<DecisionPromotionResult?> PromoteAsync()
         {
             if (Interlocked.Increment(ref readyCount) == replicaCount)
                 start.TrySetResult();
             await start.Task;
-            await connectionGate.WaitAsync();
-            try
-            {
-                await using var db = await pg.CreateDbContextAsync();
-                return await DecisionPromotion.PromoteEntryAsync(
-                    db,
-                    projectId,
-                    entryId,
-                    DateTimeOffset.UtcNow,
-                    "scribe:promotion",
-                    CancellationToken.None);
-            }
-            finally
-            {
-                connectionGate.Release();
-            }
+            await using var db = await pg.CreateDbContextAsync();
+            return await DecisionPromotion.PromoteEntryAsync(
+                db,
+                projectId,
+                entryId,
+                DateTimeOffset.UtcNow,
+                "scribe:promotion",
+                CancellationToken.None);
         }
 
         var promotions = Enumerable.Range(0, replicaCount).Select(_ => PromoteAsync()).ToArray();
+
+        await start.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await WaitForAdvisoryLockWaitersAsync(lockHolder, replicaCount);
+        promotions.Should().OnlyContain(promotion => !promotion.IsCompleted,
+            "all 100 physical replicas must be waiting on the held promotion lock before it is released");
+        await lockTransaction.CommitAsync();
 
         var results = await Task.WhenAll(promotions);
         results.All(result => result is not null).Should().BeTrue();
