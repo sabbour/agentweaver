@@ -42,7 +42,7 @@ public interface IScribeExportOperation
         CancellationToken ct);
 }
 
-public sealed class ScribeExportOperation(MemoryDbContext memoryDb) : IScribeExportOperation
+public sealed class ScribeExportOperation(DecisionLedgerSyncService ledgerSync) : IScribeExportOperation
 {
     public Task<bool> IsAppliedAsync(
         string workingDirectory,
@@ -59,10 +59,8 @@ public sealed class ScribeExportOperation(MemoryDbContext memoryDb) : IScribeExp
         string operationKey,
         CancellationToken ct)
     {
-        await MemoryLedgerExporter.ExportAsync(
-            projectId, workingDirectory, memoryDb, ct).ConfigureAwait(false);
-        await MemoryLedgerExporter.CommitExportAsync(
-            workingDirectory, defaultBranch, ct, operationKey).ConfigureAwait(false);
+        await ledgerSync.ExportAndCommitAsync(
+            projectId, workingDirectory, defaultBranch, ct, operationKey).ConfigureAwait(false);
     }
 }
 
@@ -115,7 +113,7 @@ public sealed class ScribeHousekeepingService(
     private static readonly string[] CoordinatorMergeTypes =
         ["learning", "pattern", "update", "architectural", "scope"];
     private readonly IScribeExportOperation _exportOperation =
-        exportOperation ?? new ScribeExportOperation(memoryDb);
+        exportOperation ?? NoOpScribeExportOperation.Instance;
 
     public async Task RunAsync(ScribeHousekeepingRequest request, CancellationToken ct)
     {
@@ -431,6 +429,24 @@ public sealed class ScribeHousekeepingService(
                 }
                 or SqliteException { SqliteErrorCode: 19 });
     }
+}
+
+internal sealed class NoOpScribeExportOperation : IScribeExportOperation
+{
+    public static NoOpScribeExportOperation Instance { get; } = new();
+
+    public Task<bool> IsAppliedAsync(
+        string workingDirectory,
+        string defaultBranch,
+        string operationKey,
+        CancellationToken ct) => Task.FromResult(false);
+
+    public Task ApplyAsync(
+        string projectId,
+        string workingDirectory,
+        string defaultBranch,
+        string operationKey,
+        CancellationToken ct) => Task.CompletedTask;
 }
 
 public sealed record ScribeFailureDiagnostic(string Code, bool Retryable);
