@@ -61,7 +61,7 @@ public sealed class MemoryWriteDeduplicationTests
     }
 
     [Fact]
-    public async Task SupersededDecisionAllowsANewActiveVersion()
+    public async Task RepeatedSupersessionAllowsNewActiveVersionsWithoutHistoricalIdentityCollisions()
     {
         using var factory = new ProjectsWebApplicationFactory();
         using var client = factory.CreateAuthenticatedClient();
@@ -94,8 +94,19 @@ public sealed class MemoryWriteDeduplicationTests
 
         var nextVersion = await client.PostAsJsonAsync($"/api/projects/{projectId}/decisions", original);
         nextVersion.StatusCode.Should().Be(HttpStatusCode.Created);
-        (await nextVersion.Content.ReadFromJsonAsync<JsonElement>())
-            .GetProperty("id").GetInt32().Should().NotBe(firstId);
+        var nextVersionId = (await nextVersion.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetInt32();
+        nextVersionId.Should().NotBe(firstId);
+
+        var supersedeNextVersion = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/decisions/{nextVersionId}",
+            new { superseded_by_id = replacementId });
+        supersedeNextVersion.EnsureSuccessStatusCode();
+
+        var latestVersion = await client.PostAsJsonAsync($"/api/projects/{projectId}/decisions", original);
+        latestVersion.StatusCode.Should().Be(HttpStatusCode.Created);
+        (await latestVersion.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetInt32().Should().NotBe(nextVersionId);
     }
 
     private static async Task<int[]> ReadIdsAsync(IEnumerable<HttpResponseMessage> responses)

@@ -128,7 +128,8 @@ public static class MemoryWriteDeduplicator
         "decision", decision.ProjectId, decision.AgentName, decision.Type, decision.Status,
         decision.Title, decision.Content, decision.Rationale, decision.Tags,
         decision.SupersededById?.ToString(), decision.SourceKind,
-        decision.SourceIdentity, decision.SourceRunId);
+        decision.SourceIdentity, decision.SourceRunId,
+        decision.Status == "active" ? null : decision.Id.ToString());
 
     private static string Hash(params string?[] values) =>
         Convert.ToHexString(SHA256.HashData(
