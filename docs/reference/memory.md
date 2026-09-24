@@ -14,7 +14,7 @@ it is historical data, never prompt structure or executable instructions.
 ```text
 Decisions: active, approved architectural/scope records, ordered by creation time
 Memory candidates: eligible own core context + learnings/patterns
-Selection: decisions mandatory; then importance, recency, and record id for memory; one bounded item/envelope budget
+Selection for runs: decisions mandatory; then task relevance, importance, recency, and record id; one bounded item/envelope budget
 Session: most recent open session (ties by record id), included only as one complete record
 ```
 
@@ -65,6 +65,15 @@ High-importance `learning` and `pattern` rows are selected when either:
 
 The `cross-team` tag alone is not authority. Cross-agent selection requires explicit
 approval by a project owner or verified Coordinator run.
+
+Before a fresh or delegated run, eligible learnings and patterns are filtered against
+the run task. Normalized tags are the primary relevance signal; memory content also
+requires multiple meaningful terms to overlap the task, and the exact `irrelevant` tag
+always excludes a record. This keeps unrelated retained
+facts out of the prompt. Relevant records are ranked deterministically before the existing
+importance, recency, and record-id tie breakers. Core context remains available to fresh
+runs, while delegated runs omit core context and session state to preserve their lean
+worktree-safe prompt.
 
 ### Layer 4 — Current session
 
@@ -180,21 +189,21 @@ END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON
 
 If there is no memory yet for a project, the block is omitted entirely and the agent runs with only the base prompt.
 
-`memory.context_composition` records this structured-context selection on the run stream. Its payload is limited to `included`, `omittedMemoryCount`, `omittedSessionCount`, and `omissionCauses`; prompt text, stored records, identifiers, and character/token measurements are deliberately excluded. This is distinct from per-turn cross-section size telemetry.
+`memory.context_composition` records this structured-context selection on the run stream. Its payload is limited to `included`, `omittedMemoryCount`, `omittedSessionCount`, and `omissionCauses`; causes include `relevance`, `item_limit`, and `budget`. Prompt text, stored records, identifiers, and character/token measurements are deliberately excluded. This is distinct from per-turn cross-section size telemetry.
 
 ---
 
-## Coordinator child workers — decisions only
+## Coordinator child workers — lean relevant context
 
-Coordinator child runs (a run with a `ParentRunId`) do **not** receive the full four-layer stack. The core-context, learnings, and session layers duplicated the child's charter and carried artifact-write instructions that pointed at `session-state` / `.copilot` paths absent from a child worktree, which the sandbox rejected and stalled the child.
+Coordinator child runs (a run with a `ParentRunId`) do **not** receive the full four-layer stack. Core context and session state duplicated the child's charter and carried artifact-write instructions that pointed at `session-state` / `.copilot` paths absent from a child worktree, which the sandbox rejected and stalled the child.
 
-Instead, `RunOrchestrator.BuildContextAsync` injects the child's charter plus **only**
-active, approved architectural/scope decisions, compiled by
-`MemoryContextCompiler.CompileDecisionsAsync(projectId)`. The decisions use the same
-untrusted JSON envelope but omit memory and session data. When there are no eligible
-decisions, the method returns `null` and only the charter is injected. Compilation
-non-budget failures are logged as warnings and the child proceeds with its charter alone.
-A mandatory-decision budget failure is terminalized before model invocation.
+Instead, `RunOrchestrator.BuildContextAsync` injects the child's charter plus active,
+approved architectural/scope decisions and task-relevant high-importance learning or
+pattern memory eligible for that agent. Core context and session data stay omitted. The
+same deterministic item/envelope budgets and omission telemetry apply to fresh and child
+runs. Compilation non-budget failures are logged as warnings and the child proceeds with
+its charter alone. A mandatory-decision budget failure is terminalized before model
+invocation.
 
 Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `export_memory` correspond to public MCP `memory_record`, `decision_inbox_submit`, `session_update` and `memory_export`.
 
@@ -209,7 +218,7 @@ Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `expor
 <tr><td>Active decisions</td><td>Project-wide boundaries</td></tr>
 <tr><td>Active decisions</td><td>Approved architecture / scope</td></tr>
 <tr><td>Active decisions</td><td>Oldest-created first</td></tr>
-<tr><td>Active decisions</td><td>Child prompts: decisions only</td></tr>
+<tr><td>Active decisions</td><td>Child prompts: decisions plus task-relevant memory</td></tr>
 <tr><td>Core + learnings</td><td>Core + learnings</td></tr>
 <tr><td>Core + learnings</td><td>Agent-scoped candidates</td></tr>
 <tr><td>Core + learnings</td><td>Core: exclude legacy trust</td></tr>

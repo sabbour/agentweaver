@@ -276,10 +276,11 @@ The shared [context schematic](../diagrams/flagship/canonical-memory-context.png
 as a reference. The eligibility table below makes the current trust and provenance
 gates explicit rather than implying that active status or a tag alone is sufficient.
 
-Memory selection is bounded. Candidates are scored by importance, then recency, and
-selection stops at the item limit or the first candidate that would exceed the
-approximate token budget. Core context is part of that same candidate set; it is not
-guaranteed to outrank every learning. The default limits are 20 items and approximately
+Memory selection is bounded. For run prompts, eligible learning and pattern candidates
+are filtered and scored by task relevance, then importance and recency; selection stops
+at the item limit or the first candidate that would exceed the approximate token budget.
+Core context is part of the fresh-run candidate set; delegated runs omit it and session
+state while retaining relevant learning/pattern memory. The default limits are 20 items and approximately
 4,000 tokens (four characters per token). This budget applies to selected memories,
 not to decisions or session data.
 
@@ -368,7 +369,7 @@ Malformed inbox files are skipped. This keeps one bad file from blocking all imp
 
 ### Memory bloat
 
-Unbounded memory would produce noisy prompts and high token usage. The compiler must keep a deterministic budget by importance, recency, item count, and approximate tokens.
+Unbounded memory would produce noisy prompts and high token usage. The compiler must keep a deterministic budget by task relevance, importance, recency, item count, and approximate tokens.
 
 ### Cross-team over-sharing
 
@@ -487,7 +488,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
 <tr><td>Active decisions</td><td>Project-wide boundaries</td></tr>
 <tr><td>Active decisions</td><td>Approved architecture / scope</td></tr>
 <tr><td>Active decisions</td><td>Oldest-created first</td></tr>
-<tr><td>Active decisions</td><td>Child prompts: decisions only</td></tr>
+<tr><td>Active decisions</td><td>Child prompts: decisions plus task-relevant memory</td></tr>
 <tr><td>Core + learnings</td><td>Core + learnings</td></tr>
 <tr><td>Core + learnings</td><td>Agent-scoped candidates</td></tr>
 <tr><td>Core + learnings</td><td>Core: exclude legacy trust</td></tr>
@@ -500,7 +501,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
 <tr><td>Open session</td><td>Latest StartedAt wins</td></tr>
 <tr><td>Joint rank + budget</td><td>Joint rank + budget</td></tr>
 <tr><td>Joint rank + budget</td><td>One combined memory list</td></tr>
-<tr><td>Joint rank + budget</td><td>Importance, then recency</td></tr>
+<tr><td>Joint rank + budget</td><td>Task relevance, importance, then recency</td></tr>
 <tr><td>Joint rank + budget</td><td>Stop at item / char limit</td></tr>
 <tr><td>Joint rank + budget</td><td>Approximation: 4 chars/token</td></tr>
 <tr><td>Context compiler</td><td>Context compiler</td></tr>
@@ -520,7 +521,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
 <tr><td>relation-4</td><td>5 serialize</td></tr>
 <tr><td>assurance</td><td>Defaults: 20 memory items / ≈4,000 tokens. That budget bounds selected memories—not decisions or the entire context.</td></tr>
 <tr><td>assurance-0-label</td><td>Joint memory ordering</td></tr>
-<tr><td>assurance-0-fact</td><td>Importance first; recency breaks ties.</td></tr>
+<tr><td>assurance-0-fact</td><td>Task relevance first; importance and recency break ties.</td></tr>
 <tr><td>assurance-0-source</td><td>MemoryContextCompiler.cs</td></tr>
 <tr><td>assurance-1-label</td><td>Bounded selection</td></tr>
 <tr><td>assurance-1-fact</td><td>Item / character limits cover memory.</td></tr>
@@ -530,7 +531,7 @@ To rebuild memory and decision governance from these concepts, implement the sys
 <tr><td>n0</td><td>Approved architecture / scope; Oldest-created first</td></tr>
 <tr><td>n1</td><td>Core: exclude legacy trust; High learning / pattern</td></tr>
 <tr><td>n2</td><td>Focus / issues / summary; Ended sessions excluded</td></tr>
-<tr><td>n3</td><td>Importance, then recency; Stop at item / char limit</td></tr>
+<tr><td>n3</td><td>Task relevance, importance, then recency; Stop at item / char limit</td></tr>
 <tr><td>n4</td><td>Decisions + selected memory; Add current session</td></tr>
 <tr><td>n5</td><td>Explicit boundary markers; Ignore embedded instructions</td></tr>
 <tr><td>groups</td><td>SCOPED INPUTS; SELECTION AND SERIALIZATION</td></tr>
