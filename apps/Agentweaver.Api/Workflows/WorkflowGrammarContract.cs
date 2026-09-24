@@ -52,7 +52,7 @@ internal static class WorkflowGrammarContract
     [
         Unconditional(NodeKind.Agent, NodeKind.Rai),
         Transition(NodeKind.Rai, NodeKind.Agent, "revise", "review"),
-        Transition(NodeKind.Rai, NodeKind.Terminal, "safety-failed", "no-changes", "review"),
+        Transition(NodeKind.Rai, NodeKind.Terminal, "safety-failed", "no-changes"),
         Transition(NodeKind.Rai, NodeKind.Scribe, "no-changes"),
         Transition(NodeKind.Rai, NodeKind.HumanReview, "review"),
         Transition(NodeKind.HumanReview, NodeKind.Merge, "approved"),
@@ -86,7 +86,6 @@ internal static class WorkflowGrammarContract
         Transition(NodeKind.PeerReview, NodeKind.Terminal, "approved", "pass", "declined"),
         Transition(NodeKind.Rubberduck, NodeKind.HumanReview, "pass"),
         Transition(NodeKind.Rubberduck, NodeKind.Merge, "pass"),
-        Transition(NodeKind.Rubberduck, NodeKind.Terminal, "pass"),
         Transition(NodeKind.Rubberduck, NodeKind.Agent, "pass", "revise"),
     ];
 

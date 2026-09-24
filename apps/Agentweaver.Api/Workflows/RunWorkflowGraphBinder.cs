@@ -357,6 +357,13 @@ internal static class RunWorkflowGraphBinder
                         && string.IsNullOrEmpty(output.Diff) && output.ContentSafetyFlagged);
                 return true;
 
+            // No changes -> direct successful completion when the workflow has no scribe stage.
+            case (NodeKind.Rai, NodeKind.Terminal, "no-changes"):
+                g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), b.TerminalNoOp,
+                    output => output is not null && !output.RaiRevisionRequired
+                        && string.IsNullOrEmpty(output.Diff) && !output.ContentSafetyFlagged);
+                return true;
+
             // No changes -> no-op -> scribe path.
             case (NodeKind.Rai, NodeKind.Scribe, "no-changes"):
                 g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), b.TerminalNoOp,
@@ -457,6 +464,18 @@ internal static class RunWorkflowGraphBinder
                  .AddEdge(path.Input, path.Scribe)
                  .AddEdge(path.Scribe, path.Output);
                 ctx.ScribeOutputs.Add(path.Output);
+                return true;
+            }
+
+            // Producer-only workflow -> direct successful completion.
+            case (NodeKind.Agent, NodeKind.Terminal, null):
+            {
+                var terminal = s.AgentToTerminalAdapter(edge);
+                g.AddEdge<AgentTurnOutput>(
+                    s.ResolveAgentNode(fromNode),
+                    terminal,
+                    IsSuccessfulAgentTurn);
+                ctx.DirectTerminalOutputs.Add(terminal);
                 return true;
             }
 
@@ -831,6 +850,11 @@ internal static class RunWorkflowGraphBinder
             g.WithOutputFrom(b.TerminalDeclined);
             return;
         }
+        if (incoming.Any(e => string.Equals(e.When, "no-changes", StringComparison.Ordinal)))
+        {
+            g.WithOutputFrom(b.TerminalNoOp);
+            return;
+        }
         if (incoming.Any(e => string.Equals(e.When, "approved", StringComparison.Ordinal)
                            || string.Equals(e.When, "pass", StringComparison.Ordinal)))
         {
@@ -840,6 +864,12 @@ internal static class RunWorkflowGraphBinder
                     $"Cannot bind outputs for terminal node '{terminal.Id}': it is reached from an approved/pass " +
                     "review verdict but no direct terminal output executor was wired.", terminal.Id);
             g.WithOutputFrom(outputs);
+            return;
+        }
+        if (incoming.Any(e => e.When is null)
+            && ctx.DirectTerminalOutputs.Distinct().ToArray() is { Length: > 0 } directOutputs)
+        {
+            g.WithOutputFrom(directOutputs);
             return;
         }
         // A terminal reached from a scribe stage is the run's "done" sink; every scribe-output executor

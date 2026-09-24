@@ -231,6 +231,19 @@ public sealed class OpenApiEndpointsTests : IDisposable
 
         result.IsValid.Should().BeTrue(result.Error);
         RunWorkflowGraphBinder.GetBindabilityErrors(result.Definition!).Should().BeEmpty();
+
+        var publishedTransitions = grammar.GetProperty("edge").GetProperty("transitions").EnumerateArray()
+            .Select(rule => new
+            {
+                From = rule.GetProperty("from_kind").GetString(),
+                To = rule.GetProperty("to_kind").GetString(),
+                When = rule.GetProperty("when").EnumerateArray().Select(value => value.GetString()).ToArray(),
+            })
+            .ToArray();
+        publishedTransitions.Should().NotContain(rule =>
+            rule.From == "rai" && rule.To == "terminal" && rule.When.Contains("review"));
+        publishedTransitions.Should().NotContain(rule =>
+            rule.From == "rubberduck" && rule.To == "terminal");
     }
 
     [Fact]
