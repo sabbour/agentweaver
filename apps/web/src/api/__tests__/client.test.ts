@@ -261,6 +261,43 @@ describe('AgentweaverApiClient keepalive', () => {
   });
 });
 
+describe('AgentweaverApiClient agent-memory update contract', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the project-scoped agent-memory PUT route', async () => {
+    const response = {
+      id: '42',
+      agent_name: 'Smith',
+      type: 'pattern',
+      importance: 'medium',
+      content: 'Updated memory',
+      created_at: '2026-09-23T00:00:00Z',
+      updated_at: '2026-09-23T00:01:00Z',
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(response),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await expect(client.updateAgentMemory(
+      'project/1',
+      'Smith Agent',
+      '42',
+      { type: 'pattern', content: 'Updated memory' },
+    )).resolves.toEqual(response);
+
+    expect(fetchMock.mock.calls[0][0])
+      .toBe('https://api.example.test/api/projects/project%2F1/agents/Smith%20Agent/memory/42');
+    expect(fetchMock.mock.calls[0][1].method).toBe('PUT');
+    expect(fetchMock.mock.calls[0][1].body).toBe('{"type":"pattern","content":"Updated memory"}');
+  });
+});
+
 // #208 point 5 regression coverage: an AbortSignal passed to a metrics-fetching client method must
 // reach the underlying `fetch` call so callers (DashboardPage/OverviewPage) can actually cancel
 // in-flight requests on unmount/range-change/overlapping-poll instead of the option being a no-op.

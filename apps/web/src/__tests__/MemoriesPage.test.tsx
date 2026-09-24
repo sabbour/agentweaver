@@ -11,7 +11,7 @@ import {
   it,
   vi,
 } from 'vitest';
-import type { DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
+import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -22,6 +22,8 @@ vi.mock('../api/apiClient', () => ({
     mergeDecisionInboxEntry: vi.fn(),
     promoteDecisionInboxEntry: vi.fn(),
     rejectDecisionInboxEntry: vi.fn(),
+    createAgentMemory: vi.fn(),
+    updateAgentMemory: vi.fn(),
   },
 }));
 
@@ -121,6 +123,19 @@ function makeSession(id: string, over?: Partial<SessionHistoryDto>): SessionHist
     serialized_state: null,
     started_at: '2026-03-10T12:00:00Z',
     ended_at: '2026-03-10T12:15:00Z',
+    ...over,
+  };
+}
+
+function makeMemory(id: string, over?: Partial<AgentMemoryDto>): AgentMemoryDto {
+  return {
+    id,
+    agent_name: 'Smith',
+    type: 'learning',
+    importance: 'medium',
+    content: 'Before update',
+    created_at: '2026-09-23T00:00:00Z',
+    updated_at: '2026-09-23T00:00:00Z',
     ...over,
   };
 }
@@ -255,6 +270,44 @@ describe('MemoriesPage — Decisions tab', () => {
     expect(
       vi.mocked(apiClient.getDecisionsInbox).mock.calls.some(([, options]) => options?.page === 1 && options?.pageSize === 25),
     ).toBe(true);
+  });
+});
+
+describe('MemoriesPage — Agent memory tab', () => {
+  beforeEach(() => {
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getProjectSessions).mockResolvedValue(page([]));
+  });
+
+  it('updates memory and reads the durable value back after refresh', async () => {
+    let stored = makeMemory('42');
+    vi.mocked(apiClient.getProjectMemory).mockImplementation(async () => page([stored]));
+    vi.mocked(apiClient.updateAgentMemory).mockImplementation(async (_projectId, _agentName, _memoryId, body) => {
+      stored = { ...stored, ...body, updated_at: '2026-09-23T00:01:00Z' };
+      return stored;
+    });
+
+    const first = renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Agent memory' }));
+    await waitFor(() => expect(screen.getByText('Before update')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    fireEvent.change(screen.getByDisplayValue('Before update'), { target: { value: 'After update' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiClient.updateAgentMemory).toHaveBeenCalledWith(
+      'proj-001',
+      'Smith',
+      '42',
+      { type: 'learning', content: 'After update' },
+    ));
+    await waitFor(() => expect(screen.getByText('After update')).toBeTruthy());
+
+    first.unmount();
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Agent memory' }));
+    await waitFor(() => expect(screen.getByText('After update')).toBeTruthy());
   });
 });
 

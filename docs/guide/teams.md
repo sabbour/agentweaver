@@ -179,7 +179,7 @@ The **Agent Memory** tab shows individual memory entries for each agent — lear
 - A **type** label
 - The **content**
 
-You can create entries manually and update existing ones from this tab.
+Project contributors can create entries and update an existing entry's type and content from this tab. Editing an approved entry returns it to `pending` and clears its prior approval so an owner or verified Coordinator must review the changed content again.
 
 Memory and decisions carry provenance (`human`, `run`, or `legacy`) and a trust state:
 
