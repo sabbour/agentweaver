@@ -98,7 +98,8 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     [Fact]
     public async Task ReArm_OrphanedRunningSubtask_ReconcilesTerminalChild_DispatchesDependent_AdvancesPlan()
     {
-        const string coord = "coord-rearm-1";
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
         // s0: running, but its child already reached assemble_ready in the store (the orphaned case).
         // s1: pending, depends on s0 — blocked forever until s0 is reconciled.
         var child0 = await SeedChildRunAsync(RunStatus.AssembleReady);
@@ -153,7 +154,8 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     [Fact]
     public async Task ReArm_StalledOrphanedChild_FailsSubtask_WithGuidance_AndBumpsRecoveryAttempts()
     {
-        const string coord = "coord-stall-1";
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
         // Child run is still in-progress in the store (no terminal status) and has no live stream/watch
         // loop, with a start time well in the past — a genuinely stalled/orphaned child.
         var child0 = await SeedChildRunAsync(RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddHours(-1));
