@@ -397,13 +397,15 @@ public sealed class CoordinatorRunService
         RunApprovalPolicySnapshot approvalSnapshot,
         string confirmedBy,
         CancellationToken ct,
-        EffectiveModelProviderResult? effectiveProvider = null)
+        EffectiveModelProviderResult? effectiveProvider = null,
+        ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null)
     {
         var approvalPolicy = approvalSnapshot.Policy;
         await ActivatePersistedRunAsync(
                 reservedRun,
                 approvalPolicy,
                 effectiveProvider: effectiveProvider,
+                effectiveProviderBoundary: effectiveProviderBoundary,
                 approvalPolicySource: approvalSnapshot.Source,
                 approvalPolicyCapturedAt: approvalSnapshot.CapturedAt,
                 approvalPolicySettingsUpdatedAt: approvalSnapshot.SettingsUpdatedAt)

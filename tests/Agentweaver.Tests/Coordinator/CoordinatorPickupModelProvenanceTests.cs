@@ -27,7 +27,7 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
 
     public CoordinatorPickupModelProvenanceTests()
     {
-        _factory = new CoordinatorWebApplicationFactory();
+        _factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
         _owner = _factory.CreateOwnerClient();
     }
 
@@ -266,6 +266,8 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         drafted.Should().BeTrue("the test changes or removes the configuration at the first draft boundary");
         var claimed = await backlogStore.GetAsync(pid, task.Id);
         var run = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(claimed!.RunId!.Value);
+        run!.ModelId.Should().Be(accepted.Model,
+            "accepted execution-key pickups must reserve the frozen BYOK model");
         var boundary = await _factory.Services.GetRequiredService<IRunModelProviderBoundaryResolver>()
             .ResolveDurableProviderBoundaryAsync(run!, CancellationToken.None);
 
@@ -279,9 +281,18 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
     {
         var projectId = await CreateProjectAsync();
         var pid = ProjectId.Parse(projectId);
+        const string conflictingCopilotModel = "copilot-project-model";
+        const string conflictingRoleModel = "role-default-model";
         ByokProviderConfiguration provider;
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
+            var projects = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+            var storedProject = await projects.GetAsync(pid);
+            await projects.UpdateProviderSettingsAsync(
+                pid,
+                storedProject!.ProviderSettings with { GitHubCopilotModel = conflictingCopilotModel },
+                DateTimeOffset.UtcNow);
+
             var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
             provider = await byok.AddAsync(
                 new ByokProviderConfiguration(
@@ -304,6 +315,9 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
             });
             await db.SaveChangesAsync();
         }
+        WriteRoleDefaultModel(
+            (await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(pid))!.WorkingDirectory,
+            conflictingRoleModel);
 
         await using var invocationScope = _factory.Services.CreateAsyncScope();
         var invocations = invocationScope.ServiceProvider.GetRequiredService<IAutomationInvocationService>();
@@ -332,14 +346,45 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         await _factory.Services.GetRequiredService<CoordinatorPickupService>()
             .TryPickupAsync(project!, task, CancellationToken.None);
 
-        var drafted = await WaitForDraftAsync(
-            _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
-                .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject);
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var drafted = await WaitForDraftAsync(drafter);
         drafted.Should().BeTrue();
         var claimed = await backlogStore.GetAsync(pid, task.Id);
         var run = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(claimed!.RunId!.Value);
         run!.ModelSource.Should().Be(ModelSource.Byok);
+        run.ModelId.Should().Be(provider.Model)
+            .And.NotBe(conflictingCopilotModel);
         run.Result.Should().NotBe("operation_requires_github_copilot");
+        drafter.LastInput!.ModelId.Should().Be(provider.Model);
+
+        var entry = _factory.Services.GetRequiredService<RunStreamStore>().Get(run.Id.ToString());
+        var providerEvent = entry!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.RunModelProviderResolved);
+        JsonSerializer.SerializeToElement(providerEvent.Payload)
+            .GetProperty("modelId").GetString().Should().Be(provider.Model);
+
+        var plan = await WaitForWorkPlanAsync(run.Id.ToString());
+        var subtasks = await WaitForSubtasksAsync(plan.Id);
+        subtasks.Should().NotBeEmpty();
+        subtasks.Should().OnlyContain(subtask =>
+            subtask.SelectedModelId == provider.Model
+            && subtask.SelectedModelId != conflictingRoleModel);
+
+        await using var graphScope = _factory.Services.CreateAsyncScope();
+        var graphDb = graphScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtaskIds = subtasks.Select(subtask => subtask.Id).ToHashSet();
+        var dependencies = graphDb.SubtaskDependencies
+            .Where(edge => subtaskIds.Contains(edge.SubtaskId))
+            .Select(edge => new ValueTuple<int, int>(edge.SubtaskId, edge.DependsOnSubtaskId))
+            .ToList();
+        var graph = CoordinatorGraphDescriptor.Build(
+            run.Id.ToString(),
+            subtasks,
+            dependencies,
+            coordinatorModel: run.ModelId);
+        graph.Nodes.Where(node => node.Role is "coordinator" or "subtask")
+            .Should().OnlyContain(node => node.Model == provider.Model);
     }
 
     private async Task<string> CreateProjectAsync()
@@ -363,5 +408,62 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         while (drafter.LastInput is null && DateTime.UtcNow < deadline)
             await Task.Delay(50);
         return drafter.LastInput is not null;
+    }
+
+    private async Task<WorkPlan> WaitForWorkPlanAsync(string runId)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = db.WorkPlans.SingleOrDefault(candidate => candidate.CoordinatorRunId == runId);
+            if (plan is not null)
+                return plan;
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException("The deterministic decomposition did not persist a work plan.");
+    }
+
+    private async Task<List<Subtask>> WaitForSubtasksAsync(int workPlanId)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var subtasks = scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Subtasks
+                .Where(subtask => subtask.WorkPlanId == workPlanId)
+                .ToList();
+            if (subtasks.Count > 0)
+                return subtasks;
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException("The deterministic decomposition did not persist subtasks.");
+    }
+
+    private static void WriteRoleDefaultModel(string workingDirectory, string model)
+    {
+        File.WriteAllText(
+            Path.Combine(workingDirectory, ".squad", "casting", "registry.json"),
+            $$"""
+            {
+              "agents": {
+                "Alpha": {
+                  "name": "Alpha",
+                  "persistent_name": "Alpha",
+                  "universe": "Inception",
+                  "default_model": "{{model}}",
+                  "status": "Active",
+                  "created_at": "2026-01-01T00:00:00Z",
+                  "previous_name": null,
+                  "succeeded_by": null,
+                  "retired_at": null,
+                  "charter_path": ".squad/agents/alpha/charter.md"
+                }
+              }
+            }
+            """);
     }
 }
