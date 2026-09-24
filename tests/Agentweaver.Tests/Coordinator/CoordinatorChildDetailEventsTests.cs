@@ -220,6 +220,63 @@ public sealed class CoordinatorChildDetailEventsTests : IDisposable
     }
 
     [Fact]
+    public async Task GetEvents_SystemPromptProjection_AllowsCanonicalByokProviderOnly()
+    {
+        const string providerSecret = "private-provider-secret";
+        var childRunId = await InsertChildRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunId.New().ToString(), "5");
+        var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();
+        var workflowFactory = _factory.Services.GetRequiredService<RunWorkflowFactory>();
+        var entry = streamStore.Create(childRunId, CoordinatorWebApplicationFactory.OwnerUser);
+        entry.RecordNext(EventTypes.AgentSystemPrompt, new
+        {
+            provider = "byok",
+            runId = childRunId,
+            projectId = Guid.NewGuid().ToString("D"),
+            baseCharacters = 100,
+            runContextCharacters = 0,
+            skillCharacters = 0,
+            separatorCharacters = 0,
+            taskCharacters = 10,
+            toolDeclarationCharacters = 30,
+            skillDeliveryMode = "none",
+            totalCharacters = 140,
+            estimatedTokens = 35,
+            callableMemoryGuidanceIncluded = false,
+            providerId = providerSecret,
+            providerType = providerSecret,
+            model = providerSecret,
+            apiKey = providerSecret,
+        });
+        entry.RecordNext(EventTypes.AgentSystemPrompt, new
+        {
+            provider = providerSecret,
+            runId = childRunId,
+            baseCharacters = 1,
+        });
+        streamStore.Complete(childRunId);
+        await workflowFactory.PersistRunEventsAsync(childRunId);
+
+        var response = await _owner.GetAsync($"/api/runs/{childRunId}/events");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var events = await response.Content.ReadFromJsonAsync<List<EventDto>>();
+        var prompts = events!.Where(e => e.Type == EventTypes.AgentSystemPrompt).ToList();
+        var prompt = prompts[0];
+
+        prompts.Should().HaveCount(2);
+        prompt.Payload.GetProperty("provider").GetString().Should().Be("byok");
+        prompt.Payload.EnumerateObject().Select(property => property.Name).Should().BeEquivalentTo(
+            "provider", "runId", "projectId", "baseCharacters", "runContextCharacters",
+            "skillCharacters", "separatorCharacters", "taskCharacters", "toolDeclarationCharacters",
+            "skillDeliveryMode", "totalCharacters", "estimatedTokens",
+            "callableMemoryGuidanceIncluded", "timestamp_utc");
+        prompt.Payload.GetRawText().Should().NotContain(providerSecret);
+        prompts[1].Payload.TryGetProperty("provider", out _).Should().BeFalse(
+            "provider identities and arbitrary values must not pass the fixed copilot/byok allowlist");
+        JsonSerializer.Serialize(prompts).Should().NotContain(providerSecret);
+    }
+
+    [Fact]
     public async Task GetEvents_ToolErrorsAreRedactedAndBoundedForDiagnostics()
     {
         var childRunId = await InsertChildRunAsync(

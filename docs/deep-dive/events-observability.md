@@ -26,10 +26,12 @@ block, separators, task, and provider declarations, plus a fixed skill delivery 
 It is separate from `memory.context_composition`, which records the #1241 structured-context
 selection and omission results rather than prompt sizing.
 
-Copilot turns also emit `agent.system_prompt` from the same composition evidence. This includes the
-AgentHost-backed operator assistant path as well as coordinator/project turns. The durable event
-contains the same bounded metadata plus `callableMemoryGuidanceIncluded`, which records whether the
-actual prompt-composition branch added callable project-memory guidance. Prompt text and hashes,
+Copilot SDK turns also emit `agent.system_prompt` from the same composition evidence. This includes
+the AgentHost-backed operator assistant path, for both GitHub Copilot and BYOK, as well as
+coordinator/project turns. The durable event contains the same bounded metadata plus
+`callableMemoryGuidanceIncluded`, which records whether the actual prompt-composition branch added
+callable project-memory guidance. Its provider field is only the canonical `copilot` or `byok` token;
+provider/configuration identifiers, types, model names, endpoints, prompt text and hashes,
 task/skill/charter content, tool names or schemas, credentials, PII, and unknown fields are never
 part of the public contract. REST and SSE rebuild a strict allowlisted projection, including for
 historical rows.

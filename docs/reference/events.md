@@ -48,7 +48,7 @@ serialization.
 | `agent.message.delta` | When the model streams a chunk of visible text from the GitHub Copilot SDK runner | `delta`, `messageId` |
 | `agent.turn.end` | When the model finishes a turn (closes the turn bubble in the frontend) | `turnId` |
 | `agent.intent` | When the agent calls `report_intent` before a major step | `intent` |
-| `agent.system_prompt` | Once for each Copilot provider turn after the system prompt is composed | The same bounded fields as `agent.runtime_context`, plus `callableMemoryGuidanceIncluded` (boolean); never prompt content |
+| `agent.system_prompt` | Once for each supported provider turn after the system prompt is composed | The same bounded fields as `agent.runtime_context`, plus `callableMemoryGuidanceIncluded` (boolean); never prompt content |
 | `agent.tools` | At run start, listing the tools registered for this run | `tools` (string array of tool names) |
 | `agent.runtime_context` | Once for each provider agent turn after the prompt and provider tool declarations are assembled | `provider`, `runId`, `projectId`, `baseCharacters`, `runContextCharacters`, `skillCharacters`, `separatorCharacters`, `taskCharacters`, `toolDeclarationCharacters`, `skillDeliveryMode` (`none`, `file`, `inline`, `mixed`), `totalCharacters`, `estimatedTokens` |
 | `memory.context_composition` | After the structured memory context is selected for a run or coordinator decomposition | `included`, `omittedMemoryCount`, `omittedSessionCount`, `omissionCauses`; no prompt text, records, identifiers, or size measurements |
@@ -143,11 +143,13 @@ SDK-internal tools (`report_outcome`, `glob`) are suppressed from the event stre
 
 ### `agent.runtime_context`
 
-All supported GitHub Copilot execution paths emit the same bounded composition record once per agent
-turn, including coordinator/project turns and the AgentHost-backed operator assistant.
-It contains only scalar character counts, the stable run/project correlation, provider name, and the
-fixed delivery-mode token; it never contains prompt or task text, skill names or content, tool names,
-tool arguments or declarations, credentials, or exception text. This is separate from
+All supported Copilot SDK execution paths emit the same bounded composition record once per agent
+turn, including coordinator/project turns and the AgentHost-backed operator assistant using either
+GitHub Copilot or BYOK. It contains only scalar character counts, the stable run/project correlation,
+the canonical provider token (`copilot` or `byok`), and the fixed delivery-mode token; it never
+contains provider type, provider/configuration identifiers, model names, endpoints, prompt or task
+text, skill names or content, tool names, tool arguments or declarations, credentials, or exception
+text. This is separate from
 `memory.context_composition`, which reports #1241 structured-memory selection and omission facts.
 
 The counts measure the exact assembled fragments. `separatorCharacters` includes the base-to-context
@@ -162,7 +164,7 @@ not use the project-run prompt sectioning scheme. The invariant is:
 
 ### `agent.system_prompt`
 
-All supported GitHub Copilot execution paths emit this durable metadata-only event once per provider
+All supported Copilot SDK execution paths emit this durable metadata-only event once per provider
 turn, using the same composition evidence as `agent.runtime_context`. Its payload contains the same
 run/project correlation, scalar character counts, fixed skill-delivery token, total, and planning
 estimate, plus `callableMemoryGuidanceIncluded`. That boolean is computed by the branch that decides
