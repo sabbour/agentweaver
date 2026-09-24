@@ -276,8 +276,11 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         boundary.ByokProviderFingerprint.Should().Be(accepted.ExecutionFingerprint());
     }
 
-    [Fact]
-    public async Task TrustedAutomationPickup_UsesActivatedByokWithoutBrowserExecutionKey()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TrustedAutomationPickup_UsesFrozenByokForChildrenAfterProviderChangesOrRemoval(
+        bool removeProvider)
     {
         var projectId = await CreateProjectAsync();
         var pid = ProjectId.Parse(projectId);
@@ -385,6 +388,76 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
             coordinatorModel: run.ModelId);
         graph.Nodes.Where(node => node.Role is "coordinator" or "subtask")
             .Should().OnlyContain(node => node.Model == provider.Model);
+
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            if (removeProvider)
+                await byok.RemoveAsync(provider.Id, CancellationToken.None);
+            else
+                await byok.UpdateAsync(
+                    provider.Id,
+                    provider with { Model = "replacement-model", ApiKey = "replacement-key" },
+                    CancellationToken.None);
+        }
+
+        Run? launchedChild = null;
+        ResolvedRunModelProviderBoundary? launchedBoundary = null;
+        var dispatch = _factory.Services.GetRequiredService<CoordinatorDispatchService>();
+        var eventStream = _factory.Services.GetRequiredService<IRunEventStream>();
+        dispatch.StartChildRunOverride = async (child, ct) =>
+        {
+            launchedChild = child;
+            await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(child, ct);
+            launchedBoundary = await _factory.Services
+                .GetRequiredService<IRunModelProviderBoundaryResolver>()
+                .ResolveDurableProviderBoundaryAsync(child, ct);
+            await eventStream.AppendAsync(
+                child.Id.ToString(),
+                new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }),
+                ct);
+            await eventStream.CompleteAsync(child.Id.ToString(), ct);
+        };
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            try
+            {
+                await dispatch.DispatchOneAsync(
+                    new CoordinatorDispatchContext(
+                        run.Id.ToString(),
+                        run.RepositoryPath,
+                        run.OriginatingBranch,
+                        run.SubmittingUser,
+                        run.ProjectId),
+                    plan.Id,
+                    subtasks[0].Id,
+                    subtasks.ToDictionary(subtask => subtask.Id, subtask => subtask.Status),
+                    [],
+                    new CoordinatorDispatchService.SeqCounter(),
+                    cts.Token);
+            }
+            catch (InvalidOperationException ex) when (
+                launchedChild is not null
+                && ex.Message.Contains("RunRecord", StringComparison.Ordinal))
+            {
+                // This focused host keeps run storage outside MemoryDbContext. Dispatch has already
+                // launched and persisted the child; only the unrelated post-launch graph projection
+                // cannot query RunRecord through this test host's reduced EF model.
+            }
+        }
+        finally
+        {
+            dispatch.StartChildRunOverride = null;
+        }
+
+        launchedChild.Should().NotBeNull();
+        launchedChild!.ModelSource.Should().Be(ModelSource.Byok);
+        launchedChild.ModelId.Should().Be(provider.Model);
+        launchedBoundary.Should().NotBeNull();
+        launchedBoundary!.Provider.Should().BeOfType<EffectiveModelProviderResult.Byok>();
+        launchedBoundary.ByokProviderConfiguration.Should().Be(provider);
+        launchedBoundary.ByokProviderFingerprint.Should().Be(provider.ExecutionFingerprint());
     }
 
     private async Task<string> CreateProjectAsync()

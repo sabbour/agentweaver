@@ -850,7 +850,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _assembly.StartAssembly(context);
     }
 
-    private async Task<string?> DispatchOneAsync(
+    internal async Task<string?> DispatchOneAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
         int subtaskId,
@@ -899,15 +899,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (childBaseBranch is null)
             return null;
 
-        // A child run is served by the SAME effective model provider as its coordinator, but the
-        // durable source must reflect the resolver's actual result — a hardcoded literal made every
-        // BYOK child run persist (and render) as GitHub Copilot.
-        var effectiveProvider = await ResolveEffectiveProviderAsync(context.ProjectId, ct).ConfigureAwait(false);
-
+        Run? coordinatorRun = null;
+        ResolvedRunModelProviderBoundary? coordinatorProviderBoundary = null;
         RunApprovalPolicySnapshot? childApprovalSnapshot = null;
         if (_runStore is not null && RunId.TryParse(context.CoordinatorRunId, out var coordinatorRunId))
         {
-            var coordinatorRun = await _runStore.GetAsync(coordinatorRunId, ct).ConfigureAwait(false);
+            coordinatorRun = await _runStore.GetAsync(coordinatorRunId, ct).ConfigureAwait(false);
+            if (coordinatorRun is not null)
+            {
+                coordinatorProviderBoundary = await _orchestrator
+                    .ResolveDurableProviderBoundaryAsync(coordinatorRun, ct)
+                    .ConfigureAwait(false);
+            }
             if (coordinatorRun?.GetApprovalPolicySnapshot() is { } parentSnapshot)
             {
                 childApprovalSnapshot = new RunApprovalPolicySnapshot(
@@ -918,19 +921,22 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     InheritedFromRunId: context.CoordinatorRunId);
             }
         }
+        if (coordinatorRun is null || coordinatorProviderBoundary is null)
+            throw new InvalidOperationException(
+                $"Coordinator dispatch cannot resolve the durable parent run boundary for {context.CoordinatorRunId}.");
 
         var childRun = new Run
         {
             Id = childRunId,
             RepositoryPath = context.RepositoryPath,
             OriginatingBranch = childBaseBranch,
-            ModelSource = effectiveProvider.ToModelSource(),
+            ModelSource = coordinatorProviderBoundary.Provider.ToModelSource(),
             Task = childTask,
             SubmittingUser = context.SubmittingUser,
             Status = RunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
             ProjectId = context.ProjectId,
-            ModelId = subtask.SelectedModelId,
+            ModelId = coordinatorProviderBoundary.ResolveEffectiveModelId(subtask.SelectedModelId),
             AgentName = subtask.AssignedAgent,
             AgentCharter = subtask.AgentCharter,
             ParentRunId = context.CoordinatorRunId,
@@ -999,19 +1005,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             EmitSubtask(context, workPlanId, running, EventTypes.SubtaskRunning, seq.Next());
 
         return childRunId.ToString();
-    }
-
-    /// <summary>
-    /// Resolves the effective model provider for <paramref name="projectId"/> through the single
-    /// shared <see cref="EffectiveModelProviderResolver"/>, so each dispatched child run persists the
-    /// provider that actually serves its model turns.
-    /// </summary>
-    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderAsync(
-        ProjectId? projectId, CancellationToken ct)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
-        return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
     }
 
     private async Task ApplyChildResultAsync(
