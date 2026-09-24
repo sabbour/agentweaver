@@ -86,7 +86,6 @@ internal static class WorkflowGrammarContract
         Transition(NodeKind.PeerReview, NodeKind.Terminal, "approved", "pass", "declined"),
         Transition(NodeKind.Rubberduck, NodeKind.HumanReview, "pass"),
         Transition(NodeKind.Rubberduck, NodeKind.Merge, "pass"),
-        Transition(NodeKind.Rubberduck, NodeKind.Terminal, "pass"),
         Transition(NodeKind.Rubberduck, NodeKind.Agent, "pass", "revise"),
     ];
 
