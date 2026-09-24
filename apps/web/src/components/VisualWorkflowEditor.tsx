@@ -26,7 +26,6 @@ import {
   AddRegular,
   ArrowJoinRegular,
   ArrowSplitRegular,
-  ArrowUploadRegular,
   BeakerRegular,
   BranchRegular,
   CheckmarkCircleRegular,
@@ -112,7 +111,6 @@ const TYPE_ROLE: Record<string, string> = {
   peer_review: 'review',
   build_test: 'review',
   open_pull_request: 'action',
-  publish: 'agent',
   check: 'rai',
   fan_out: 'subtask',
   fan_in: 'assembly',
@@ -128,7 +126,6 @@ const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
   peer_review: 'gate',
   build_test: 'gate',
   open_pull_request: 'action',
-  publish: 'action',
   check: 'gate',
   fan_out: 'action',
   fan_in: 'action',
@@ -140,7 +137,7 @@ const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
 };
 
 // Node types whose `agent` field is meaningful (FR-045 type-aware authoring).
-const AGENT_TYPES = new Set(['prompt', 'peer_review', 'build_test', 'coordinator_composed', 'publish']);
+const AGENT_TYPES = new Set(['prompt', 'peer_review', 'build_test', 'coordinator_composed']);
 const READONLY_NODE_TYPES = new Set(['merge', 'scribe']);
 
 const SPECIAL_GATES = [
@@ -217,7 +214,6 @@ const NODE_TYPE_META: Record<string, { Icon: ComponentType; description: string;
   peer_review: { Icon: PeopleTeamRegular, description: "Another agent reviews the previous step's output.", group: 'gates' },
   check: { Icon: CheckmarkCircleRegular, description: 'Generic verdict gate that branches on an outcome.', group: 'gates' },
   open_pull_request: { Icon: BranchRegular, description: 'Open a pull request on the connected GitHub repository.', group: 'actions' },
-  publish: { Icon: ArrowUploadRegular, description: 'Package or deliver approved output with an agent turn.', group: 'actions' },
   fan_out: { Icon: ArrowSplitRegular, description: 'Split work into parallel subtasks.', group: 'flow' },
   fan_in: { Icon: ArrowJoinRegular, description: 'Gather parallel subtask results back together.', group: 'flow' },
   coordinator_composed: { Icon: FlowchartRegular, description: 'Delegate to a nested coordinator sub-workflow.', group: 'flow' },
@@ -564,7 +560,7 @@ function buildGraph(
   const raw: Node[] = model.nodes.map((n) => {
     const role = TYPE_ROLE[n.type] ?? 'agent';
     const gnt = TYPE_GRAPHNODE[n.type] ?? 'action';
-    const hasEditorActions = n.type === 'prompt' || n.type === 'publish';
+    const hasEditorActions = n.type === 'prompt';
     hints[n.id] = workflowNodeSizeHint(gnt, { withEditorActions: hasEditorActions });
     return {
       id: n.id,
@@ -1322,7 +1318,7 @@ export function VisualWorkflowEditor({
                   />
                 </Field>
               )}
-              {(selectedNode.type === 'prompt' || selectedNode.type === 'publish') && (
+              {selectedNode.type === 'prompt' && (
                 <Field label="Prompt">
                   <Textarea
                     defaultValue={selectedNode.prompt ?? ''}

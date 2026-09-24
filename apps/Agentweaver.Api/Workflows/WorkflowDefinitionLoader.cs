@@ -98,6 +98,8 @@ public static class WorkflowDefinitionLoader
                 return Fail(source, $"duplicate node id '{n.Id}'.", out error);
             if (string.IsNullOrWhiteSpace(n.Type))
                 return Fail(source, $"node '{n.Id}' is missing its required 'type'.", out error);
+            if (Normalize(n.Type) == "publish")
+                return Fail(source, $"node '{n.Id}' requests unsupported capability 'publish'. Publication targets are not supported.", out error);
             if (!WorkflowGrammarContract.TryParseNodeType(n.Type, out var nodeType))
                 return Fail(source, $"node '{n.Id}' has unknown type '{n.Type}'.", out error);
             if (n.Prompt?.Length > WorkflowGrammarContract.MaxPromptCharacters)

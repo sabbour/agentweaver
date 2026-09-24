@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Agentweaver.Api.Workflows;
 
 /// <summary>
@@ -50,7 +52,7 @@ public record WorkflowGenerationResult(
 /// (FR-060) could not produce a schema-valid workflow. The message names the unresolved validation
 /// problem so the endpoint can surface a structured 400 rather than a broken draft.
 /// </summary>
-public sealed class WorkflowGenerationException : Exception
+public class WorkflowGenerationException : Exception
 {
     public WorkflowGenerationException(
         string message,
@@ -68,4 +70,18 @@ public sealed class WorkflowGenerationException : Exception
     public string Code { get; } = "workflow_generation_failed";
     public IReadOnlyList<string> ValidationErrors { get; } = [];
     public IReadOnlyList<WorkflowTransitionIssue> TransitionIssues { get; } = [];
+}
+
+/// <summary>Thrown before model execution when a requested workflow capability is unavailable.</summary>
+public sealed class WorkflowUnsupportedCapabilityException(string capability, string message)
+    : WorkflowGenerationException(message)
+{
+    public string Capability { get; } = capability;
+
+    public static WorkflowUnsupportedCapabilityException? ForDescription(string description) =>
+        Regex.IsMatch(description, @"\bpublish(?:ing|ed|ation)?\b", RegexOptions.IgnoreCase)
+            ? new(
+                "publish",
+                "Publication is not a supported workflow capability. Use an approved external publication process instead.")
+            : null;
 }

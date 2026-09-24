@@ -108,7 +108,7 @@ Click **Add node** to insert a new step, or choose **Add next step** on a node t
 
 The inspector and **YAML** are separate tabs. Changes from either surface share the same YAML draft, so **Undo**, **Redo**, **Revert to last save**, and **Discard changes** apply consistently. Use **Validate** to check that the YAML parses and that all declared gate verdicts have outgoing routes before saving.
 
-The **Actions** group includes **Open pull request**, which creates a pull request on the connected GitHub repository, and **Publish**, an agent-backed step for packaging or delivering approved output without code-merge semantics. Both types round-trip through YAML. Configure common fields in the node inspector; use the YAML view for pull-request template overrides such as `title`, `body`, `base`, `head`, and `draft`.
+The **Actions** group includes **Open pull request**, which creates a pull request on the connected GitHub repository. Generic artifact publication is not a workflow capability: generation and YAML validation reject `publish` with an `unsupported_capability` response rather than substituting an agent prompt. Configure common fields in the node inspector; use the YAML view for pull-request template overrides such as `title`, `body`, `base`, `head`, and `draft`.
 
 The **Schedule trigger** section shows whether the workflow is manual-only or scheduled. Choose **Add schedule trigger** or **Edit schedule trigger** to configure a daily, weekly, or monthly UTC schedule. Schedule changes update the editor's current YAML draft and are persisted with the rest of the workflow when you choose **Save**, so unsaved graph or YAML edits are never overwritten by a separate schedule save.
 

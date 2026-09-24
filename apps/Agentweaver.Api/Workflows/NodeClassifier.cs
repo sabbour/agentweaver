@@ -75,7 +75,6 @@ internal static class NodeClassifier
         WorkflowNodeType.PeerReview          => NodeKind.PeerReview,
         WorkflowNodeType.BuildTest           => NodeKind.PeerReview,
         WorkflowNodeType.OpenPullRequest     => NodeKind.OpenPullRequest,
-        WorkflowNodeType.Publish             => NodeKind.Agent,
         WorkflowNodeType.CoordinatorComposed => NodeKind.CoordinatorComposed,
         WorkflowNodeType.Check               => ClassifyGate(node),
         _                                    => NodeKind.Check,
