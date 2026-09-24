@@ -144,6 +144,10 @@ visibility. Run-detail defaults use `app-navigation-menu`, `run-focus-toggle`, a
 `run-operator-console`; override those IDs with `--navigation-test-id`,
 `--focus-test-id`, and `--content-test-id`. Set `--focus-mode standard`, `focused`, or
 `available` (the default) to assert the expected focus-toggle state.
+The vertical-scroll assertion performs and reverses a real root scroll, and only passes
+for scrollable root overflow modes (`auto`, `scroll`, or `overlay`), never `hidden` or
+`clip`. Per-target diagnostics serialize only changed scroll containers, blocking
+`clippedBy` ancestors, and the final reachability result.
 
 `goto` and `capture` wait up to 30 seconds for the authenticated Agentweaver app shell
 after `domcontentloaded`; a transient authentication spinner is allowed to resolve
