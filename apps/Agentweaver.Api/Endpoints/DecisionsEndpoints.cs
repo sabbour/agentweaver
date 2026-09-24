@@ -447,17 +447,20 @@ app.MapPost("/api/projects/{id}/decisions", async (
         CreatedAt = now,
         UpdatedAt = now,
     };
-    memoryDb.Decisions.Add(decision);
-    await memoryDb.SaveChangesAsync(ct);
+    var (storedDecision, created) = await MemoryWriteDeduplicator
+        .GetOrCreateDecisionAsync(memoryDb, decision, ct);
     await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
-    return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
+    var response = new
     {
-        decision.Id, decision.AgentName, decision.Type, decision.Status,
-        decision.Title, decision.Content, decision.Rationale, decision.Tags,
-        decision.SourceKind, decision.SourceIdentity, decision.SourceRunId,
-        decision.TrustState, decision.ApprovedBy, decision.ApprovedAt,
-        created_at = decision.CreatedAt,
-    });
+        storedDecision.Id, storedDecision.AgentName, storedDecision.Type, storedDecision.Status,
+        storedDecision.Title, storedDecision.Content, storedDecision.Rationale, storedDecision.Tags,
+        storedDecision.SourceKind, storedDecision.SourceIdentity, storedDecision.SourceRunId,
+        storedDecision.TrustState, storedDecision.ApprovedBy, storedDecision.ApprovedAt,
+        created_at = storedDecision.CreatedAt,
+    };
+    return created
+        ? Results.Created($"/api/projects/{id}/decisions/{storedDecision.Id}", response)
+        : Results.Ok(response);
 });
 
 // PUT /api/projects/{id}/decisions/{decisionId}
@@ -505,6 +508,7 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     decision.ApprovedBy = approver!.SourceIdentity;
     decision.ApprovedAt = DateTimeOffset.UtcNow;
     decision.UpdatedAt = DateTimeOffset.UtcNow;
+    MemoryWriteDeduplicator.RefreshDecisionIdentity(decision);
     await memoryDb.SaveChangesAsync(ct);
     await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new

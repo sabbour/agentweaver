@@ -18,6 +18,7 @@ public sealed class AgentMemory
     public string TrustState { get; set; } = MemoryTrustStates.Legacy;
     public string? ApprovedBy { get; set; }
     public DateTimeOffset? ApprovedAt { get; set; }
+    public string? IdentityKey { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

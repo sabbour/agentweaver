@@ -27,11 +27,7 @@ public static class DecisionPromotion
         string approvedBy,
         CancellationToken ct = default)
     {
-        entry.Status = "merged";
-        entry.UpdatedAt = now;
-        entry.MergedAt = now;
-
-        var decision = new Decision
+        var candidate = new Decision
         {
             ProjectId = entry.ProjectId,
             AgentName = entry.AgentName,
@@ -49,8 +45,12 @@ public static class DecisionPromotion
             CreatedAt = now,
             UpdatedAt = now,
         };
-        db.Decisions.Add(decision);
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        var (decision, _) = await MemoryWriteDeduplicator
+            .GetOrCreateDecisionAsync(db, candidate, ct)
+            .ConfigureAwait(false);
+        entry.Status = "merged";
+        entry.UpdatedAt = now;
+        entry.MergedAt = now;
         entry.DecisionId = decision.Id;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
         return decision;
