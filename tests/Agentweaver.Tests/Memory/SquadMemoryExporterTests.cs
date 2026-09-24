@@ -81,6 +81,66 @@ public sealed class SquadMemoryExporterTests : IDisposable
         }
     }
 
+    [Fact]
+    public void ScanInbox_RejectsDanglingDirectorySymbolicLink()
+    {
+        var inbox = Path.Combine(_directory, ".squad", "decisions", "inbox");
+        Directory.CreateDirectory(Path.GetDirectoryName(inbox)!);
+        var missingTarget = Path.Combine(Path.GetTempPath(), $"agentweaver-missing-{Guid.NewGuid():N}");
+        try
+        {
+            try
+            {
+                Directory.CreateSymbolicLink(inbox, missingTarget);
+            }
+            catch (IOException) when (OperatingSystem.IsWindows())
+            {
+                return; // Windows without developer mode cannot create the fixture.
+            }
+
+            var scan = new SquadMemoryImporter(_directory).ScanInbox();
+
+            scan.Entries.Should().BeEmpty();
+            scan.Conflicts.Should().ContainSingle(conflict =>
+                conflict.Reason.Contains("symbolic links or reparse points", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(inbox) || new DirectoryInfo(inbox).LinkTarget is not null)
+                Directory.Delete(inbox);
+        }
+    }
+
+    [Fact]
+    public void ScanAcceptedDecisions_RejectsDanglingFileSymbolicLink()
+    {
+        var decisionsDirectory = Path.Combine(_directory, ".squad");
+        Directory.CreateDirectory(decisionsDirectory);
+        var decisions = Path.Combine(decisionsDirectory, "decisions.md");
+        var missingTarget = Path.Combine(Path.GetTempPath(), $"agentweaver-missing-{Guid.NewGuid():N}.md");
+        try
+        {
+            try
+            {
+                File.CreateSymbolicLink(decisions, missingTarget);
+            }
+            catch (IOException) when (OperatingSystem.IsWindows())
+            {
+                return; // Windows without developer mode cannot create the fixture.
+            }
+
+            var act = () => new SquadMemoryImporter(_directory).ScanAcceptedDecisions();
+
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*symbolic links or reparse points*");
+        }
+        finally
+        {
+            if (File.Exists(decisions) || new FileInfo(decisions).LinkTarget is not null)
+                File.Delete(decisions);
+        }
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_directory))
