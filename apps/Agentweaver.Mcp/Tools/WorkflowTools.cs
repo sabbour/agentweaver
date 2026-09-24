@@ -72,7 +72,7 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     /// </summary>
     [McpServerTool(Name = "workflow_generate"), Description(
         "Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. " +
-        "Returns YAML draft — not yet saved. Use workflow_save to persist. " +
+        "Returns YAML draft — not yet saved. Use workflow_save to persist. Publication requests fail with an unsupported_capability response; they are never converted to agent prompts. " +
         "The agent can inspect the YAML before saving.")]
     public async Task<string> WorkflowGenerateAsync(
         [Description("Project ID")] string project_id,

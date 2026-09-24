@@ -491,6 +491,13 @@ public static class WorkflowDefinitionEndpoints
                 request.Yaml,
                 workflowId,
                 validationMode: WorkflowDefinitionValidationMode.Authoring);
+            if (loadResult.Error?.Contains("unsupported capability 'publish'", StringComparison.Ordinal) == true)
+                return Results.BadRequest(new
+                {
+                    error = "unsupported_capability",
+                    capability = "publish",
+                    message = loadResult.Error,
+                });
             if (!loadResult.IsValid || loadResult.Definition is null)
                 return Results.BadRequest(new
                 {
@@ -629,6 +636,13 @@ public static class WorkflowDefinitionEndpoints
 
             if (request is null || string.IsNullOrWhiteSpace(request.Description))
                 return Results.BadRequest(new { error = "description is required." });
+            if (WorkflowUnsupportedCapabilityException.ForDescription(request.Description) is { } unsupported)
+                return Results.BadRequest(new
+                {
+                    error = "unsupported_capability",
+                    capability = unsupported.Capability,
+                    message = unsupported.Message,
+                });
 
             // FR-061: constrain generated nodes to the project's actual cast roles so the workflow is
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.

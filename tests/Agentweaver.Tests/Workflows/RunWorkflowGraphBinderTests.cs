@@ -281,7 +281,7 @@ public sealed class RunWorkflowGraphBinderTests
             .Which.Should().ContainAll(
                 "Cannot bind start node 'review'",
                 "require an AgentTurnOutput from a preceding producer",
-                "Choose a prompt or publish node as start");
+                "Choose a prompt node as start");
 
         var bind = () => RunWorkflowGraphBinder.ValidateBindable(definition);
         bind.Should().Throw<WorkflowBindException>()

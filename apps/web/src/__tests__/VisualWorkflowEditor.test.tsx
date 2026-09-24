@@ -346,7 +346,7 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
     expect(screen.getByTestId('workflow-node-rai-check').textContent).toContain('Needs routing');
   });
 
-  it('opens a centered add-node dialog with grouped cards, but never Merge/Scribe', async () => {
+  it('opens a centered add-node dialog with grouped cards, but never unsupported or owned nodes', async () => {
     const user = userEvent.setup();
     renderEditor(YAML_WITH_UNROUTED_RAI);
 
@@ -365,7 +365,6 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
       // primitive is dropped from the palette; the preset is the single entry point.
       expect(within(addDialog).getAllByTestId('add-node-option-build-test')).toHaveLength(1);
       expect(within(addDialog).getByTestId('add-node-option-open_pull_request')).toBeDefined();
-      expect(within(addDialog).getByTestId('add-node-option-publish')).toBeDefined();
     });
 
     // The dialog keeps the existing groups as scannable sections/tabs.
@@ -382,9 +381,10 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
 
     expect(within(addDialog).queryByTestId('add-node-option-merge')).toBeNull();
     expect(within(addDialog).queryByTestId('add-node-option-scribe')).toBeNull();
+    expect(within(addDialog).queryByTestId('add-node-option-publish')).toBeNull();
   });
 
-  it('filters the add-node dialog by label and still adds the selected node type', async () => {
+  it('does not offer unsupported publication when filtering the add-node dialog', async () => {
     const user = userEvent.setup();
     renderEditor(YAML_WITH_UNROUTED_RAI);
 
@@ -395,18 +395,9 @@ describe('VisualWorkflowEditor — gate palette (#186)', () => {
     await user.type(screen.getByPlaceholderText('Search node types'), 'publish');
 
     await waitFor(() => {
-      expect(within(dialog).getByTestId('add-node-option-publish')).toBeDefined();
+      expect(within(dialog).queryByTestId('add-node-option-publish')).toBeNull();
     });
     expect(within(dialog).queryByTestId('add-node-option-rai')).toBeNull();
-
-    await user.click(within(dialog).getByTestId('add-node-option-publish'));
-    await waitFor(() => {
-      expect(screen.queryByTestId('add-node-dialog')).toBeNull();
-    });
-    expect(await screen.findByRole('textbox', { name: 'Prompt' })).toBeDefined();
-    await user.click(screen.getByRole('tab', { name: 'YAML' }));
-    expect((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value)
-      .toContain('type: publish');
   });
 
   it('renders existing merge/scribe tail nodes read-only for backward compatibility', async () => {

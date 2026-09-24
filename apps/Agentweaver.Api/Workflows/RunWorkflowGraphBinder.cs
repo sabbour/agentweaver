@@ -278,7 +278,7 @@ internal static class RunWorkflowGraphBinder
         NodeClassifier.Classify(startNode) == NodeKind.PeerReview
             ? $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): peer_review and build_test " +
               "verdict gates require an AgentTurnOutput from a preceding producer, but workflow entry supplies " +
-              "AgentTurnInput. Choose a prompt or publish node as start and route its successful output to this gate."
+              "AgentTurnInput. Choose a prompt node as start and route its successful output to this gate."
             : null;
 
     /// <summary>Resolves the executor a definition's START node is entered at.</summary>

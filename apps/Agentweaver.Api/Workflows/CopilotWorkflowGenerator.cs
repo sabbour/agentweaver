@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -57,6 +56,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.Description))
             throw new ArgumentException("A description is required to generate a workflow.", nameof(request));
+        if (WorkflowUnsupportedCapabilityException.ForDescription(request.Description) is { } unsupported)
+            throw unsupported;
 
         var basePrompt = BuildPrompt(request);
 
@@ -327,6 +328,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - merge / scribe: platform-owned final actions. DO NOT author these nodes; the coordinator
               appends its merge-and-scribe tail after authored gates.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
+            - publish is unsupported. Never replace a requested publication with a prompt or another node.
 
             {{gateRequirement}}
 
@@ -427,6 +429,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               coordinator_composed because those node types are not currently bindable at runtime.
             - Do NOT add merge or scribe nodes to generated/custom workflows; the coordinator appends
               its hardcoded tail after authored gates.
+            - publish is unsupported. Never replace a requested publication with a prompt or another node.
 
             {{gateRequirement}}
 

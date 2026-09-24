@@ -667,7 +667,21 @@ public sealed class WorkflowGeneratorTests
         result.Workflow.Id.Should().Be("weekly-aks-issue-triage");
         runner.CallCount.Should().Be(2);
         runner.LastTask.Should().Contain("Cannot bind start node 'review-prds'");
-        runner.LastTask.Should().Contain("Choose a prompt or publish node as start");
+        runner.LastTask.Should().Contain("Choose a prompt node as start");
+    }
+
+    [Fact]
+    public async Task GenerateAsync_PublicationRequest_FailsBeforeInvokingModel()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var act = () => generator.GenerateAsync(
+            new WorkflowGenerationRequest("Publish the reviewed artifact to the public site."));
+
+        var exception = await act.Should().ThrowAsync<WorkflowUnsupportedCapabilityException>();
+        exception.Which.Capability.Should().Be("publish");
+        runner.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -1540,6 +1554,35 @@ public sealed class WorkflowGeneratorTests
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("error").GetString().Should().Contain("description");
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_PublicationRequest_ReturnsStructured400BeforeJobOrModelExecution()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Unsupported Publish Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+
+        var response = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description = "Publish the approved artifact to the public site." });
+
+        response.Response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Body.GetProperty("error").GetString().Should().Be("unsupported_capability");
+        response.Body.GetProperty("capability").GetString().Should().Be("publish");
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.CallCount.Should().Be(0);
     }
 
     /// <summary>Scripted <see cref="IAgentRunner"/>: returns a queued response per call so the

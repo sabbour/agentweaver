@@ -1374,7 +1374,6 @@ public sealed class CoordinatorOrchestratorExecutor
             .Where(n => !string.IsNullOrWhiteSpace(n.Agent)
                         || !string.IsNullOrWhiteSpace(n.Role)
                         || n.Type == WorkflowNodeType.Prompt
-                        || n.Type == WorkflowNodeType.Publish
                         || n.Type == WorkflowNodeType.PeerReview)
             .Select(n =>
             {

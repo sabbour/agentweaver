@@ -1402,7 +1402,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     private static string? ResolveAgentNodeCharter(WorkflowDefinition definition)
     {
         bool IsAgentWithCharter(WorkflowNode n) =>
-            n.Type is WorkflowNodeType.Prompt or WorkflowNodeType.Publish
+            n.Type == WorkflowNodeType.Prompt
             && !string.IsNullOrWhiteSpace(n.Charter);
 
         var startNode = definition.Nodes.FirstOrDefault(
