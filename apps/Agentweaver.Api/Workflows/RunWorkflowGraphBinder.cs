@@ -756,16 +756,6 @@ internal static class RunWorkflowGraphBinder
                 return true;
             }
 
-            // Rubber-duck PASS -> terminal.
-            case (NodeKind.Rubberduck, NodeKind.Terminal, "pass"):
-            {
-                var terminal = s.ReviewToTerminalAdapter(edge);
-                g.AddEdge<WorkflowReviewDecision>(ResolveRubberduck(fromNode, b), terminal,
-                    decision => decision is not null && decision.Approved);
-                ctx.DirectTerminalOutputs.Add(terminal);
-                return true;
-            }
-
             // Rubber-duck PASS -> next agent turn.
             case (NodeKind.Rubberduck, NodeKind.Agent, "pass"):
             {

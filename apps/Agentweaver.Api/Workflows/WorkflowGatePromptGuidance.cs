@@ -7,8 +7,9 @@ internal static class WorkflowGatePromptGuidance
         MANDATORY BUILD & TEST STEP (software workflows): For any software-oriented workflow — one that
         implements, fixes, refactors, or otherwise changes code (bug fix, feature delivery, refactor,
         etc.) — you MUST include exactly one build_test gate immediately after any RAI safety check,
-        followed by exactly one human-review check gate. If peer review is requested, place it between
-        build_test and human review: RAI pass -> build_test approved -> peer_review approved -> human-review.
+        followed immediately by exactly one human-review check gate, except when peer review is requested.
+        In that case, place peer_review between build_test and human review:
+        RAI pass -> build_test approved -> peer_review approved -> human-review.
         Every reachable RAI safety gate's
         approved or pass edge MUST route directly to that build_test gate; no path may reach human review
         before this RAI/build_test sequence. Neither gate is optional or omittable. The build_test gate is
