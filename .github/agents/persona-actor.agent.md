@@ -127,7 +127,7 @@ Each dispatch supplies, in the task prompt:
       const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}<path>`, {
         method: '<METHOD>',
         headers: {
-          Authorization: `Bearer ${authorization}`,
+          Authorization: authorization,
           'Content-Type': 'application/json',
         },
         redirect: 'error',
