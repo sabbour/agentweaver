@@ -235,6 +235,7 @@ POST /oauth/register | ProtocolManaged
 POST /oauth/token | ProtocolManaged
 PUT /api/account/ai-access/byok | AuthenticatedSelf
 PUT /api/admin/byok-providers/{id} | PlatformOrMcp
+PUT /api/projects/{id}/agents/{name}/memory/{memId} | PlatformOrMcp
 PUT /api/projects/{id}/decisions/{decisionId} | PlatformOrMcp
 PUT /api/projects/{id}/preview-settings | PlatformOrMcp
 PUT /api/projects/{id}/provider-settings | PlatformOrMcp
