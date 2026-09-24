@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.33.2
+
+### Patch Changes
+
+- 7767d52: Make the required project-name field accessible to keyboard users, assistive technology, and semantic UI automation.
+- 054544d: Emit bounded system-prompt and runtime-context metadata for AgentHost-backed assistant turns.
+- 2049513: Run Blueprint generation as durable asynchronous jobs with authorized status, cancellation, retry, idempotency, provider snapshots, and one immutable result artifact.
+- 2072142: Make concurrent decision-inbox promotion atomic and idempotent across API replicas.
+- 557f36b: Filter fresh and delegated agent memory context by task relevance while preserving approved decisions, deterministic budgets, and omission telemetry.
+- f1d9cbf: Report the frozen BYOK execution model consistently across coordinator runs, work plans, topology, provider events, and child execution.
+- a102230: Make GitHub repository search results selectable through accessible semantic controls when creating a project.
+- 6fad85e: Keep coordinator runs actionable when activation or decomposition fails by recording one terminal failure with safe diagnostics and retry guidance.
+- 0910ab5: Make Scribe housekeeping recoverable and exactly-once while keeping coordinator completion nonfatal when a Scribe attempt fails.
+- 7d47687: Add deterministic desktop, constrained-height, and mobile viewport evidence to the maintained semantic UI harness.
+- 9167a9b: Run advanced workflow generation as durable, idempotent jobs with bounded provider execution, authorized status, cancellation, retry, and exactly-once draft artifacts.
+- ca916fd: Reject unsupported workflow publication requests instead of replacing them with an agent prompt.
+- a2b642c: Make harness Judge prompts produce schema-valid PASS, FAIL, and CANNOT_DETERMINE verdicts on the first response while retaining invalid raw output for diagnostics.
+- 0e311fd: Preserve accepted team decisions when repository Markdown, database exports, scheduled consolidation, and Scribe run concurrently, and report conflicting ledger entries instead of overwriting them.
+- d17a13c: Keep generated review workflows runtime-bindable by sharing one transition contract across generation, save validation, and execution, including RAI, Build & Test, peer-review, and human-review chains with structured alternatives for unsupported edges.
+- 8c79f0b: Bind generated workflow roles to confirmed project team members and return structured requirements when a role must be cast or mapped before save or run.
+- 555d5cc: Recover unavailable AgentHost dispatches once before model-turn delivery, then record one redacted retryable terminal outcome without replaying uncertain turns.
+- 3b04e3f: Deduplicate repeated and concurrent memory and decision writes while preserving superseded decision history.
+- 8d3ea37: Make agent-memory edits persist through the API while preserving project authorization and approval review.
+- db05ef0: Preserve the recorder-session provider's complete authorization header so API persona runs can access protected identity and project endpoints after managed Chrome sign-in.
+- a124c62: Preserve actionable provider and runtime failure codes across the first AgentHost turn, with safe retryability and correlation diagnostics instead of collapsing known failures into an internal error.
+- 3600ccb: Require completion-running Harness scenarios to prove repository identity, immutable checkout revision, workflow or Blueprint selection, and orchestration provenance.
+- 69e09a7: Preserve agent memory, decisions, inbox entries, and session context when migrating an existing SQLite installation to PostgreSQL.
+- bc4e551: Publish the supported workflow YAML grammar and the complete run-event query contract in OpenAPI so clients can construct valid workflows and event requests without hidden API knowledge.
+
 ## 0.33.1
 
 ### Patch Changes
