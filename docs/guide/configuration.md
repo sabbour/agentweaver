@@ -25,6 +25,13 @@ Agentweaver stores its operational state (runs, projects, the per-run event log,
 With the default `sqlite` provider, the database file is `memory.db` inside the app data directory (`%LOCALAPPDATA%/agentweaver` on Windows, the platform-equivalent local application data folder elsewhere). See [Memory reference](/reference/memory) for the schema and provider details.
 :::
 
+To preserve local state when moving from SQLite to PostgreSQL, configure the PostgreSQL
+provider and connection string, then run the API once with `--migrate-data` before
+cutover. The transfer is idempotent and includes projects, runs, supported operational
+records, agent memory, decisions, decision inbox entries, and session context. Memory
+relationships and metadata are preserved, including decision supersession, inbox links,
+status, provenance, trust and approval fields, tags, source runs, and timestamps.
+
 ### Authentication settings
 
 | Key | Default | Purpose |

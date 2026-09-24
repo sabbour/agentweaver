@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import { createRecorderSessionAuthProvider } from '../lib/auth-providers/recorder-session.mjs';
 import { AgentweaverClient } from '../lib/client.mjs';
@@ -22,6 +23,15 @@ test('recorder-session provider hands cached UI authentication to API calls in m
   const provider = cachedUiProvider();
   const authorization = await provider.getAuthorization();
   assert.equal(authorization, ['B', 'e', 'a', 'r', 'e', 'r', ' ', 'test-only-memory-value'].join(''));
+});
+
+test('PersonaActor sends the recorder provider Authorization value unchanged', async () => {
+  const contract = await readFile(
+    new URL('../../../.github/agents/persona-actor.agent.md', import.meta.url),
+    'utf8',
+  );
+  assert.match(contract, /Authorization: authorization,/);
+  assert.doesNotMatch(contract, /Authorization:\s*`Bearer \$\{authorization\}`/);
 });
 
 test('recorder-session provider reuses one cached UI session without launching another sign-in', async () => {

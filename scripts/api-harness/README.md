@@ -26,15 +26,20 @@ The JSON and YAML variants describe the same live route surface. Prefer the YAML
 `PersonaActor` is dispatched after Harness resolves the target. It drives one real
 call at a time. Its recorder-session provider reuses the target-matched cached session
 created by `scripts/ui-harness/login-chrome-default.mjs`; it does not start another
-Chrome sign-in. Raw tokens never enter prompts, argv, or transcripts. Missing,
+Chrome sign-in. The provider returns the complete `Authorization` value, which callers
+pass to the header unchanged. Raw tokens never enter prompts, argv, or transcripts. Missing,
 expired, or wrong-origin UI state fails with the login command needed to refresh it.
+Transcript, lifecycle, Judge, hash, finding, and evidence boundaries use the shared
+redactor before persistence or hashing. Sensitive descriptor/value pairs such as
+`{ "name": "Authorization", "value": "..." }` are retained structurally while their
+values are replaced, including nested arrays and JSON-encoded strings.
 
 ```powershell
 @'
 import { createRecorderSessionAuthProvider } from './scripts/api-harness/lib/auth-providers/recorder-session.mjs';
 const authorization = await createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL }).getAuthorization();
 const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
-  headers: { Authorization: `Bearer ${authorization}` },
+  headers: { Authorization: authorization },
   redirect: 'error',
 });
 console.log(await response.text());
@@ -44,6 +49,38 @@ console.log(await response.text());
 
 See `.github/agents/persona-actor.agent.md` for the full turn-by-turn contract
 (pushback grounding, never-blind-approve, stop-at-gate, transcript format).
+
+### Repository provenance for completion-required scenarios
+
+Before dispatching a completion-capable persona against repository work, Harness
+must create a disposable GitHub-origin project through the existing repository
+selection flow, or explicitly select a disposable project already connected to
+the requested `owner/repository`. A blank project is not a substitute.
+
+Re-read the project through `GET /api/projects/{id}` and call
+`GET /api/projects/{id}/workspace/refs`. The base ref includes `revision`, the
+resolved immutable commit SHA for that checkout. Validate the project response, workspace refs, and selected workflow/Blueprint
+at the executable dispatch boundary before orchestration creation:
+`node scripts/harness-shared/repository-scenario-dispatch.mjs --input
+<request.json>`. The request contains verdict join-key metadata, a setup-verdict
+path, and the repository inputs.
+Repository discovery, project listing, and workspace browsing are setup only; none
+may be reported as scenario execution.
+
+The first gate imports and invokes `preflightRepositoryScenario()` and must return
+`action: "create-orchestration"` before orchestration creation. After creation,
+run the gate again with `phase: "running"`, the same canonical repository inputs,
+orchestration run ID, metadata, and verdict path. The second phase re-runs
+`preflightRepositoryScenario()` before invoking `markRepositoryScenarioRunning()` and
+`buildSetupFailureVerdict()`; it never trusts a caller-supplied preflight or provenance
+object. PersonaActor may be dispatched only when it returns
+`action: "dispatch-persona"`; pass its `repositoryProvenance` verbatim. A running result
+is valid only when it contains `projectUrl`, `repositoryIdentity`, `resolvedRevision`,
+`workflowOrBlueprintId`, and `orchestrationUrl`. On any missing or mismatched
+precondition the gate returns `action: "stop"` and persists an actionable, schema-valid
+`agentweaver.persona-judge-verdict/v1` failure; do not dispatch the persona.
+The shared redaction boundary applies to both success and failure evidence; selection
+codes, tokens, cookies, and installation identifiers must never be persisted.
 
 ## Run the generation-seam structural check (fixed, non-persona)
 

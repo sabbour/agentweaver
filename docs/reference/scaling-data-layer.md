@@ -59,7 +59,7 @@ Under Postgres the operational stores are served behind the EF Core `MemoryDbCon
 3. **CAS already lives in EF.** The coordinator assembly store already proves that a guarded `ExecuteUpdateAsync(... .Where(Status == X))` delivers exactly-once CAS. Porting the `runs` and `backlog_tasks` claims to the same idiom is consistent, not novel.
 4. **Cross-store transactions stay trivial.** The backlog claim spans `backlog_tasks` + `runs` in one transaction today. With both tables in one context and one database, it stays a single transaction; splitting them across two databases would require a distributed/two-phase hack.
 
-The PostgreSQL path is implemented: operational stores, memory/orchestration entities, durable run events and workflow checkpoints use the shared database. The SQLite idiom table is migration/background guidance, not an outstanding staged-port plan. Changing providers does not transfer existing data.
+The PostgreSQL path is implemented: operational stores, memory/orchestration entities, durable run events and workflow checkpoints use the shared database. The SQLite idiom table is migration/background guidance, not an outstanding staged-port plan. Changing providers alone does not transfer existing data; run the API once with `Database:Provider=postgres` and `--migrate-data` before cutover to idempotently copy supported SQLite state, including agent memory, decisions, decision inbox entries, session context, and their provenance, approval, status, supersession, linkage, tags, and timestamps.
 
 ### SQLite idioms and their Postgres mapping
 

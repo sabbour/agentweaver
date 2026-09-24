@@ -197,6 +197,68 @@ public sealed class A2ATurnBridgeAgentTests
     }
 
     [Fact]
+    public async Task StreamTurnAsync_KnownProviderFailure_PreservesActionableTerminal()
+    {
+        var runner = new ThrowingTurnRunner
+        {
+            Failure = new AgentProviderException(
+                ModelSource.GitHubCopilot,
+                AgentProviderFailureKind.Authorization,
+                "github_copilot_auth_required",
+                "GitHub Copilot authorization is required.",
+                isRetryable: false),
+        };
+        var bridge = CreateBridge(runner);
+
+        var updates = new List<AgentResponseUpdate>();
+        Func<Task> act = async () =>
+        {
+            await foreach (var update in bridge.StreamTurnAsync(BuildTurnMessage("go", isRevision: false), default))
+                updates.Add(update);
+        };
+
+        await act.Should().ThrowAsync<AgentProviderException>();
+
+        var runFailed = DecodeRunFailedEvents(updates);
+        runFailed.Should().ContainSingle("one causal terminal must cross the AgentHost boundary");
+        var payload = JsonSerializer.SerializeToElement(runFailed[0].Payload);
+        payload.GetProperty("errorCode").GetString().Should().Be("github_copilot_auth_required");
+        payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
+        payload.GetProperty("message").GetString().Should().Be("GitHub Copilot authorization is required.");
+    }
+
+    [Fact]
+    public async Task StreamTurnAsync_KnownRuntimeFailure_PreservesRetryabilityAndCorrelation()
+    {
+        var runner = new ThrowingTurnRunner
+        {
+            Failure = new WorkflowAgentInfrastructureException(
+                "shell_execution_timeout",
+                "Shell execution exceeded its hard deadline.",
+                isRetryable: true),
+        };
+        var bridge = CreateBridge(runner);
+
+        var updates = new List<AgentResponseUpdate>();
+        Func<Task> act = async () =>
+        {
+            await foreach (var update in bridge.StreamTurnAsync(BuildTurnMessage("go", isRevision: false), default))
+                updates.Add(update);
+        };
+
+        await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+
+        var runFailed = DecodeRunFailedEvents(updates);
+        runFailed.Should().ContainSingle();
+        var payload = JsonSerializer.SerializeToElement(runFailed[0].Payload);
+        payload.GetProperty("errorCode").GetString().Should().Be("shell_execution_timeout");
+        payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+        payload.GetProperty("correlationId").GetString().Should().MatchRegex("^[a-f0-9]{32}$");
+        payload.GetProperty("causeChain").EnumerateArray().Select(item => item.GetString())
+            .Should().Equal("WorkflowAgentInfrastructureException");
+    }
+
+    [Fact]
     public async Task StreamTurnAsync_TurnAbortsAfterStructuredFailure_DoesNotDoubleEmit()
     {
         // If the pod already emitted its own structured RunFailed, the bridge must NOT overwrite it

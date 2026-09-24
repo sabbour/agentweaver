@@ -95,7 +95,9 @@ describe('ProjectGalleryPage repository authorization', () => {
     expect(screen.getByText('Agentweaver has access only to selected repositories for octocat.')).toBeDefined();
 
     fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'Hello World' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
     fireEvent.input(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'octocat/hello-world' } });
+    fireEvent.click(await screen.findByRole('option', { name: /^octocat\/hello-world$/ }));
     fireEvent.change(screen.getByPlaceholderText('my-repo'), { target: { value: 'hello-world' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
@@ -137,6 +139,35 @@ describe('ProjectGalleryPage repository authorization', () => {
     expect(screen.getByRole('combobox', { name: 'Repository' })).toBeDefined();
   });
 
+  it('selects and commits an exact semantic repository option', async () => {
+    const user = userEvent.setup();
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    await user.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
+
+    const repository = await screen.findByRole('combobox', { name: 'Repository' });
+    await waitFor(() => expect(repository.hasAttribute('disabled')).toBe(false));
+    await user.type(repository, 'octocat/hello-world');
+    await user.click(await screen.findByRole('option', { name: /^octocat\/hello-world$/ }));
+
+    expect((repository as HTMLInputElement).value).toBe('octocat/hello-world');
+    await user.click(repository);
+    expect(await screen.findByRole('option', { name: /^octocat\/hello-world$/, selected: true })).toBeDefined();
+  });
+
+  it('keeps repository selection operable by keyboard', async () => {
+    const user = userEvent.setup();
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    await user.click(await screen.findByRole('button', { name: 'Create from GitHub' }));
+
+    const repository = await screen.findByRole('combobox', { name: 'Repository' });
+    await waitFor(() => expect(repository.hasAttribute('disabled')).toBe(false));
+    await user.click(repository);
+    await user.type(repository, 'hello-world');
+    await user.keyboard('{ArrowDown}{Enter}');
+
+    expect((repository as HTMLInputElement).value).toBe('octocat/hello-world');
+  });
+
   it('explains an empty installation set and uses the server-provided install URL', async () => {
     vi.mocked(apiClient.listGitHubRepositorySelections).mockResolvedValue({
       repositories: [],
@@ -158,7 +189,9 @@ describe('ProjectGalleryPage repository authorization', () => {
 
     expect(await screen.findByRole('heading', { name: 'Create project from GitHub' })).toBeDefined();
     fireEvent.change(screen.getByPlaceholderText('My project'), { target: { value: 'Hello World' } });
+    fireEvent.click(screen.getByRole('combobox', { name: 'Repository' }));
     fireEvent.input(screen.getByRole('combobox', { name: 'Repository' }), { target: { value: 'octocat/hello-world' } });
+    fireEvent.click(await screen.findByRole('option', { name: /^octocat\/hello-world$/ }));
     fireEvent.change(screen.getByPlaceholderText('my-repo'), { target: { value: 'hello-world' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 

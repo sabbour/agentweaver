@@ -310,7 +310,10 @@ public sealed class BlueprintService
         WorkflowDefinition? generatedDefinition = null;
         if (!string.IsNullOrWhiteSpace(generatedWorkflowYaml))
         {
-            var loadResult = WorkflowDefinitionLoader.Load(generatedWorkflowYaml, "generated");
+            var loadResult = WorkflowDefinitionLoader.Load(
+                generatedWorkflowYaml,
+                "generated",
+                validationMode: WorkflowDefinitionValidationMode.Authoring);
             if (loadResult.IsValid && loadResult.Definition is not null)
             {
                 var wfIdError = ValidateWorkflowFileId(loadResult.Definition.Id);
@@ -744,6 +747,26 @@ public sealed class BlueprintService
         {
             return ProviderFailureResult(AgentProviderException.Classify(ModelSource.GitHubCopilot, ex)!);
         }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            const string message = "The blueprint generation provider did not complete before its deadline.";
+            return new BlueprintGenerationResult(null, [message])
+            {
+                FailureKind = BlueprintGenerationFailureKind.ProviderUnavailable,
+                ErrorCode = "blueprint_provider_timeout",
+                FailureMessage = message,
+            };
+        }
+        catch (TimeoutException)
+        {
+            const string message = "The blueprint generation provider did not complete before its deadline.";
+            return new BlueprintGenerationResult(null, [message])
+            {
+                FailureKind = BlueprintGenerationFailureKind.ProviderUnavailable,
+                ErrorCode = "blueprint_provider_timeout",
+                FailureMessage = message,
+            };
+        }
         catch (Exception ex)
         {
             _logger.LogError(
@@ -855,22 +878,23 @@ public sealed class BlueprintService
             {
                 return ProviderFailureResult(ex);
             }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return ProviderTimeoutResult();
+            }
+            catch (TimeoutException)
+            {
+                return ProviderTimeoutResult();
+            }
             catch (WorkflowGenerationException ex)
             {
                 _logger.LogWarning(ex, "Blueprint generation: IWorkflowGenerator fallback failed");
-                // Fall back gracefully: use the built-in default workflow instead.
-                warnings.Add("Workflow generation failed; the built-in default workflow was selected. Review the blueprint before applying.");
-                blueprint = new Blueprint(
-                    blueprint.Id,
-                    blueprint.Name,
-                    blueprint.Description,
-                    blueprint.Roster,
-                    [BuiltInWorkflows.DefaultWorkflowId],
-                    blueprint.ReviewPolicy,
-                    blueprint.SandboxProfile)
+                const string message = "The requested custom workflow could not be generated.";
+                return new BlueprintGenerationResult(null, [message])
                 {
-                    BespokeRoles = blueprint.BespokeRoles,
-                    SkillBindings = blueprint.SkillBindings,
+                    FailureKind = BlueprintGenerationFailureKind.ModelRunFailed,
+                    ErrorCode = "blueprint_workflow_generation_failed",
+                    FailureMessage = message,
                 };
             }
         }
@@ -891,6 +915,17 @@ public sealed class BlueprintService
             GeneratedWorkflow = generatedWorkflow,
             GeneratedWorkflowYaml = generatedWorkflowYaml,
             Warnings = warnings,
+        };
+    }
+
+    private static BlueprintGenerationResult ProviderTimeoutResult()
+    {
+        const string message = "The AI provider did not complete Blueprint generation before its deadline.";
+        return new BlueprintGenerationResult(null, [message])
+        {
+            FailureKind = BlueprintGenerationFailureKind.ProviderUnavailable,
+            ErrorCode = "blueprint_provider_timeout",
+            FailureMessage = message,
         };
     }
 

@@ -15,6 +15,13 @@ namespace Agentweaver.AgentRuntime;
 /// </summary>
 public sealed class ScribeAIAgent : CopilotAIAgent
 {
+    private static readonly ISet<string> AllowedTools = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "report_intent",
+        "report_outcome",
+        "list_inbox",
+    };
+
     public ScribeAIAgent(
         GitHubCopilotClientFactory factory,
         ISandboxExecutor executor,
@@ -39,4 +46,12 @@ public sealed class ScribeAIAgent : CopilotAIAgent
     protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
         JsonElement serializedState, JsonSerializerOptions? jsonSerializerOptions, CancellationToken cancellationToken) =>
         CreateSessionCoreAsync(cancellationToken);
+
+    protected override IList<Microsoft.Extensions.AI.AIFunction> FilterSessionTools(
+        IList<Microsoft.Extensions.AI.AIFunction> tools) =>
+        FilterAllowedTools(tools);
+
+    internal static IList<Microsoft.Extensions.AI.AIFunction> FilterAllowedTools(
+        IEnumerable<Microsoft.Extensions.AI.AIFunction> tools) =>
+        tools.Where(tool => AllowedTools.Contains(tool.Name)).ToList();
 }

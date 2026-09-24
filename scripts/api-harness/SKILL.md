@@ -6,7 +6,7 @@ request/response evidence, and emit a normalized
 end-to-end validation; use the UI or MCP harness for those surfaces.
 
 Run all commands below from the repository root. The harness requires Node 18 or
-newer. At its first authenticated call, it obtains the bearer only through the cached
+newer. At its first authenticated call, it obtains the complete `Authorization` value only through the cached
 UI-harness recorder-session provider, in memory, and never accepts bearer material in
 process arguments or borrows
 `gh auth token` or `GITHUB_TOKEN` for a remote target.
@@ -16,7 +16,8 @@ process arguments or borrows
 Agentweaver staging uses Entra Conditional Access. Before an authenticated API run,
 run the documented UI-harness Chrome Default-profile login once for that target. The
 `recorder-session` provider reads its cached UI storage/session sidecar, verifies it
-belongs to the requested origin, and returns the bearer only in memory. It never
+belongs to the requested origin, and returns the complete `Authorization` value only in
+memory. Pass that value to the header unchanged; do not add another scheme. It never
 starts a second browser sign-in or exports the value to an environment variable, CLI
 argument, transcript, finding, verdict, or log:
 
@@ -88,6 +89,28 @@ The selector warns when the strongest keyword match stops at a gate and lists
 gate-stopping candidates under `rejectedMatches`, which is a scenario-selection
 problem, not evidence of a product regression.
 
+For any completion-required scenario that will execute against a repository, require
+an explicit `owner/repository` target and preflight it before dispatch. Create a
+Harness-owned disposable project with the existing repository-selection/project
+creation APIs, or explicitly select a disposable project connected to the exact
+repository. Fetch the canonical project plus `/api/projects/{id}/workspace/refs` and select a
+workflow or applied Blueprint. Before orchestration creation, run
+`node scripts/harness-shared/repository-scenario-dispatch.mjs
+--input <request.json>` with verdict join-key metadata, a setup-verdict path,
+and the repository inputs. Create the orchestration only when it returns
+`action: "create-orchestration"`. Never substitute a blank project or count
+read-only discovery as a running scenario.
+
+After orchestration creation, run the gate again with `phase: "running"`, the
+same canonical repository inputs, orchestration run ID, metadata, and verdict path.
+The running phase re-runs repository preflight; never supply or trust a caller-created
+`repositoryPreflight` or provenance object as proof. The executable phases invoke the
+repository preflight, running marker, and setup failure verdict builder. Dispatch
+PersonaActor only when the second returns `action: "dispatch-persona"`, and pass its
+`repositoryProvenance` verbatim. If it returns `action: "stop"`, it has persisted the
+schema-valid setup failure; do not dispatch. The running evidence contains the project
+URL, repository identity, resolved revision, workflow/Blueprint ID, and orchestration URL.
+
 There is no curated list of named scenario subcommands, no per-persona fixed
 step sequence, and no scripted HTTP-calling layer standing between the driving
 actor and the target. Harness dispatches a fresh **`PersonaActor`** sub-agent
@@ -112,7 +135,7 @@ $transcript = "scripts/api-harness/transcripts/priya-live-<timestamp>.jsonl"
 import { createRecorderSessionAuthProvider } from './scripts/api-harness/lib/auth-providers/recorder-session.mjs';
 const authorization = await createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL }).getAuthorization();
 const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
-  headers: { Authorization: `Bearer ${authorization}` },
+  headers: { Authorization: authorization },
   redirect: 'error',
 });
 console.log(await response.text());

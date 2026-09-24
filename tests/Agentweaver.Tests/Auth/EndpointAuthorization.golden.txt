@@ -25,6 +25,8 @@ GET /api/auth/github/repo-app/authorization/status | PlatformOrMcp
 GET /api/auth/github/repo-app/authorizations/{transactionId} | PlatformOrMcp
 GET /api/auth/session | AuthenticatedSelf
 GET /api/blueprints | PlatformOrMcp
+GET /api/blueprints/generation-jobs/{jobId} | PlatformOrMcp
+GET /api/blueprints/generation-jobs/{jobId}/result | PlatformOrMcp
 GET /api/casting/templates | PlatformOrMcp
 GET /api/catalog/roles | PlatformOrMcp
 GET /api/diagnostics | PlatformOrMcp
@@ -79,6 +81,8 @@ GET /api/projects/{projectId}/board | PlatformOrMcp
 GET /api/projects/{projectId}/team/sync | PlatformOrMcp
 GET /api/projects/{projectId}/workflow-stages | PlatformOrMcp
 GET /api/projects/{projectId}/workflows | PlatformOrMcp
+GET /api/projects/{projectId}/workflows/generation-jobs/{jobId} | PlatformOrMcp
+GET /api/projects/{projectId}/workflows/generation-jobs/{jobId}/result | PlatformOrMcp
 GET /api/projects/{projectId}/workflows/{workflowId} | PlatformOrMcp
 GET /api/projects/{projectId}/workflows/{workflowId}/graph | PlatformOrMcp
 GET /api/projects/{projectId}/workflows/{workflowId}/trigger | PlatformOrMcp
@@ -108,6 +112,7 @@ GET /api/server/info | OperationalAnonymous
 GET /api/skill-marketplaces | PlatformOrMcp
 GET /api/system/runtime | PlatformOrMcp
 GET /api/version | OperationalAnonymous
+GET /api/workflows/grammar | OperationalAnonymous
 GET /auth/entra/authorize | ProtocolManaged
 GET /auth/entra/callback | ProtocolManaged
 GET /auth/github/copilot-app/callback | ProtocolManaged
@@ -144,6 +149,8 @@ POST /api/auth/github/repo-app/authorizations/handoff | PlatformOrMcp
 POST /api/auth/session/exchange | ProtocolManaged
 POST /api/auth/session/sign-out | AuthenticatedSelf
 POST /api/blueprints/generate | PlatformOrMcp
+POST /api/blueprints/generation-jobs/{jobId}/cancel | PlatformOrMcp
+POST /api/blueprints/generation-jobs/{jobId}/retry | PlatformOrMcp
 POST /api/blueprints/suggest | PlatformOrMcp
 POST /api/blueprints/validate | PlatformOrMcp
 POST /api/github/repository-selections | PlatformOrMcp
@@ -173,6 +180,7 @@ POST /api/projects/{id}/memory/import | PlatformOrMcp
 POST /api/projects/{id}/orchestrations | PlatformOrMcp
 POST /api/projects/{id}/role-assignments | PlatformOrMcp
 POST /api/projects/{id}/runs | PlatformOrMcp
+POST /api/projects/{id}/scribe/finalize | InternalService
 POST /api/projects/{id}/sessions | PlatformOrMcp
 POST /api/projects/{id}/skill-defaults/apply | PlatformOrMcp
 POST /api/projects/{id}/skill-defaults/preview | PlatformOrMcp
@@ -195,6 +203,8 @@ POST /api/projects/{projectId}/backlog/tasks/{taskId}/reorder | PlatformOrMcp
 POST /api/projects/{projectId}/team/sync | PlatformOrMcp
 POST /api/projects/{projectId}/workflow-events | PlatformOrMcp
 POST /api/projects/{projectId}/workflows/generate | PlatformOrMcp
+POST /api/projects/{projectId}/workflows/generation-jobs/{jobId}/cancel | PlatformOrMcp
+POST /api/projects/{projectId}/workflows/generation-jobs/{jobId}/retry | PlatformOrMcp
 POST /api/projects/{projectId}/workflows/sync | PlatformOrMcp
 POST /api/projects/{projectId}/workflows/{workflowId}/run | PlatformOrMcp
 POST /api/runs | PlatformOrMcp
@@ -225,6 +235,7 @@ POST /oauth/register | ProtocolManaged
 POST /oauth/token | ProtocolManaged
 PUT /api/account/ai-access/byok | AuthenticatedSelf
 PUT /api/admin/byok-providers/{id} | PlatformOrMcp
+PUT /api/projects/{id}/agents/{name}/memory/{memId} | PlatformOrMcp
 PUT /api/projects/{id}/decisions/{decisionId} | PlatformOrMcp
 PUT /api/projects/{id}/preview-settings | PlatformOrMcp
 PUT /api/projects/{id}/provider-settings | PlatformOrMcp

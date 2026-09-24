@@ -161,6 +161,122 @@ public sealed class MemoryContextCompilerSecurityTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task CompileForRunAsync_FiltersIrrelevantMemoryForFreshAndDelegatedAgents()
+    {
+        const string projectId = "project-relevant-memory";
+        var createdAt = DateTimeOffset.UtcNow;
+        _db.Decisions.Add(new Decision
+        {
+            ProjectId = projectId,
+            AgentName = "Coordinator",
+            Type = "architectural",
+            Status = "active",
+            Title = "Release branch topology",
+            Content = "Use dev -> release -> main.",
+            TrustState = MemoryTrustStates.Approved,
+            SourceKind = MemorySourceKinds.Human,
+            SourceIdentity = "human:owner",
+            ApprovedBy = "human:owner",
+            ApprovedAt = createdAt,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+        });
+        _db.AgentMemory.AddRange(
+            Memory(projectId, "The canonical verification command is npm run release:plan.", createdAt,
+                tags: ",release-readiness,canonical-command,"),
+            Memory(projectId, "The disposable demo accent-color preference is amber.", createdAt.AddMinutes(1),
+                tags: ",irrelevant,demo-accent,"),
+            Memory(projectId, "Release candidates must preserve the published branch topology.", createdAt.AddMinutes(2),
+                agentName: "Smith", tags: ",cross-team,"),
+            new AgentMemory
+            {
+                ProjectId = projectId,
+                AgentName = "Tank",
+                Type = "core_context",
+                Importance = "high",
+                Content = "Tank owns runtime implementation.",
+                TrustState = MemoryTrustStates.Approved,
+                SourceKind = MemorySourceKinds.Human,
+                SourceIdentity = "human:owner",
+                ApprovedBy = "human:owner",
+                ApprovedAt = createdAt,
+                CreatedAt = createdAt,
+                UpdatedAt = createdAt,
+            });
+        _db.SessionContexts.Add(new SessionContext
+        {
+            ProjectId = projectId,
+            SessionId = "session-1",
+            FocusArea = "release readiness",
+            Summary = "Current release verification.",
+            StartedAt = createdAt,
+        });
+        await _db.SaveChangesAsync();
+
+        const string task =
+            "Identify the canonical pre-release verification command and branch topology. " +
+            "Do not discuss the demo accent or amber.";
+        var compiler = new MemoryContextCompiler(_db);
+        var fresh = await compiler.CompileForRunAsync(
+            projectId, "Tank", task, includeCoreMemories: true, includeSession: true);
+        var child = await compiler.CompileForRunAsync(
+            projectId, "Tank", task, includeCoreMemories: false, includeSession: false);
+
+        foreach (var compiled in new[] { fresh, child })
+        {
+            compiled.Should().NotBeNull();
+            compiled!.Text.Should().Contain("Release branch topology")
+                .And.Contain("npm run release:plan")
+                .And.Contain("published branch topology")
+                .And.NotContain("amber");
+            compiled.OmittedMemoryCount.Should().Be(1);
+            compiled.OmissionCauses.Should().Contain("relevance");
+        }
+        fresh!.Text.Should().Contain("Tank owns runtime implementation.")
+            .And.Contain("Current release verification.");
+        child!.Text.Should().NotContain("Tank owns runtime implementation.")
+            .And.NotContain("Current release verification.");
+    }
+
+    [Fact]
+    public async Task CompileForRunAsync_PreservesDeterministicRankingAndTelemetryUnderItemPressure()
+    {
+        const string projectId = "project-relevant-memory-pressure";
+        var createdAt = DateTimeOffset.UtcNow;
+        _db.AgentMemory.AddRange(
+            Memory(projectId, "Use npm run release:plan.", createdAt,
+                tags: ",release-readiness,canonical-command,"),
+            Memory(projectId, "Keep the release checklist.", createdAt.AddMinutes(1),
+                tags: ",release-readiness,"),
+            Memory(projectId, "The disposable demo accent-color preference is amber.", createdAt.AddMinutes(2),
+                tags: ",irrelevant,demo-accent,"));
+        await _db.SaveChangesAsync();
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["MemoryContext:MaxItems"] = "1",
+            ["MemoryContext:MaxTokens"] = "4000",
+        }).Build();
+        const string task = "Identify the canonical release-readiness command.";
+
+        var fresh = await new MemoryContextCompiler(_db, configuration).CompileForRunAsync(
+            projectId, "Tank", task, includeCoreMemories: true, includeSession: true);
+        var child = await new MemoryContextCompiler(_db, configuration).CompileForRunAsync(
+            projectId, "Tank", task, includeCoreMemories: false, includeSession: false);
+        var afterRestart = await new MemoryContextCompiler(_db, configuration).CompileForRunAsync(
+            projectId, "Tank", task, includeCoreMemories: false, includeSession: false);
+
+        child.Should().BeEquivalentTo(afterRestart);
+        foreach (var compiled in new[] { fresh, child })
+        {
+            compiled!.Text.Should().Contain("npm run release:plan")
+                .And.NotContain("release checklist")
+                .And.NotContain("amber");
+            compiled.OmittedMemoryCount.Should().Be(2);
+            compiled.OmissionCauses.Should().Equal("relevance", "item_limit");
+        }
+    }
+
+    [Fact]
     public async Task CompileAsync_UsesTheCompleteEnvelopeBudgetAndOmitsWholeRecordsDeterministically()
     {
         const string projectId = "project-envelope-budget";
@@ -279,13 +395,19 @@ public sealed class MemoryContextCompilerSecurityTests : IAsyncDisposable
         defaults.OmissionCauses.Should().Contain("item_limit");
     }
 
-    private static AgentMemory Memory(string projectId, string content, DateTimeOffset createdAt) => new()
+    private static AgentMemory Memory(
+        string projectId,
+        string content,
+        DateTimeOffset createdAt,
+        string agentName = "Tank",
+        string? tags = null) => new()
     {
         ProjectId = projectId,
-        AgentName = "Tank",
+        AgentName = agentName,
         Type = "learning",
         Importance = "high",
         Content = content,
+        Tags = tags,
         TrustState = MemoryTrustStates.Approved,
         SourceKind = MemorySourceKinds.Run,
         SourceIdentity = "run:tank",

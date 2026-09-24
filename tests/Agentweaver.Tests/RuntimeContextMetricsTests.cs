@@ -166,6 +166,123 @@ public sealed class RuntimeContextMetricsTests
             .And.NotContain("context ");
     }
 
+    [Fact]
+    public async Task OperatorAssistant_EmitsExactScalarOnlyRuntimeContextForResolvedProvider()
+    {
+        const string secret = "operator-secret-canary";
+        var request = new OperatorAssistantRequest(
+            ConversationId: "conversation-123",
+            Message: $"inspect {secret}",
+            CallerUser: $"user-{secret}",
+            GitHubLogin: secret,
+            ProjectId: "project-456",
+            RunId: "conversation-123",
+            ModelId: null,
+            AgentDefinition: $"operator definition {secret}",
+            McpBrokerToken: secret,
+            History: []);
+        var declarations = Declarations();
+        var sink = new RecordingPromptSink();
+        var systemPrompt = OperatorAssistantAgent.BuildSystemPromptForTests(
+            request.AgentDefinition,
+            declarations.Count,
+            request.ProjectId,
+            request.RunId);
+
+        var metrics = await OperatorAssistantAgent.EmitPromptMetadataAsync(
+            request,
+            systemPrompt,
+            declarations,
+            ModelSource.GitHubCopilot,
+            sink,
+            CancellationToken.None);
+
+        metrics.Provider.Should().Be("copilot");
+        metrics.RunId.Should().Be("conversation-123");
+        metrics.ProjectId.Should().Be("project-456");
+        metrics.RunContextCharacters.Should().Be(0);
+        metrics.SkillCharacters.Should().Be(0);
+        metrics.SeparatorCharacters.Should().Be(0);
+        metrics.SkillDeliveryMode.Should().Be("none");
+        metrics.TotalCharacters.Should().Be(
+            metrics.BaseCharacters + metrics.TaskCharacters + metrics.ToolDeclarationCharacters);
+        metrics.EstimatedTokens.Should().Be((metrics.TotalCharacters + 3) / 4);
+        JsonSerializer.Serialize(metrics).Should().NotContain(secret)
+            .And.NotContain("safe_tool");
+        sink.Events.Should().ContainSingle().Which.Should().BeEquivalentTo((metrics, false));
+    }
+
+    [Fact]
+    public async Task OperatorAssistant_ByokPromptMetadataUsesCanonicalProviderWithoutConfigurationSecrets()
+    {
+        const string providerSecret = "private-byok-provider-secret";
+        var request = new OperatorAssistantRequest(
+            ConversationId: "conversation-byok",
+            Message: "inspect deployment",
+            CallerUser: "user-1",
+            GitHubLogin: null,
+            ProjectId: "project-1",
+            RunId: "conversation-byok",
+            ModelId: "private-model-name",
+            AgentDefinition: "You are the operator.",
+            McpBrokerToken: providerSecret,
+            History: []);
+        var sink = new RecordingPromptSink();
+        var declarations = Declarations();
+        var systemPrompt = OperatorAssistantAgent.BuildSystemPromptForTests(
+            request.AgentDefinition,
+            declarations.Count,
+            request.ProjectId,
+            request.RunId);
+
+        var metrics = await OperatorAssistantAgent.EmitPromptMetadataAsync(
+            request,
+            systemPrompt,
+            declarations,
+            ModelSource.Byok,
+            sink,
+            CancellationToken.None);
+
+        metrics.Provider.Should().Be("byok");
+        sink.Events.Should().ContainSingle().Which.Should().BeEquivalentTo((metrics, false));
+        JsonSerializer.Serialize(sink.Events).Should().NotContain(providerSecret)
+            .And.NotContain("private-model-name")
+            .And.NotContain("safe_tool");
+    }
+
     private static List<AIFunctionDeclaration> Declarations() =>
     [AIFunctionFactory.Create((string value) => value, "safe_tool")];
+
+    private sealed class RecordingPromptSink : IOperatorAssistantTurnSink
+    {
+        public List<(AgentRuntimeContextMetrics Metrics, bool GuidanceIncluded)> Events { get; } = [];
+
+        public ValueTask OnPromptMetadataAsync(
+            AgentRuntimeContextMetrics runtimeContext,
+            bool callableMemoryGuidanceIncluded,
+            CancellationToken ct)
+        {
+            Events.Add((runtimeContext, callableMemoryGuidanceIncluded));
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnToolCallAsync(string toolName, string? argumentsJson, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnToolResultAsync(string toolName, bool success, CancellationToken ct) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnMcpBrokerTokenRefreshRequiredAsync(CancellationToken ct) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask<bool> OnApprovalRequiredAsync(
+            string requestId,
+            string toolName,
+            string? argumentsJson,
+            CancellationToken ct) =>
+            ValueTask.FromResult(true);
+    }
 }

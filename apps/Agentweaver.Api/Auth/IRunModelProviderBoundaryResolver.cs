@@ -5,7 +5,15 @@ namespace Agentweaver.Api.Auth;
 public sealed record ResolvedRunModelProviderBoundary(
     EffectiveModelProviderResult Provider,
     string? ByokProviderFingerprint,
-    ByokProviderConfiguration? ByokProviderConfiguration = null);
+    ByokProviderConfiguration? ByokProviderConfiguration = null)
+{
+    public string? ResolveEffectiveModelId(string? requestedModelId) =>
+        Provider is EffectiveModelProviderResult.Byok
+            ? ByokProviderConfiguration?.Model
+                ?? throw new InvalidOperationException(
+                    "The accepted BYOK provider boundary is missing its frozen model configuration.")
+            : requestedModelId;
+}
 
 public interface IRunModelProviderBoundaryResolver
 {

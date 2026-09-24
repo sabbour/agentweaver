@@ -1,6 +1,7 @@
 namespace Agentweaver.Squad.Memory;
 
 public sealed record DecisionExportDto(
+    int RecordId,
     string AgentName,
     string Type,
     string Status,
@@ -37,3 +38,21 @@ public sealed record InboxImportDto(
     string Title,
     string Content,
     string? Rationale);
+
+public sealed record InboxImportConflict(
+    string Path,
+    string Reason);
+
+public sealed record InboxImportScanResult(
+    IReadOnlyList<InboxImportDto> Entries,
+    IReadOnlyList<InboxImportConflict> Conflicts);
+
+public sealed record DecisionImportDto(
+    int? RecordId,
+    string? ContentHash,
+    string AgentName,
+    string Type,
+    string Title,
+    string Content,
+    string? Rationale,
+    bool IsExporterOwned);

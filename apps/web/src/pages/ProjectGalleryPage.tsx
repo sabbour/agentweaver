@@ -409,8 +409,9 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
 
   const left = (
     <>
-      <Field label="Project name *">
+      <Field label="Project name" required>
         <Input
+          required
           value={d.name}
           onChange={(_, v) => { const slug = slugify(v.value); d.setName(v.value); if (!folderEdited) setWorkspaceSlug(slug); }}
           placeholder="My project"
@@ -444,7 +445,11 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
       onChange={d.setBlueprint}
       generated={generation.generated}
       onGenerate={() => void generation.generate(goal)}
+      onCancel={() => void generation.cancel()}
+      onRetry={() => void generation.retry()}
       generating={generation.generating}
+      canRetry={generation.job?.status === 'failed' || generation.job?.status === 'cancelled'}
+      jobStatus={generation.job?.status}
       generationError={generation.error}
       generateDescription={goal}
       onGenerateDescriptionChange={setGoal}
@@ -647,15 +652,19 @@ function CreateFromGitHubDialog({
               aria-label="Repository"
               freeform
               placeholder={reposLoading ? 'Loading repositories...' : 'Search or select a repository'}
-              value={d.sourceRepository}
-              onInput={(e) => { const val = (e.target as HTMLInputElement).value; setRepoFilter(val); d.setSourceRepository(val); if (val.includes('/')) applyRepo(val); }}
+              value={repoFilter}
+              selectedOptions={repos.some((repo) => repo.fullName === d.sourceRepository) ? [d.sourceRepository] : []}
+              onChange={(e) => {
+                setRepoFilter(e.target.value);
+                if (e.target.value !== d.sourceRepository) d.setSourceRepository('');
+              }}
               onOptionSelect={(_, data) => { if (data.optionValue) applyRepo(data.optionValue); }}
               disabled={reposLoading}
             >
               {filteredRepos.map((repo) => {
                 const fullName = repo.fullName ?? '';
                 return (
-                  <Option key={fullName} value={fullName} text={fullName}>
+                  <Option key={fullName} value={fullName} text={fullName} aria-label={fullName}>
                     <span className={styles.repoOption}>
                       <span className={styles.githubMark}>GH</span>
                       <Text weight="semibold">{repoDisplayName(fullName)}</Text>
@@ -735,7 +744,11 @@ function CreateFromGitHubDialog({
       targetRepository={d.sourceRepository}
       generated={generation.generated}
       onGenerate={() => void generation.generate(generateDescription)}
+      onCancel={() => void generation.cancel()}
+      onRetry={() => void generation.retry()}
       generating={generation.generating}
+      canRetry={generation.job?.status === 'failed' || generation.job?.status === 'cancelled'}
+      jobStatus={generation.job?.status}
       generationError={generation.error}
       generateDescription={generateDescription}
       onGenerateDescriptionChange={setGenerateDescription}

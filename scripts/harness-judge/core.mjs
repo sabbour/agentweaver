@@ -93,13 +93,17 @@ function verdictTemplate(metadata, persona = null) {
     surface: metadata.surface,
     runId: metadata.runId,
     timestamp: metadata.timestamp,
-    p0: { verdict: P0_VERDICTS.join(' | '), evidence: '<objective mechanics summary>' },
-    p1: { verdict: P1_VERDICTS.join(' | '), evidence: '<quality summary vs persona criteria>', criteriaCoverage: [] },
+    p0: { verdict: P0_VERDICTS.join(' | '), evidence: '<non-empty objective mechanics summary string>' },
+    p1: {
+      verdict: P1_VERDICTS.join(' | '),
+      evidence: '<non-empty quality summary string vs persona criteria>',
+      criteriaCoverage: ['<criterion: MET | PARTIAL | MISSED | CANNOT_DETERMINE - grounded reason>'],
+    },
     frustration: {
       level: 'none | mild | moderate | severe | abandoned | not_assessed',
       score: 0,
-      signals: [{ kind: '<observed signal>', evidence: '<turn refs / quote>' }],
-      rationale: '<one or two sentences grounded in observed evidence>',
+      signals: [{ kind: '<non-empty observed signal string>', evidence: '<non-empty turn refs / quote string>' }],
+      rationale: '<non-empty rationale string grounded in observed evidence>',
     },
     pushback: { count: 0, requirementMet: true, each: [] },
     cannotDetermine: [],
@@ -187,6 +191,10 @@ export function buildJudgePrompt(normalizedEvidence, ctx = {}) {
     fence(template),
     '',
     'Rules:',
+    '- `p0.evidence` and `p1.evidence` MUST each be one non-empty string. Never return an array, object, or blank string for either field.',
+    '- `p1.criteriaCoverage` MUST be a JSON array. Use one concise string per authored criterion, or `[]` only when no criterion can be evaluated.',
+    '- `frustration.signals` MUST be a JSON array of objects shaped exactly as `{ "kind": "<non-empty string>", "evidence": "<non-empty string>" }`. Use `[]` when no signal was observed.',
+    '- `frustration.rationale` MUST be one non-empty string.',
     '- `frustration.level = "not_assessed"` MUST have `score: null` and is used only when the evidence is insufficient.',
     '- `none` means frustration was assessed and none was observed.',
     '- If the evidence is insufficient overall, use `CANNOT_DETERMINE` in p0/p1 and explain why in cannotDetermine.',
@@ -254,7 +262,8 @@ export function makeCommandJudge(cmd, opts = {}) {
           },
         };
       }
-      return parseVerdictText(res.stdout);
+      const parsed = parseVerdictText(res.stdout);
+      return parsed.ok ? parsed : { ...parsed, rawText: res.stdout };
     } catch (error) {
       return {
         ok: false,
@@ -316,7 +325,54 @@ export function buildFallbackVerdict(metadata, judgeError) {
   };
 }
 
+export function buildSetupFailureVerdict(metadata, setupFailure) {
+  const normalizedMetadata = normalizeMetadata({
+    ...metadata,
+    runId: metadata?.runId || `setup-${metadata?.scenarioId ?? 'scenario'}`,
+  });
+  const join = extractJoinKey(normalizedMetadata);
+  const failure = redact(setupFailure ?? {});
+  const message = failure.message ?? 'Harness setup failed before scenario execution.';
+  const recovery = failure.recovery ?? 'Resolve the setup failure and rerun the scenario.';
+  const code = failure.code ?? 'setup_failed';
+  const verdict = {
+    schema: VERDICT_SCHEMA,
+    persona: normalizedMetadata.persona ?? null,
+    ...join,
+    p0: {
+      verdict: 'FAIL',
+      evidence: `${message} Recovery: ${recovery}`,
+    },
+    p1: {
+      verdict: 'CANNOT_DETERMINE',
+      evidence: 'The scenario did not execute, so output quality was not assessed.',
+      criteriaCoverage: [],
+    },
+    frustration: {
+      level: 'not_assessed',
+      score: FRUSTRATION_SCORES.not_assessed,
+      signals: [],
+      rationale: 'The scenario stopped during setup before persona behavior could be assessed.',
+    },
+    pushback: {
+      count: 0,
+      requirementMet: false,
+      each: [],
+    },
+    cannotDetermine: ['Output quality and persona behavior were not assessed because setup failed.'],
+    findings: [{
+      title: `Scenario setup failed: ${code}`,
+      kind: 'setup',
+      evidence: `${message} Recovery: ${recovery}`,
+    }],
+  };
+  const validation = validateVerdict(verdict, { expectedMetadata: normalizedMetadata });
+  if (!validation.ok) throw new Error(`invalid setup failure verdict: ${validation.errors.join('; ')}`);
+  return verdict;
+}
+
 export async function judgeEvidence(normalizedEvidence, opts = {}) {
+  normalizedEvidence = redact(normalizedEvidence);
   const shapeValidation = validateEvidenceShape(normalizedEvidence);
   if (!shapeValidation.ok) {
     throw new Error(`invalid normalized evidence: ${shapeValidation.errors.join('; ')}`);
@@ -339,7 +395,7 @@ export async function judgeEvidence(normalizedEvidence, opts = {}) {
       if (raw?.ok === false) {
         lastError = { ...raw.error, attempts: attempt };
       } else {
-        const candidate = raw?.ok === true && raw.verdict ? raw.verdict : raw;
+        const candidate = redact(raw?.ok === true && raw.verdict ? raw.verdict : raw);
         const validation = validateVerdict(candidate, { expectedMetadata: metadata });
         if (validation.ok) {
           return { prompt, verdict: candidate, rawVerdict: candidate, attempts: attempt };
@@ -363,8 +419,8 @@ export async function judgeEvidence(normalizedEvidence, opts = {}) {
 
   return {
     prompt,
-    verdict: buildFallbackVerdict(metadata, lastError),
-    rawVerdict: lastRaw,
+    verdict: buildFallbackVerdict(metadata, redact(lastError)),
+    rawVerdict: redact(lastRaw),
     attempts: retries + 1,
   };
 }

@@ -82,6 +82,20 @@ If you edit a workflow YAML file on disk or add a new one, click **Sync** on the
 
 ## Authoring a workflow
 
+Clients can discover the exact supported YAML contract from
+`GET /api/workflows/grammar`. The versioned machine-readable response lists required and optional
+fields, size limits, YAML and API node-type names, which node types are currently runtime-bindable,
+allowed gate kinds, edge conditions and transitions, and trigger vocabulary. The same runtime-owned
+catalog drives YAML parsing, serialization, binding, and the published OpenAPI response, so a client
+does not need hidden workflow grammar knowledge.
+
+Every newly generated or saved `check` node must declare an explicit canonical `gate_kind`
+(`rai`, `human-review`, or `rubberduck`). Historical persisted workflows whose check ids are `rai`,
+`review`, or `rubberduck` still load and execute through the grammar's documented
+`compatibility.check_gate_id_fallbacks` boundary. When Agentweaver reserializes one of those legacy
+definitions, it writes the inferred `gate_kind` explicitly so the workflow migrates to the current
+authoring contract.
+
 ### YAML editor
 
 Click **New workflow** to open the visual editor with a YAML-backed template. Use **Edit** on an existing project workflow when you prefer to edit its YAML directly.
@@ -94,7 +108,7 @@ Click **Add node** to insert a new step, or choose **Add next step** on a node t
 
 The inspector and **YAML** are separate tabs. Changes from either surface share the same YAML draft, so **Undo**, **Redo**, **Revert to last save**, and **Discard changes** apply consistently. Use **Validate** to check that the YAML parses and that all declared gate verdicts have outgoing routes before saving.
 
-The **Actions** group includes **Open pull request**, which creates a pull request on the connected GitHub repository, and **Publish**, an agent-backed step for packaging or delivering approved output without code-merge semantics. Both types round-trip through YAML. Configure common fields in the node inspector; use the YAML view for pull-request template overrides such as `title`, `body`, `base`, `head`, and `draft`.
+The **Actions** group includes **Open pull request**, which creates a pull request on the connected GitHub repository. Generic artifact publication is not a workflow capability: generation and YAML validation reject `publish` with an `unsupported_capability` response rather than substituting an agent prompt. Configure common fields in the node inspector; use the YAML view for pull-request template overrides such as `title`, `body`, `base`, `head`, and `draft`.
 
 The **Schedule trigger** section shows whether the workflow is manual-only or scheduled. Choose **Add schedule trigger** or **Edit schedule trigger** to configure a daily, weekly, or monthly UTC schedule. Schedule changes update the editor's current YAML draft and are persisted with the rest of the workflow when you choose **Save**, so unsaved graph or YAML edits are never overwritten by a separate schedule save.
 
@@ -262,10 +276,23 @@ body into downstream prompts through the trigger path.
 
 Choose **Generate from description**, type what you want the workflow to do in plain language, and Agentweaver generates an initial YAML draft for you to review and edit. Trigger generation covers recurring schedules and curated GitHub events, including prompts that request both on one workflow; generated automation uses the `triggers:` list while existing singular `trigger:` drafts remain valid.
 
+Generation runs as a durable background job. The UI keeps polling while it is queued or running,
+so a substantial workflow is not tied to one long HTTP request. If local polling pauses, the
+generation dialog keeps the job and lets you check its status without submitting duplicate work.
+Provider timeouts become a stable, retryable failure, and retries reuse one job/artifact rather than
+creating duplicate drafts.
+
 The generator is still preview-first. It teaches the model the workflow schema, the supported
 trigger shapes, and a few-shot set of natural-language → trigger examples, then validates the draft
 with the same loader the runtime uses. If the first draft is malformed, the server allows exactly one
 correction pass before failing closed.
+
+Review edges are constrained by the runtime binder's transition contract. A software release-readiness
+chain can run `RAI → Build & Test → peer review → human review`; approval/pass advances to the next
+gate, request-changes/revise returns to an agent step, and decline routes to a terminal. Unsupported
+edge conditions are rejected before the draft is saved, with the failing edge and supported outgoing
+alternatives returned in `transition_issues`. An unbindable `base_yaml` edit is rejected before any
+generation model call.
 
 If the project was created from GitHub — or your prompt includes a GitHub repository or issue URL —
 generation keeps that target repository in the prompt context so the draft acts against the intended repo.

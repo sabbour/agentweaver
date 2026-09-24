@@ -140,8 +140,15 @@ human merge review remain separate.
 Once you confirm the spec, the coordinator:
 
 1. Decomposes the OutcomeSpec into a **WorkPlan** — a dependency graph of subtasks
-2. Assigns each subtask to the best-fit agent and selects a model — an explicit run `modelId` (or the project's GitHub Copilot default) pins every subtask; otherwise each subtask uses its role's default model
+2. Assigns each subtask to the best-fit agent and records the effective execution model — BYOK runs use the frozen provider model for the coordinator and every child; GitHub Copilot runs use an explicit run `modelId` (or the project's default) when pinned, otherwise each subtask uses its role's default model
 3. Dispatches independent subtasks in parallel; dependent ones run in series
+
+If activation or decomposition fails after the run is created, Agentweaver retains that run as
+**Failed** instead of leaving it executing with zero tasks. The start response includes the
+`run_id`, stable `coordinator_startup_failed` code, retryability, correlation ID, diagnostic link,
+and recovery guidance. The run page shows the same actionable failed state and offers a fresh retry.
+These diagnostics are intentionally bounded and never include prompts, filesystem paths, credentials,
+provider internals, or raw exception text.
 
 There is a short transition while the WorkPlan and integration branch are being created. During
 that transition, the coordinator's ordinary changed-files endpoint returns an empty list, and
@@ -224,6 +231,11 @@ Agent → Assemble-ready
 
 RAI, Build & Test, Human Review, Merge, and Scribe run once on the **combined** output of all child agents — not per subtask. In the built-in software workflows, Build & Test runs after RAI and before Human Review.
 
+Scribe uses a read-only model tool profile. Durable memory housekeeping is performed by a
+server-side finalizer with bounded recovery and deterministic operation identities, so a timeout
+or restart can resume without duplicating decisions, session history, or exports. A Scribe child
+failure is visible and retryable but does not reverse an otherwise completed coordinator run.
+
 Collective feedback goes through coordinator steering, which can redirect existing
 children or dispatch fresh work. It is not a per-child RAI loop.
 
@@ -285,13 +297,15 @@ an unconditional agent-to-review shortcut.
 
 ### Agent turn infrastructure failures
 
-The run timeline reports `agent_turn_internal_error` when Agentweaver must supply a
-structured fallback: the pod bridge's turn throws without first emitting a structured
-`run.failed`, the worker receives an unstructured `run.failed`, or the A2A stream ends
-on an unsupported or unset event. This is an execution-infrastructure failure, not a
-model request for changes. The fallback is marked `retryable: true` because the
-surrounding workflow may retry or redispatch the turn; it does not mean that the
-interrupted turn completed successfully.
+The run timeline reports `agent_turn_internal_error` only when Agentweaver must supply
+an unclassified structured fallback: the pod bridge's turn throws an unknown exception
+without first emitting a structured `run.failed`, the worker receives an unstructured
+`run.failed`, or the A2A stream ends on an unsupported or unset event. Known provider
+and runtime failures now cross the AgentHost boundary with their allowlisted error code,
+retryability, server-generated correlation ID, and bounded exception-type chain intact.
+The internal fallback remains an execution-infrastructure failure, not a model request
+for changes. It is marked `retryable: true` because the surrounding workflow may retry
+or redispatch the turn; it does not mean that the interrupted turn completed successfully.
 
 Agentweaver does not replace more specific outcomes with this fallback:
 

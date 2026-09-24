@@ -9,10 +9,10 @@ namespace Agentweaver.AgentRuntime.Workflow;
 
 /// <summary>
 /// Runs Scribe as a real agent turn after a project run completes.
-/// Scribe receives a structured task and uses memory API tools to review
-/// the inbox, merge learnings, and export to .squad/.
+/// Scribe receives a structured task and may inspect the inbox. Durable mutation is
+/// performed afterward by the server-side Scribe finalizer.
 /// Its charter is read dynamically from <c>.squad/agents/scribe/charter.md</c>.
-/// Best-effort: exceptions never abort the workflow.
+/// Failures propagate so the owning Scribe child attempt is failed truthfully.
 /// </summary>
 public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInput>, IWorkflowNodeMeta
 {
@@ -46,13 +46,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
 
         The following native tools are available for the post-run memory pass:
         - list_inbox(forAgent?) — list pending inbox entries (returns JSON)
-        - merge_inbox_entry(entryId) — merge a learning/pattern/update entry by its numeric id
-        - update_session(summary) — record a one-sentence summary of what the agent accomplished
-        - export_memory() — write the updated state to .squad/ and .agentweaver/context/
-
-        Only merge entries of type: learning, pattern, update.
-        Architectural and scope entries are promoted by the Coordinator during finalization,
-        not by a per-run Scribe pass.
+        Scribe is read-only. Durable decision, memory, session, history, inbox, and export
+        housekeeping is owned by the server-side finalizer after the model turn succeeds.
         """;
 
 
@@ -69,6 +64,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
     private readonly IWorkflowAgentFactory? _agentFactory;
+    private readonly Func<ScribeTurnInput, bool, CancellationToken, Task>? _finalizeHousekeeping;
 
     public ScribeTurnExecutor(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -83,7 +79,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         Action<string>? completeSubStream = null,
         string? apiBaseUrl = null,
         string? apiKey = null,
-        IWorkflowAgentFactory? agentFactory = null)
+        IWorkflowAgentFactory? agentFactory = null,
+        Func<ScribeTurnInput, bool, CancellationToken, Task>? finalizeHousekeeping = null)
         : base(name)
     {
         _copilotClientFactory = copilotClientFactory;
@@ -99,6 +96,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         _apiBaseUrl = apiBaseUrl;
         _apiKey = apiKey;
         _agentFactory = agentFactory;
+        _finalizeHousekeeping = finalizeHousekeeping;
     }
 
     public override async ValueTask<ScribeTurnInput> HandleAsync(
@@ -114,8 +112,8 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
             return input;
         }
 
-        // ProjectId present but AgentName missing: proceed with "unknown" so update_session
-        // and export_memory still run and the session record is not lost.
+        // ProjectId present but AgentName missing: preserve the legacy fallback identity while the
+        // server-side finalizer still validates the persisted run scope.
         if (string.IsNullOrEmpty(input.AgentName))
         {
             _logger.LogWarning(
@@ -138,19 +136,13 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
         var subWriter = _createSubStream?.Invoke(subRunId, "scribe");
 
         IWorkflowTurnAgent? agent = null;
-        var scribeFailed = false;
         try
         {
             var isCoordinator = string.Equals(input.AgentName, "coordinator", StringComparison.OrdinalIgnoreCase);
 
-            // The Coordinator owns architectural/scope promotion: as part of finalization it reviews
-            // those pending entries and merges the ones it endorses. A per-run worker Scribe leaves
-            // them untouched. A deterministic backstop promotes any the model misses.
             var reviewStep = isCoordinator
-                ? "2. Review every entry. For type learning, pattern, or update: call merge_inbox_entry(entryId).\n"
-                  + "                   For type architectural or scope: call merge_inbox_entry(entryId) for the ones you endorse as a team boundary."
-                : "2. For each entry of type learning, pattern, or update: call merge_inbox_entry(entryId).\n"
-                  + "                   Leave architectural and scope entries for the Coordinator to promote.";
+                ? "2. Review every entry and identify durable team boundaries in your summary."
+                : "2. Review learning, pattern, and update entries; leave architectural and scope authority to the Coordinator.";
 
             var task = $$"""
                 You are Scribe. A project run has reached terminal state: {{input.TerminalStatus ?? "completed"}}.
@@ -160,14 +152,13 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 Agent: {{input.AgentName}}
                 Run started at: {{input.RunStartedAt:O}}
 
-                Complete these post-run steps using the native memory tools available to you:
+                Complete these read-only post-run steps:
 
                 1. Call list_inbox(forAgent: "{{input.AgentName}}") to see pending entries.
                 {{reviewStep}}
-                3. Call update_session(summary: one sentence describing the run terminal state ({{input.TerminalStatus ?? "completed"}}) and what {{input.AgentName}} accomplished or attempted).
-                4. Call export_memory() to write the updated memory state to .squad/.
+                3. Return one concise sentence describing the terminal state and what {{input.AgentName}} accomplished or attempted.
 
-                Be systematic and concise. Do not write code or read project files.
+                Do not mutate state, write code, or read project files.
                 """;
 
             var charter = (BuiltInCharterResolver.Resolve(input.RepositoryPath, "scribe") ?? FallbackCharter)
@@ -206,18 +197,24 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                 input.SubmittingUser).ConfigureAwait(false);
 
             await agent.RunTurnAsync(task, isRevision: false, ct).ConfigureAwait(false);
+            if (_finalizeHousekeeping is null)
+                throw new InvalidOperationException("Scribe housekeeping finalizer is unavailable.");
+            await _finalizeHousekeeping(input, isCoordinator, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            scribeFailed = true;
-            _logger.LogWarning(ex,
-                "Scribe agent turn failed for run {RunId} — workflow proceeds normally", input.RunId);
+            var diagnostic = Classify(ex);
+            _logger.LogWarning(
+                "Scribe agent turn failed for run {RunId}; code={FailureCode}; retryable={Retryable}",
+                input.RunId, diagnostic.Code, diagnostic.Retryable);
             WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "failed", "Scribe pass");
             writer?.TryWrite(new RunEvent(0, "run.scribe_failed", new
             {
-                reason = ex.Message,
+                code = diagnostic.Code,
+                retryable = diagnostic.Retryable,
                 timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
             }));
+            throw new ScribeTurnException(diagnostic.Code, diagnostic.Retryable);
         }
         finally
         {
@@ -226,10 +223,28 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
             _completeSubStream?.Invoke(subRunId);
         }
 
-        if (scribeFailed)
-            return input with { TerminalStatus = "scribe_failed", MergeResult = "scribe_failed" };
-
         WorkflowStepEvents.Emit(writer, _logger, input.RunId, "scribe", "completed", "Scribe pass");
         return input;
     }
+
+    private static (string Code, bool Retryable) Classify(Exception exception) =>
+        exception switch
+        {
+            OperationCanceledException => ("scribe_timeout", true),
+            HttpRequestException => ("scribe_transport_failure", true),
+            AgentProviderException provider => ("scribe_provider_failure", provider.IsRetryable),
+            WorkflowAgentInfrastructureException infrastructure =>
+                ("scribe_infrastructure_failure", infrastructure.IsRetryable ?? false),
+            UnauthorizedAccessException => ("scribe_authorization_failure", false),
+            _ => ("scribe_internal_failure", false),
+        };
+}
+
+public sealed class ScribeTurnException(
+    string code,
+    bool retryable)
+    : Exception("Scribe execution failed.")
+{
+    public string Code { get; } = code;
+    public bool Retryable { get; } = retryable;
 }

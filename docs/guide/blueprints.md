@@ -12,7 +12,33 @@ Generated and user-supplied blueprints are validated before they can be applied.
 - `review_policy` is `default`, the only currently accepted policy;
 - `sandbox_profile` is one of the supported profiles (`default` or `restricted`).
 
-If generation returns an invalid blueprint, the API reports plain-language validation details and offers two safe next steps: regenerate with a clearer prompt or edit the draft and validate it again. Invalid blueprints are not saved or applied.
+If generation returns an invalid blueprint, the generation job ends with a canonical failure. Invalid blueprints are not saved or applied.
+
+## Durable generation jobs
+
+Blueprint generation runs asynchronously so complex Blueprint and custom-workflow requests are not
+limited by one HTTP response window. `POST /api/blueprints/generate` requires an
+`Idempotency-Key` header and returns `202 Accepted` with a job id plus status, result, cancel, and
+retry URLs.
+
+The accepted job snapshots the caller, project or repository context, effective provider and model
+selection, and credential-binding version. Reusing the same idempotency key with the same request
+returns the original job; reusing it for different input returns `409 Conflict`.
+
+Poll the status URL until the job is terminal:
+
+- `completed`: fetch the result URL. The result identifies one immutable Blueprint artifact by
+  `artifact_id`, Blueprint `logical_id`, and version.
+- `failed`: inspect the redacted failure code and message. Provider deadlines use
+  `blueprint_provider_timeout`; temporary provider failures use
+  `blueprint_provider_unavailable`. Retry is available only when the failure is marked retryable.
+  If the accepted provider or credential binding changed, reauthorize and submit a new request so
+  the new job captures the replacement provider snapshot.
+- `cancelled`: use the retry URL to queue the same job again. Retry cannot create another artifact
+  for a job that already completed.
+
+Status, result, cancel, and retry requests reauthorize the current caller and any bound project.
+Provider failures never substitute a default workflow and report success.
 
 ## Generated blueprint hardening
 

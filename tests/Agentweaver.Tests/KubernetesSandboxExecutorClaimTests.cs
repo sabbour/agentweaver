@@ -1567,7 +1567,13 @@ public sealed class KubernetesSandboxExecutorClaimTests
                     SharedWorkingDirectory: null,
                     Purpose: AgentHostPurpose.OperatorAssistant,
                     McpBrokerToken: "holder-stamp-broker-token",
-                    HolderToken: "owner-token-abc"),
+                    HolderToken: "owner-token-abc",
+                    DispatchId: "dispatch-123",
+                    LifecycleGeneration: 7,
+                    DispatchProjectId: "project-123",
+                    DispatchUserId: "user-123",
+                    DispatchAgentName: "link",
+                    ProviderSnapshotKey: "copilot:binding:v7"),
                 new CancellationTokenSource(TimeSpan.FromMilliseconds(50)).Token);
         }
         catch (Exception)
@@ -1579,7 +1585,14 @@ public sealed class KubernetesSandboxExecutorClaimTests
         create.Should().NotBeNull();
         create!.Body.Should().Contain(KubernetesSandboxExecutor.HolderTokenAnnotation)
             .And.Contain("owner-token-abc",
-                "a claim that is not stamped at creation cannot be fenced when it is released");
+                "a claim that is not stamped at creation cannot be fenced when it is released")
+            .And.Contain(KubernetesSandboxExecutor.DispatchIdAnnotation)
+            .And.Contain("dispatch-123")
+            .And.Contain(KubernetesSandboxExecutor.LifecycleGenerationAnnotation)
+            .And.Contain("project-123")
+            .And.Contain("user-123")
+            .And.Contain("link")
+            .And.Contain("copilot:binding:v7");
     }
 
     // Minimal ISandboxPreviewService test double: only lifecycle reconciliation is exercised by the

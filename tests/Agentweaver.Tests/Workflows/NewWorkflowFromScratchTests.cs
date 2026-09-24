@@ -5,6 +5,8 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
+using Agentweaver.Squad.Model;
+using Agentweaver.Squad.Squad;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Workflows;
@@ -101,6 +103,41 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
 
         ids.Should().Contain("my-workflow",
             because: "the registry must pick up the saved workflow without a separate Sync");
+    }
+
+    [Fact]
+    public async Task PutNewWorkflow_RejectsLegacyGateIdFallbackWithoutExplicitGateKind()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        var yaml = """
+            id: legacy-gate
+            name: Legacy gate
+            start: author
+            nodes:
+              - id: author
+                type: prompt
+              - id: review
+                type: check
+                branches:
+                  - declined
+              - id: done
+                type: terminal
+            edges:
+              - from: author
+                to: review
+              - from: review
+                to: done
+                when: declined
+            """;
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/legacy-gate",
+            new { yaml });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should()
+            .Contain("must declare explicit 'gate_kind' for authoring");
     }
 
     [Fact]
@@ -396,6 +433,27 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Created, "the test project must be created");
         var id = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
+        new SquadWriter(dir).WriteTeam(
+            new Team(
+                "New Workflow Test",
+                "test",
+                [
+                    new CastMember(
+                        "Lead",
+                        new Role(
+                            "lead-architect",
+                            "Lead Architect",
+                            "Leads the test workflow.",
+                            "test",
+                            [],
+                            [],
+                            []),
+                        ".squad/agents/lead/charter.md",
+                        CastMemberStatus.Active,
+                        true),
+                ]),
+            "test",
+            DateTimeOffset.UtcNow);
         return (id, dir);
     }
 }

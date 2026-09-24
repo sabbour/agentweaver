@@ -9,6 +9,8 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Agentweaver.Tests.PostgresIntegration;
 
@@ -30,6 +32,7 @@ public sealed class DataMigratorTests : IDisposable
     private readonly string _seededRecoveredRunId;
     private readonly string _seededPackageId;
     private readonly string _seededPackageVersion;
+    private readonly MemoryFixture _memoryFixture;
 
     public DataMigratorTests(PostgresFixture pg)
     {
@@ -41,6 +44,7 @@ public sealed class DataMigratorTests : IDisposable
 
         (_seededProjectId, _seededRecoveredRunId, _seededPackageId, _seededPackageVersion) =
             SeedSqliteDb(_agentweaverDbPath);
+        _memoryFixture = SeedMemoryDb(_memoryDbPath, _seededProjectId);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -118,6 +122,61 @@ public sealed class DataMigratorTests : IDisposable
         packageVersionsAfterSecond.Should().Be(
             packageVersionsAfterFirst,
             "second migration run must not insert duplicate package versions");
+    }
+
+    [PostgresFact]
+    public async Task Migrator_MemoryState_PreservesRelationshipsAndReadModelsIdempotently()
+    {
+        await using var source = CreateSqliteMemoryContext();
+        var sourcePrompt = await new MemoryContextCompiler(source)
+            .CompileAsync(_seededProjectId, "link");
+        var sourceApi = await ReadApiSnapshotAsync(source, _seededProjectId);
+        var sourceExport = Path.Combine(_tempDir, "source-export");
+        var destinationExport = Path.Combine(_tempDir, "destination-export");
+        Directory.CreateDirectory(sourceExport);
+        Directory.CreateDirectory(destinationExport);
+        await MemoryLedgerExporter.ExportAsync(
+            _seededProjectId, sourceExport, source, CancellationToken.None);
+
+        var migrator = BuildMigrator();
+        await migrator.RunAsync();
+        await migrator.RunAsync();
+
+        await using var destination = await _pg.CreateDbContextAsync();
+        var memories = await destination.AgentMemory
+            .Where(x => x.ProjectId == _seededProjectId)
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+        var decisions = await destination.Decisions
+            .Where(x => x.ProjectId == _seededProjectId)
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+        var inbox = await destination.DecisionInbox
+            .Where(x => x.ProjectId == _seededProjectId)
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+        var sessions = await destination.SessionContexts
+            .Where(x => x.ProjectId == _seededProjectId)
+            .OrderBy(x => x.Id)
+            .ToListAsync();
+
+        memories.Should().HaveCount(2);
+        decisions.Should().HaveCount(2);
+        inbox.Should().HaveCount(2);
+        sessions.Should().HaveCount(2);
+        decisions.Single(x => x.Id == _memoryFixture.SupersededDecisionId)
+            .SupersededById.Should().Be(_memoryFixture.ActiveDecisionId);
+        inbox.Single(x => x.Id == _memoryFixture.MergedInboxId)
+            .DecisionId.Should().Be(_memoryFixture.ActiveDecisionId);
+
+        var destinationPrompt = await new MemoryContextCompiler(destination)
+            .CompileAsync(_seededProjectId, "link");
+        destinationPrompt.Should().BeEquivalentTo(sourcePrompt);
+        (await ReadApiSnapshotAsync(destination, _seededProjectId)).Should().Be(sourceApi);
+
+        await MemoryLedgerExporter.ExportAsync(
+            _seededProjectId, destinationExport, destination, CancellationToken.None);
+        ReadExport(destinationExport).Should().BeEquivalentTo(ReadExport(sourceExport));
     }
 
     [PostgresFact]
@@ -293,6 +352,232 @@ public sealed class DataMigratorTests : IDisposable
             NullLogger<SqliteToPostgresMigrator>.Instance,
             beforeGitHubConnectionsCommit);
     }
+
+    private MemoryDbContext CreateSqliteMemoryContext()
+    {
+        var options = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite($"Data Source={_memoryDbPath}")
+            .Options;
+        return new MemoryDbContext(options);
+    }
+
+    private static async Task<string> ReadApiSnapshotAsync(MemoryDbContext db, string projectId)
+    {
+        var memories = (await db.AgentMemory.Where(x => x.ProjectId == projectId).ToListAsync())
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new
+            {
+                x.Id, x.AgentName, x.SessionId, x.Type, x.Importance, x.Content, x.Tags,
+                x.SourceKind, x.SourceIdentity, x.SourceRunId, x.TrustState, x.ApprovedBy, x.ApprovedAt,
+                created_at = x.CreatedAt, updated_at = x.UpdatedAt,
+            });
+        var decisions = (await db.Decisions.Where(x => x.ProjectId == projectId).ToListAsync())
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new
+            {
+                x.Id, x.AgentName, x.Type, x.Status, x.Title, x.Content, x.Rationale, x.Tags,
+                x.SourceKind, x.SourceIdentity, x.SourceRunId, x.TrustState, x.ApprovedBy, x.ApprovedAt,
+                superseded_by_id = x.SupersededById,
+                created_at = x.CreatedAt, updated_at = x.UpdatedAt,
+            });
+        var inbox = (await db.DecisionInbox.Where(x => x.ProjectId == projectId).ToListAsync())
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new
+            {
+                x.Id, x.AgentName, x.Slug, x.Type, x.Title, x.Content, x.Rationale, x.Status,
+                x.SourceKind, x.SourceIdentity, x.SourceRunId,
+                decision_id = x.DecisionId, merged_at = x.MergedAt,
+                created_at = x.CreatedAt, updated_at = x.UpdatedAt,
+            });
+        var sessions = (await db.SessionContexts.Where(x => x.ProjectId == projectId).ToListAsync())
+            .OrderByDescending(x => x.StartedAt)
+            .Select(x => new
+            {
+                x.Id, x.SessionId, x.FocusArea, x.ActiveIssues, x.Summary,
+                serialized_state = x.SerializedState,
+                started_at = x.StartedAt, ended_at = x.EndedAt,
+            });
+        return JsonSerializer.Serialize(new { memories, decisions, inbox, sessions });
+    }
+
+    private static Dictionary<string, string> ReadExport(string root) =>
+        Directory.GetFiles(root, "*.md", SearchOption.AllDirectories)
+            .ToDictionary(
+                path => Path.GetRelativePath(root, path).Replace('\\', '/'),
+                path => NormalizeGeneratedMetadata(
+                    Path.GetRelativePath(root, path).Replace('\\', '/'),
+                    File.ReadAllText(path)),
+                StringComparer.Ordinal);
+
+    private static string NormalizeGeneratedMetadata(string relativePath, string content) =>
+        relativePath == ".squad/identity/now.md"
+            ? Regex.Replace(content, @"(?m)^updated_at:.*(?:\r?\n|$)", string.Empty)
+            : content;
+
+    private static MemoryFixture SeedMemoryDb(string dbPath, string projectId)
+    {
+        var options = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite($"Data Source={dbPath}")
+            .Options;
+        using var db = new MemoryDbContext(options);
+        db.Database.EnsureCreated();
+
+        var baseId = Random.Shared.Next(100_000, 900_000);
+        var created = DateTimeOffset.Parse("2026-09-24T12:34:56.1234560Z");
+        var updated = created.AddMinutes(5);
+        var activeDecisionId = baseId + 2;
+        var supersededDecisionId = baseId + 1;
+        var mergedInboxId = baseId + 20;
+        db.AgentMemory.AddRange(
+            new AgentMemory
+            {
+                Id = baseId + 10,
+                ProjectId = projectId,
+                AgentName = "link",
+                SessionId = "session-current",
+                Type = "core_context",
+                Importance = "high",
+                Content = "Preserve provider migration behavior.",
+                Tags = ",migration,cross-team,",
+                SourceKind = "agent",
+                SourceIdentity = "link",
+                SourceRunId = "run-memory-source",
+                TrustState = MemoryTrustStates.Approved,
+                ApprovedBy = "owner",
+                ApprovedAt = updated,
+                IdentityKey = Guid.NewGuid().ToString("N"),
+                CreatedAt = created,
+                UpdatedAt = updated,
+            },
+            new AgentMemory
+            {
+                Id = baseId + 11,
+                ProjectId = projectId,
+                AgentName = "scribe",
+                Type = "learning",
+                Importance = "medium",
+                Content = "Keep migration provenance.",
+                Tags = ",migration,",
+                SourceKind = "run",
+                SourceIdentity = "scribe",
+                SourceRunId = "run-learning-source",
+                TrustState = MemoryTrustStates.Pending,
+                IdentityKey = Guid.NewGuid().ToString("N"),
+                CreatedAt = created.AddMinutes(1),
+                UpdatedAt = updated.AddMinutes(1),
+            });
+        db.Decisions.AddRange(
+            new Decision
+            {
+                Id = supersededDecisionId,
+                ProjectId = projectId,
+                AgentName = "link",
+                Type = "architectural",
+                Status = "superseded",
+                Title = "Use legacy migration",
+                Content = "Superseded migration guidance.",
+                Rationale = "Retained for history.",
+                Tags = ",storage,migration,",
+                SupersededById = activeDecisionId,
+                SourceKind = "agent",
+                SourceIdentity = "link",
+                SourceRunId = "run-decision-old",
+                TrustState = MemoryTrustStates.Approved,
+                ApprovedBy = "owner",
+                ApprovedAt = updated,
+                IdentityKey = Guid.NewGuid().ToString("N"),
+                CreatedAt = created,
+                UpdatedAt = updated,
+            },
+            new Decision
+            {
+                Id = activeDecisionId,
+                ProjectId = projectId,
+                AgentName = "link",
+                Type = "architectural",
+                Status = "active",
+                Title = "Migrate memory explicitly",
+                Content = "Transfer SQLite memory state before provider cutover.",
+                Rationale = "Preserves durable project context.",
+                Tags = ",storage,migration,",
+                SourceKind = "agent",
+                SourceIdentity = "link",
+                SourceRunId = "run-decision-active",
+                TrustState = MemoryTrustStates.Approved,
+                ApprovedBy = "owner",
+                ApprovedAt = updated.AddMinutes(1),
+                IdentityKey = Guid.NewGuid().ToString("N"),
+                CreatedAt = created.AddMinutes(1),
+                UpdatedAt = updated.AddMinutes(1),
+            });
+        db.DecisionInbox.AddRange(
+            new DecisionInboxEntry
+            {
+                Id = mergedInboxId,
+                ProjectId = projectId,
+                AgentName = "link",
+                Slug = "migrate-memory",
+                Type = "architectural",
+                Title = "Migrate memory explicitly",
+                Content = "Transfer the complete memory ledger.",
+                Rationale = "Avoid cutover data loss.",
+                Status = "merged",
+                DecisionId = activeDecisionId,
+                SourceKind = "run",
+                SourceIdentity = "link",
+                SourceRunId = "run-inbox-merged",
+                CreatedAt = created,
+                UpdatedAt = updated,
+                MergedAt = updated,
+            },
+            new DecisionInboxEntry
+            {
+                Id = baseId + 21,
+                ProjectId = projectId,
+                AgentName = "scribe",
+                Slug = "validate-export",
+                Type = "process",
+                Title = "Validate exported ledger",
+                Content = "Compare generated files after migration.",
+                Status = "pending",
+                SourceKind = "agent",
+                SourceIdentity = "scribe",
+                SourceRunId = "run-inbox-pending",
+                CreatedAt = created.AddMinutes(2),
+                UpdatedAt = updated.AddMinutes(2),
+            });
+        db.SessionContexts.AddRange(
+            new SessionContext
+            {
+                Id = baseId + 30,
+                ProjectId = projectId,
+                SessionId = "session-current",
+                FocusArea = "SQLite to PostgreSQL migration",
+                ActiveIssues = """["#1532"]""",
+                Summary = "Validate memory parity.",
+                SerializedState = """{"phase":"validation"}""",
+                StartedAt = created,
+            },
+            new SessionContext
+            {
+                Id = baseId + 31,
+                ProjectId = projectId,
+                SessionId = "session-ended",
+                FocusArea = "Migration discovery",
+                ActiveIssues = """["#1532"]""",
+                Summary = "Discovery complete.",
+                SerializedState = """{"phase":"complete"}""",
+                StartedAt = created.AddHours(-1),
+                EndedAt = created.AddMinutes(-30),
+            });
+        db.SaveChanges();
+        return new MemoryFixture(activeDecisionId, supersededDecisionId, mergedInboxId);
+    }
+
+    private sealed record MemoryFixture(
+        int ActiveDecisionId,
+        int SupersededDecisionId,
+        int MergedInboxId);
 
     /// <summary>
     /// Seeds an agentweaver.db with test data via raw ADO.NET.

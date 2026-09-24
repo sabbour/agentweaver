@@ -22,7 +22,8 @@ This document covers the server-side generation capability behind
 | `CopilotWorkflowGenerator` | Builds the prompt, resolves the effective generation provider via `GenerationModelProviderExecutor`, calls `IAgentRunner`, validates, and runs one correction pass. |
 | `WorkflowDefinitionLoader` | Validates the model output with the **same** schema/structural rules the runtime loader enforces. |
 | `RunWorkflowGraphBinder.ValidateBindable` | Dry-runs runtime binding after schema validation; rejects loadable but unrunnable node/edge combinations. |
-| `WorkflowDefinitionEndpoints` | Hosts the `POST .../workflows/generate` endpoint; resolves the project's cast roles and maps results/errors to HTTP. |
+| `WorkflowDefinitionEndpoints` | Accepts durable generation jobs, resolves the project's cast roles for the request, and exposes authorized status, result, cancellation, and retry endpoints. |
+| `BlueprintGenerationJobWorker` | Runs both Blueprint and workflow generation through the existing leased durable-job queue, binds generated worker nodes to confirmed cast members, and persists exactly one artifact only after binding succeeds. |
 
 All prompt construction, schema context, and LLM invocation live **server-side**
 (FR-057). The client sends a description plus project target-repository context
@@ -32,17 +33,31 @@ when available, then renders the returned YAML.
 
 ```
 POST /api/projects/{id}/workflows/generate
+Idempotency-Key: <caller retry key>
 Body: { "description": "string" }
-→ 200 { "yaml": string, "workflowId": string, "wasCorrected": bool }
-→ 400 { "error": string }   // description missing, or generation failed after the correction pass
+→ 202 { "job_id": string, "status": "queued", "status_url": string, "result_url": string, ... }
+→ 400 { "error": string }   // description or Idempotency-Key missing
+→ 409 { "error": "idempotency_key_conflict" }
 → 404                       // project not found
 → 403                       // caller is not the project owner
 ```
 
-The response YAML is a draft — the MCP server and Web UI use the same server-side
-generation contract (FR-059). The production provider can be Copilot or BYOK; the class
-name is not a provider guarantee. Prepare the `workflow_generation` AI execution context
-and send its `execution_key` in `If-Model-Provider-Key` for the guarded request.
+Poll `status_url`; a completed job exposes immutable YAML, workflow ID, version, and graph at
+`result_url`. The job can be cancelled while queued/running and retried after cancellation or a
+retryable failure. Reusing the same `Idempotency-Key` with the identical request returns the same
+job; using it for different input returns `409`. A provider timeout becomes the canonical
+retryable `workflow_provider_timeout` failure instead of a disconnected request with ambiguous
+progress. Before artifact persistence, generated worker and peer-review nodes bind to confirmed
+cast members. A missing or unreadable team, or an unmapped role, fails the job with
+`workflow_team_binding_required` and structured `unresolved_roles`; `result_url` returns the same
+requirements with `422`, and no artifact is created. The returned YAML remains an unsaved draft —
+the MCP server and Web UI use the same server-side generation contract (FR-059), and project
+workspace persistence still requires an explicit save.
+
+The production provider can be Copilot or BYOK; the class name is not a provider guarantee.
+Prepare the `workflow_generation` AI execution context and send its `execution_key` in
+`If-Model-Provider-Key` for the guarded acceptance request. The accepted job snapshots that
+provider binding and restores it in the worker.
 For GitHub-backed projects, the server also passes the project's source repository
 into the generation prompt so generated node prompts keep acting against that repo.
 
@@ -60,7 +75,9 @@ contains:
    `serial`, `fan_out`, `fan_in`, and `coordinator_composed`, which load but cannot bind.
 3. **Validation rules** — required fields, edge/`start` node-reference integrity,
    `check` nodes needing `branches:` with a matching outgoing edge per verdict, and
-   the binder's supported runtime topology. Schema acceptance alone is insufficient.
+   the binder's supported runtime topology. The review-transition matrix is rendered
+   directly from `WorkflowTransitionContract`, the same allowlist used by runtime
+   binding. Schema acceptance alone is insufficient.
 4. **Available roles** — the project's **actual cast roles** when a team exists,
    otherwise the full catalog (FR-061). Constraining the `agent`/`role` fields to
    castable roles keeps the generated workflow immediately runnable without
@@ -103,8 +120,14 @@ Fix the YAML and return only the corrected YAML.
 
 - If the corrected output validates → it is returned with `wasCorrected = true`.
 - If it is still invalid → the generator throws `WorkflowGenerationException`, which
-  the endpoint maps to `400 { error }` naming the unresolved problem rather than
-  surfacing a broken draft. The mechanism never loops or retries indefinitely.
+  the endpoint maps to a structured `400` with `error`, `message`,
+  `validation_errors`, and `transition_issues`. Each transition issue identifies the
+  rejected edge/kinds/condition and lists supported outgoing alternatives. The
+  mechanism never loops or retries indefinitely.
+
+An edit request with unbindable `base_yaml` is rejected with the same transition
+details before the AI execution context is activated, so no model call or persistence
+occurs for a topology the runtime cannot execute.
 
 ## Output cleanup and id generation
 

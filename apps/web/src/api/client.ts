@@ -47,6 +47,7 @@ import type {
   DecomposeResponse,
   DetailedSystemDiagnosticsDto,
   GenerateBlueprintResponse,
+  BlueprintGenerationJob,
   GitHubRepositorySelectionCodeResponse,
   GitHubRepositorySelectionListResponse,
   GraphDescriptor,
@@ -285,6 +286,35 @@ export class RetriableReviewError extends Error {
   }
 }
 
+export interface WorkflowGenerationHandle {
+  jobId: string;
+  statusUrl: string;
+  resultUrl: string;
+  aiExecutionContext?: AiExecutionContext | null;
+}
+
+export type WorkflowGenerationOutcome =
+  | {
+      status: 'completed';
+      yaml: string;
+      workflowId: string;
+      wasCorrected: boolean;
+      ai_execution_context?: AiExecutionContext | null;
+    }
+  | {
+      status: 'pending';
+      job: WorkflowGenerationHandle;
+    };
+
+interface WorkflowGenerationJob {
+  job_id: string;
+  status: string;
+  status_url: string;
+  result_url: string;
+  failure?: { code: string; message: string; retryable: boolean } | null;
+  ai_execution_context?: AiExecutionContext | null;
+}
+
 export class AgentweaverApiClient {
   private readonly baseUrl: string;
   private readonly sessionTokenProvider: () => string | null;
@@ -328,8 +358,13 @@ export class AgentweaverApiClient {
   // Persisted run events (FR-022). Seeds the execution timeline for terminal/parked
   // runs whose live SSE stream is closed (e.g. a finished coordinator child). The
   // backend persists and replays the events here; 404 until the log exists.
-  getRunEvents(runId: string): Promise<PersistedRunEvent[]> {
-    return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events`);
+  getRunEvents(runId: string, options?: { type?: string; after?: number; limit?: number }): Promise<PersistedRunEvent[]> {
+    const query = new URLSearchParams();
+    if (options?.type != null) query.set('type', options.type);
+    if (options?.after != null) query.set('after', String(options.after));
+    if (options?.limit != null) query.set('limit', String(options.limit));
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events${suffix}`);
   }
 
   getPendingApprovals(runId: string): Promise<import('./types').PendingApprovalsResponse> {
@@ -448,11 +483,47 @@ export class AgentweaverApiClient {
       .then(normalizeBlueprintList);
   }
 
-  generateBlueprint(description: string, targetRepository?: string | null, providerKey?: string): Promise<GenerateBlueprintResponse> {
-    return this.request<GenerateBlueprintResponse>('POST', '/blueprints/generate', {
+  generateBlueprint(
+    description: string,
+    targetRepository?: string | null,
+    providerKey?: string,
+    idempotencyKey = crypto.randomUUID(),
+  ): Promise<BlueprintGenerationJob> {
+    return this.request<BlueprintGenerationJob>('POST', '/blueprints/generate', {
       description,
       target_repository: targetRepository || undefined,
-    }, undefined, providerHeaders(providerKey));
+    }, undefined, {
+      ...providerHeaders(providerKey),
+      'Idempotency-Key': idempotencyKey,
+    });
+  }
+
+  getBlueprintGenerationJob(jobId: string): Promise<BlueprintGenerationJob> {
+    return this.request<BlueprintGenerationJob>(
+      'GET',
+      `/blueprints/generation-jobs/${encodeURIComponent(jobId)}`,
+    );
+  }
+
+  getBlueprintGenerationResult(jobId: string): Promise<GenerateBlueprintResponse> {
+    return this.request<GenerateBlueprintResponse>(
+      'GET',
+      `/blueprints/generation-jobs/${encodeURIComponent(jobId)}/result`,
+    );
+  }
+
+  cancelBlueprintGeneration(jobId: string): Promise<BlueprintGenerationJob> {
+    return this.request<BlueprintGenerationJob>(
+      'POST',
+      `/blueprints/generation-jobs/${encodeURIComponent(jobId)}/cancel`,
+    );
+  }
+
+  retryBlueprintGeneration(jobId: string): Promise<BlueprintGenerationJob> {
+    return this.request<BlueprintGenerationJob>(
+      'POST',
+      `/blueprints/generation-jobs/${encodeURIComponent(jobId)}/retry`,
+    );
   }
 
   suggestBlueprint(repository: string): Promise<SuggestBlueprintResponse> {
@@ -1409,6 +1480,10 @@ export class AgentweaverApiClient {
   // List discovered workflows + validation status; Sync re-reads .agentweaver/
   // workflows/ from disk and returns the refreshed set; Get returns one full
   // definition.
+  getWorkflowGrammar(): Promise<import('./types').WorkflowGrammar> {
+    return this.request<import('./types').WorkflowGrammar>('GET', '/workflows/grammar');
+  }
+
   listWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
     return this.request<import('./types').WorkflowListResponse>('GET', `/projects/${encodeURIComponent(projectId)}/workflows`);
   }
@@ -1462,17 +1537,82 @@ export class AgentweaverApiClient {
     );
   }
 
-  // Generate a workflow draft from a natural-language description (US10). Returns the generated YAML
-  // (unsaved — open it in the editor for review), the workflow id, and whether the single correction
-  // pass was needed. Throws ApiError 400 when generation fails after the correction pass.
-  generateWorkflow(projectId: string, description: string, providerKey?: string, contentOnly = false): Promise<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }> {
-    return this.request<{ yaml: string; workflowId: string; wasCorrected: boolean; ai_execution_context?: AiExecutionContext | null }>(
+  // Accept durable workflow generation, then poll the job while preserving the existing UI result shape.
+  async generateWorkflow(projectId: string, description: string, providerKey?: string, contentOnly = false): Promise<WorkflowGenerationOutcome> {
+    const idempotencyKey = globalThis.crypto?.randomUUID?.()
+      ?? `workflow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const headers = {
+      ...providerHeaders(providerKey),
+      'Idempotency-Key': idempotencyKey,
+    };
+    const submit = () => this.request<WorkflowGenerationJob>(
       'POST',
       `/projects/${encodeURIComponent(projectId)}/workflows/generate`,
       { description, content_only: contentOnly },
       undefined,
-      providerHeaders(providerKey),
+      headers,
     );
+    let job: WorkflowGenerationJob;
+    try {
+      job = await submit();
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      job = await submit();
+    }
+    const executionContext = job.ai_execution_context;
+    const deadline = Date.now() + 5 * 60_000 + 30_000;
+    while (job.status === 'queued' || job.status === 'running') {
+      if (Date.now() >= deadline) {
+        return {
+          status: 'pending',
+          job: {
+            jobId: job.job_id,
+            statusUrl: job.status_url,
+            resultUrl: job.result_url,
+            aiExecutionContext: executionContext,
+          },
+        };
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+      job = await this.request<WorkflowGenerationJob>('GET', job.status_url.replace(/^\/api/, ''));
+    }
+    return this.resolveWorkflowGeneration(job, executionContext);
+  }
+
+  async resumeWorkflowGeneration(handle: WorkflowGenerationHandle): Promise<WorkflowGenerationOutcome> {
+    const job = await this.request<WorkflowGenerationJob>('GET', handle.statusUrl.replace(/^\/api/, ''));
+    if (job.status === 'queued' || job.status === 'running') {
+      return {
+        status: 'pending',
+        job: {
+          ...handle,
+          statusUrl: job.status_url,
+          resultUrl: job.result_url,
+        },
+      };
+    }
+    return this.resolveWorkflowGeneration(job, handle.aiExecutionContext);
+  }
+
+  private async resolveWorkflowGeneration(
+    job: WorkflowGenerationJob,
+    executionContext?: AiExecutionContext | null,
+  ): Promise<WorkflowGenerationOutcome> {
+    if (job.status !== 'completed') {
+      throw new Error(job.failure?.message ?? 'Workflow generation failed before producing a draft.');
+    }
+    const result = await this.request<{
+      yaml: string;
+      workflow_id: string;
+      was_corrected: boolean;
+    }>('GET', job.result_url.replace(/^\/api/, ''));
+    return {
+      status: 'completed',
+      yaml: result.yaml,
+      workflowId: result.workflow_id,
+      wasCorrected: result.was_corrected,
+      ai_execution_context: executionContext,
+    };
   }
 
   // Get the static graph descriptor for a workflow definition (US6). Returns a WorkflowGraphDto

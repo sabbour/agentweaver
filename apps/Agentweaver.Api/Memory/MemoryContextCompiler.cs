@@ -7,7 +7,7 @@ namespace Agentweaver.Api.Memory;
 
 /// <summary>
 /// Deterministic context assembler. Applies strict priority hierarchy:
-/// decisions (boundaries) > core_context memories > high-importance learnings > session focus.
+/// decisions (boundaries) > task relevance > importance > recency > session focus.
 /// Memory is scoped to the target agent; approved cross-team memories cross agent boundaries.
 /// </summary>
 public sealed record MemoryContextCompilation(
@@ -42,7 +42,7 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             agentName,
             maxItems: null,
             maxTokens: null,
-            ct).ConfigureAwait(false);
+            ct: ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -55,6 +55,50 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
         int? maxItems,
         int? maxTokens,
         CancellationToken ct = default)
+    {
+        return await CompileAsync(
+            projectId,
+            agentName,
+            relevanceText: null,
+            includeCoreMemories: true,
+            includeSession: true,
+            maxItems: maxItems,
+            maxTokens: maxTokens,
+            ct: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Compiles task-relevant context for a run. Delegated runs can omit core memories and session
+    /// state while still receiving relevant learnings and approved cross-team project memory.
+    /// </summary>
+    public async Task<MemoryContextCompilation?> CompileForRunAsync(
+        string projectId,
+        string agentName,
+        string relevanceText,
+        bool includeCoreMemories,
+        bool includeSession,
+        CancellationToken ct = default)
+    {
+        return await CompileAsync(
+            projectId,
+            agentName,
+            relevanceText,
+            includeCoreMemories,
+            includeSession,
+            maxItems: null,
+            maxTokens: null,
+            ct: ct).ConfigureAwait(false);
+    }
+
+    private async Task<MemoryContextCompilation?> CompileAsync(
+        string projectId,
+        string agentName,
+        string? relevanceText,
+        bool includeCoreMemories,
+        bool includeSession,
+        int? maxItems,
+        int? maxTokens,
+        CancellationToken ct)
     {
         var memoryLimit = ResolvePositive(maxItems)
             ?? ResolvePositive(configuration?.GetValue<int?>("MemoryContext:MaxItems"))
@@ -79,14 +123,16 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             .ToList();
 
         // Layer 2: agent core_context memories
-        var coreMemories = (await db.AgentMemory
-            .Where(m => m.ProjectId == projectId
-                     && m.AgentName == agentName
-                     && m.Type == "core_context"
-                     && m.TrustState != MemoryTrustStates.Legacy)
-            .ToListAsync(ct))
-            .OrderBy(m => m.CreatedAt)
-            .ToList();
+        var coreMemories = includeCoreMemories
+            ? (await db.AgentMemory
+                .Where(m => m.ProjectId == projectId
+                         && m.AgentName == agentName
+                         && m.Type == "core_context"
+                         && m.TrustState != MemoryTrustStates.Legacy)
+                .ToListAsync(ct))
+                .OrderBy(m => m.CreatedAt)
+                .ToList()
+            : [];
 
         // Layer 3: high-importance learnings/patterns for this agent
         //          + cross-team tagged memories from other agents
@@ -103,15 +149,18 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             .ToList();
 
         // Layer 4: current open session
-        var session = (await db.SessionContexts
-            .Where(s => s.ProjectId == projectId && s.EndedAt == null)
-            .ToListAsync(ct))
-            .OrderByDescending(s => s.StartedAt)
-            .ThenBy(s => s.Id)
-            .FirstOrDefault();
+        var session = includeSession
+            ? (await db.SessionContexts
+                .Where(s => s.ProjectId == projectId && s.EndedAt == null)
+                .ToListAsync(ct))
+                .OrderByDescending(s => s.StartedAt)
+                .ThenBy(s => s.Id)
+                .FirstOrDefault()
+            : null;
 
-        var candidates = OrderMemories(coreMemories, learnings, agentName);
-        if (!decisions.Any() && !candidates.Any() && session is null)
+        var orderedMemories = OrderMemories(coreMemories, learnings, agentName, relevanceText);
+        var candidates = orderedMemories.Candidates;
+        if (!decisions.Any() && !candidates.Any() && session is null && orderedMemories.OmittedCount == 0)
             return null;
 
         var mandatoryText = BuildUntrustedContext(decisions, [], session: null);
@@ -119,13 +168,13 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             throw new MandatoryContextBudgetExceededException(maxChars, mandatoryText.Length);
 
         var selected = new List<(AgentMemory Memory, string Label)>();
-        var omittedMemoryCount = 0;
+        var omittedMemoryCount = orderedMemories.OmittedCount;
         var memoryOmissionCause = (string?)null;
         for (var index = 0; index < candidates.Count; index++)
         {
             if (selected.Count >= memoryLimit)
             {
-                omittedMemoryCount = candidates.Count - index;
+                omittedMemoryCount += candidates.Count - index;
                 memoryOmissionCause = "item_limit";
                 break;
             }
@@ -136,7 +185,7 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
                 continue;
 
             selected.RemoveAt(selected.Count - 1);
-            omittedMemoryCount = candidates.Count - index;
+            omittedMemoryCount += candidates.Count - index;
             memoryOmissionCause = "budget";
             break;
         }
@@ -156,25 +205,88 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             text,
             omittedMemoryCount,
             omittedSessionCount,
-            [.. new[] { memoryOmissionCause, omittedSessionCount > 0 ? "budget" : null }
+            [.. new[] {
+                    orderedMemories.OmittedCount > 0 ? "relevance" : null,
+                    memoryOmissionCause,
+                    omittedSessionCount > 0 ? "budget" : null,
+                }
                 .OfType<string>()]);
     }
 
-    private static List<(AgentMemory Memory, string Label)> OrderMemories(
+    private static OrderedMemories OrderMemories(
         IEnumerable<AgentMemory> coreMemories,
         IEnumerable<AgentMemory> learnings,
-        string agentName)
+        string agentName,
+        string? relevanceText)
     {
-        return coreMemories
-            .Select(m => (Memory: m, Label: "core"))
+        var filterByRelevance = relevanceText is not null;
+        var relevanceTokens = Tokenize(relevanceText);
+        var candidates = coreMemories
+            .Select(m => (Memory: m, Label: "core", Relevance: relevanceTokens.Count > 0 ? 1 : 0))
             .Concat(learnings.Select(m => (
                 Memory: m,
-                Label: m.AgentName == agentName ? m.Type : $"{m.Type} from {m.AgentName}")))
-            .OrderByDescending(m => ImportanceScore(m.Memory.Importance))
+                Label: m.AgentName == agentName ? m.Type : $"{m.Type} from {m.AgentName}",
+                Relevance: RelevanceScore(m, relevanceTokens))))
+            .ToList();
+        var omittedCount = !filterByRelevance
+            ? 0
+            : candidates.Count(candidate => IsExplicitlyIrrelevant(candidate.Memory)
+                || (candidate.Label != "core"
+                    && relevanceTokens.Count > 0
+                    && candidate.Relevance == 0));
+
+        return new OrderedMemories(
+            candidates
+            .Where(candidate => !filterByRelevance
+                || (!IsExplicitlyIrrelevant(candidate.Memory)
+                    && (candidate.Label == "core"
+                        || relevanceTokens.Count == 0
+                        || candidate.Relevance > 0)))
+            .OrderByDescending(m => m.Relevance)
+            .ThenByDescending(m => ImportanceScore(m.Memory.Importance))
             .ThenByDescending(m => m.Memory.CreatedAt)
             .ThenBy(m => m.Memory.Id)
-            .ToList();
+            .Select(m => (m.Memory, m.Label))
+            .ToList(),
+            omittedCount);
     }
+
+    private static int RelevanceScore(AgentMemory memory, IReadOnlySet<string> relevanceTokens)
+    {
+        if (IsExplicitlyIrrelevant(memory) || relevanceTokens.Count == 0)
+            return 0;
+
+        var tagMatches = Tokenize(memory.Tags).Count(relevanceTokens.Contains);
+        var contentMatches = Tokenize(memory.Content).Count(relevanceTokens.Contains);
+        return (tagMatches * 2) + (contentMatches >= 2 ? contentMatches : 0);
+    }
+
+    private static bool IsExplicitlyIrrelevant(AgentMemory memory) =>
+        memory.Tags?.Contains(",irrelevant,", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static HashSet<string> Tokenize(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return [];
+
+        return text.ToLowerInvariant()
+            .Split([' ', '-', '_', ',', '.', '/', '\\', '\t', '\n', '\r', ':', ';', '`', '\'', '"',
+                '(', ')', '[', ']', '{', '}', '!', '?'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(token => token.Length > 2 && !RelevanceStopWords.Contains(token))
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static readonly HashSet<string> RelevanceStopWords = new(
+        [
+            "agent", "blank", "context", "current", "disposable", "from", "identify", "memory",
+            "only", "project", "retained", "session", "task", "that", "this", "using", "with",
+            "work",
+        ],
+        StringComparer.Ordinal);
+
+    private sealed record OrderedMemories(
+        List<(AgentMemory Memory, string Label)> Candidates,
+        int OmittedCount);
 
     private static int ImportanceScore(string? importance) => importance?.ToLowerInvariant() switch
     {
@@ -187,11 +299,8 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
     private static int? ResolvePositive(int? value) => value is > 0 ? value.Value : null;
 
     /// <summary>
-    /// Compiles ONLY the active architectural + scope decisions block (the "## Boundaries and
-    /// Decisions" section) for a project. Used for coordinator CHILD worker prompts, which must
-    /// receive team-wide non-negotiable boundaries but deliberately NOT the full memory stack
-    /// (core_context/learnings/session) — that stack duplicated the charter and bloated child
-    /// prompts (Defect C). Returns null if there are no active decisions.
+    /// Compiles only active architectural and scope decisions. This remains the fallback for
+    /// project-scoped runs that do not have an agent identity for memory selection.
     /// </summary>
     public async Task<MemoryContextCompilation?> CompileDecisionsAsync(string projectId, CancellationToken ct = default)
     {

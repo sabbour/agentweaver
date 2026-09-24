@@ -161,6 +161,7 @@ const TERMINAL_FAILURE_CODES = new Set([
   'assembly_failed',
   'coordinator_execution_failed',
   'coordinator_direct_execution_failed',
+  'coordinator_startup_failed',
   'github_copilot_auth_required',
   'github_copilot_capability_snapshot_unavailable',
   'github_copilot_model_unavailable',
@@ -372,10 +373,55 @@ export interface GenerateBlueprintRequest {
   target_repository?: string | null;
 }
 
+export interface BlueprintGenerationProviderSnapshot {
+  provider_kind: string;
+  provider_type?: string | null;
+  provider_key: string;
+  provider_scope: string;
+  resolution_scope: string;
+  blueprint_model?: string | null;
+  workflow_model?: string | null;
+  credential_binding_version?: string | null;
+}
+
+export interface BlueprintGenerationArtifact {
+  artifact_id: string;
+  logical_id: string;
+  version: number;
+}
+
+export interface BlueprintGenerationFailure {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface BlueprintGenerationJob {
+  job_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  attempt: number;
+  project_id?: string | null;
+  target_repository?: string | null;
+  provider_snapshot: BlueprintGenerationProviderSnapshot;
+  artifact?: BlueprintGenerationArtifact | null;
+  failure?: BlueprintGenerationFailure | null;
+  created_at: string;
+  updated_at: string;
+  status_url: string;
+  result_url: string;
+  cancel_url: string;
+  retry_url: string;
+  ai_execution_context?: AiExecutionContext | null;
+}
+
 export interface GenerateBlueprintResponse {
+  job_id: string;
+  artifact_id: string;
+  logical_id: string;
+  version: number;
   blueprint: Blueprint;
   generated_workflow_yaml?: string | null;
-  ai_execution_context?: AiExecutionContext | null;
+  warnings: string[];
 }
 
 export interface SuggestBlueprintResponse {
@@ -1622,6 +1668,58 @@ export interface HeartbeatStatusDto {
 // Response body for GET raw YAML content of a project workflow file (US7).
 export interface WorkflowYamlResponse {
   yaml: string;
+}
+
+export interface WorkflowGrammar {
+  grammar_version: string;
+  format: 'yaml';
+  root: {
+    required_fields: string[];
+    optional_fields: string[];
+    maximum_document_characters: number;
+    maximum_nodes: number;
+    maximum_edges: number;
+    maximum_triggers: number;
+  };
+  node_fields: {
+    required_fields: string[];
+    optional_fields: string[];
+    maximum_prompt_characters: number;
+    maximum_charter_characters: number;
+  };
+  node_types: Array<{
+    yaml_type: string;
+    api_type: string;
+    label: string;
+    authorable: boolean;
+    runtime_bindable: boolean;
+    runtime_kinds: string[];
+    required_fields: string[];
+    allowed_gate_kinds: string[];
+  }>;
+  edge: {
+    required_fields: string[];
+    optional_fields: string[];
+    conditions_are_case_sensitive: boolean;
+    transitions: Array<{
+      from_kind: string;
+      to_kind: string;
+      unconditional: boolean;
+      when: string[];
+    }>;
+  };
+  triggers: {
+    types: string[];
+    schedule_intervals: string[];
+    review_states: string[];
+    ref_match_modes: string[];
+    predicate_types: string[];
+  };
+  compatibility: {
+    legacy_loading_only: boolean;
+    check_gate_id_matching: string;
+    check_gate_id_fallbacks: Record<string, string>;
+  };
 }
 
 // A workflow in the project's list response: identity, validation.

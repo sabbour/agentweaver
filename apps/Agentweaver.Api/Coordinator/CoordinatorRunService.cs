@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.EntityFrameworkCore;
@@ -152,7 +154,9 @@ public sealed class CoordinatorRunService
 
         // The resolver — not a hardcoded literal — decides the run's durable ModelSource, so a BYOK
         // run is persisted (and rendered) as BYOK instead of always claiming GitHub Copilot.
-        var effectiveProvider = await ResolveEffectiveProviderForInvocationAsync(projectId, ct).ConfigureAwait(false);
+        var effectiveProviderBoundary = await ResolveEffectiveProviderBoundaryForInvocationAsync(projectId, ct)
+            .ConfigureAwait(false);
+        var effectiveProvider = effectiveProviderBoundary.Provider;
 
         var approvalSnapshot = new RunApprovalPolicySnapshot(
             approvalPolicy,
@@ -170,14 +174,15 @@ public sealed class CoordinatorRunService
             Status = RunStatus.InProgress,
             StartedAt = now,
             ProjectId = projectId,
-            ModelId = modelId,
+            ModelId = effectiveProviderBoundary.ResolveEffectiveModelId(modelId),
             AgentName = "Coordinator",
             ParentRunId = null,
             SubtaskId = null,
             RetriedFrom = retriedFrom,
         }.WithApprovalPolicySnapshot(approvalSnapshot);
 
-        var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProvider, ct).ConfigureAwait(false);
+        var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProviderBoundary, ct)
+            .ConfigureAwait(false);
         try
         {
             await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
@@ -191,13 +196,14 @@ public sealed class CoordinatorRunService
 
         // Interactive define-outcome runs stop at the confirmation gate; Direct runs skip only that
         // definition gate and still enter the same dispatch/review/merge pipeline.
-        await ActivateAsync(
+        await ActivatePersistedRunAsync(
                 run,
                 approvalPolicy,
                 workflowOverrideId,
                 direct: startMode == CoordinatorStartMode.Direct,
                 submittingUserDisplayName: submittingUserDisplayName,
                 effectiveProvider: effectiveProvider,
+                effectiveProviderBoundary: effectiveProviderBoundary,
                 providerSnapshotCaptured: capturedSnapshot is not null,
                 approvalPolicySource: approvalSnapshot.Source,
                 approvalPolicyCapturedAt: approvalSnapshot.CapturedAt,
@@ -329,7 +335,7 @@ public sealed class CoordinatorRunService
             RepositoryPath = source.RepositoryPath,
             OriginatingBranch = source.OriginatingBranch,
             ModelSource = effectiveProvider.ToModelSource(),
-            ModelId = source.ModelId,
+            ModelId = effectiveProviderBoundary.ResolveEffectiveModelId(source.ModelId),
             Task = source.Task,
             SubmittingUser = source.SubmittingUser,    // accountable human carried through (Principle IX)
             Status = RunStatus.InProgress,
@@ -357,7 +363,7 @@ public sealed class CoordinatorRunService
             throw;
         }
 
-        await ActivateAsync(
+        await ActivatePersistedRunAsync(
                 run,
                 approvalPolicy,
                 submittingUserDisplayName: submittingUserDisplayName,
@@ -391,13 +397,15 @@ public sealed class CoordinatorRunService
         RunApprovalPolicySnapshot approvalSnapshot,
         string confirmedBy,
         CancellationToken ct,
-        EffectiveModelProviderResult? effectiveProvider = null)
+        EffectiveModelProviderResult? effectiveProvider = null,
+        ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null)
     {
         var approvalPolicy = approvalSnapshot.Policy;
-        await ActivateAsync(
+        await ActivatePersistedRunAsync(
                 reservedRun,
                 approvalPolicy,
                 effectiveProvider: effectiveProvider,
+                effectiveProviderBoundary: effectiveProviderBoundary,
                 approvalPolicySource: approvalSnapshot.Source,
                 approvalPolicyCapturedAt: approvalSnapshot.CapturedAt,
                 approvalPolicySettingsUpdatedAt: approvalSnapshot.SettingsUpdatedAt)
@@ -419,6 +427,130 @@ public sealed class CoordinatorRunService
     /// per-run CTS (registered so Abandon -> Cts.Cancel() tears the run down, mirroring
     /// RunOrchestrator), and starts the supervised watch loop.
     /// </summary>
+    private async Task ActivatePersistedRunAsync(
+        Run run, RunApprovalPolicy approvalPolicy, string? workflowOverrideId = null, bool direct = false,
+        string? submittingUserDisplayName = null,
+        EffectiveModelProviderResult? effectiveProvider = null,
+        ResolvedRunModelProviderBoundary? effectiveProviderBoundary = null,
+        bool providerSnapshotCaptured = false,
+        string approvalPolicySource = "direct",
+        DateTimeOffset? approvalPolicyCapturedAt = null,
+        DateTimeOffset? approvalPolicySettingsUpdatedAt = null,
+        string? approvalPolicyInheritedFromRunId = null)
+    {
+        try
+        {
+            await ActivateAsync(
+                    run,
+                    approvalPolicy,
+                    workflowOverrideId,
+                    direct,
+                    submittingUserDisplayName,
+                    effectiveProvider,
+                    effectiveProviderBoundary,
+                    providerSnapshotCaptured,
+                    approvalPolicySource,
+                    approvalPolicyCapturedAt,
+                    approvalPolicySettingsUpdatedAt,
+                    approvalPolicyInheritedFromRunId)
+                .ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            var startupFailure = await TerminalizeStartupFailureAsync(run, failure).ConfigureAwait(false);
+            throw startupFailure;
+        }
+    }
+
+    internal async Task<CoordinatorStartupException> TerminalizeStartupFailureAsync(
+        Run run,
+        Exception failure)
+    {
+        var runId = run.Id.ToString();
+        var correlationId = CreateStartupFailureCorrelationId(run);
+        var payload = new
+        {
+            reason = CoordinatorFailureCodes.StartupFailed,
+            errorCode = CoordinatorFailureCodes.StartupFailed,
+            message = StructuredRunFailureTerminal.CreateDiagnosticMessage(
+                CoordinatorFailureCodes.StartupFailed,
+                retryable: true),
+            retryable = true,
+            correlationId,
+            traceId = Activity.Current?.TraceId.ToHexString(),
+            diagnosticPath = $"/api/runs/{runId}/terminal-diagnostic",
+            recoveryGuidance = "Retry the run. If it fails again, open the run trace and use the correlation id when reporting the failure.",
+            causeChain = BuildSafeCauseChain(
+                CoordinatorFailureCodes.StartupFailed,
+                "activation",
+                failure),
+        };
+
+        try
+        {
+            var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
+            var changed = await _runStore.TrySetTerminalOutcomeAsync(
+                run.Id,
+                TerminalRunOutcome.Create(
+                    RunStatus.Failed,
+                    EventTypes.RunFailed,
+                    payload,
+                    DateTimeOffset.UtcNow,
+                    run.LifecycleGeneration),
+                CoordinatorFailureCodes.StartupFailed,
+                CancellationToken.None).ConfigureAwait(false);
+            if (!changed)
+            {
+                var terminalRun = await _runStore.GetAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
+                if (terminalRun?.LifecycleGeneration != run.LifecycleGeneration
+                    || terminalRun.Result != CoordinatorFailureCodes.StartupFailed)
+                    throw new InvalidOperationException(
+                        $"Coordinator run {runId} reached a different terminal outcome during startup failure handling.");
+            }
+            else
+            {
+                try
+                {
+                    await CompleteTerminalOutcomeAsync(
+                        changed,
+                        entry,
+                        runId,
+                        EventTypes.RunFailed,
+                        payload,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception projectionFailure)
+                {
+                    _logger.LogError(
+                        "Immediate startup-failure projection deferred for run {RunId}: cause={CauseType}",
+                        runId,
+                        projectionFailure.GetType().Name);
+                }
+            }
+
+            _logger.LogError(
+                "Coordinator startup failure recorded for run {RunId}: code={ErrorCode} correlationId={CorrelationId} cause={CauseType}",
+                runId,
+                CoordinatorFailureCodes.StartupFailed,
+                correlationId,
+                failure.GetType().Name);
+        }
+        finally
+        {
+            await ReleaseAgentHostPodSafeAsync(runId).ConfigureAwait(false);
+            _registry.Abandon(runId);
+        }
+
+        return new CoordinatorStartupException(runId, correlationId, failure);
+    }
+
+    private static string CreateStartupFailureCorrelationId(Run run)
+    {
+        var input = Encoding.UTF8.GetBytes(
+            $"coordinator-startup:{run.Id}:{run.LifecycleGeneration}");
+        return Convert.ToHexString(SHA256.HashData(input))[..32].ToLowerInvariant();
+    }
+
     private async Task ActivateAsync(
         Run run, RunApprovalPolicy approvalPolicy, string? workflowOverrideId = null, bool direct = false,
         string? submittingUserDisplayName = null,
@@ -558,17 +690,44 @@ public sealed class CoordinatorRunService
         return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
     }
 
-    private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderForInvocationAsync(
+    private async Task<ResolvedRunModelProviderBoundary> ResolveEffectiveProviderBoundaryForInvocationAsync(
         ProjectId projectId,
         CancellationToken ct)
     {
+        EffectiveModelProviderResult provider;
         if (_executionPlanAccessor?.Current is { Operation: "orchestration" } accepted)
         {
             using var scope = _scopeFactory.CreateScope();
             var executionPlans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
-            return (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
+            provider = (await executionPlans.RevalidateAcceptedAsync(accepted, ct).ConfigureAwait(false)).Provider;
         }
-        return await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
+        else
+        {
+            provider = await ResolveEffectiveProviderAsync(projectId, ct).ConfigureAwait(false);
+        }
+
+        if (provider is not EffectiveModelProviderResult.Byok expectedByok)
+            return new ResolvedRunModelProviderBoundary(provider, null);
+
+        var configuration = _executionPlanAccessor?.FrozenByokConfiguration;
+        if (configuration is null)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            configuration = await scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>()
+                .GetAsync(ct).ConfigureAwait(false);
+        }
+        if (configuration is null || !GenerationModelProviderExecutor.Matches(configuration, expectedByok))
+            throw new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.Configuration,
+                "model_provider_changed",
+                "The effective BYOK provider changed before coordinator launch.",
+                isRetryable: true);
+
+        return new ResolvedRunModelProviderBoundary(
+            provider,
+            expectedByok.ConfigurationFingerprint,
+            configuration);
     }
 
     /// <summary>

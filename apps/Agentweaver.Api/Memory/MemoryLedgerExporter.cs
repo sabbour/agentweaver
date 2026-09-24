@@ -11,16 +11,22 @@ namespace Agentweaver.Api.Memory;
 /// on-disk <c>.squad/</c> + <c>.agentweaver/context/</c> file mirror for a given target directory.
 ///
 /// <para>
-/// Consolidates logic that was previously duplicated across the <c>/memory/export</c> endpoint,
-/// the per-write best-effort refresh (<c>MemoryExportHelpers.TryExportAsync</c>), and
-/// <see cref="Agentweaver.Api.Runs.PostRunScribeService"/>. It is also used to mirror the ledger
-/// into a run's git worktree immediately before commit, so the ledger rides the same commit/push
-/// flow as the run's other changes (issue #539).
+/// Generates the file mirror used by <see cref="DecisionLedgerSyncService"/> and mirrors the
+/// authoritative state into a run's git worktree immediately before commit, so the ledger rides
+/// the same commit/push flow as the run's other changes (issue #539).
 /// </para>
 /// </summary>
-internal static class MemoryLedgerExporter
+public static class MemoryLedgerExporter
 {
-    internal sealed record ExportResult(IReadOnlyList<string> Files);
+    public sealed record ExportResult(IReadOnlyList<string> Files);
+    internal sealed record ReconcileResult(int Imported, IReadOnlyList<DecisionInboxEntry> Entries);
+    internal sealed record AcceptedReconcileResult(int Imported);
+
+    public sealed class DecisionLedgerConflictException(IReadOnlyList<string> conflicts)
+        : InvalidOperationException($"Decision ledger conflicts: {string.Join("; ", conflicts)}")
+    {
+        public IReadOnlyList<string> Conflicts { get; } = conflicts;
+    }
 
     private static readonly string[] FixedExportPaths =
     [
@@ -73,7 +79,7 @@ internal static class MemoryLedgerExporter
         var exporter = new SquadMemoryExporter(targetDirectory);
         var files = await exporter.ExportAsync(
             decisions.Select(d => new DecisionExportDto(
-                d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList(),
+                d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.CreatedAt)).ToList(),
             inbox.Select(e => new InboxExportDto(
                 e.AgentName, e.Slug, e.Type, e.Title, e.Content, e.Rationale)).ToList(),
             memories.Select(m => new MemoryExportDto(
@@ -82,6 +88,140 @@ internal static class MemoryLedgerExporter
                 session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary),
             ct).ConfigureAwait(false);
         return new ExportResult(files);
+    }
+
+    internal static async Task<ReconcileResult> ReconcileInboxAsync(
+        string projectId,
+        string targetDirectory,
+        MemoryDbContext memoryDb,
+        CancellationToken ct)
+    {
+        var scan = new SquadMemoryImporter(targetDirectory).ScanInbox();
+        var conflicts = scan.Conflicts
+            .Select(conflict => $"{conflict.Path}: {conflict.Reason}")
+            .ToList();
+        var existing = await memoryDb.DecisionInbox
+            .Where(entry => entry.ProjectId == projectId)
+            .ToDictionaryAsync(entry => entry.Slug, StringComparer.Ordinal, ct)
+            .ConfigureAwait(false);
+
+        foreach (var candidate in scan.Entries)
+        {
+            if (!existing.TryGetValue(candidate.Slug, out var stored))
+                continue;
+
+            if (stored.Status == "rejected")
+            {
+                conflicts.Add($"{candidate.Slug}: repository entry conflicts with a rejected DB entry");
+                continue;
+            }
+
+            if (!Same(candidate, stored))
+                conflicts.Add($"{candidate.Slug}: repository and DB entries have different content");
+        }
+
+        if (conflicts.Count > 0)
+            throw new DecisionLedgerConflictException(conflicts);
+
+        var imported = 0;
+        var entries = new List<DecisionInboxEntry>(scan.Entries.Count);
+        foreach (var candidate in scan.Entries)
+        {
+            if (existing.TryGetValue(candidate.Slug, out var stored))
+            {
+                entries.Add(stored);
+                continue;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var entry = new DecisionInboxEntry
+            {
+                ProjectId = projectId,
+                AgentName = candidate.AgentName,
+                Slug = candidate.Slug,
+                Type = candidate.Type,
+                Title = candidate.Title,
+                Content = candidate.Content,
+                Rationale = candidate.Rationale,
+                Status = "pending",
+                SourceKind = MemorySourceKinds.Legacy,
+                SourceIdentity = $"repository:.squad/decisions/inbox/{candidate.Slug}.md",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            memoryDb.DecisionInbox.Add(entry);
+            entries.Add(entry);
+            imported++;
+        }
+
+        if (imported > 0)
+            await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        return new ReconcileResult(imported, entries);
+    }
+
+    internal static async Task<AcceptedReconcileResult> ReconcileAcceptedDecisionsAsync(
+        string projectId,
+        string targetDirectory,
+        MemoryDbContext memoryDb,
+        CancellationToken ct)
+    {
+        var candidates = new SquadMemoryImporter(targetDirectory).ScanAcceptedDecisions();
+        var existing = await memoryDb.Decisions
+            .Where(decision => decision.ProjectId == projectId)
+            .ToDictionaryAsync(decision => decision.Id, ct)
+            .ConfigureAwait(false);
+        var conflicts = new List<string>();
+        foreach (var candidate in candidates)
+        {
+            if (!candidate.IsExporterOwned)
+                continue;
+            if (candidate.RecordId is not { } recordId || !existing.TryGetValue(recordId, out var stored))
+            {
+                conflicts.Add($"{candidate.Title}: Markdown references an unknown exporter decision record");
+                continue;
+            }
+            if (!string.Equals(candidate.ContentHash, Hash(candidate), StringComparison.Ordinal))
+                conflicts.Add($"{candidate.Title}: exporter-owned Markdown record was modified outside Agentweaver");
+        }
+
+        if (conflicts.Count > 0)
+            throw new DecisionLedgerConflictException(conflicts);
+
+        var imported = 0;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.IsExporterOwned)
+                continue;
+
+            var now = DateTimeOffset.UtcNow;
+            var slug = $"repository-ledger-{Hash(candidate.Content)[..16]}";
+            var existingInbox = await memoryDb.DecisionInbox
+                .FirstOrDefaultAsync(entry => entry.ProjectId == projectId && entry.Slug == slug, ct)
+                .ConfigureAwait(false);
+            if (existingInbox is not null)
+                continue;
+            memoryDb.DecisionInbox.Add(new DecisionInboxEntry
+            {
+                ProjectId = projectId,
+                AgentName = candidate.AgentName,
+                Slug = slug,
+                Type = candidate.Type,
+                Status = "pending",
+                Title = candidate.Title,
+                Content = candidate.Content,
+                Rationale = candidate.Rationale,
+                SourceKind = MemorySourceKinds.Legacy,
+                SourceIdentity = "repository:.squad/decisions.md",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            imported++;
+        }
+
+        if (imported > 0)
+            await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+        return new AcceptedReconcileResult(imported);
     }
 
     /// <summary>
@@ -146,7 +286,8 @@ internal static class MemoryLedgerExporter
     public static Task CommitExportAsync(
         string workingDirectory,
         string defaultBranch,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? operationKey = null)
     {
         ct.ThrowIfCancellationRequested();
         using var repo = new Repository(workingDirectory);
@@ -194,14 +335,18 @@ internal static class MemoryLedgerExporter
         }
 
         var treeId = repo.ObjectDatabase.CreateTree(tree);
-        if (string.Equals(treeId.Sha, parent.Tree.Sha, StringComparison.Ordinal))
+        if (operationKey is null
+            && string.Equals(treeId.Sha, parent.Tree.Sha, StringComparison.Ordinal))
             return Task.CompletedTask;
 
         var signature = new Signature("Agentweaver", "agentweaver@localhost", DateTimeOffset.UtcNow);
+        var message = operationKey is null
+            ? "Export project memory"
+            : $"Export project memory\n\nAgentweaver-Scribe-Operation: {operationKey}";
         var commit = repo.ObjectDatabase.CreateCommit(
             signature,
             signature,
-            "Export project memory",
+            message,
             treeId,
             new[] { parent },
             prettifyMessage: true);
@@ -220,6 +365,24 @@ internal static class MemoryLedgerExporter
         return Task.CompletedTask;
     }
 
+    public static Task<bool> HasCommittedOperationAsync(
+        string workingDirectory,
+        string defaultBranch,
+        string operationKey,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        using var repo = new Repository(workingDirectory);
+        var branch = repo.Branches[defaultBranch]
+            ?? throw new InvalidOperationException($"Default branch '{defaultBranch}' was not found.");
+        var marker = $"Agentweaver-Scribe-Operation: {operationKey}";
+        return Task.FromResult(branch.Commits.Any(commit =>
+        {
+            ct.ThrowIfCancellationRequested();
+            return commit.Message.Contains(marker, StringComparison.Ordinal);
+        }));
+    }
+
     private static IEnumerable<string> EnumerateTreePaths(Tree tree, string prefix = "")
     {
         foreach (var entry in tree)
@@ -236,4 +399,21 @@ internal static class MemoryLedgerExporter
             }
         }
     }
+
+    private static bool Same(InboxImportDto candidate, DecisionInboxEntry stored) =>
+        string.Equals(candidate.AgentName, stored.AgentName, StringComparison.Ordinal)
+        && string.Equals(candidate.Type, stored.Type, StringComparison.Ordinal)
+        && string.Equals(candidate.Title, stored.Title, StringComparison.Ordinal)
+        && string.Equals(candidate.Content, stored.Content, StringComparison.Ordinal)
+        && string.Equals(candidate.Rationale, stored.Rationale, StringComparison.Ordinal);
+
+    private static string Hash(DecisionImportDto decision) =>
+        Hash(string.Join("\n", decision.AgentName, decision.Type, decision.Title, decision.Content, decision.Rationale ?? ""));
+
+    private static string Hash(Decision decision) =>
+        Hash(string.Join("\n", decision.AgentName, decision.Type, decision.Title, decision.Content, decision.Rationale ?? ""));
+
+    private static string Hash(string content) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 }

@@ -35,12 +35,18 @@ public sealed class WorkflowNodeTypeContractTests
             })
             .ToArray();
 
+        contract.Should().Equal(
+            WorkflowGrammarContract.NodeTypes.Select(entry => new ContractEntry(
+                entry.YamlType,
+                entry.ApiType,
+                entry.Label,
+                entry.Authorable)));
         contract!.Select(entry => (entry.YamlType, entry.ApiType))
             .Should().Equal(serverTypes.Select(entry => (entry.YamlType, entry.ApiType)));
     }
 
     [Fact]
-    public void PublishNode_IsBindableAsAnAgentBackedAction()
+    public void PublishNode_IsRejectedAsUnsupportedCapability()
     {
         var result = WorkflowDefinitionLoader.Load("""
             id: publish-output
@@ -65,10 +71,8 @@ public sealed class WorkflowNodeTypeContractTests
                 to: done
             """, "publish-output");
 
-        result.IsValid.Should().BeTrue(result.Error);
-        result.Definition!.Nodes.Single(node => node.Id == "publish").Type
-            .Should().Be(WorkflowNodeType.Publish);
-        RunWorkflowGraphBinder.GetBindabilityErrors(result.Definition).Should().BeEmpty();
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("unsupported capability 'publish'");
     }
 
     private static WorkflowDefinition DefinitionWith(WorkflowNodeType type) => new()

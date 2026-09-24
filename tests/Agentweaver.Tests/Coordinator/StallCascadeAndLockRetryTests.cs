@@ -260,7 +260,8 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         var stream = new SqliteRunEventStream(_streamConfig);
         var stalledChildRunId = await SeedChildRunAsync(
             RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddHours(-2));
-        const string coord = "stall-event-coord";
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
         var (_, ids) = await SeedPlanAsync(coord,
             [(SubtaskStatus.Running, stalledChildRunId)]);
         _streamStore.Create(coord, "owner");
@@ -941,6 +942,20 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
         }
         return id.ToString();
     }
+
+    private Task SeedCoordinatorRunAsync(string coordinatorRunId) =>
+        _runStore.InsertAsync(new Run
+        {
+            Id = RunId.Parse(coordinatorRunId),
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "coordinate",
+            SubmittingUser = "owner",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Coordinator",
+        });
 
     private async Task<(int PlanId, List<int> SubtaskIds)> SeedPlanAsync(
         string coordinatorRunId,

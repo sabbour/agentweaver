@@ -111,6 +111,18 @@ export function parseNoTeamStartError(err: unknown): NoTeamStartOrchestrationErr
   };
 }
 
+export function parseCoordinatorStartupError(err: unknown): { runId: string } | null {
+  if (!(err instanceof ApiError)
+      || typeof err.payload !== 'object'
+      || err.payload === null) return null;
+  const payload = err.payload as Record<string, unknown>;
+  return payload.error === 'coordinator_startup_failed'
+      && typeof payload.run_id === 'string'
+      && payload.run_id.trim().length > 0
+    ? { runId: payload.run_id }
+    : null;
+}
+
 export function formatApiError(err: unknown, fallback = 'The request failed.'): FormattedApiError {
   if (err instanceof ApiError) {
     const body = parseApiBody(err.body);

@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Agentweaver.Api.Workflows;
 
 /// <summary>
@@ -50,8 +52,48 @@ public record WorkflowGenerationResult(
 /// (FR-060) could not produce a schema-valid workflow. The message names the unresolved validation
 /// problem so the endpoint can surface a structured 400 rather than a broken draft.
 /// </summary>
-public sealed class WorkflowGenerationException : Exception
+public class WorkflowGenerationException : Exception
 {
-    public WorkflowGenerationException(string message) : base(message) { }
+    public WorkflowGenerationException(
+        string message,
+        string code = "workflow_generation_failed",
+        IReadOnlyList<string>? validationErrors = null,
+        IReadOnlyList<WorkflowTransitionIssue>? transitionIssues = null) : base(message)
+    {
+        Code = code;
+        ValidationErrors = validationErrors ?? [message];
+        TransitionIssues = transitionIssues ?? [];
+    }
+
     public WorkflowGenerationException(string message, Exception inner) : base(message, inner) { }
+
+    public string Code { get; } = "workflow_generation_failed";
+    public IReadOnlyList<string> ValidationErrors { get; } = [];
+    public IReadOnlyList<WorkflowTransitionIssue> TransitionIssues { get; } = [];
+}
+
+/// <summary>Thrown before model execution when a requested workflow capability is unavailable.</summary>
+public sealed class WorkflowUnsupportedCapabilityException(string capability, string message)
+    : WorkflowGenerationException(message)
+{
+    private const string UnsupportedMessage =
+        "Publication is not a supported workflow capability. Use an approved external publication process instead.";
+
+    public string Capability { get; } = capability;
+
+    public static WorkflowUnsupportedCapabilityException? ForDescription(string description) =>
+        Regex.IsMatch(
+            description,
+            @"\b(?:publish(?:es|ed|ing)?|publications?)\b|"
+            + @"\b(?:deploy(?:s|ed|ing)?|releas(?:e|es|ed|ing))\b"
+            + @"[^\r\n.!?]{0,80}\b(?:externally|publicly|to\s+(?:(?:the|an?)\s+)?(?:public|production|external)(?:\s+(?:site|service|system))?)\b|"
+            + @"\b(?:externally|publicly)\b[^\r\n.!?]{0,40}\b(?:deploy(?:s|ed|ing)?|releas(?:e|es|ed|ing))\b",
+            RegexOptions.IgnoreCase)
+            ? new("publish", UnsupportedMessage)
+            : null;
+
+    public static WorkflowUnsupportedCapabilityException? ForLoadError(string? error) =>
+        error?.Contains("unsupported capability 'publish'", StringComparison.Ordinal) == true
+            ? new("publish", error)
+            : null;
 }

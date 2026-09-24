@@ -24,11 +24,12 @@ public enum WorkspaceOutcome
     InvalidPath,
 }
 
-/// <summary>A browsable git ref for a project workspace: base branch, active worktree, or assembly branch.</summary>
+/// <summary>A browsable git ref and its resolved commit revision for a project workspace.</summary>
 public sealed record WorkspaceRef
 {
     [JsonPropertyName("kind")] public required string Kind { get; init; }            // "base" | "worktree" | "assembly"
     [JsonPropertyName("branch")] public required string Branch { get; init; }
+    [JsonPropertyName("revision")] public string? Revision { get; init; }
     [JsonPropertyName("label")] public required string Label { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("run_status")] public string? RunStatus { get; init; }
@@ -90,6 +91,7 @@ public sealed class ProjectWorkspaceService
             {
                 Kind = "base",
                 Branch = project.DefaultBranch,
+                Revision = ResolveRevision(project.WorkingDirectory, project.DefaultBranch),
                 Label = $"{project.DefaultBranch} (base)",
             },
         };
@@ -101,6 +103,7 @@ public sealed class ProjectWorkspaceService
             {
                 Kind = "worktree",
                 Branch = run.WorktreeBranch!,
+                Revision = ResolveRevision(project.WorkingDirectory, run.WorktreeBranch!),
                 Label = BuildWorktreeLabel(run),
                 RunId = run.Id.ToString(),
                 RunStatus = run.Status.ToApiString(),
@@ -117,6 +120,7 @@ public sealed class ProjectWorkspaceService
             {
                 Kind = "assembly",
                 Branch = branch,
+                Revision = ResolveRevision(repoPath, branch),
                 Label = $"Assembly {run.Id.ToString()[..8]} ({run.Status.ToApiString()})",
                 RunId = run.Id.ToString(),
                 RunStatus = run.Status.ToApiString(),
@@ -127,6 +131,13 @@ public sealed class ProjectWorkspaceService
         return new WorkspaceRefsResult(
             WorkspaceOutcome.Ok,
             new WorkspaceRefsResponse { CurrentBranch = project.DefaultBranch, Refs = refs });
+    }
+
+    private static string? ResolveRevision(string repositoryPath, string branch)
+    {
+        if (!Repository.IsValid(repositoryPath)) return null;
+        using var repository = new Repository(repositoryPath);
+        return repository.Branches[branch]?.Tip?.Sha;
     }
 
     /// <summary>

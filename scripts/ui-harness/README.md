@@ -9,6 +9,8 @@ npm --prefix scripts/ui-harness install
 node scripts/ui-harness/login-chrome-default.mjs --base-url https://<host>.staging.<domain>
 node scripts/ui-harness/agent-driver-ui/tools.mjs init --persona jordan --base-url https://<host>.staging.<domain>
 node scripts/ui-harness/agent-driver-ui/tools.mjs goto --session <sessionId> --path /
+node scripts/ui-harness/agent-driver-ui/tools.mjs viewport --session <sessionId> --width 1280 --height 720
+node scripts/ui-harness/agent-driver-ui/tools.mjs viewport --session <sessionId> --mobile
 node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --test-id <test-id>
 node scripts/ui-harness/agent-driver-ui/tools.mjs capture --session <sessionId>
 node scripts/ui-harness/agent-driver-ui/tools.mjs finish --session <sessionId>
@@ -49,8 +51,9 @@ to evidence.
 
 The matching `staging.storageState.json.sessionStorage.json` sidecar is also the sole
 authentication handoff to the API harness. Its `recorder-session` provider validates
-the target origin and uses the bearer only in memory, so a completed Chrome Default SSO
-login is not repeated for an API harness run.
+the target origin and returns the complete `Authorization` value only in memory. API
+callers pass that value to the header unchanged, so a completed Chrome Default SSO login
+is not repeated for an API harness run.
 
 `init` owns one headless browser worker per session. Separate action invocations reuse
 that worker's page, so navigation and browser state survive a documented
@@ -58,6 +61,21 @@ that worker's page, so navigation and browser state survive a documented
 sessions remain isolated, and `finish` closes the worker and deletes its private
 recovery state. An abandoned worker is recovered from the last completed action without
 opening a CDP or remote-debugging endpoint.
+
+`viewport` resizes that same authenticated managed-Chrome-backed session, so responsive
+evidence does not require a generic Playwright or recorder fallback. Use explicit
+`--width` and `--height` values for desktop or constrained-height checks, or `--mobile`
+(`390x844`) for the maintained narrow/mobile size. Each evidence step records the actual
+viewport and document overflow dimensions. A `viewport` step additionally records
+required assertions for navigation reachability, horizontal/vertical overflow,
+focus-mode state, and content visibility. The run-detail semantic defaults are
+`app-navigation-menu`, `run-focus-toggle`, and `run-operator-console`; override them with
+`--navigation-test-id`, `--focus-test-id`, and `--content-test-id`. Use
+`--focus-mode standard|focused|available` when the state itself is part of acceptance.
+Vertical-overflow evidence uses a reversible root-scroll probe and rejects `hidden` or
+`clip` root overflow modes. Target reachability evidence keeps only scroll containers
+whose positions changed, the clipping ancestors that actually block the target, and the
+resulting reachability fact.
 
 Persisted snapshots, actions, errors, screenshot metadata, and normalized artifacts keep
 URLs only as origin plus pathname; userinfo, query strings, and fragments remain

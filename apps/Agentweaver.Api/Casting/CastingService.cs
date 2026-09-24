@@ -1263,14 +1263,7 @@ public sealed class CastingService
                     || string.IsNullOrWhiteSpace(charter))
                     continue;
 
-                var alreadySeeded = await memoryDb.AgentMemory
-                    .AnyAsync(m => m.ProjectId == projectId
-                               && m.AgentName == member.Name
-                               && m.Type == "core_context", ct)
-                    .ConfigureAwait(false);
-                if (alreadySeeded) continue;
-
-                memoryDb.AgentMemory.Add(new AgentMemory
+                await MemoryWriteDeduplicator.GetOrCreateMemoryAsync(memoryDb, new AgentMemory
                 {
                     ProjectId = projectId,
                     AgentName = member.Name,
@@ -1280,7 +1273,7 @@ public sealed class CastingService
                     Tags = null,
                     CreatedAt = now,
                     UpdatedAt = now,
-                });
+                }, ct).ConfigureAwait(false);
             }
 
             // Start a project session if none is open

@@ -13,6 +13,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<DecisionInboxEntry> DecisionInbox => Set<DecisionInboxEntry>();
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
     public DbSet<RunAuthorshipCapability> RunAuthorshipCapabilities => Set<RunAuthorshipCapability>();
+    public DbSet<ScribeOperationAttempt> ScribeOperationAttempts => Set<ScribeOperationAttempt>();
     public DbSet<SessionContext> SessionContexts => Set<SessionContext>();
     public DbSet<RunEventRecord> RunEvents => Set<RunEventRecord>();
     public DbSet<OutcomeSpec> OutcomeSpecs => Set<OutcomeSpec>();
@@ -78,6 +79,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<BlueprintPackageVersionRecord> BlueprintPackageVersions => Set<BlueprintPackageVersionRecord>();
     public DbSet<BlueprintPackagePayloadRecord> BlueprintPackagePayloads => Set<BlueprintPackagePayloadRecord>();
     public DbSet<BlueprintPackageAcquisitionRecord> BlueprintPackageAcquisitions => Set<BlueprintPackageAcquisitionRecord>();
+    public DbSet<BlueprintGenerationJobRecord> BlueprintGenerationJobs => Set<BlueprintGenerationJobRecord>();
+    public DbSet<BlueprintGenerationArtifactRecord> BlueprintGenerationArtifacts => Set<BlueprintGenerationArtifactRecord>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -85,6 +88,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.UseOpenIddict();
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.Status });
         model.Entity<Decision>().HasIndex(d => new { d.ProjectId, d.AgentName });
+        model.Entity<Decision>().Property(d => d.IdentityKey).HasMaxLength(64);
+        model.Entity<Decision>().HasIndex(d => d.IdentityKey).IsUnique();
         model.Entity<Decision>().Property(d => d.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<Decision>().Property(d => d.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
         model.Entity<Decision>()
@@ -102,6 +107,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .IsRequired(false);
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.AgentName });
         model.Entity<AgentMemory>().HasIndex(m => new { m.ProjectId, m.Type });
+        model.Entity<AgentMemory>().Property(m => m.IdentityKey).HasMaxLength(64);
+        model.Entity<AgentMemory>().HasIndex(m => m.IdentityKey).IsUnique();
         model.Entity<AgentMemory>().Property(m => m.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<AgentMemory>().Property(m => m.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
         model.Entity<RunAuthorshipCapability>().ToTable("run_authorship_capabilities");
@@ -116,6 +123,20 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .HasColumnName("expires_at")
             .IsRequired();
         model.Entity<RunAuthorshipCapability>().HasIndex(capability => capability.ExpiresAt);
+        model.Entity<ScribeOperationAttempt>(attempt =>
+        {
+            attempt.ToTable("scribe_operation_attempts");
+            attempt.HasKey(candidate => candidate.Id);
+            attempt.Property(candidate => candidate.OperationKey).HasMaxLength(256).IsRequired();
+            attempt.Property(candidate => candidate.ProjectId).HasMaxLength(128).IsRequired();
+            attempt.Property(candidate => candidate.RunId).HasMaxLength(128).IsRequired();
+            attempt.Property(candidate => candidate.OperationType).HasMaxLength(64).IsRequired();
+            attempt.Property(candidate => candidate.Status).HasMaxLength(32).IsRequired();
+            attempt.Property(candidate => candidate.FailureCode).HasMaxLength(64);
+            attempt.HasIndex(candidate => candidate.OperationKey)
+                .IsUnique()
+                .HasFilter("\"Status\" IN ('started', 'completed')");
+        });
         model.Entity<RunModelProviderSnapshotOwner>(owner =>
         {
             owner.ToTable("run_model_provider_snapshot_owners");
@@ -179,6 +200,58 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<OAuthDynamicRegistration>().HasIndex(x => new { x.SourceHash, x.RegisteredAt });
         model.Entity<OAuthRefreshTokenFamily>().HasIndex(x => x.AuthorizationId).IsUnique();
         model.Entity<OAuthMaintenanceLease>().HasKey(x => x.Name);
+        model.Entity<BlueprintGenerationJobRecord>(entity =>
+        {
+            entity.ToTable("blueprint_generation_jobs");
+            entity.HasKey(x => x.JobId);
+            entity.Property(x => x.JobId).HasColumnName("job_id").HasMaxLength(32);
+            entity.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(256);
+            entity.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(256);
+            entity.Property(x => x.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
+            entity.Property(x => x.Description).HasColumnName("description");
+            entity.Property(x => x.ProjectId).HasColumnName("project_id").HasMaxLength(64);
+            entity.Property(x => x.TargetRepository).HasColumnName("target_repository").HasMaxLength(512);
+            entity.Property(x => x.BlueprintModel).HasColumnName("blueprint_model").HasMaxLength(256);
+            entity.Property(x => x.WorkflowModel).HasColumnName("workflow_model").HasMaxLength(256);
+            entity.Property(x => x.ProviderKind).HasColumnName("provider_kind").HasMaxLength(64);
+            entity.Property(x => x.ProviderType).HasColumnName("provider_type").HasMaxLength(64);
+            entity.Property(x => x.ProviderKey).HasColumnName("provider_key").HasMaxLength(64);
+            entity.Property(x => x.ProviderScope).HasColumnName("provider_scope").HasMaxLength(32);
+            entity.Property(x => x.ResolutionScope).HasColumnName("resolution_scope").HasMaxLength(32);
+            entity.Property(x => x.CredentialBindingVersion).HasColumnName("credential_binding_version").HasMaxLength(128);
+            entity.Property(x => x.QueuedProviderKey).HasColumnName("queued_provider_key");
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(32);
+            entity.Property(x => x.Attempt).HasColumnName("attempt");
+            entity.Property(x => x.LeaseOwner).HasColumnName("lease_owner").HasMaxLength(128);
+            entity.Property(x => x.LeaseExpiresAt).HasColumnName("lease_expires_at");
+            entity.Property(x => x.FailureCode).HasColumnName("failure_code").HasMaxLength(128);
+            entity.Property(x => x.FailureMessage).HasColumnName("failure_message");
+            entity.Property(x => x.FailureRetryable).HasColumnName("failure_retryable");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(x => x.StartedAt).HasColumnName("started_at");
+            entity.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            entity.HasIndex(x => new { x.Subject, x.IdempotencyKey }).IsUnique();
+            entity.HasIndex(x => new { x.Status, x.LeaseExpiresAt, x.CreatedAt });
+        });
+        model.Entity<BlueprintGenerationArtifactRecord>(entity =>
+        {
+            entity.ToTable("blueprint_generation_artifacts");
+            entity.HasKey(x => x.ArtifactId);
+            entity.Property(x => x.ArtifactId).HasColumnName("artifact_id").HasMaxLength(32);
+            entity.Property(x => x.JobId).HasColumnName("job_id").HasMaxLength(32);
+            entity.Property(x => x.LogicalId).HasColumnName("logical_id").HasMaxLength(256);
+            entity.Property(x => x.Version).HasColumnName("version");
+            entity.Property(x => x.BlueprintJson).HasColumnName("blueprint_json");
+            entity.Property(x => x.GeneratedWorkflowYaml).HasColumnName("generated_workflow_yaml");
+            entity.Property(x => x.WarningsJson).HasColumnName("warnings_json");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(x => x.JobId).IsUnique();
+            entity.HasOne<BlueprintGenerationJobRecord>()
+                .WithOne()
+                .HasForeignKey<BlueprintGenerationArtifactRecord>(x => x.JobId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
 
         model.Entity<IntegrationBuildLockRecord>().HasKey(l => l.ProjectId);
         ConfigureGitHubConnectionsPersistence(model);

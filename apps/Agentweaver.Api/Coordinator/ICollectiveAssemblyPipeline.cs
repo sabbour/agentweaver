@@ -211,6 +211,7 @@ public sealed record CollectiveScribeRequest(
     string ModelSource,
     string? ModelId,
     DateTimeOffset RunStartedAt,
+    int LifecycleGeneration,
     string? TerminalStatus = null,
     string? MergeResult = null,
     string? ByokProviderFingerprint = null);

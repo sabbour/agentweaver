@@ -75,7 +75,6 @@ internal static class NodeClassifier
         WorkflowNodeType.PeerReview          => NodeKind.PeerReview,
         WorkflowNodeType.BuildTest           => NodeKind.PeerReview,
         WorkflowNodeType.OpenPullRequest     => NodeKind.OpenPullRequest,
-        WorkflowNodeType.Publish             => NodeKind.Agent,
         WorkflowNodeType.CoordinatorComposed => NodeKind.CoordinatorComposed,
         WorkflowNodeType.Check               => ClassifyGate(node),
         _                                    => NodeKind.Check,
@@ -90,13 +89,31 @@ internal static class NodeClassifier
     };
 
     /// <summary>
-    /// Canonical gate kind from <see cref="WorkflowNode.GateKind"/>, falling back to the node id for legacy
-    /// definitions that predate the explicit <c>gate_kind</c> field. Mirrors the normalization in
-    /// <c>RunWorkflowFactory.GateKindOf</c> so the policy-gate bindings and the binder agree.
+    /// Resolves the runtime gate kind. The node-id fallback is intentionally restricted to loading and
+    /// executing legacy persisted definitions; new authoring is validated against an explicit canonical
+    /// <c>gate_kind</c> before it reaches the binder.
     /// </summary>
     public static string? NormalizeGateKind(WorkflowNode node)
     {
-        var raw = !string.IsNullOrWhiteSpace(node.GateKind) ? node.GateKind! : node.Id;
+        var raw = !string.IsNullOrWhiteSpace(node.GateKind)
+            ? node.GateKind!
+            : LegacyGateKindFromId(node);
+        return raw is null ? null : NormalizeGateKindValue(raw);
+    }
+
+    public static string? LegacyGateKindFromId(WorkflowNode node)
+    {
+        if (!string.IsNullOrWhiteSpace(node.GateKind))
+            return null;
+
+        return NormalizeGateKindValue(node.Id);
+    }
+
+    public static bool IsCanonicalGateKind(string? gateKind) =>
+        gateKind is "rai" or "human-review" or "rubberduck";
+
+    private static string? NormalizeGateKindValue(string raw)
+    {
         return raw.Trim().Replace('_', '-').Replace(' ', '-').ToLowerInvariant() switch
         {
             "rai"                      => "rai",

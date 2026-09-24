@@ -296,7 +296,11 @@ Team member objects include `is_built_in: true` for Scribe, Ralph, and Rai (case
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/blueprints` | List predefined blueprints |
-| `POST` | `/api/blueprints/generate` | Generate a blueprint from a description |
+| `POST` | `/api/blueprints/generate` | Accept a durable Blueprint-generation job |
+| `GET` | `/api/blueprints/generation-jobs/{jobId}` | Read authorized generation status |
+| `GET` | `/api/blueprints/generation-jobs/{jobId}/result` | Read the immutable generated Blueprint artifact |
+| `POST` | `/api/blueprints/generation-jobs/{jobId}/cancel` | Cancel queued or running generation |
+| `POST` | `/api/blueprints/generation-jobs/{jobId}/retry` | Retry failed or cancelled generation |
 | `POST` | `/api/blueprints/suggest` | Analyze a GitHub repository and recommend a catalog blueprint |
 | `POST` | `/api/blueprints/validate` | Validate an inline blueprint |
 
@@ -385,7 +389,11 @@ Example trigger payload:
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/graph` | Get a workflow graph |
 | `GET` | `/api/projects/{projectId}/workflows/{workflowId}/yaml` | Get workflow YAML |
 | `PUT` | `/api/projects/{projectId}/workflows/{workflowId}` | Replace a workflow definition |
-| `POST` | `/api/projects/{projectId}/workflows/generate` | Generate a workflow definition |
+| `POST` | `/api/projects/{projectId}/workflows/generate` | Accept a durable workflow-generation job (`Idempotency-Key` required) |
+| `GET` | `/api/projects/{projectId}/workflows/generation-jobs/{jobId}` | Read authorized workflow-generation status |
+| `GET` | `/api/projects/{projectId}/workflows/generation-jobs/{jobId}/result` | Read immutable workflow YAML, version, and graph |
+| `POST` | `/api/projects/{projectId}/workflows/generation-jobs/{jobId}/cancel` | Cancel queued or running generation |
+| `POST` | `/api/projects/{projectId}/workflows/generation-jobs/{jobId}/retry` | Retry cancelled or retryable failed generation |
 
 ### Workflow trigger configuration
 
@@ -1173,7 +1181,8 @@ Response `200 OK`:
 
 ### POST /api/blueprints/generate
 
-Generates a single blueprint from a free-text description.
+Accepts a durable Blueprint-generation job from a free-text description. The request must include
+an `Idempotency-Key` header.
 
 Request:
 
@@ -1189,16 +1198,41 @@ When `project_id` is supplied, the caller must own the project and blueprint gen
 project's `blueprint_generation_model`; the generated workflow fallback uses
 `workflow_generation_model`. Null/omitted project settings inherit the global Generation fallback.
 
-Response `200 OK`:
+Response `202 Accepted`:
 
 ```json
 {
-  "blueprint": { "...": "BlueprintDto" },
-  "generated_workflow_yaml": null
+  "job_id": "f6d47c1d7f44414989be66bb7935b97f",
+  "status": "queued",
+  "attempt": 0,
+  "provider_snapshot": {
+    "provider_kind": "platform_github_copilot",
+    "provider_key": "opaque-provider-fingerprint",
+    "provider_scope": "platform",
+    "resolution_scope": "platform",
+    "blueprint_model": "gpt-5",
+    "workflow_model": "gpt-5",
+    "credential_binding_version": "3"
+  },
+  "status_url": "/api/blueprints/generation-jobs/f6d47c1d7f44414989be66bb7935b97f",
+  "result_url": "/api/blueprints/generation-jobs/f6d47c1d7f44414989be66bb7935b97f/result",
+  "cancel_url": "/api/blueprints/generation-jobs/f6d47c1d7f44414989be66bb7935b97f/cancel",
+  "retry_url": "/api/blueprints/generation-jobs/f6d47c1d7f44414989be66bb7935b97f/retry"
 }
 ```
 
-`generated_workflow_yaml` is present when no suitable library workflow exists and a custom workflow was generated. Validation failures return `422 Unprocessable Entity` with `error: "blueprint_generation_failed"` and `details`.
+The same subject, key, and request fingerprint return the original job. Reusing the key for
+different input returns `409 Conflict` with `idempotency_key_conflict`.
+
+Status values are `queued`, `running`, `completed`, `failed`, and `cancelled`. Status, result,
+cancel, and retry reauthorize the bound subject and project. A completed result contains one
+immutable `artifact_id`, Blueprint `logical_id`, `version`, Blueprint payload, optional
+`generated_workflow_yaml`, and warnings. Provider deadlines and availability failures are redacted
+to `blueprint_provider_timeout` and `blueprint_provider_unavailable`; a failed custom-workflow
+request never returns a default workflow as a successful result.
+Retry accepts cancelled jobs and failures marked `retryable`. If the accepted provider identity or
+credential-binding version changed, the job fails closed; reauthorize and submit a new generation
+request to capture a new immutable provider snapshot.
 
 ### POST /api/blueprints/validate
 

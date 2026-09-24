@@ -48,7 +48,7 @@ serialization.
 | `agent.message.delta` | When the model streams a chunk of visible text from the GitHub Copilot SDK runner | `delta`, `messageId` |
 | `agent.turn.end` | When the model finishes a turn (closes the turn bubble in the frontend) | `turnId` |
 | `agent.intent` | When the agent calls `report_intent` before a major step | `intent` |
-| `agent.system_prompt` | Once for each Copilot provider turn after the system prompt is composed | The same bounded fields as `agent.runtime_context`, plus `callableMemoryGuidanceIncluded` (boolean); never prompt content |
+| `agent.system_prompt` | Once for each supported provider turn after the system prompt is composed | The same bounded fields as `agent.runtime_context`, plus `callableMemoryGuidanceIncluded` (boolean); never prompt content |
 | `agent.tools` | At run start, listing the tools registered for this run | `tools` (string array of tool names) |
 | `agent.runtime_context` | Once for each provider agent turn after the prompt and provider tool declarations are assembled | `provider`, `runId`, `projectId`, `baseCharacters`, `runContextCharacters`, `skillCharacters`, `separatorCharacters`, `taskCharacters`, `toolDeclarationCharacters`, `skillDeliveryMode` (`none`, `file`, `inline`, `mixed`), `totalCharacters`, `estimatedTokens` |
 | `memory.context_composition` | After the structured memory context is selected for a run or coordinator decomposition | `included`, `omittedMemoryCount`, `omittedSessionCount`, `omissionCauses`; no prompt text, records, identifiers, or size measurements |
@@ -62,7 +62,7 @@ serialization.
 | `agent.question_answered` | When a pending `ask_question` request is answered (or resolved by timeout) and the agent resumes | `requestId`, `answer`, `timedOut` |
 | `run.completed` | When the watch loop determines the run is terminal with no file changes (watch-loop only; never emitted by the runner) | `result` |
 | `run.outcome` | Agent self-assessment of task completion, emitted just before `run.completed` | `achieved` (bool), `reason` |
-| `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `message`, `errorCode`, `retryable` — bounded normalized public contract |
+| `run.failed` | When the runtime, provider, or content-safety flow ends the run in failure | `message`, `errorCode`, `retryable`, plus optional server-generated `correlationId`, active `traceId`, and bounded exception-type `causeChain` — normalized public contract |
 | `run.bounded` | When the run hits a step-count or wall-clock bound | `limit_type`, `step_count` |
 | `run.cancelled` | When an in-progress run is cancelled because its project was deleted | *(none)* |
 | `run.approval_policy_selected` | When a coordinator run persists its immutable launch approval policy | `autoApproveTools`, `autopilot`, `source` (`direct`, `backlog_pickup`, or `retry`), `capturedAt`, `settingsUpdatedAt` (heartbeat-derived policies), `inheritedFromRunId` (retries), `safeTools` |
@@ -114,7 +114,7 @@ serialization.
 | `coordinator.assembly_changes_requested` | When a gate requests changes; the coordinator re-dispatches the reviewer-implicated subtasks and their transitive dependents | `workPlanId`, `redispatchSubtaskIds`, `redispatchedSubtaskIds`, `implicatedSubtaskIds`, `dependentSubtaskIds`, `feedback` |
 | `coordinator.assembly_implicated_scope_fallback` | When the #223 implicated-subtask scoping reverts to the broad all-contributors set because the reviewer's structured `TARGET_FILES:` hint was missing or reverse-mapped to nothing (fail-safe, made observable) | `workPlanId`, `source`, `reviewer`, `reason` (`no_target_files_field` \| `target_files_matched_nothing`), `namedFiles`, `touchedFiles`, `contributorIds` |
 | `coordinator.assembly_merge_started` / `coordinator.assembly_merge_completed` / `coordinator.assembly_merge_failed` | The ONE collective merge of the integration branch into the originating branch | `workPlanId`, `integrationBranch` / `commitHash` / `reason`, `conflictingFiles` |
-| `coordinator.assembly_scribe_started` / `coordinator.assembly_scribe_completed` | The ONE collective scribe pass after a successful merge (best-effort) | `workPlanId` |
+| `coordinator.assembly_scribe_started` / `coordinator.assembly_scribe_completed` | The ONE collective Scribe pass after merge. `completed` is emitted only after durable, idempotent housekeeping succeeds. A failed Scribe child remains nonfatal to the coordinator and emits `run.scribe_failed` instead. | `workPlanId` |
 | `coordinator.assembly_completed` | When collective assembly finishes and the work plan reaches `complete` | `workPlanId`, `integrationBranch`, `commitHash` |
 | `coordinator.assembly_declined` | When the reviewer declines the combined output (terminal); the coordinator run ends `declined` | `workPlanId`, `reason`, `reviewer` |
 | `coordinator.assembly_failed` | When the assembly background task hits an UNEXPECTED fault, or when Build & Test infrastructure fails with a non-retryable configuration error; the work plan moves to `assembly_failed` and the coordinator run ends with a human-readable reason. This is a stream terminal. | `workPlanId`, `reason`, `phase` for unexpected faults; `detail`, `exceptionMessage`, `innerExceptionMessage`, `innerExceptionType`, `infrastructureReason` for Build & Test infrastructure failures |
@@ -143,15 +143,20 @@ SDK-internal tools (`report_outcome`, `glob`) are suppressed from the event stre
 
 ### `agent.runtime_context`
 
-Both GitHub Copilot execution paths emit the same bounded composition record once per agent turn.
-It contains only scalar character counts, the stable run/project correlation, provider name, and the
-fixed delivery-mode token; it never contains prompt or task text, skill names or content, tool names,
-tool arguments or declarations, credentials, or exception text. This is separate from
+All supported Copilot SDK execution paths emit the same bounded composition record once per agent
+turn, including coordinator/project turns and the AgentHost-backed operator assistant using either
+GitHub Copilot or BYOK. It contains only scalar character counts, the stable run/project correlation,
+the canonical provider token (`copilot` or `byok`), and the fixed delivery-mode token; it never
+contains provider type, provider/configuration identifiers, model names, endpoints, prompt or task
+text, skill names or content, tool names, tool arguments or declarations, credentials, or exception
+text. This is separate from
 `memory.context_composition`, which reports #1241 structured-memory selection and omission facts.
 
 The counts measure the exact assembled fragments. `separatorCharacters` includes the base-to-context
 and run-context-to-skill separators. Provider tool declarations are measured from the declaration list
-passed to the SDK. The invariant is:
+passed to the SDK. The operator assistant reports its complete assistant system message under
+`baseCharacters`; its run-context, skill, and separator counts are zero because that lighter path does
+not use the project-run prompt sectioning scheme. The invariant is:
 
 `totalCharacters = baseCharacters + runContextCharacters + skillCharacters + separatorCharacters + taskCharacters + toolDeclarationCharacters`
 
@@ -159,11 +164,13 @@ passed to the SDK. The invariant is:
 
 ### `agent.system_prompt`
 
-Both GitHub Copilot execution paths emit this durable metadata-only event once per provider turn,
-using the same composition evidence as `agent.runtime_context`. Its payload contains the same
+All supported Copilot SDK execution paths emit this durable metadata-only event once per provider
+turn, using the same composition evidence as `agent.runtime_context`. Its payload contains the same
 run/project correlation, scalar character counts, fixed skill-delivery token, total, and planning
 estimate, plus `callableMemoryGuidanceIncluded`. That boolean is computed by the branch that decides
-whether the callable project-memory guidance is included in the actual provider prompt.
+whether the callable project-memory guidance is included in the actual provider prompt. It is `false`
+for the operator assistant, whose MCP-only prompt does not use the project-run callable-memory
+guidance block.
 
 The event never stores or returns prompt text or hashes, task text, tool names or schemas, skill or
 charter text, credentials, PII, or arbitrary extension fields. Public REST and SSE projections
@@ -459,7 +466,7 @@ A single background pipeline then drives the collective stages, each emitting a 
 5. **Automated assembly review gates** (`coordinator.assembly_review_requested` with `gateKind: "rubberduck"` or `"build-test"`) — Rubberduck critique may request changes; Build & Test creates a detached integration-branch worktree and runs the build/test verdict. The deterministic preview step then runs after Build & Test for approved or request-changes verdicts, producing `sandbox.preview_ready`, `sandbox.preview_failed`, or `sandbox.preview_skipped_not_applicable` without changing the verdict. Automated gate request-changes feedback routes through unified steering: `coordinator.steering_received` records the source, and `coordinator.steering_decision` records whether the coordinator chose in-place steering, fresh dispatch, proceed/terminal, or advisory no-op. Fresh dispatch is therefore visible before any reset.
 6. **One human review gate** (`coordinator.assembly_review_requested` with `gateKind: "human-review"`, carrying `treeHash` and `includedSubtaskIds` so the UI can render the assembled tree and which subtasks it covers) — the pipeline suspends until a decision arrives via `POST /api/runs/{coordinatorRunId}/assembly/review`. The POST can land on any API replica; if it lands away from the owner pipeline while the work plan is durably `in_review`, the decision is deferred in shared state and the owner consumes it at most once. Approve → `coordinator.assembly_review_approved`. Request changes → `coordinator.assembly_changes_requested` (the coordinator scopes the re-dispatch to the reviewer's **implicated** subtasks — reverse-mapped from the reviewer's structured `TARGET_FILES:` hint via `AssemblyPlanning.ScopeImplicatedSubtasks`, never prose-scraped — plus their transitive dependents: `implicatedSubtaskIds`, `dependentSubtaskIds`, `redispatchSubtaskIds`; if no hint is present or it matches nothing it falls back to all contributors and emits `coordinator.assembly_implicated_scope_fallback`), resets those subtasks to `pending`, returns the plan to `dispatching`, and re-dispatches. A pure decline is the terminal `assembly_declined` status.
 7. **One merge** (`coordinator.assembly_merge_started` → `coordinator.assembly_merge_completed` with `commitHash`, or `coordinator.assembly_merge_failed` with `reason`/`conflictingFiles`).
-8. **One scribe** (`coordinator.assembly_scribe_started` → `coordinator.assembly_scribe_completed`) — best-effort; a scribe failure does not fail the already-merged assembly.
+8. **One Scribe** (`coordinator.assembly_scribe_started` → `coordinator.assembly_scribe_completed`) — the model turn has a read-only Scribe tool profile. Server-side finalization owns decision/inbox promotion, session/history updates, and export under deterministic operation keys shared with post-run recovery. Completed operations suppress retries; failed attempts remain auditable. `coordinator.assembly_scribe_completed` is emitted only after durable housekeeping succeeds. A failed Scribe child remains nonfatal to the already-merged coordinator run and reports only a classified, redacted `run.scribe_failed` diagnostic.
 9. **Completion** — `coordinator.assembly_completed` with the `integrationBranch` and `commitHash`; the work plan reaches `complete`.
 
 Work-plan status and run terminal status differ. `assembly_blocked` can park a recoverable assembly and does not inherently terminate SSE. Actual terminal outcomes emit terminal events; durable replay drains its loaded batch before closing. Budget exhaustion escalates to `in_review` at human review, not terminal steering-budget exhaustion.

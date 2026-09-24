@@ -5,11 +5,19 @@ using ModelContextProtocol.Server;
 
 namespace Agentweaver.Mcp.Tools;
 
-/// <summary>Response from POST /api/projects/{id}/workflows/generate.</summary>
-internal sealed record GenerateWorkflowResponse(
-    [property: JsonPropertyName("yaml")] string Yaml,
-    [property: JsonPropertyName("workflow_id")] string WorkflowId,
-    [property: JsonPropertyName("was_corrected")] bool WasCorrected);
+internal sealed record WorkflowGenerationFailure(
+    [property: JsonPropertyName("code")] string Code,
+    [property: JsonPropertyName("message")] string Message,
+    [property: JsonPropertyName("retryable")] bool Retryable,
+    [property: JsonPropertyName("unresolved_roles")] JsonElement? UnresolvedRoles);
+
+internal sealed record WorkflowGenerationJobResponse(
+    [property: JsonPropertyName("job_id")] string JobId,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("status_url")] string StatusUrl,
+    [property: JsonPropertyName("result_url")] string ResultUrl,
+    [property: JsonPropertyName("retry_url")] string RetryUrl,
+    [property: JsonPropertyName("failure")] WorkflowGenerationFailure? Failure);
 
 [McpServerToolType]
 public sealed class WorkflowTools(AgentweaverApiClient api)
@@ -65,30 +73,71 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
     /// </summary>
     [McpServerTool(Name = "workflow_generate"), Description(
         "Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. " +
-        "Returns YAML draft — not yet saved. Use workflow_save to persist. " +
+        "Returns YAML draft — not yet saved. Use workflow_save to persist. Publication requests fail with an unsupported_capability response; they are never converted to agent prompts. " +
+        "Generated roles bind to confirmed team members; missing roles return workflow_team_binding_required with unresolved_roles. " +
         "The agent can inspect the YAML before saving.")]
     public async Task<string> WorkflowGenerateAsync(
         [Description("Project ID")] string project_id,
         [Description("Natural language description of the workflow to generate")] string description,
         [Description("Explicitly exempt a pure content workflow from mandatory software delivery gates")] bool content_only = false,
+        [Description("Caller-chosen retry key; reuse it after a timeout or reset to resume the same durable generation job")] string? idempotency_key = null,
         CancellationToken ct = default)
     {
         try
         {
             var body = new { description, content_only };
-            var result = await api.PostAiAsync<GenerateWorkflowResponse>(
+            var job = await api.PostAiAsync<WorkflowGenerationJobResponse>(
                 $"/api/projects/{Uri.EscapeDataString(project_id)}/workflows/generate",
                 body,
                 "workflow_generation",
                 project_id,
-                ct: ct);
+                ct: ct,
+                idempotencyKey: string.IsNullOrWhiteSpace(idempotency_key)
+                    ? Guid.NewGuid().ToString("N")
+                    : idempotency_key);
+            var deadline = DateTimeOffset.UtcNow.AddMinutes(5).AddSeconds(30);
+            while (job.Status is "queued" or "running")
+            {
+                if (DateTimeOffset.UtcNow >= deadline)
+                    return JsonSerializer.Serialize(job, JsonOpts);
+                await Task.Delay(TimeSpan.FromMilliseconds(500), ct).ConfigureAwait(false);
+                job = await api.GetAsync<WorkflowGenerationJobResponse>(job.StatusUrl, ct).ConfigureAwait(false);
+            }
+            if (job.Status != "completed")
+            {
+                var failure = job.Failure;
+                if (string.Equals(
+                        failure?.Code,
+                        "workflow_team_binding_required",
+                        StringComparison.Ordinal)
+                    && failure is not null)
+                {
+                    throw new McpApiException(
+                        422,
+                        failure.Message,
+                        job.StatusUrl,
+                        failure.Code,
+                        "Cast the missing roles or map the workflow to confirmed team members, then retry.",
+                        failure.UnresolvedRoles);
+                }
+
+                throw new McpApiException(
+                    503,
+                    $"{failure?.Message ?? "Workflow generation failed."} Job {job.JobId}; retry via {job.RetryUrl}.",
+                    job.StatusUrl,
+                    failure?.Code,
+                    failure?.Retryable == true ? "Retry the durable generation job." : null);
+            }
+            var result = await api.GetAsync<JsonElement>(job.ResultUrl, ct).ConfigureAwait(false);
             return JsonSerializer.Serialize(result, JsonOpts);
         }
         catch (McpApiException ex) when (ex.StatusCode == 404)
         {
             throw new McpApiException(404, $"Project {Uri.EscapeDataString(project_id)} not found");
         }
-        catch (McpApiException ex) when (ex.StatusCode == 400)
+        catch (McpApiException ex) when (
+            ex.StatusCode == 400
+            && !string.Equals(ex.ApiErrorCode, "unsupported_capability", StringComparison.Ordinal))
         {
             throw new McpApiException(400, $"Workflow generation failed: {ex.Message}");
         }

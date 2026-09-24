@@ -62,6 +62,17 @@ public sealed record OperatorAssistantTurnEnvelope(
 /// </summary>
 public interface IOperatorAssistantTurnSink
 {
+    /// <summary>
+    /// Projects the bounded prompt-composition metadata for this turn. The payload contains only
+    /// scalar counts and stable correlation identifiers; prompt, task, tool, and credential content
+    /// must never cross this callback.
+    /// </summary>
+    ValueTask OnPromptMetadataAsync(
+        AgentRuntimeContextMetrics runtimeContext,
+        bool callableMemoryGuidanceIncluded,
+        CancellationToken ct) =>
+        ValueTask.CompletedTask;
+
     /// <summary>A streamed slice of the assistant's textual answer.</summary>
     ValueTask OnAssistantTextDeltaAsync(string delta, CancellationToken ct);
 
@@ -197,9 +208,21 @@ public sealed class OperatorAssistantAgent(
                     "Operator assistant provider failure while starting client: {Code}",
                     providerFailure.ErrorCode)).ConfigureAwait(false);
 
+            var systemPrompt = BuildSystemPrompt(request, toolDeclarations.Count);
+            if (sink is not null)
+            {
+                await EmitPromptMetadataAsync(
+                    request,
+                    systemPrompt,
+                    toolDeclarations,
+                    modelSource,
+                    sink,
+                    ct).ConfigureAwait(false);
+            }
+
             var sessionConfig = BuildSessionConfig(
                 request.ConversationId,
-                BuildSystemPrompt(request),
+                systemPrompt,
                 toolDeclarations,
                 request.ModelId,
                 byokProvider);
@@ -636,6 +659,31 @@ public sealed class OperatorAssistantAgent(
             AgentDefinition: agentDefinition,
             McpBrokerToken: "test",
             History: []), mcpToolCount);
+
+    internal static async ValueTask<AgentRuntimeContextMetrics> EmitPromptMetadataAsync(
+        OperatorAssistantRequest request,
+        string systemPrompt,
+        IReadOnlyList<AIFunctionDeclaration> toolDeclarations,
+        ModelSource modelSource,
+        IOperatorAssistantTurnSink sink,
+        CancellationToken ct)
+    {
+        var runtimeContext = AgentRuntimeContextMetricsComposer.ComposeFlat(
+            PromptMetadataProvider(modelSource),
+            request.ConversationId,
+            request.ProjectId,
+            request.Message,
+            systemPrompt,
+            toolDeclarations);
+        await sink.OnPromptMetadataAsync(
+            runtimeContext,
+            callableMemoryGuidanceIncluded: false,
+            ct).ConfigureAwait(false);
+        return runtimeContext;
+    }
+
+    private static string PromptMetadataProvider(ModelSource modelSource) =>
+        modelSource == ModelSource.Byok ? "byok" : "copilot";
 
     private static string BuildSystemPrompt(OperatorAssistantRequest request, int mcpToolCount = 0)
     {

@@ -76,6 +76,26 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
 
     internal IWorkflowAgentFactory AgentFactory => _agentFactory;
 
+    internal async Task FinalizeScribeHousekeepingAsync(
+        ScribeTurnInput input,
+        bool _,
+        CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var result = await scope.ServiceProvider.GetRequiredService<ScribeFinalizationService>()
+            .FinalizeAsync(
+                ProjectId.Parse(input.ProjectId),
+                RunId.Parse(input.RunId),
+                input.LifecycleGeneration,
+                input.AgentName,
+                input.SubmittingUser,
+                input.TerminalStatus,
+                ct)
+            .ConfigureAwait(false);
+        if (!result.Completed)
+            throw new UnauthorizedAccessException(result.Error);
+    }
+
     public RunWorkflowFactory(
         IAgentRunner agentRunner,
         GitHubCopilotClientFactory copilotClientFactory,
@@ -560,12 +580,14 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
-            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory);
+            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory,
+            finalizeHousekeeping: FinalizeScribeHousekeepingAsync);
         var scribeNoChangesExec = new ScribeTurnExecutor(
             _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-no-changes",
             createSubStream: CreateSubStreamWriter, completeSubStream: CompleteSubStream,
-            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory);
+            apiBaseUrl: _apiBaseUrl, apiKey: _apiKey, agentFactory: _agentFactory,
+            finalizeHousekeeping: FinalizeScribeHousekeepingAsync);
         ExecutorBinding scribeBindingMerge = scribeMergeExec;
         ExecutorBinding scribeBindingNoChanges = scribeNoChangesExec;
 
@@ -641,7 +663,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     MergeResult: output.MergeResult,
                     MergeMode: output.MergeMode,
                     SubmittingUser: submittingUser,
-                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
+                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint,
+                    LifecycleGeneration: run?.LifecycleGeneration ?? 1);
             });
 
         ExecutorBinding scribeInputNoChanges = new VisualFunctionExecutor<NoChangesOutput, ScribeTurnInput>(
@@ -701,7 +724,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     agentInput?.ModelId ?? run?.ModelId,
                     TerminalStatus: "no_changes",
                     SubmittingUser: submittingUser,
-                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
+                    ByokProviderFingerprint: agentInput?.ByokProviderFingerprint,
+                    LifecycleGeneration: run?.LifecycleGeneration ?? 1);
             });
 
         // Scribe output adapters: reconstruct terminal output types from pass-through.
@@ -909,7 +933,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             agentInput?.ModelId ?? run?.ModelId,
             TerminalStatus: terminalStatus,
             SubmittingUser: submittingUser,
-            ByokProviderFingerprint: agentInput?.ByokProviderFingerprint);
+            ByokProviderFingerprint: agentInput?.ByokProviderFingerprint,
+            LifecycleGeneration: run?.LifecycleGeneration ?? 1);
     }
 
     /// <summary>
@@ -1165,6 +1190,15 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 });
         }
 
+        public ExecutorBinding AgentToTerminalAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("agent-to-terminal", edge);
+            return new VisualFunctionExecutor<AgentTurnOutput, NoChangesOutput>(
+                id, id, "Done", "plumbing", "terminal", true,
+                (output, ctx, ct) =>
+                    new ValueTask<NoChangesOutput>(new NoChangesOutput(output.RunId)));
+        }
+
         public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge)
         {
             var id = EdgeId("agent-to-merge", edge);
@@ -1242,7 +1276,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 _factory._loggerFactory, _factory.GetRecordingWriter,
                 name: $"scribe-turn-{edge.From}-{edge.To}",
                 createSubStream: _factory.CreateSubStreamWriter, completeSubStream: _factory.CompleteSubStream,
-                apiBaseUrl: _factory._apiBaseUrl, apiKey: _factory._apiKey, agentFactory: _factory._agentFactory);
+                apiBaseUrl: _factory._apiBaseUrl, apiKey: _factory._apiKey, agentFactory: _factory._agentFactory,
+                finalizeHousekeeping: _factory.FinalizeScribeHousekeepingAsync);
 
             var outputId = $"scribe-output-{edge.From}-{edge.To}";
             ExecutorBinding output = new VisualFunctionExecutor<ScribeTurnInput, MergeOutput>(
@@ -1367,7 +1402,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     private static string? ResolveAgentNodeCharter(WorkflowDefinition definition)
     {
         bool IsAgentWithCharter(WorkflowNode n) =>
-            n.Type is WorkflowNodeType.Prompt or WorkflowNodeType.Publish
+            n.Type == WorkflowNodeType.Prompt
             && !string.IsNullOrWhiteSpace(n.Charter);
 
         var startNode = definition.Nodes.FirstOrDefault(

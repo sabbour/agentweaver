@@ -6,6 +6,9 @@ streaming, review, and merge. Every client is a thin layer over these endpoints.
 Base path: `/api`. Each endpoint declares one authorization classification; there is no
 path-based authentication allowlist.
 
+The generated OpenAPI documents are available at `/openapi/v1.json` and
+`/openapi/v1.yaml`.
+
 ## Authentication
 
 Browser and API clients send a Microsoft Entra access token:
@@ -52,6 +55,16 @@ family. Anonymous registration accepts only literal loopback and constrained
 private-use callbacks; HTTPS callbacks must be administered as static clients.
 
 ## Endpoints
+
+### GET /api/workflows/grammar
+
+Returns the versioned, machine-readable YAML workflow grammar used by runtime validation and
+binding. The response publishes required and optional fields, limits, YAML and API node type names,
+runtime bindability, gate kinds, edge conditions and supported transitions, and trigger vocabulary.
+OpenAPI-guided clients can use this contract to construct a workflow that passes both parsing and
+runtime bindability checks. New authoring requires every `check` node to declare a canonical explicit
+`gate_kind`. The `compatibility` object separately documents the legacy persisted node-id fallbacks
+that remain available only while loading and executing historical workflows.
 
 ### POST /api/runs
 
@@ -519,17 +532,24 @@ generation prompt (full YAML schema, executable node-type semantics, the project
 cast roles or the full catalog, and library workflows as few-shot examples),
 validates the model output against the same rules as the runtime loader, and
 performs **exactly one correction pass** (FR-060) on invalid output before failing.
-The draft is **never persisted** — the client opens it in the workflow editor for
-review and an explicit save.
+Generation runs as a durable accepted job. Its immutable result artifact is persisted
+exactly once, but the draft is not written into the project workspace until the client
+reviews and explicitly saves it.
 
 ```
 POST /api/projects/{id}/workflows/generate
+Idempotency-Key: <caller retry key>
 Body: { "description": "string" }
-→ 200 { "yaml": string, "workflowId": string, "wasCorrected": bool }
-→ 400 { "error": string }   // description missing, or generation failed after the correction pass
+→ 202 { "job_id": string, "status": "queued", "status_url": string, "result_url": string, ... }
+→ 400 { "error": string }   // description or Idempotency-Key missing
+→ 409 { "error": "idempotency_key_conflict" }
 → 404                       // project not found
 → 403                       // caller is not the project owner
 ```
+
+Poll the returned status URL. Completed results contain the workflow YAML, stable
+workflow ID, artifact version, and graph. Queued/running jobs can be cancelled;
+cancelled or retryable failed jobs can be retried without creating duplicate artifacts.
 
 See [`docs/workflow-generation.md`](../../docs/workflow-generation.md) for the
 prompt design, correction pass, and few-shot examples.
@@ -544,4 +564,5 @@ prompt design, correction pass, and few-shot examples.
 | `Git:Author:Name` | `Agentweaver` | Commit and merge author name |
 | `Git:Author:Email` | `agentweaver@localhost` | Commit and merge author email |
 | `Auth:ApiKey` | none | Internal service credential; compared in fixed time and accepted only through endpoint policy |
+| `Generation:DurableJobTimeoutSeconds` | `300` | Bounded execution deadline for durable Blueprint and workflow generation jobs (clamped to 1–3600 seconds) |
 | `Runs:AllowedRepositoryRoots` | `[]` (permissive) | String array of allowed parent directories for `repository_path`. When empty, any local absolute path is accepted. Shared or exposed deployments MUST configure this to restrict which repositories can be targeted. |

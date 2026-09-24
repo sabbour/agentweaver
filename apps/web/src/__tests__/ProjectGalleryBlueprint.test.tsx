@@ -4,6 +4,7 @@ import { BlueprintSkillBindings } from '../components/BlueprintPicker';
 import { ProjectListProvider } from '../hooks/useProjectList';
 import { ProjectGalleryPage } from '../pages/ProjectGalleryPage';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import {
   afterEach,
@@ -13,7 +14,7 @@ import {
   it,
   vi,
 } from 'vitest';
-import type { Blueprint, Project } from '../api/types';
+import type { Blueprint, BlueprintGenerationJob, Project } from '../api/types';
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -22,6 +23,10 @@ vi.mock('../api/apiClient', () => ({
     createProject: vi.fn(),
     listBlueprints: vi.fn(),
     generateBlueprint: vi.fn(),
+    getBlueprintGenerationJob: vi.fn(),
+    getBlueprintGenerationResult: vi.fn(),
+    cancelBlueprintGeneration: vi.fn(),
+    retryBlueprintGeneration: vi.fn(),
     suggestBlueprint: vi.fn(),
   },
 }));
@@ -108,6 +113,25 @@ const GENERATED: Blueprint = {
   sandbox_profile: 'standard',
 };
 
+const COMPLETED_JOB: BlueprintGenerationJob = {
+  job_id: 'job-1',
+  status: 'completed',
+  attempt: 1,
+  provider_snapshot: {
+    provider_kind: 'platform_github_copilot',
+    provider_key: 'provider-key',
+    provider_scope: 'platform',
+    resolution_scope: 'platform',
+  },
+  artifact: { artifact_id: 'artifact-1', logical_id: GENERATED.id, version: 1 },
+  created_at: '',
+  updated_at: '',
+  status_url: '/status',
+  result_url: '/result',
+  cancel_url: '/cancel',
+  retry_url: '/retry',
+};
+
 function Wrapper({ children }: { children: ReactNode }) {
   return (
     <AzureFluentProvider density="compact">
@@ -125,6 +149,15 @@ beforeEach(() => {
   vi.mocked(apiClient.getServerInfo).mockResolvedValue({ data_directory: '/data', workspace_auto_assigned: false } as never);
   vi.mocked(apiClient.listProjects).mockResolvedValue(projectsPage([]));
   vi.mocked(apiClient.listBlueprints).mockResolvedValue([BP_BACKEND, BP_DOCS]);
+  vi.mocked(apiClient.generateBlueprint).mockResolvedValue(COMPLETED_JOB);
+  vi.mocked(apiClient.getBlueprintGenerationResult).mockResolvedValue({
+    job_id: COMPLETED_JOB.job_id,
+    artifact_id: 'artifact-1',
+    logical_id: GENERATED.id,
+    version: 1,
+    blueprint: GENERATED,
+    warnings: [],
+  });
   vi.mocked(apiClient.suggestBlueprint).mockResolvedValue({
     recommended_blueprint: BP_BACKEND,
     rationale: 'Recommended for tests.',
@@ -149,6 +182,22 @@ function fillNameAndFolder() {
 }
 
 describe('ProjectGalleryPage — blueprint selection', () => {
+  it('exposes the required project name to keyboard and semantic automation', async () => {
+    const user = userEvent.setup();
+    render(<Wrapper><ProjectGalleryPage /></Wrapper>);
+    const trigger = await screen.findByRole('button', { name: 'Create blank project' });
+
+    trigger.focus();
+    await user.keyboard('{Enter}');
+
+    const nameInput = screen.getByRole('textbox', { name: 'Project name' });
+    expect((nameInput as HTMLInputElement).required).toBe(true);
+    nameInput.focus();
+    await user.keyboard('Keyboard project');
+    expect(document.activeElement).toBe(nameInput);
+    expect((nameInput as HTMLInputElement).value).toBe('Keyboard project');
+  });
+
   it('pages project tiles from the server when the catalog exceeds 100 projects', async () => {
     const manyProjects = Array.from({ length: 101 }, (_, index) =>
       makeProject(`p-${index + 1}`, `Project ${index + 1}`),
@@ -301,10 +350,6 @@ describe('ProjectGalleryPage — blueprint selection', () => {
   });
 
   it('generates a blueprint from a description and shows the preview', async () => {
-    vi.mocked(apiClient.generateBlueprint).mockResolvedValue({
-      blueprint: GENERATED,
-    });
-
     await openBlankDialog();
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
 
@@ -366,10 +411,6 @@ describe('ProjectGalleryPage — blueprint selection', () => {
   });
 
   it('submits the inline blueprint when a generated blueprint is applied', async () => {
-    vi.mocked(apiClient.generateBlueprint).mockResolvedValue({
-      blueprint: GENERATED,
-    });
-
     await openBlankDialog();
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
 
@@ -393,10 +434,6 @@ describe('ProjectGalleryPage — blueprint selection', () => {
   });
 
   it('keeps create disabled after generated blueprint selection when required fields are missing', async () => {
-    vi.mocked(apiClient.generateBlueprint).mockResolvedValue({
-      blueprint: GENERATED,
-    });
-
     await openBlankDialog();
     await waitFor(() => expect(screen.getByText('Backend Squad')).toBeDefined());
 

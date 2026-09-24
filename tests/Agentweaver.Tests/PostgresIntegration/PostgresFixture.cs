@@ -8,12 +8,17 @@ namespace Agentweaver.Tests.PostgresIntegration;
 
 public sealed class PostgresFixture : IAsyncLifetime
 {
+    // The promotion contention test uses 100 independently connected replicas plus lock holders.
+    private const int MaxDatabaseConnections = 160;
+    private const int MaxClientPoolSize = 128;
+
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine")
         .WithDatabase("awtest").WithUsername("awtest").WithPassword("awtest")
+        .WithCommand("-c", $"max_connections={MaxDatabaseConnections}")
         .WithCleanUp(true).Build();
 
     public IDbContextFactory<MemoryDbContext> Factory { get; private set; } = null!;
-    public string ConnectionString => _container.GetConnectionString();
+    public string ConnectionString => $"{_container.GetConnectionString()};Maximum Pool Size={MaxClientPoolSize}";
 
     public async Task InitializeAsync()
     {

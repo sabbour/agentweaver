@@ -119,6 +119,138 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Theory]
+    [InlineData("rai", "safety-failed", "rai")]
+    [InlineData("review", "declined", "human-review")]
+    [InlineData("rubberduck", "pass", "rubberduck")]
+    public void LegacyPersistedGateIds_LoadBindAndReserializeWithExplicitGateKind(
+        string nodeId,
+        string verdict,
+        string expectedGateKind)
+    {
+        var optionalApprovalNode = nodeId == "rubberduck"
+            ? """
+              - id: approval
+                type: check
+                gate_kind: human-review
+                branches:
+                  - declined
+            """
+            : "";
+        var gateTarget = nodeId == "rubberduck" ? "approval" : "done";
+        var optionalApprovalEdge = nodeId == "rubberduck"
+            ? """
+              - from: approval
+                to: done
+                when: declined
+            """
+            : "";
+        var yaml = $"""
+            id: legacy-gate
+            name: Legacy gate
+            start: author
+            nodes:
+              - id: author
+                type: prompt
+              - id: {nodeId}
+                type: check
+                branches:
+                  - {verdict}
+            {optionalApprovalNode}
+              - id: done
+                type: terminal
+            edges:
+              - from: author
+                to: {nodeId}
+              - from: {nodeId}
+                to: {gateTarget}
+                when: {verdict}
+            {optionalApprovalEdge}
+            """;
+
+        var legacyLoad = WorkflowDefinitionLoader.Load(yaml, "persisted.yaml");
+
+        legacyLoad.IsValid.Should().BeTrue(legacyLoad.Error);
+        legacyLoad.Warnings.Should().ContainSingle(message =>
+            message.Contains($"inferred gate_kind '{expectedGateKind}'", StringComparison.Ordinal));
+        RunWorkflowGraphBinder.GetBindabilityErrors(legacyLoad.Definition!).Should().BeEmpty();
+
+        var migratedYaml = WorkflowDefinitionYamlSerializer.Serialize(legacyLoad.Definition!);
+        migratedYaml.Should().Contain($"gate_kind: {expectedGateKind}");
+        WorkflowDefinitionLoader.Load(
+                migratedYaml,
+                "migrated.yaml",
+                validationMode: WorkflowDefinitionValidationMode.Authoring)
+            .IsValid.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("rai")]
+    [InlineData("review")]
+    [InlineData("rubberduck")]
+    public void AuthoringContract_RejectsLegacyGateIdFallback(string nodeId)
+    {
+        var result = WorkflowDefinitionLoader.Load(
+            $"""
+            id: new-gate
+            name: New gate
+            start: author
+            nodes:
+              - id: author
+                type: prompt
+              - id: {nodeId}
+                type: check
+                branches:
+                  - pass
+              - id: done
+                type: terminal
+            edges:
+              - from: author
+                to: {nodeId}
+              - from: {nodeId}
+                to: done
+                when: pass
+            """,
+            "new.yaml",
+            validationMode: WorkflowDefinitionValidationMode.Authoring);
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("must declare explicit 'gate_kind' for authoring");
+    }
+
+    [Fact]
+    public void EveryPublishedTransition_WiresThroughFullBinder()
+    {
+        var failures = new List<string>();
+
+        foreach (var transition in WorkflowGrammarContract.Transitions)
+        {
+            foreach (var condition in transition.Conditions)
+            {
+                var definition = DefinitionForPublishedTransition(
+                    transition.From,
+                    transition.To,
+                    condition);
+                var bindings = FakeBindings.Create();
+                var builder = new GraphDescriptorBuilder(bindings.AgentInputStorer);
+
+                try
+                {
+                    RunWorkflowGraphBinder.WireFull(builder, definition, bindings);
+                    builder.BuildDescriptor(definition.Id, "full");
+                }
+                catch (Exception ex)
+                {
+                    failures.Add(
+                        $"{transition.From}->{transition.To} when '{condition ?? "(unconditional)"}': {ex.Message}");
+                }
+            }
+        }
+
+        failures.Should().BeEmpty(
+            "the published grammar must contain only transitions with concrete full-binder wiring");
+    }
+
+    [Theory]
     [InlineData(WorkflowNodeType.PeerReview)]
     [InlineData(WorkflowNodeType.BuildTest)]
     public void VerdictStyleNode_AsStart_IsRejectedBeforeRuntime(WorkflowNodeType verdictNodeType)
@@ -132,12 +264,14 @@ public sealed class RunWorkflowGraphBinderTests
             [
                 Node("review", verdictNodeType),
                 Node("continue", WorkflowNodeType.Prompt),
+                Node("scribe", WorkflowNodeType.Scribe),
                 Node("done", WorkflowNodeType.Terminal),
             ],
             Edges =
             [
                 new WorkflowEdge { From = "review", To = "continue", When = "approved" },
-                new WorkflowEdge { From = "continue", To = "done" },
+                new WorkflowEdge { From = "continue", To = "scribe" },
+                new WorkflowEdge { From = "scribe", To = "done" },
             ],
         };
 
@@ -147,7 +281,7 @@ public sealed class RunWorkflowGraphBinderTests
             .Which.Should().ContainAll(
                 "Cannot bind start node 'review'",
                 "require an AgentTurnOutput from a preceding producer",
-                "Choose a prompt or publish node as start");
+                "Choose a prompt node as start");
 
         var bind = () => RunWorkflowGraphBinder.ValidateBindable(definition);
         bind.Should().Throw<WorkflowBindException>()
@@ -160,6 +294,109 @@ public sealed class RunWorkflowGraphBinderTests
             bindings);
         wire.Should().Throw<WorkflowBindException>()
             .Which.NodeId.Should().Be("review");
+    }
+
+    [Fact]
+    public void TransitionContract_RejectsEdgesWithoutRuntimeWiring_AndReturnsAlternatives()
+    {
+        var definition = new WorkflowDefinition
+        {
+            Id = "unsupported-review-edge",
+            Name = "Unsupported review edge",
+            Start = "implement",
+            Nodes =
+            [
+                Node("implement", WorkflowNodeType.Prompt),
+                Node("rai", WorkflowNodeType.Check, "rai"),
+                Node("build-test", WorkflowNodeType.BuildTest),
+                Node("done", WorkflowNodeType.Terminal),
+            ],
+            Edges =
+            [
+                new WorkflowEdge { From = "implement", To = "rai" },
+                new WorkflowEdge { From = "rai", To = "build-test", When = "no-changes" },
+                new WorkflowEdge { From = "build-test", To = "done", When = "approved" },
+            ],
+        };
+
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().Contain(error =>
+            error.Contains("'Rai'->'PeerReview'", StringComparison.Ordinal));
+
+        var issue = RunWorkflowGraphBinder.GetTransitionIssues(definition).Should().ContainSingle().Subject;
+        issue.From.Should().Be("rai");
+        issue.To.Should().Be("build-test");
+        issue.When.Should().Be("no-changes");
+        issue.Alternatives.Should().Contain("rai -> peer-review/build-test (when: approved | pass | review)");
+    }
+
+    [Fact]
+    public void AdvancedReleaseReviewChain_BuildsThroughTheFullRuntimeBinder()
+    {
+        using var factory = new WorkflowWebApplicationFactory();
+        var workflowFactory = factory.Services.GetRequiredService<RunWorkflowFactory>();
+        var definition = new WorkflowDefinition
+        {
+            Id = "release-readiness",
+            Name = "Release readiness",
+            Start = "implement",
+            Nodes =
+            [
+                Node("implement", WorkflowNodeType.Prompt),
+                Node("rai", WorkflowNodeType.Check, "rai"),
+                Node("build-test", WorkflowNodeType.BuildTest),
+                Node("peer-review", WorkflowNodeType.PeerReview),
+                Node("human-review", WorkflowNodeType.Check, "human-review"),
+                Node("declined", WorkflowNodeType.Terminal),
+                Node("done", WorkflowNodeType.Terminal),
+            ],
+            Edges =
+            [
+                new WorkflowEdge { From = "implement", To = "rai" },
+                new WorkflowEdge { From = "rai", To = "build-test", When = "pass" },
+                new WorkflowEdge { From = "rai", To = "implement", When = "revise" },
+                new WorkflowEdge { From = "build-test", To = "peer-review", When = "approved" },
+                new WorkflowEdge { From = "build-test", To = "implement", When = "request-changes" },
+                new WorkflowEdge { From = "build-test", To = "declined", When = "declined" },
+                new WorkflowEdge { From = "peer-review", To = "human-review", When = "approved" },
+                new WorkflowEdge { From = "peer-review", To = "implement", When = "request-changes" },
+                new WorkflowEdge { From = "peer-review", To = "declined", When = "declined" },
+                new WorkflowEdge { From = "human-review", To = "done", When = "approved" },
+                new WorkflowEdge { From = "human-review", To = "implement", When = "request-changes" },
+                new WorkflowEdge { From = "human-review", To = "declined", When = "declined" },
+            ],
+        };
+
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().BeEmpty();
+        var (_, descriptor) = workflowFactory.BuildWorkflowForTest(isChild: false, definition);
+
+        var edges = descriptor.Edges.Select(edge => (edge.From, edge.To)).ToList();
+        edges.Should().Contain(("rai", "build-test"));
+        edges.Should().Contain(("build-test", "peer-review"));
+        edges.Should().Contain(("peer-review", "human-review"));
+    }
+
+    [Fact]
+    public void DirectAgentCompletion_ClaimedByContract_BuildsThroughTheFullRuntimeBinder()
+    {
+        using var factory = new WorkflowWebApplicationFactory();
+        var workflowFactory = factory.Services.GetRequiredService<RunWorkflowFactory>();
+        var definition = new WorkflowDefinition
+        {
+            Id = "direct-completion",
+            Name = "Direct completion",
+            Start = "work",
+            Nodes =
+            [
+                Node("work", WorkflowNodeType.Prompt),
+                Node("done", WorkflowNodeType.Terminal),
+            ],
+            Edges = [new WorkflowEdge { From = "work", To = "done" }],
+        };
+
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().BeEmpty();
+        var act = () => workflowFactory.BuildWorkflowForTest(isChild: false, definition);
+
+        act.Should().NotThrow();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────────────────────────
@@ -228,6 +465,82 @@ public sealed class RunWorkflowGraphBinderTests
             new WorkflowEdge { From = "record", To = "finished" },
         ],
     };
+
+    private static WorkflowDefinition DefinitionForPublishedTransition(
+        NodeKind fromKind,
+        NodeKind toKind,
+        string? condition)
+    {
+        var nodes = new List<WorkflowNode>();
+        var edges = new List<WorkflowEdge>();
+        var entry = Node("entry-agent", WorkflowNodeType.Prompt);
+        nodes.Add(entry);
+
+        var from = NodeForKind("from", fromKind);
+        var to = NodeForKind("to", toKind);
+        if (from.Id != entry.Id)
+        {
+            AddEntryPath(nodes, edges, entry, from, fromKind);
+            nodes.Add(from);
+        }
+
+        if (nodes.All(node => node.Id != to.Id))
+            nodes.Add(to);
+        edges.Add(new WorkflowEdge { From = from.Id, To = to.Id, When = condition });
+
+        return new WorkflowDefinition
+        {
+            Id = "published-transition",
+            Name = "Published transition",
+            Start = entry.Id,
+            Nodes = nodes,
+            Edges = edges,
+        };
+    }
+
+    private static void AddEntryPath(
+        List<WorkflowNode> nodes,
+        List<WorkflowEdge> edges,
+        WorkflowNode entry,
+        WorkflowNode source,
+        NodeKind sourceKind)
+    {
+        switch (sourceKind)
+        {
+            case NodeKind.Rai:
+            case NodeKind.HumanReview:
+            case NodeKind.Rubberduck:
+            case NodeKind.PeerReview:
+            case NodeKind.OpenPullRequest:
+            case NodeKind.Scribe:
+                edges.Add(new WorkflowEdge { From = entry.Id, To = source.Id });
+                return;
+            case NodeKind.Merge:
+                var review = NodeForKind("entry", NodeKind.PeerReview);
+                nodes.Add(review);
+                edges.Add(new WorkflowEdge { From = entry.Id, To = review.Id });
+                edges.Add(new WorkflowEdge { From = review.Id, To = source.Id, When = "approved" });
+                return;
+            default:
+                throw new InvalidOperationException($"No entry path for published source kind '{sourceKind}'.");
+        }
+    }
+
+    private static WorkflowNode NodeForKind(string prefix, NodeKind kind) => kind switch
+    {
+        NodeKind.Agent => Node(
+            prefix == "from" ? "entry-agent" : $"{prefix}-agent",
+            WorkflowNodeType.Prompt),
+        NodeKind.Rai => Node($"{prefix}-rai", WorkflowNodeType.Check, "rai"),
+        NodeKind.HumanReview => Node($"{prefix}-human-review", WorkflowNodeType.Check, "human-review"),
+        NodeKind.Rubberduck => Node($"{prefix}-rubberduck", WorkflowNodeType.Check, "rubberduck"),
+        NodeKind.PeerReview => Node($"{prefix}-peer-review", WorkflowNodeType.PeerReview),
+        NodeKind.Merge => Node($"{prefix}-merge", WorkflowNodeType.Merge),
+        NodeKind.Scribe => Node($"{prefix}-scribe", WorkflowNodeType.Scribe),
+        NodeKind.Terminal => Node($"{prefix}-terminal", WorkflowNodeType.Terminal),
+        NodeKind.OpenPullRequest => Node($"{prefix}-open-pull-request", WorkflowNodeType.OpenPullRequest),
+        _ => throw new InvalidOperationException($"Published transition uses unsupported kind '{kind}'."),
+    };
 }
 
 /// <summary>
@@ -285,7 +598,11 @@ internal static class FakeBindings
             PolicyAgentTurnStorer: policyAgentTurnStorer,
             PolicyAgentOutputAdapter: policyAgentOutputAdapter,
             PolicyDirectMergeAdapter: policyDirectMergeAdapter,
-            PolicyGateBindings: new Dictionary<string, ExecutorBinding>(StringComparer.Ordinal),
+            PolicyGateBindings: new Dictionary<string, ExecutorBinding>(StringComparer.Ordinal)
+            {
+                ["from-rubberduck"] = review,
+                ["to-rubberduck"] = review,
+            },
             MergeAdapter: mergeAdapter,
             MergeBinding: merge,
             TerminalMerge: terminalMerge,
@@ -318,21 +635,22 @@ internal sealed class FakeWiring(
     ScribeSubPath openPrScribePath) : IRunWorkflowWiringSupport
 {
     public ExecutorBinding ResolveAgentNode(WorkflowNode node) => agent;
-    public ExecutorBinding ResolvePeerReviewNode(WorkflowNode node) => throw new NotSupportedException();
+    public ExecutorBinding ResolvePeerReviewNode(WorkflowNode node) => agent;
     public ExecutorBinding ResolveOpenPullRequestNode(WorkflowNode node) => openPr;
-    public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding ReviewToAgentForwardAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding ReviewToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding StoreAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding ReviewToAgentOutputAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding ReviewToMergeAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding AgentToReviewRequestAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding ReviewToTerminalAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding ReviewToAgentForwardAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding ReviewToAgentReviseAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding StoreAgentOutputAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding ReviewToAgentOutputAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding ReviewToMergeAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding AgentToReviewRequestAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding ReviewToTerminalAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding AgentToTerminalAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
-    public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge) => throw new NotSupportedException();
-    public ScribeSubPath AgentScribePath(WorkflowEdge edge) => throw new NotSupportedException();
+    public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ScribeSubPath AgentScribePath(WorkflowEdge edge) => openPrScribePath;
     public ScribeSubPath OpenPullRequestScribePath(WorkflowEdge edge) => openPrScribePath;
-    public ScribeSubPath ReviewScribePath(WorkflowEdge edge) => throw new NotSupportedException();
+    public ScribeSubPath ReviewScribePath(WorkflowEdge edge) => openPrScribePath;
 }

@@ -76,6 +76,63 @@ describe('AgentweaverApiClient keepalive', () => {
     vi.unstubAllGlobals();
   });
 
+  describe('AgentweaverApiClient workflow generation recovery', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
+    it('returns the durable handle at the polling deadline and resumes without another submit', async () => {
+      const queued = {
+        job_id: 'job-1540',
+        status: 'running',
+        status_url: '/api/projects/project-1/workflows/generation-jobs/job-1540',
+        result_url: '/api/projects/project-1/workflows/generation-jobs/job-1540/result',
+      };
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 202,
+          text: async () => JSON.stringify(queued),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ ...queued, status: 'completed' }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            yaml: 'id: resumed-workflow',
+            workflow_id: 'resumed-workflow',
+            was_corrected: false,
+          }),
+        });
+      vi.stubGlobal('fetch', fetchMock);
+      vi.stubGlobal('crypto', { randomUUID: () => 'stable-key' });
+      vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(330_000);
+      const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+      const pending = await client.generateWorkflow('project-1', 'Generate a durable workflow');
+      expect(pending).toEqual({
+        status: 'pending',
+        job: {
+          jobId: 'job-1540',
+          statusUrl: queued.status_url,
+          resultUrl: queued.result_url,
+        },
+      });
+      if (pending.status !== 'pending') throw new Error('Expected a pending workflow generation.');
+
+      await expect(client.resumeWorkflowGeneration(pending.job)).resolves.toMatchObject({
+        status: 'completed',
+        workflowId: 'resumed-workflow',
+      });
+      expect(fetchMock.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    });
+  });
+
   it('resolves relative API keepalive URLs through the configured API base', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -201,6 +258,43 @@ describe('AgentweaverApiClient keepalive', () => {
 
     expect(received).not.toHaveBeenCalled();
     window.removeEventListener(MODEL_PROVIDER_CONNECTION_REQUIRED_EVENT, received);
+  });
+});
+
+describe('AgentweaverApiClient agent-memory update contract', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses the project-scoped agent-memory PUT route', async () => {
+    const response = {
+      id: '42',
+      agent_name: 'Smith',
+      type: 'pattern',
+      importance: 'medium',
+      content: 'Updated memory',
+      created_at: '2026-09-23T00:00:00Z',
+      updated_at: '2026-09-23T00:01:00Z',
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(response),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await expect(client.updateAgentMemory(
+      'project/1',
+      'Smith Agent',
+      '42',
+      { type: 'pattern', content: 'Updated memory' },
+    )).resolves.toEqual(response);
+
+    expect(fetchMock.mock.calls[0][0])
+      .toBe('https://api.example.test/api/projects/project%2F1/agents/Smith%20Agent/memory/42');
+    expect(fetchMock.mock.calls[0][1].method).toBe('PUT');
+    expect(fetchMock.mock.calls[0][1].body).toBe('{"type":"pattern","content":"Updated memory"}');
   });
 });
 

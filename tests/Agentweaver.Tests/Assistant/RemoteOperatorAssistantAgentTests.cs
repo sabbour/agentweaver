@@ -115,7 +115,9 @@ public sealed class RemoteOperatorAssistantAgentTests
         provider.IsRetryable.Should().BeTrue();
     }
 
-    private static RemoteOperatorAssistantAgent NewAgent(RecordingPodLifecycle lifecycle) =>
+    private static RemoteOperatorAssistantAgent NewAgent(
+        RecordingPodLifecycle lifecycle,
+        IRunEventStream? eventStream = null) =>
         new(
             new MissingEndpointResolver(),
             new PodNameRegistry(),
@@ -128,7 +130,7 @@ public sealed class RemoteOperatorAssistantAgentTests
                     ["Agentweaver:RemoteApiBaseUrl"] = "http://agentweaver-api:8080",
                 })
                 .Build(),
-            null!,
+            eventStream!,
             NullLogger<RemoteOperatorAssistantAgent>.Instance,
             lifecycle);
 
@@ -213,6 +215,72 @@ public sealed class RemoteOperatorAssistantAgentTests
             CancellationToken.None);
 
         sink.Deltas.Should().Equal("partial reply");
+    }
+
+    [Fact]
+    public async Task DrainAsync_PersistsOnlyBoundedPromptMetadataFromAgentHost()
+    {
+        const string secret = "prompt-secret-canary";
+        var lifecycle = new RecordingPodLifecycle();
+        var eventStream = new RecordingEventStream();
+        var agent = NewAgent(lifecycle, eventStream);
+        var channel = Channel.CreateUnbounded<RunEvent>();
+        var runtimeContext = new AgentRuntimeContextMetrics(
+            "copilot",
+            "conversation-metadata",
+            "project-1",
+            BaseCharacters: 100,
+            RunContextCharacters: 0,
+            SkillCharacters: 0,
+            SeparatorCharacters: 0,
+            TaskCharacters: 20,
+            ToolDeclarationCharacters: 30,
+            SkillDeliveryMode: "none",
+            TotalCharacters: 150,
+            EstimatedTokens: 38);
+        await channel.Writer.WriteAsync(new RunEvent(
+            0,
+            EventTypes.AgentSystemPrompt,
+            JsonSerializer.SerializeToElement(new
+            {
+                runtimeContext.Provider,
+                runtimeContext.RunId,
+                runtimeContext.ProjectId,
+                runtimeContext.BaseCharacters,
+                runtimeContext.RunContextCharacters,
+                runtimeContext.SkillCharacters,
+                runtimeContext.SeparatorCharacters,
+                runtimeContext.TaskCharacters,
+                runtimeContext.ToolDeclarationCharacters,
+                runtimeContext.SkillDeliveryMode,
+                runtimeContext.TotalCharacters,
+                runtimeContext.EstimatedTokens,
+                CallableMemoryGuidanceIncluded = false,
+            })));
+        await channel.Writer.WriteAsync(new RunEvent(
+            0,
+            EventTypes.AgentRuntimeContext,
+            JsonSerializer.SerializeToElement(runtimeContext)));
+        await channel.Writer.WriteAsync(new RunEvent(
+            0,
+            EventTypes.AgentTurnEnd,
+            JsonSerializer.SerializeToElement(new { turnId = secret })));
+        channel.Writer.Complete();
+
+        await agent.DrainAsync(
+            "conversation-metadata",
+            channel.Reader,
+            sink: null,
+            [],
+            Request("conversation-metadata", "broker-token"),
+            lifecycle,
+            CancellationToken.None);
+
+        eventStream.Events.Select(evt => evt.Type).Should().Equal(
+            EventTypes.AgentSystemPrompt,
+            EventTypes.AgentRuntimeContext);
+        JsonSerializer.Serialize(eventStream.Events).Should().NotContain(secret)
+            .And.NotContain("broker-token");
     }
 
     private static OperatorAssistantRequest Request(
@@ -312,5 +380,31 @@ public sealed class RemoteOperatorAssistantAgentTests
             string? argumentsJson,
             CancellationToken ct) =>
             ValueTask.FromResult(true);
+    }
+
+    private sealed class RecordingEventStream : IRunEventStream
+    {
+        public List<RunEvent> Events { get; } = [];
+
+        public ValueTask<int> AppendAsync(
+            string runId,
+            RunEvent evt,
+            CancellationToken ct = default)
+        {
+            Events.Add(evt);
+            return ValueTask.FromResult(Events.Count);
+        }
+
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId,
+            int fromSequence = 0,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
     }
 }

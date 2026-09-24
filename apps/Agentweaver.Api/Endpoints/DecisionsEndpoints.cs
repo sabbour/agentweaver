@@ -28,7 +28,6 @@ public static class DecisionsEndpoints
 {
     public static void MapDecisionsEndpoints(this IEndpointRouteBuilder app)
     {
-        var logger = app.ServiceProvider.GetRequiredService<ILogger<Program>>();
 // -----------------------------------------------------------------------
 // Memory / Decision Inbox endpoints
 // -----------------------------------------------------------------------
@@ -41,6 +40,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     IRunSubmittingUserResolver runResolver,
     IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
@@ -90,7 +90,14 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
             exists.SourceRunId = author.SourceRunId;
             exists.UpdatedAt = DateTimeOffset.UtcNow;
             await memoryDb.SaveChangesAsync(ct);
-            await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+            try
+            {
+                await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
+            }
+            catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+            {
+                return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
+            }
             return Results.Ok(new
             {
                 exists.Id, exists.AgentName, exists.Slug, exists.Type, exists.Title, exists.Content,
@@ -140,7 +147,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox", async (
     };
     memoryDb.DecisionInbox.Add(entry);
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Created($"/api/projects/{id}/decisions/inbox/{entry.Id}", new
     {
         entry.Id, entry.AgentName, entry.Slug, entry.Type, entry.Title, entry.Content,
@@ -196,6 +203,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     IRunSubmittingUserResolver runResolver,
     IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
@@ -208,23 +216,22 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
         httpContext, project, configuration, runResolver, turnTokens, ct);
     if (approvalFailure is not null) return approvalFailure;
 
-    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
-    var entry = await memoryDb.DecisionInbox
-        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
-    if (entry is null)
+    var promotion = await DecisionPromotion.PromoteEntryAsync(
+        memoryDb, id, entryId, DateTimeOffset.UtcNow, approver!.SourceIdentity, ct);
+    if (promotion is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
-    var now = DateTimeOffset.UtcNow;
-    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, approver!.SourceIdentity, ct);
-    await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
-    return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
+    var response = new
     {
-        id = entry.Id,
-        entry.Status,
-        decisionId = decision.Id,
-        mergedAt = entry.MergedAt,
-    });
+        id = promotion.Entry.Id,
+        promotion.Entry.Status,
+        decisionId = promotion.Decision.Id,
+        mergedAt = promotion.Entry.MergedAt,
+    };
+    return promotion.Promoted
+        ? Results.Created($"/api/projects/{id}/decisions/{promotion.Decision.Id}", response)
+        : Results.Ok(response);
 });
 
 // POST /api/projects/{id}/decisions/inbox/{entryId}/promote (alias for /merge)
@@ -235,6 +242,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     IRunSubmittingUserResolver runResolver,
     IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
@@ -247,22 +255,18 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
         httpContext, project, configuration, runResolver, turnTokens, ct);
     if (approvalFailure is not null) return approvalFailure;
 
-    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
-    var entry = await memoryDb.DecisionInbox
-        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
-    if (entry is null)
+    var promotion = await DecisionPromotion.PromoteEntryAsync(
+        memoryDb, id, entryId, DateTimeOffset.UtcNow, approver!.SourceIdentity, ct);
+    if (promotion is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
-    var now = DateTimeOffset.UtcNow;
-    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, approver!.SourceIdentity, ct);
-    await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Ok(new
     {
-        id = entry.Id,
-        entry.Status,
-        decisionId = decision.Id,
-        mergedAt = entry.MergedAt,
+        id = promotion.Entry.Id,
+        promotion.Entry.Status,
+        decisionId = promotion.Decision.Id,
+        mergedAt = promotion.Entry.MergedAt,
     });
 });
 
@@ -274,6 +278,7 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     IRunSubmittingUserResolver runResolver,
     IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
@@ -286,17 +291,12 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
         httpContext, project, configuration, runResolver, turnTokens, ct);
     if (approvalFailure is not null) return approvalFailure;
 
-    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
-    var entry = await memoryDb.DecisionInbox
-        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
+    var entry = await DecisionPromotion.RejectEntryAsync(
+        memoryDb, id, entryId, DateTimeOffset.UtcNow, ct);
     if (entry is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
-    entry.Status = "rejected";
-    entry.UpdatedAt = DateTimeOffset.UtcNow;
-    await memoryDb.SaveChangesAsync(ct);
-    await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Ok(new { entry.Id, entry.Status });
 });
 
@@ -408,6 +408,7 @@ app.MapPost("/api/projects/{id}/decisions", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     IRunSubmittingUserResolver runResolver,
     IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
@@ -447,17 +448,27 @@ app.MapPost("/api/projects/{id}/decisions", async (
         CreatedAt = now,
         UpdatedAt = now,
     };
-    memoryDb.Decisions.Add(decision);
-    await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
-    return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
+    var (storedDecision, created) = await MemoryWriteDeduplicator
+        .GetOrCreateDecisionAsync(memoryDb, decision, ct);
+    try
     {
-        decision.Id, decision.AgentName, decision.Type, decision.Status,
-        decision.Title, decision.Content, decision.Rationale, decision.Tags,
-        decision.SourceKind, decision.SourceIdentity, decision.SourceRunId,
-        decision.TrustState, decision.ApprovedBy, decision.ApprovedAt,
-        created_at = decision.CreatedAt,
-    });
+        await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
+    }
+    catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+    {
+        return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
+    }
+    var response = new
+    {
+        storedDecision.Id, storedDecision.AgentName, storedDecision.Type, storedDecision.Status,
+        storedDecision.Title, storedDecision.Content, storedDecision.Rationale, storedDecision.Tags,
+        storedDecision.SourceKind, storedDecision.SourceIdentity, storedDecision.SourceRunId,
+        storedDecision.TrustState, storedDecision.ApprovedBy, storedDecision.ApprovedAt,
+        created_at = storedDecision.CreatedAt,
+    };
+    return created
+        ? Results.Created($"/api/projects/{id}/decisions/{storedDecision.Id}", response)
+        : Results.Ok(response);
 });
 
 // PUT /api/projects/{id}/decisions/{decisionId}
@@ -469,6 +480,7 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     IRunSubmittingUserResolver runResolver,
     IRunAuthorshipCapabilityStore turnTokens,
     CancellationToken ct) =>
@@ -505,8 +517,16 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     decision.ApprovedBy = approver!.SourceIdentity;
     decision.ApprovedAt = DateTimeOffset.UtcNow;
     decision.UpdatedAt = DateTimeOffset.UtcNow;
+    MemoryWriteDeduplicator.RefreshDecisionIdentity(decision);
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    try
+    {
+        await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
+    }
+    catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+    {
+        return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
+    }
     return Results.Ok(new
     {
         decision.Id, decision.Status, decision.Content, decision.Rationale,

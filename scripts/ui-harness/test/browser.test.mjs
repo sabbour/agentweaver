@@ -5,8 +5,49 @@ import {
   browserLaunchOptions,
   guardedUrl,
   installedChromeLaunchOptions,
+  keyedLocator,
   openBrowserSession,
 } from '../lib/browser.mjs';
+
+test('semantic project-name automation uses the exact accessible textbox target', () => {
+  const locator = {};
+  const calls = [];
+  const page = {
+    getByRole: (role, options) => {
+      calls.push({ role, options });
+      return locator;
+    },
+  };
+
+  assert.equal(
+    keyedLocator(page, { role: 'textbox', name: 'Project name' }),
+    locator,
+  );
+  assert.deepEqual(calls, [{
+    role: 'textbox',
+    options: { name: 'Project name', exact: true },
+  }]);
+});
+
+test('semantic repository automation uses the exact accessible option target', () => {
+  const locator = {};
+  const calls = [];
+  const page = {
+    getByRole: (role, options) => {
+      calls.push({ role, options });
+      return locator;
+    },
+  };
+
+  assert.equal(
+    keyedLocator(page, { role: 'option', name: 'sabbour/agentweaver' }),
+    locator,
+  );
+  assert.deepEqual(calls, [{
+    role: 'option',
+    options: { name: 'sabbour/agentweaver', exact: true },
+  }]);
+});
 
 test('UI sessions launch installed Google Chrome rather than Playwright Chromium', () => {
   const launch = installedChromeLaunchOptions(

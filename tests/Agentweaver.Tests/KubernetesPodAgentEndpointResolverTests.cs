@@ -5,16 +5,253 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using k8s;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests;
 
 public sealed class KubernetesPodAgentEndpointResolverTests
 {
+    [Fact]
+    [Trait("Category", "ProcessEnvironment")]
+    public async Task Production_host_registers_generation_bound_dispatch_validator()
+    {
+        await using var factory = new ReviewWebApplicationFactory();
+
+        factory.Services.GetRequiredService<IAgentHostDispatchBoundaryValidator>()
+            .Should().BeOfType<AgentHostDispatchBoundaryValidator>();
+    }
+
+    [Fact]
+    public async Task Dispatch_boundary_revalidates_project_authorization_before_provider_launch()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = MakeRun();
+        await store.InsertAsync(run);
+        var services = new ServiceCollection();
+        services.AddScoped<IRunStore>(_ => store);
+        services.AddScoped<IProjectRoleAuthorizationService, DenyingProjectAuthorization>();
+        services.AddSingleton<RunModelInvocationGuard>();
+        await using var provider = services.BuildServiceProvider();
+        var validator = new AgentHostDispatchBoundaryValidator(
+            provider.GetRequiredService<IServiceScopeFactory>());
+
+        var act = () => validator.CaptureAsync(run.Id.ToString(), CancellationToken.None);
+
+        var failure = await act.Should().ThrowAsync<AgentProviderException>();
+        failure.Which.ErrorCode.Should().Be("project_authorization_required");
+        failure.Which.FailureKind.Should().Be(AgentProviderFailureKind.Authorization);
+    }
+
+    [Fact]
+    public async Task Concurrent_callers_join_one_recovering_generation_bound_launch()
+    {
+        var runId = RunId.New().ToString();
+        var registry = new PodNameRegistry();
+        var boundary = Boundary(runId);
+        var validator = new MutableDispatchValidator(boundary);
+        var lifecycle = new RecoveringDispatchLifecycle(registry, failFirst: true);
+        var resolver = NewDispatchResolver(runId, registry, lifecycle, validator);
+
+        var first = resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+        var second = resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+        var endpoints = await Task.WhenAll(first, second);
+
+        endpoints.Should().OnlyContain(endpoint => endpoint == new Uri("http://10.0.0.50:8088/a2a/agent"));
+        lifecycle.LaunchCalls.Should().Be(2, "one failed launch receives one bounded fresh launch");
+        lifecycle.Contexts.Select(context => context.DispatchId).Distinct().Should().ContainSingle();
+        lifecycle.Contexts.Should().OnlyContain(context =>
+            context.LifecycleGeneration == boundary.LifecycleGeneration
+            && context.DispatchProjectId == boundary.ProjectId
+            && context.DispatchUserId == boundary.UserId
+            && context.DispatchAgentName == boundary.AgentName
+            && context.ProviderSnapshotKey == boundary.ProviderKey);
+    }
+
+    [Fact]
+    public async Task Cancelled_waiter_does_not_cancel_shared_launch()
+    {
+        var runId = RunId.New().ToString();
+        var registry = new PodNameRegistry();
+        var lifecycle = new RecoveringDispatchLifecycle(registry, pauseLaunch: true);
+        var resolver = NewDispatchResolver(runId, registry, lifecycle, new MutableDispatchValidator(Boundary(runId)));
+        using var cancelled = new CancellationTokenSource();
+
+        var first = resolver.TryResolveEndpointAsync(runId, cancelled.Token);
+        await lifecycle.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        cancelled.Cancel();
+        var cancelledWait = async () => await first;
+        await cancelledWait.Should().ThrowAsync<OperationCanceledException>();
+
+        var second = resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+        lifecycle.CompleteLaunch();
+        (await second).Should().Be("http://10.0.0.50:8088/a2a/agent");
+        lifecycle.LaunchCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Delivery_revalidation_rejects_changed_authorization_boundary_without_relaunch()
+    {
+        var runId = RunId.New().ToString();
+        var registry = new PodNameRegistry();
+        var validator = new MutableDispatchValidator(Boundary(runId));
+        var lifecycle = new RecoveringDispatchLifecycle(registry);
+        var resolver = NewDispatchResolver(runId, registry, lifecycle, validator);
+        await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        validator.Current = validator.Current with { UserId = "different-user" };
+        var act = () => resolver.ValidateDeliveryAsync(runId, CancellationToken.None);
+
+        var failure = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+        failure.Which.Reason.Should().Be("agenthost_dispatch_stale");
+        lifecycle.LaunchCalls.Should().Be(1, "delivery validation must never replay a possibly accepted turn");
+    }
+
+    [Fact]
+    public async Task Released_successful_claim_is_launched_again_instead_of_reusing_completed_cache()
+    {
+        var runId = RunId.New().ToString();
+        var registry = new PodNameRegistry();
+        var lifecycle = new RecoveringDispatchLifecycle(registry);
+        var resolver = NewDispatchResolver(runId, registry, lifecycle, new MutableDispatchValidator(Boundary(runId)));
+
+        await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+        await lifecycle.ReleaseAgentHostPodAsync(runId);
+        await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        lifecycle.LaunchCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Exhaustion_writes_one_redacted_retryable_terminal_outcome()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = MakeRun();
+        await store.InsertAsync(run);
+        var registry = new PodNameRegistry();
+        var lifecycle = new RecoveringDispatchLifecycle(
+            registry,
+            alwaysFail: true,
+            pauseLaunch: true,
+            failureMessage: "Authorization: Bearer secret-do-not-persist");
+        var resolver = NewDispatchResolver(
+            run.Id.ToString(),
+            registry,
+            lifecycle,
+            new MutableDispatchValidator(Boundary(run.Id.ToString(), run.LifecycleGeneration)),
+            store);
+
+        var first = CaptureFailureAsync(resolver, run.Id.ToString());
+        var second = CaptureFailureAsync(resolver, run.Id.ToString());
+        await lifecycle.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        lifecycle.CompleteLaunch();
+        var failures = await Task.WhenAll(first, second);
+
+        failures.Should().OnlyContain(failure =>
+            failure.Reason == "agent_host_unavailable" && failure.IsRetryable == true);
+        lifecycle.LaunchCalls.Should().Be(2);
+        var outcome = (await store.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle().Subject;
+        outcome.LifecycleGeneration.Should().Be(run.LifecycleGeneration);
+        outcome.Outcome.Payload.GetProperty("errorCode").GetString().Should().Be("agent_host_unavailable");
+        outcome.Outcome.Payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+        outcome.Outcome.Payload.GetRawText().Should().NotContain("secret-do-not-persist");
+        (await store.GetAsync(run.Id))!.Status.Should().Be(RunStatus.Failed);
+    }
+
+    [Fact]
+    public async Task Endpoint_read_failure_relaunches_once_then_records_canonical_exhaustion()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = MakeRun();
+        await store.InsertAsync(run);
+        var registry = new PodNameRegistry();
+        var lifecycle = new RecoveringDispatchLifecycle(registry);
+        var logger = new SensitiveCapturingLogger<KubernetesPodAgentEndpointResolver>();
+        var client = new Kubernetes(
+            new KubernetesClientConfiguration { Host = "http://localhost:8080" },
+            new ThrowingPodHandler(new SensitiveTransportException("secret-do-not-persist")));
+        var resolver = new KubernetesPodAgentEndpointResolver(
+            client,
+            registry,
+            "agentweaver",
+            new SandboxAgentOptions { RequireMtls = false },
+            logger,
+            lifecycle,
+            store,
+            new StaticLaunchContextResolver(),
+            new MutableDispatchValidator(Boundary(run.Id.ToString(), run.LifecycleGeneration)));
+
+        var failure = await CaptureFailureAsync(resolver, run.Id.ToString());
+
+        failure.Reason.Should().Be("agent_host_unavailable");
+        failure.IsRetryable.Should().BeTrue();
+        lifecycle.LaunchCalls.Should().Be(2, "one failed endpoint read receives exactly one fresh launch");
+        lifecycle.Contexts.Select(context => context.DispatchId).Distinct().Should().HaveCount(2);
+        lifecycle.Contexts.Should().OnlyContain(context =>
+            context.LifecycleGeneration == run.LifecycleGeneration);
+        registry.TryGet(run.Id.ToString()).Should().BeNull();
+        var outcome = (await store.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle().Subject;
+        outcome.LifecycleGeneration.Should().Be(run.LifecycleGeneration);
+        outcome.Outcome.Payload.GetProperty("errorCode").GetString().Should().Be("agent_host_unavailable");
+        outcome.Outcome.Payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+        outcome.Outcome.Payload.GetRawText().Should().NotContain("secret-do-not-persist");
+        (await store.GetAsync(run.Id))!.Status.Should().Be(RunStatus.Failed);
+        logger.Entries.Should().ContainSingle(entry =>
+            entry.Level == LogLevel.Warning
+            && entry.Message.Contains("redispatching once", StringComparison.Ordinal)
+            && entry.Message.Contains("errorCode=agent_host_unavailable", StringComparison.Ordinal)
+            && entry.Message.Contains("exceptionType=SensitiveTransportException", StringComparison.Ordinal));
+        logger.Entries.Should().ContainSingle(entry =>
+            entry.Level == LogLevel.Error
+            && entry.Message.Contains("recovery exhausted", StringComparison.Ordinal)
+            && entry.Message.Contains("errorCode=agent_host_unavailable", StringComparison.Ordinal)
+            && entry.Message.Contains("exceptionType=SensitiveTransportException", StringComparison.Ordinal));
+        logger.Entries.Should().OnlyContain(entry => entry.ExceptionText == null);
+        string.Join(
+                Environment.NewLine,
+                logger.Entries.Select(entry => $"{entry.Message}{Environment.NewLine}{entry.ExceptionText}"))
+            .Should().NotContain("secret-do-not-persist");
+    }
+
+    [Fact]
+    public async Task Assistant_exhaustion_remains_resumable_and_does_not_write_terminal_outcome()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var run = MakeRun() with { AgentName = "Operator" };
+        await store.InsertAsync(run);
+        var registry = new PodNameRegistry();
+        var lifecycle = new RecoveringDispatchLifecycle(registry, alwaysFail: true);
+        var boundary = Boundary(run.Id.ToString(), run.LifecycleGeneration) with
+        {
+            AgentName = "Operator",
+            IsResumableAssistant = true,
+        };
+        var resolver = NewDispatchResolver(
+            run.Id.ToString(),
+            registry,
+            lifecycle,
+            new MutableDispatchValidator(boundary),
+            store);
+
+        var failure = await CaptureFailureAsync(resolver, run.Id.ToString());
+
+        failure.Reason.Should().Be("agent_host_unavailable");
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+        (await store.GetAsync(run.Id))!.Status.Should().Be(RunStatus.InProgress);
+    }
+
     [Fact]
     public async Task ReapedNonTerminalPod_SignalsRetryableRedispatch()
     {
@@ -34,7 +271,7 @@ public sealed class KubernetesPodAgentEndpointResolverTests
         var act = async () => await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
 
         var exception = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
-        exception.Which.Reason.Should().Be("agenthost_pod_reaped");
+        exception.Which.Reason.Should().Be("agent_host_unavailable");
         exception.Which.IsRetryable.Should().BeTrue();
         registry.TryGet(runId).Should().BeNull("the stale pod mapping must not be reused on redispatch");
     }
@@ -86,9 +323,9 @@ public sealed class KubernetesPodAgentEndpointResolverTests
         var act = () => resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
 
         var exception = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
-        exception.Which.Reason.Should().Be("agenthost_pod_reaped_recovery_exhausted");
-        exception.Which.IsRetryable.Should().BeFalse(
-            "persistent reaping must not trigger broad blind redispatch loops");
+        exception.Which.Reason.Should().Be("agent_host_unavailable");
+        exception.Which.IsRetryable.Should().BeTrue(
+            "the terminal dispatch outcome is retryable as a fresh run generation");
         lifecycle.LaunchCalls.Should().Be(1);
     }
 
@@ -189,6 +426,152 @@ public sealed class KubernetesPodAgentEndpointResolverTests
             BindingFlags.Instance | BindingFlags.NonPublic);
         return (ConcurrentDictionary<string, Lazy<Task<string>>>)
             (field?.GetValue(resolver) ?? throw new InvalidOperationException("Launch cache field not found."));
+    }
+
+    private static KubernetesPodAgentEndpointResolver NewDispatchResolver(
+        string runId,
+        PodNameRegistry registry,
+        IAgentHostPodLifecycle lifecycle,
+        IAgentHostDispatchBoundaryValidator validator,
+        IRunStore? runStore = null)
+    {
+        var client = new Kubernetes(
+            new KubernetesClientConfiguration { Host = "http://localhost:8080" },
+            new ReadyPodHandler("agenthost-dispatch", "10.0.0.50"));
+        return new KubernetesPodAgentEndpointResolver(
+            client,
+            registry,
+            "agentweaver",
+            new SandboxAgentOptions { RequireMtls = false },
+            NullLogger<KubernetesPodAgentEndpointResolver>.Instance,
+            lifecycle,
+            runStore,
+            new StaticLaunchContextResolver(),
+            validator);
+    }
+
+    private static AgentHostDispatchBoundary Boundary(string runId, int generation = 3) =>
+        new(runId, runId, generation, "project-1", "user-1", "link", "copilot:binding:v7", false);
+
+    private static Run MakeRun() => new()
+    {
+        Id = RunId.New(),
+        RepositoryPath = ".",
+        OriginatingBranch = "dev",
+        ModelSource = ModelSource.GitHubCopilot,
+        Task = "dispatch recovery",
+        SubmittingUser = "user-1",
+        Status = RunStatus.InProgress,
+        StartedAt = DateTimeOffset.UtcNow,
+        ProjectId = ProjectId.New(),
+        AgentName = "link",
+    };
+
+    private static async Task<WorkflowAgentInfrastructureException> CaptureFailureAsync(
+        KubernetesPodAgentEndpointResolver resolver,
+        string runId)
+    {
+        try
+        {
+            await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+            throw new InvalidOperationException("Expected AgentHost dispatch failure.");
+        }
+        catch (WorkflowAgentInfrastructureException ex)
+        {
+            return ex;
+        }
+    }
+
+    private sealed class MutableDispatchValidator(AgentHostDispatchBoundary current)
+        : IAgentHostDispatchBoundaryValidator
+    {
+        public AgentHostDispatchBoundary Current { get; set; } = current;
+
+        public Task<AgentHostDispatchBoundary> CaptureAsync(string runId, CancellationToken ct) =>
+            Task.FromResult(Current);
+    }
+
+    private sealed class DenyingProjectAuthorization : IProjectRoleAuthorizationService
+    {
+        public bool IsPlatformAdmin(CallerContext caller) => false;
+
+        public Task<ProjectRole?> GetEffectiveRoleAsync(
+            CallerContext caller,
+            ProjectId projectId,
+            CancellationToken ct = default) =>
+            Task.FromResult<ProjectRole?>(null);
+
+        public Task<bool> HasRoleAsync(
+            CallerContext caller,
+            ProjectId projectId,
+            ProjectRole minimumRole,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task<IReadOnlyDictionary<ProjectId, ProjectRole>> ListExplicitRolesAsync(
+            CallerContext caller,
+            CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyDictionary<ProjectId, ProjectRole>>(
+                new Dictionary<ProjectId, ProjectRole>());
+    }
+
+    private sealed class StaticLaunchContextResolver : IRunAgentHostContextResolver
+    {
+        public Task<AgentHostLaunchContext> ResolveAsync(string runId, CancellationToken ct = default) =>
+            Task.FromResult(new AgentHostLaunchContext("/workspace"));
+    }
+
+    private sealed class RecoveringDispatchLifecycle(
+        IPodNameRegistry registry,
+        bool failFirst = false,
+        bool alwaysFail = false,
+        bool pauseLaunch = false,
+        string failureMessage = "readiness failed") : IAgentHostPodLifecycle
+    {
+        private readonly TaskCompletionSource _continue =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _launchCalls;
+
+        public int LaunchCalls => Volatile.Read(ref _launchCalls);
+        public List<AgentHostLaunchContext> Contexts { get; } = [];
+        public TaskCompletionSource Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            string? workingDirectoryOverride,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public async Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            AgentHostLaunchContext context,
+            CancellationToken ct = default)
+        {
+            var call = Interlocked.Increment(ref _launchCalls);
+            lock (Contexts)
+                Contexts.Add(context);
+            Started.TrySetResult();
+            await Task.Yield();
+            if (pauseLaunch)
+                await _continue.Task.ConfigureAwait(false);
+            if (alwaysFail || (failFirst && call == 1))
+                throw new InvalidOperationException(failureMessage);
+
+            registry.Register(runId, "agenthost-dispatch");
+            return "http://10.0.0.50:8088/a2a/agent";
+        }
+
+        public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
+        {
+            registry.Unregister(runId);
+            return Task.CompletedTask;
+        }
+
+        public void CompleteLaunch() => _continue.TrySetResult();
     }
 
     private sealed class RegisteringPodLifecycle(IPodNameRegistry registry, string replacementPod)
@@ -327,6 +710,45 @@ public sealed class KubernetesPodAgentEndpointResolverTests
                 RequestMessage = request,
             });
     }
+
+    private sealed class ThrowingPodHandler(Exception failure) : DelegatingHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromException<HttpResponseMessage>(failure);
+    }
+
+    private sealed class SensitiveTransportException(string message) : HttpRequestException(message)
+    {
+        public override string ToString() =>
+            $"{base.ToString()}{Environment.NewLine}   at secret-do-not-persist";
+    }
+
+    private sealed class SensitiveCapturingLogger<T> : ILogger<T>
+    {
+        public List<SensitiveLogEntry> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add(new SensitiveLogEntry(
+                logLevel,
+                formatter(state, exception),
+                exception?.ToString()));
+    }
+
+    private sealed record SensitiveLogEntry(
+        LogLevel Level,
+        string Message,
+        string? ExceptionText);
 
     private sealed class ReadyPodHandler(string podName, string podIp) : DelegatingHandler
     {

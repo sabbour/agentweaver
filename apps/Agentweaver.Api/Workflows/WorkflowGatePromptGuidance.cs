@@ -7,7 +7,10 @@ internal static class WorkflowGatePromptGuidance
         MANDATORY BUILD & TEST STEP (software workflows): For any software-oriented workflow — one that
         implements, fixes, refactors, or otherwise changes code (bug fix, feature delivery, refactor,
         etc.) — you MUST include exactly one build_test gate immediately after any RAI safety check,
-        followed immediately by exactly one human-review check gate. Every reachable RAI safety gate's
+        followed immediately by exactly one human-review check gate, except when peer review is requested.
+        In that case, place peer_review between build_test and human review:
+        RAI pass -> build_test approved -> peer_review approved -> human-review.
+        Every reachable RAI safety gate's
         approved or pass edge MUST route directly to that build_test gate; no path may reach human review
         before this RAI/build_test sequence. Neither gate is optional or omittable. The build_test gate is
         static, platform-owned, and always-on; never add an inline
@@ -17,8 +20,9 @@ internal static class WorkflowGatePromptGuidance
             label: Build & Test
             role: review
             agent: qa-engineer
-        Route `when: approved` directly to the human-review gate; `when: request-changes` loops back to
-        the implementation node (e.g. implement/fix); `when: declined` goes to a terminal. The
+        Route `when: approved` to the human-review gate, or to the requested peer_review chain that ends
+        at human review; `when: request-changes` loops back to the implementation node (e.g.
+        implement/fix); `when: declined` goes to a terminal. The
         human-review gate MUST be `type: check` with `gate_kind: human-review` and branches `approved`,
         `request-changes`, and `declined`; route its approved verdict to the workflow's appropriate
         terminal/action, its request-changes verdict to implementation, and its declined verdict to a

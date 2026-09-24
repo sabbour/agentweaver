@@ -166,7 +166,7 @@ public sealed class BlueprintGenerationParserTests
     }
 
     [Fact]
-    public async Task Generate_FailedWorkflowFallback_PreservesSkillBindings()
+    public async Task Generate_FailedWorkflowFallback_ReturnsFailureInsteadOfDefaultWorkflow()
     {
         var raw = """
             {
@@ -188,10 +188,34 @@ public sealed class BlueprintGenerationParserTests
 
         var result = await service.GenerateAsync("test", CancellationToken.None);
 
-        result.Succeeded.Should().BeTrue(string.Join("; ", result.Errors));
-        result.Blueprint!.Workflows.Should().Equal("default");
-        result.Blueprint.SkillBindings.Should().ContainSingle();
-        result.Blueprint.SkillBindings[0].Skills.Should().Equal("api-data-safety");
+        result.Succeeded.Should().BeFalse();
+        result.FailureKind.Should().Be(BlueprintGenerationFailureKind.ModelRunFailed);
+        result.ErrorCode.Should().Be("blueprint_workflow_generation_failed");
+    }
+
+    [Fact]
+    public async Task Generate_WorkflowFallbackTimeout_ReturnsCanonicalProviderTimeout()
+    {
+        const string raw = """
+            {
+              "id": "generated",
+              "name": "Generated",
+              "description": "Generated blueprint.",
+              "roster": ["backend-engineer"],
+              "workflows": [],
+              "review_policy": "default",
+              "sandbox_profile": "default"
+            }
+            """;
+        var service = GenerationService(
+            raw,
+            new StubWorkflowGenerator(new TimeoutException("UND_ERR_HEADERS_TIMEOUT secret details")));
+
+        var result = await service.GenerateAsync("test", CancellationToken.None);
+
+        result.Succeeded.Should().BeFalse();
+        result.ErrorCode.Should().Be("blueprint_provider_timeout");
+        result.FailureMessage.Should().NotContain("UND_ERR_HEADERS_TIMEOUT");
     }
 
     [Fact]

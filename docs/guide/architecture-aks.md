@@ -37,6 +37,14 @@ identity, bounded credentials, purpose, and the workspace contract. Successful
 configuration completes setup and marks `IsReady` before returning. A2A traffic is
 gated by that ready state; there is no second post-configuration health poll.
 
+Before the first A2A request, dispatch is fenced to the run lifecycle generation,
+project, submitting user, agent, accepted provider snapshot, and an opaque dispatch
+identifier. Concurrent callers join the same launch. Readiness, configuration, or
+endpoint failure can replace the claim once while delivery is still known not to have
+started; after the streaming request begins, Agentweaver never replays the turn. A stale
+launch cannot satisfy a newer generation. Exhaustion records one retryable,
+credential-redacted `agent_host_unavailable` terminal outcome for that dispatch.
+
 Shared execution uses `/workspace`. Assembly Build/Test uses `LocalReadOnly`: fetch
 an immutable source ref, verify base commit and tree, and check out detached into
 the disk-backed `/local-workspace` emptyDir. Its preview uses the same verified

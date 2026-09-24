@@ -170,7 +170,8 @@ public sealed record ScribeTurnInput(
     string? MergeResult = null,
     string? MergeMode = null,
     string? SubmittingUser = null,
-    string? ByokProviderFingerprint = null);
+    string? ByokProviderFingerprint = null,
+    int LifecycleGeneration = 1);
 
 /// <summary>Input to the Rai RAI-review agent turn.</summary>
 public sealed record RaiTurnInput(

@@ -23,6 +23,7 @@ public static class StructuredRunFailureTerminal
         "agent_host_turn_incomplete",
         "coordinator_execution_failed",
         "coordinator_direct_execution_failed",
+        "coordinator_startup_failed",
         "github_copilot_auth_required",
         "github_copilot_capability_snapshot_unavailable",
         "github_copilot_model_unavailable",
@@ -217,6 +218,27 @@ public static class StructuredRunFailureTerminal
             sequence,
             EventTypes.RunFailed,
             CreatePayload(errorCode, message, diagnostic, retryable),
+            timestampUtc);
+
+    internal static RunEvent CreateFailure(
+        string errorCode,
+        string message,
+        bool? retryable,
+        Exception exception,
+        string correlationId,
+        int sequence = 0,
+        DateTimeOffset timestampUtc = default) =>
+        new(
+            sequence,
+            EventTypes.RunFailed,
+            CreatePayload(
+                errorCode,
+                message,
+                diagnostic: null,
+                retryable,
+                correlationId,
+                Activity.Current?.TraceId.ToHexString(),
+                BuildExceptionCauseChain(exception)),
             timestampUtc);
 
     public static string NormalizeErrorCode(string? errorCode) =>

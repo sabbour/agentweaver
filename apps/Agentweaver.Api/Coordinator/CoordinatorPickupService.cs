@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Workflows;
@@ -61,10 +62,6 @@ public sealed class CoordinatorPickupService
         if (!string.IsNullOrWhiteSpace(task.WorkflowOverrideId))
             goal = $"use {task.WorkflowOverrideId.Trim()}\n\n{goal}";
 
-        // The model id is resolved the same way the project coordinator-run endpoint does: the
-        // project default. The PROVIDER, however, comes from the shared resolver — a pickup run must
-        // record the provider that actually serves it (BYOK or Copilot), not a hardcoded literal.
-        var modelId = project.ProviderSettings.GitHubCopilotModel;
         AiExecutionPlan? acceptedPlan = null;
         ByokProviderConfiguration? acceptedByokConfiguration = null;
         string? blockedReason = null;
@@ -123,6 +120,12 @@ public sealed class CoordinatorPickupService
                     ? "project_model_provider_reconnect_required"
                     : "model_provider_connection_required";
         }
+        var effectiveProviderBoundary = await ResolveEffectiveProviderBoundaryAsync(
+                effectiveProvider,
+                acceptedByokConfiguration,
+                ct)
+            .ConfigureAwait(false);
+        acceptedByokConfiguration = effectiveProviderBoundary.ByokProviderConfiguration;
 
         var run = new Run
         {
@@ -130,7 +133,8 @@ public sealed class CoordinatorPickupService
             RepositoryPath = project.WorkingDirectory,
             OriginatingBranch = project.DefaultBranch,
             ModelSource = effectiveProvider.ToModelSource(),
-            ModelId = modelId,
+            ModelId = effectiveProviderBoundary.ResolveEffectiveModelId(
+                project.ProviderSettings.GitHubCopilotModel),
             Task = goal,
             // Keep the human-facing GitHub login in CapturedBy while carrying the durable auth
             // subject into background execution. Legacy and automation tasks retain their existing
@@ -237,15 +241,24 @@ public sealed class CoordinatorPickupService
             using var executionScope = acceptedPlan is null
                 ? null
                 : _executionPlanAccessor.Push(acceptedPlan);
-            if (acceptedByokConfiguration is not null)
+            if (acceptedPlan is not null && acceptedByokConfiguration is not null)
                 _executionPlanAccessor.FreezeByokConfiguration(acceptedByokConfiguration);
             await _coordinatorRunService.StartReservedCoordinatorRunAsync(
                     run,
                     approvalSnapshot,
                     confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
                     ct: CancellationToken.None,
-                    effectiveProvider: effectiveProvider)
+                    effectiveProvider: effectiveProvider,
+                    effectiveProviderBoundary: effectiveProviderBoundary)
                 .ConfigureAwait(false);
+        }
+        catch (CoordinatorStartupException ex)
+        {
+            _logger.LogError(
+                "Pickup: coordinator start failed for run {RunId}: code={ErrorCode} correlationId={CorrelationId}",
+                ex.RunId,
+                ex.ErrorCode,
+                ex.CorrelationId);
         }
         catch (Exception ex)
         {
@@ -277,5 +290,39 @@ public sealed class CoordinatorPickupService
         await using var scope = _scopeFactory.CreateAsyncScope();
         var resolver = scope.ServiceProvider.GetRequiredService<EffectiveModelProviderResolver>();
         return await resolver.ResolveAsync(projectId, ct).ConfigureAwait(false);
+    }
+
+    private async Task<ResolvedRunModelProviderBoundary> ResolveEffectiveProviderBoundaryAsync(
+        EffectiveModelProviderResult provider,
+        ByokProviderConfiguration? acceptedByokConfiguration,
+        CancellationToken ct)
+    {
+        if (provider is not EffectiveModelProviderResult.Byok expectedByok)
+            return new ResolvedRunModelProviderBoundary(provider, null);
+
+        var configuration = acceptedByokConfiguration;
+        if (configuration is null)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            configuration = await scope.ServiceProvider
+                .GetRequiredService<ByokProviderConfigurationService>()
+                .GetAsync(ct)
+                .ConfigureAwait(false);
+        }
+        if (configuration is null
+            || !GenerationModelProviderExecutor.Matches(configuration, expectedByok))
+        {
+            throw new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.Configuration,
+                "model_provider_changed",
+                "The effective BYOK provider changed before coordinator reservation.",
+                isRetryable: true);
+        }
+
+        return new ResolvedRunModelProviderBoundary(
+            provider,
+            expectedByok.ConfigurationFingerprint,
+            configuration);
     }
 }

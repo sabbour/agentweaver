@@ -1,5 +1,10 @@
-using Agentweaver.AgentRuntime.Providers;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Agentweaver.Api.Blueprints;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Generation;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
@@ -8,6 +13,7 @@ using Microsoft.Extensions.Options;
 using Agentweaver.Squad.Catalog;
 using Agentweaver.Squad.Squad;
 using Microsoft.Extensions.Logging;
+using Microsoft.OpenApi;
 using YamlDotNet.Core;
 
 namespace Agentweaver.Api.Workflows;
@@ -24,6 +30,15 @@ public static class WorkflowDefinitionEndpoints
 {
     public static void MapWorkflowDefinitionEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapGet("/api/workflows/grammar", () => Results.Ok(WorkflowGrammarContract.ToDto()))
+            .WithName("GetWorkflowGrammar")
+            .WithTags("Workflows")
+            .WithDescription(
+                "Returns the versioned YAML workflow grammar accepted by runtime validation, including " +
+                "node types, bindability, edge conditions, transition rules, triggers, and limits.")
+            .Produces<WorkflowGrammarDto>(StatusCodes.Status200OK)
+            .OperationalAnonymous();
+
         // GET /api/projects/{projectId}/workflows — list discovered workflows + validation status.
         app.MapGet("/api/projects/{projectId}/workflows", async (
             HttpContext httpContext,
@@ -251,6 +266,10 @@ public static class WorkflowDefinitionEndpoints
                 if (candidate is null)
                     return Results.BadRequest(new { error = "unknown_workflow_id" });
 
+                var binding = WorkflowTeamBinding.Bind(project!, candidate);
+                if (!binding.IsResolved)
+                    return TeamBindingRequired(binding);
+
                 // Binder dry-run: a workflow may be loader-valid yet fail at runtime (e.g.
                 // agent-evaluation's fan_out/fan_in have no executor). Reject it as a default before it is
                 // ever selected for a run, with a 422 naming the runtime problem.
@@ -301,6 +320,10 @@ public static class WorkflowDefinitionEndpoints
                 var candidate = registry.Get(project!, workflowId)?.Definition;
                 if (candidate is null)
                     return Results.BadRequest(new { error = "unknown_workflow_id" });
+
+                var binding = WorkflowTeamBinding.Bind(project!, candidate);
+                if (!binding.IsResolved)
+                    return TeamBindingRequired(binding);
 
                 var validationErrors = RunWorkflowGraphBinder.GetBindabilityErrors(candidate);
                 if (validationErrors.Count > 0)
@@ -401,6 +424,10 @@ public static class WorkflowDefinitionEndpoints
             var definition = registry.Get(project!, workflowId)?.Definition;
             if (definition is null) return Results.NotFound();
 
+            var binding = WorkflowTeamBinding.Bind(project!, definition);
+            if (!binding.IsResolved)
+                return TeamBindingRequired(binding);
+
             var bindErrors = RunWorkflowGraphBinder.GetBindabilityErrors(definition);
             if (bindErrors.Count > 0)
                 return Results.BadRequest(new { error = "workflow_not_bindable", validation_errors = bindErrors });
@@ -472,7 +499,17 @@ public static class WorkflowDefinitionEndpoints
             }
 
             // Step 2: Full load + structural validation via the real loader.
-            var loadResult = WorkflowDefinitionLoader.Load(request.Yaml, workflowId);
+            var loadResult = WorkflowDefinitionLoader.Load(
+                request.Yaml,
+                workflowId,
+                validationMode: WorkflowDefinitionValidationMode.Authoring);
+            if (WorkflowUnsupportedCapabilityException.ForLoadError(loadResult.Error) is { } unsupported)
+                return Results.BadRequest(new
+                {
+                    error = "unsupported_capability",
+                    capability = unsupported.Capability,
+                    message = unsupported.Message,
+                });
             if (!loadResult.IsValid || loadResult.Definition is null)
                 return Results.BadRequest(new
                 {
@@ -504,8 +541,22 @@ public static class WorkflowDefinitionEndpoints
             }
             catch (WorkflowBindException ex)
             {
-                return Results.UnprocessableEntity(new { error = ex.Message, line = errorLine });
+                return Results.UnprocessableEntity(new
+                {
+                    error = "workflow_not_bindable",
+                    validation_errors = new[] { ex.Message },
+                    transition_issues = RunWorkflowGraphBinder.GetTransitionIssues(definition),
+                    line = errorLine,
+                });
             }
+
+            var binding = WorkflowTeamBinding.Bind(project!, definition);
+            if (!binding.IsResolved)
+                return TeamBindingRequired(binding);
+            definition = binding.Workflow;
+            var persistedYaml = binding.WasBound
+                ? WorkflowDefinitionYamlSerializer.Serialize(definition)
+                : request.Yaml;
 
             // Step 5: Write to the project workspace.
             var workflowsDir = Path.Combine(project!.WorkingDirectory, ".agentweaver", "workflows");
@@ -522,7 +573,7 @@ public static class WorkflowDefinitionEndpoints
                 if (!WorkspacePathGuard.TryResolveContainedPath(workspaceRoot, filePath, out var safePath))
                     return Results.BadRequest(new { error = "Invalid workflow id." });
 
-                await File.WriteAllTextAsync(safePath, request.Yaml, ct);
+                await File.WriteAllTextAsync(safePath, persistedYaml, ct);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -586,21 +637,18 @@ public static class WorkflowDefinitionEndpoints
             return Results.Ok(WorkflowDtoMapper.ToDetail(saved, EffectiveDefaultId(project)));
         });
 
-        // POST /api/projects/{projectId}/workflows/generate — generate a DRAFT workflow from a
-        // natural-language description (Feature 015 US10, FR-056–FR-061). Returns the generated YAML as
-        // an UNSAVED draft for the client to open in the editor; nothing is written to disk here. The
-        // generator validates the model output and performs exactly one correction pass (FR-060) before
-        // failing closed with a structured 400.
+        // POST /api/projects/{projectId}/workflows/generate — accept durable generation of an UNSAVED
+        // workflow draft. The accepted request survives disconnects and is deduplicated by Idempotency-Key.
         app.MapPost("/api/projects/{projectId}/workflows/generate", async (
             HttpContext httpContext,
             string projectId,
             GenerateWorkflowRequest request,
             IProjectStore projectStore,
             WorkflowRegistry registry,
-            IWorkflowGenerator generator,
             IOptions<GenerationModelOptions> generationOptions,
             AiExecutionPlanService executionPlans,
             AiExecutionPlanAccessor executionPlanAccessor,
+            BlueprintGenerationJobStore jobs,
             CancellationToken ct) =>
         {
             var (project, error) = await ResolveOwnedProjectAsync(httpContext, projectId, projectStore, ct);
@@ -608,21 +656,18 @@ public static class WorkflowDefinitionEndpoints
 
             if (request is null || string.IsNullOrWhiteSpace(request.Description))
                 return Results.BadRequest(new { error = "description is required." });
+            if (WorkflowUnsupportedCapabilityException.ForDescription(request.Description) is { } unsupported)
+                return Results.BadRequest(new
+                {
+                    error = "unsupported_capability",
+                    capability = unsupported.Capability,
+                    message = unsupported.Message,
+                });
 
             // FR-061: constrain generated nodes to the project's actual cast roles so the workflow is
             // immediately runnable. Falls back to the full catalog inside the generator when none exist.
-            var teamRoles = TryReadTeamRoles(project!);
+            var teamRoles = WorkflowTeamBinding.ReadRoles(project!);
             var caller = httpContext.GetCaller();
-            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
-                httpContext,
-                "workflow_generation",
-                project!.Id,
-                executionPlans,
-                executionPlanAccessor,
-                ct).ConfigureAwait(false);
-            execution.Activate();
-            if (execution.Error is not null)
-                return execution.Error;
             var baseWorkflowId = Normalize(request.BaseWorkflowId);
             var baseYaml = string.IsNullOrWhiteSpace(request.BaseYaml) ? null : request.BaseYaml;
             var baseWorkflowIsBuiltIn = false;
@@ -630,6 +675,13 @@ public static class WorkflowDefinitionEndpoints
             if (!string.IsNullOrWhiteSpace(baseYaml))
             {
                 var load = WorkflowDefinitionLoader.Load(baseYaml!, "draft");
+                if (WorkflowUnsupportedCapabilityException.ForLoadError(load.Error) is { } unsupportedBase)
+                    return Results.BadRequest(new
+                    {
+                        error = "unsupported_capability",
+                        capability = unsupportedBase.Capability,
+                        message = unsupportedBase.Message,
+                    });
                 if (!load.IsValid || load.Definition is null)
                     return Results.BadRequest(new
                     {
@@ -641,8 +693,9 @@ public static class WorkflowDefinitionEndpoints
                 if (bindErrors.Count > 0)
                     return Results.BadRequest(new
                     {
-                        error = "base_yaml is not runnable.",
+                        error = "workflow_not_bindable",
                         validation_errors = bindErrors,
+                        transition_issues = RunWorkflowGraphBinder.GetTransitionIssues(load.Definition),
                     });
 
                 baseWorkflowId ??= load.Definition.Id;
@@ -664,88 +717,352 @@ public static class WorkflowDefinitionEndpoints
                 baseYaml ??= WorkflowDefinitionYamlSerializer.Serialize(baseWorkflow.Definition);
             }
 
-            try
-            {
-                var result = await generator.GenerateAsync(
-                    new WorkflowGenerationRequest(
-                        request.Description,
-                        project!.Id.ToString(),
-                        teamRoles,
-                        UserId: caller.User,
-                        TargetRepository: project.Origin.SourceRepository,
-                        BaseWorkflowId: baseWorkflowId,
-                        BaseWorkflowYaml: baseYaml,
-                        BaseWorkflowIsBuiltIn: baseWorkflowIsBuiltIn,
-                        GenerationModel: generationOptions.Value.ResolveWorkflowModel(project!.WorkflowGenerationModel),
-                        ContentOnly: request.ContentOnly),
-                    ct);
+            var idempotencyKey = httpContext.Request.Headers["Idempotency-Key"].ToString().Trim();
+            if (string.IsNullOrWhiteSpace(idempotencyKey))
+                return Results.BadRequest(new { error = "idempotency_key_required", message = "Idempotency-Key is required." });
+            if (idempotencyKey.Length > 256)
+                return Results.BadRequest(new { error = "idempotency_key_invalid", message = "Idempotency-Key must be 256 characters or fewer." });
 
-                return Results.Ok(new GenerateWorkflowResponse
+            using var execution = await EndpointHelpers.BeginAiExecutionAsync(
+                httpContext,
+                "workflow_generation",
+                project!.Id,
+                executionPlans,
+                executionPlanAccessor,
+                ct).ConfigureAwait(false);
+            if (execution.Error is not null)
+                return execution.Error;
+
+            var generationModel = generationOptions.Value.ResolveWorkflowModel(project!.WorkflowGenerationModel);
+            var payload = new WorkflowGenerationJobPayload(
+                request.Description.Trim(),
+                project.Id.ToString(),
+                teamRoles,
+                caller.User,
+                project.Origin.SourceRepository,
+                baseWorkflowId,
+                baseYaml,
+                baseWorkflowIsBuiltIn,
+                generationModel,
+                request.ContentOnly);
+            var fingerprint = CreateWorkflowGenerationFingerprint(payload, execution.Plan!);
+            var created = await jobs.CreateOrGetAsync(new BlueprintGenerationJobCreate(
+                execution.Plan!.Subject,
+                idempotencyKey,
+                fingerprint,
+                payload.Serialize(),
+                project.Id.ToString(),
+                project.Origin.SourceRepository,
+                null,
+                generationModel,
+                execution.Plan.Provider.ProviderKind(),
+                execution.Plan.Provider.ProviderType(),
+                execution.Plan.Provider.ProviderKey()!,
+                execution.Plan.Provider.ProviderScope(),
+                execution.Plan.ResolutionScope,
+                execution.Plan.Provider.CredentialVersion(),
+                executionPlans.CreateQueuedProviderKey(execution.Plan)), ct).ConfigureAwait(false);
+
+            if (created.Disposition == BlueprintGenerationJobCreateDisposition.Conflict)
+            {
+                return Results.Conflict(new
                 {
-                    Yaml = result.GeneratedYaml,
-                    WorkflowId = result.Workflow.Id,
-                    WasCorrected = result.WasCorrected,
-                    Mode = baseYaml is null ? "create" : "edit",
-                    BaseWorkflowId = baseWorkflowId,
-                    BaseWorkflowIsBuiltIn = baseWorkflowIsBuiltIn,
-                    AiExecutionContext = executionPlans.ToResponse(execution.Plan!, "completed"),
+                    error = "idempotency_key_conflict",
+                    message = "The Idempotency-Key was already used for a different workflow-generation request.",
+                    job_id = created.Snapshot.Job.JobId,
                 });
             }
-            catch (WorkflowGenerationException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (AgentProviderException ex)
-            {
-                return Results.Json(new
-                {
-                    error = ex.ErrorCode,
-                    message = ex.UserMessage,
-                    kind = ex.FailureKind.ToString(),
-                    retryable = ex.IsRetryable,
-                    options = ex.FailureKind == AgentProviderFailureKind.RateLimited
-                        ? new[] { "retry" }
-                        : new[] { "check_provider_auth", "check_provider_config", "retry" },
-                }, statusCode: ProviderFailureStatus(ex.FailureKind));
-            }
-            catch (AiExecutionPlanException ex)
-            {
-                return EndpointHelpers.AiExecutionError(ex);
-            }
+
+            return Results.Accepted(
+                $"/api/projects/{projectId}/workflows/generation-jobs/{created.Snapshot.Job.JobId}",
+                ToWorkflowJobResponse(
+                    created.Snapshot,
+                    created.Disposition == BlueprintGenerationJobCreateDisposition.Created
+                        ? executionPlans.ToResponse(execution.Plan, "active")
+                        : null));
         })
+            .WithName("GenerateWorkflow")
+            .WithTags("Workflows")
+            .AddOpenApiOperationTransformer((operation, _, _) =>
+            {
+                operation.Description ??= "Accepts a durable workflow-generation job. Supply Idempotency-Key and poll the returned status URL.";
+                operation.Parameters ??= [];
+                operation.Parameters.Add(new OpenApiParameter
+                {
+                    Name = "Idempotency-Key",
+                    In = ParameterLocation.Header,
+                    Required = true,
+                    Description = "Caller-chosen retry key. Reuse only for the identical workflow-generation request.",
+                    Schema = new OpenApiSchema { Type = JsonSchemaType.String },
+                });
+                return Task.CompletedTask;
+            })
+            .Produces<WorkflowGenerationJobResponse>(StatusCodes.Status202Accepted)
+            .Produces(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status403Forbidden)
+            .Produces(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status409Conflict)
             .RequiresAiExecutionContext("workflow_generation");
+
+        app.MapGet("/api/projects/{projectId}/workflows/generation-jobs/{jobId}", GetWorkflowGenerationJobAsync)
+            .WithName("GetWorkflowGenerationJob")
+            .WithTags("Workflows");
+        app.MapGet("/api/projects/{projectId}/workflows/generation-jobs/{jobId}/result", GetWorkflowGenerationResultAsync)
+            .WithName("GetWorkflowGenerationResult")
+            .WithTags("Workflows");
+        app.MapPost("/api/projects/{projectId}/workflows/generation-jobs/{jobId}/cancel", CancelWorkflowGenerationJobAsync)
+            .WithName("CancelWorkflowGenerationJob")
+            .WithTags("Workflows");
+        app.MapPost("/api/projects/{projectId}/workflows/generation-jobs/{jobId}/retry", RetryWorkflowGenerationJobAsync)
+            .WithName("RetryWorkflowGenerationJob")
+            .WithTags("Workflows");
     }
 
-    private static int ProviderFailureStatus(AgentProviderFailureKind kind) =>
-        kind switch
-        {
-            AgentProviderFailureKind.Authorization => StatusCodes.Status401Unauthorized,
-            AgentProviderFailureKind.RateLimited => StatusCodes.Status429TooManyRequests,
-            _ => StatusCodes.Status503ServiceUnavailable,
-        };
-
-    /// <summary>Reads the project's cast role ids from its squad team, or null when none can be read.
-    /// Used to constrain generated workflow nodes to roles the project can cast (FR-061). Reserved
-    /// orchestration roles (Scribe, Work Monitor, Rai, Coordinator) are always present on every team's
-    /// squad file but must never be offered to the generator as an assignable domain role.</summary>
-    private static IReadOnlyList<string>? TryReadTeamRoles(Project project)
+    private static async Task<IResult> GetWorkflowGenerationJobAsync(
+        HttpContext context,
+        string projectId,
+        string jobId,
+        IProjectStore projects,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
     {
-        try
+        var (project, error) = await ResolveOwnedProjectAsync(context, projectId, projects, ct);
+        if (error is not null) return error;
+        var snapshot = await GetAuthorizedWorkflowJobAsync(context, project!, jobId, jobs, ct);
+        return snapshot is null ? Results.NotFound() : Results.Ok(ToWorkflowJobResponse(snapshot));
+    }
+
+    private static async Task<IResult> GetWorkflowGenerationResultAsync(
+        HttpContext context,
+        string projectId,
+        string jobId,
+        IProjectStore projects,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
+    {
+        var (project, error) = await ResolveOwnedProjectAsync(context, projectId, projects, ct);
+        if (error is not null) return error;
+        var snapshot = await GetAuthorizedWorkflowJobAsync(context, project!, jobId, jobs, ct);
+        if (snapshot is null)
+            return Results.NotFound();
+        if (snapshot.Artifact is null)
         {
-            var team = new SquadReader(project.WorkingDirectory).ReadTeam();
-            if (team is null) return null;
-            var roles = team.Members
-                .Select(m => m.Role.Id)
-                .Where(r => !string.IsNullOrWhiteSpace(r) && !ReservedRoles.IsReserved(r))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            return roles.Count == 0 ? null : roles;
+            if (string.Equals(
+                    snapshot.Job.FailureCode,
+                    "workflow_team_binding_required",
+                    StringComparison.Ordinal))
+            {
+                return Results.UnprocessableEntity(new
+                {
+                    error = snapshot.Job.FailureCode,
+                    unresolved_roles = ReadBindingRequirements(snapshot.Job),
+                });
+            }
+
+            return Results.Conflict(new
+            {
+                error = "workflow_generation_not_complete",
+                status = snapshot.Job.Status,
+                failure = snapshot.Job.FailureCode is null ? null : ToWorkflowFailure(snapshot.Job),
+            });
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+
+        var yaml = snapshot.Artifact.GeneratedWorkflowYaml;
+        if (string.IsNullOrWhiteSpace(yaml))
+            return Results.Problem("Persisted workflow generation artifact has no YAML.");
+        var loaded = WorkflowDefinitionLoader.Load(yaml, "generated-artifact");
+        if (!loaded.IsValid || loaded.Definition is null)
+            return Results.Problem("Persisted workflow generation artifact is invalid.");
+        var metadata = JsonSerializer.Deserialize<WorkflowGenerationArtifactMetadata>(
+            snapshot.Artifact.BlueprintJson)
+            ?? throw new InvalidOperationException("Persisted workflow generation metadata is invalid.");
+        return Results.Ok(new WorkflowGenerationResultResponse
+        {
+            JobId = jobId,
+            ArtifactId = snapshot.Artifact.ArtifactId,
+            WorkflowId = snapshot.Artifact.LogicalId,
+            Version = snapshot.Artifact.Version,
+            Yaml = yaml,
+            WasCorrected = metadata.WasCorrected,
+            Mode = metadata.Mode,
+            BaseWorkflowId = metadata.BaseWorkflowId,
+            BaseWorkflowIsBuiltIn = metadata.BaseWorkflowIsBuiltIn,
+            Graph = WorkflowDtoMapper.ToGraph(loaded.Definition),
+        });
+    }
+
+    private static async Task<IResult> CancelWorkflowGenerationJobAsync(
+        HttpContext context,
+        string projectId,
+        string jobId,
+        IProjectStore projects,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
+    {
+        var (project, error) = await ResolveOwnedProjectAsync(context, projectId, projects, ct);
+        if (error is not null) return error;
+        var snapshot = await GetAuthorizedWorkflowJobAsync(context, project!, jobId, jobs, ct);
+        if (snapshot is null)
+            return Results.NotFound();
+        var cancelled = await jobs.CancelAsync(jobId, ct).ConfigureAwait(false);
+        return Results.Ok(ToWorkflowJobResponse(cancelled!));
+    }
+
+    private static async Task<IResult> RetryWorkflowGenerationJobAsync(
+        HttpContext context,
+        string projectId,
+        string jobId,
+        IProjectStore projects,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
+    {
+        var (project, error) = await ResolveOwnedProjectAsync(context, projectId, projects, ct);
+        if (error is not null) return error;
+        var snapshot = await GetAuthorizedWorkflowJobAsync(context, project!, jobId, jobs, ct);
+        if (snapshot is null)
+            return Results.NotFound();
+        var retryable = snapshot.Job.Status == BlueprintGenerationJobStatuses.Cancelled
+            || snapshot.Job.Status == BlueprintGenerationJobStatuses.Failed
+                && snapshot.Job.FailureRetryable;
+        if (!retryable)
+        {
+            return Results.Conflict(new
+            {
+                error = "workflow_generation_not_retryable",
+                status = snapshot.Job.Status,
+            });
+        }
+        var retried = await jobs.RetryAsync(jobId, ct).ConfigureAwait(false);
+        return Results.Accepted(
+            $"/api/projects/{projectId}/workflows/generation-jobs/{jobId}",
+            ToWorkflowJobResponse(retried!));
+    }
+
+    private static async Task<BlueprintGenerationJobSnapshot?> GetAuthorizedWorkflowJobAsync(
+        HttpContext context,
+        Project project,
+        string jobId,
+        BlueprintGenerationJobStore jobs,
+        CancellationToken ct)
+    {
+        var snapshot = await jobs.GetAsync(jobId, ct).ConfigureAwait(false);
+        if (snapshot is null
+            || !WorkflowGenerationJobPayload.TryDeserialize(snapshot.Job.Description, out _)
+            || !string.Equals(snapshot.Job.ProjectId, project.Id.ToString(), StringComparison.Ordinal)
+            || !context.GetCaller().Owns(snapshot.Job.Subject))
         {
             return null;
         }
+        return snapshot;
     }
+
+    private static WorkflowGenerationJobResponse ToWorkflowJobResponse(
+        BlueprintGenerationJobSnapshot snapshot,
+        AiExecutionContextResponse? executionContext = null)
+    {
+        var job = snapshot.Job;
+        var baseUrl = $"/api/projects/{job.ProjectId}/workflows/generation-jobs/{job.JobId}";
+        return new WorkflowGenerationJobResponse
+        {
+            JobId = job.JobId,
+            Status = job.Status,
+            Attempt = job.Attempt,
+            ProjectId = job.ProjectId!,
+            ProviderSnapshot = new WorkflowGenerationProviderSnapshotDto
+            {
+                ProviderKind = job.ProviderKind,
+                ProviderType = job.ProviderType,
+                ProviderKey = job.ProviderKey,
+                ProviderScope = job.ProviderScope,
+                ResolutionScope = job.ResolutionScope,
+                WorkflowModel = job.WorkflowModel,
+                CredentialBindingVersion = job.CredentialBindingVersion,
+            },
+            Artifact = snapshot.Artifact is null
+                ? null
+                : new WorkflowGenerationArtifactDto
+                {
+                    ArtifactId = snapshot.Artifact.ArtifactId,
+                    WorkflowId = snapshot.Artifact.LogicalId,
+                    Version = snapshot.Artifact.Version,
+                },
+            Failure = job.FailureCode is null ? null : ToWorkflowFailure(job),
+            CreatedAt = job.CreatedAt,
+            UpdatedAt = job.UpdatedAt,
+            StatusUrl = baseUrl,
+            ResultUrl = $"{baseUrl}/result",
+            CancelUrl = $"{baseUrl}/cancel",
+            RetryUrl = $"{baseUrl}/retry",
+            AiExecutionContext = executionContext,
+        };
+    }
+
+    private static WorkflowGenerationFailureDto ToWorkflowFailure(BlueprintGenerationJobRecord job)
+    {
+        var bindingRequirements = string.Equals(
+                job.FailureCode,
+                "workflow_team_binding_required",
+                StringComparison.Ordinal)
+            ? ReadBindingRequirements(job)
+            : null;
+        return new WorkflowGenerationFailureDto
+        {
+            Code = job.FailureCode!,
+            Message = bindingRequirements is null
+                ? job.FailureMessage ?? "Workflow generation failed."
+                : "Generated workflow roles must be cast or mapped before the draft can be returned.",
+            Retryable = job.FailureRetryable,
+            UnresolvedRoles = bindingRequirements,
+        };
+    }
+
+    private static IReadOnlyList<WorkflowRoleRequirement> ReadBindingRequirements(
+        BlueprintGenerationJobRecord job)
+    {
+        if (string.IsNullOrWhiteSpace(job.FailureMessage))
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<IReadOnlyList<WorkflowRoleRequirement>>(
+                    job.FailureMessage)
+                ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static string CreateWorkflowGenerationFingerprint(
+        WorkflowGenerationJobPayload request,
+        AiExecutionPlan plan)
+    {
+        var canonical = JsonSerializer.Serialize(new
+        {
+            request.Description,
+            request.ProjectId,
+            request.TeamRoles,
+            request.UserId,
+            request.TargetRepository,
+            request.BaseWorkflowId,
+            request.BaseWorkflowYaml,
+            request.BaseWorkflowIsBuiltIn,
+            request.GenerationModel,
+            request.ContentOnly,
+            provider_key = plan.Provider.ProviderKey(),
+            credential_binding_version = plan.Provider.CredentialVersion(),
+        });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)))
+            .ToLowerInvariant();
+    }
+
+    private static IResult TeamBindingRequired(WorkflowTeamBindingResult binding) =>
+        Results.UnprocessableEntity(new
+        {
+            error = "workflow_team_binding_required",
+            unresolved_roles = binding.UnresolvedRoles,
+        });
 
     /// <summary>Normalizes an incoming workflow id: trims and treats empty/whitespace as null (clear).</summary>
     private static string? Normalize(string? workflowId) =>
@@ -860,6 +1177,11 @@ public static class WorkflowDefinitionEndpoints
         var load = WorkflowDefinitionLoader.Load(yaml, workflowId);
         if (!load.IsValid || load.Definition is null)
             return Results.BadRequest(new { error = load.Error ?? "Workflow validation failed.", warnings = load.Warnings });
+
+        var binding = WorkflowTeamBinding.Bind(project, load.Definition);
+        if (!binding.IsResolved)
+            return TeamBindingRequired(binding);
+        yaml = WorkflowDefinitionYamlSerializer.Serialize(binding.Workflow);
 
         try
         {

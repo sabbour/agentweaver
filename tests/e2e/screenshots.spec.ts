@@ -142,7 +142,7 @@ test.describe('User Guide · Projects and settings', () => {
     await page.goto(`${BASE_URL}/projects`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: 'Create blank project' }).click();
     await page.getByRole('dialog', { name: 'Create blank project' }).waitFor();
-    await page.getByRole('textbox', { name: 'Project name *' }).fill('Demo project').catch(() => undefined);
+    await page.getByRole('textbox', { name: 'Project name', exact: true }).fill('Demo project');
     await page.screenshot({ path: shot('create-blank-project-dialog'), fullPage: true });
   });
 

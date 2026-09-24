@@ -5,6 +5,12 @@ using Agentweaver.Squad.Catalog;
 
 namespace Agentweaver.Api.Workflows;
 
+public enum WorkflowDefinitionValidationMode
+{
+    LegacyCompatible,
+    Authoring,
+}
+
 /// <summary>
 /// Parses and validates a single workflow YAML document into a <see cref="WorkflowDefinition"/>
 /// (Feature 010, FR-001/002/003/004). All discovery, validation, and composition is server-side; a
@@ -20,10 +26,14 @@ public static class WorkflowDefinitionLoader
         .Build();
 
     /// <summary>Parses+validates a YAML document. Always returns a result (never throws).</summary>
-    public static WorkflowLoadResult Load(string yaml, string source, bool isBuiltIn = false)
+    public static WorkflowLoadResult Load(
+        string yaml,
+        string source,
+        bool isBuiltIn = false,
+        WorkflowDefinitionValidationMode validationMode = WorkflowDefinitionValidationMode.LegacyCompatible)
     {
-        if (yaml.Length > 262_144)
-            return WorkflowLoadResult.Invalid(source, $"{source}: workflow resource exceeds the 262144 character limit.");
+        if (yaml.Length > WorkflowGrammarContract.MaxDocumentCharacters)
+            return WorkflowLoadResult.Invalid(source, $"{source}: workflow resource exceeds the {WorkflowGrammarContract.MaxDocumentCharacters} character limit.");
 
         WorkflowYamlDto? dto;
         try
@@ -38,7 +48,14 @@ public static class WorkflowDefinitionLoader
         if (dto is null)
             return WorkflowLoadResult.Invalid(source, $"{source}: empty or null workflow document.");
 
-        if (!TryMapAndValidate(dto, source, isBuiltIn, out var definition, out var error, out var loadWarnings))
+        if (!TryMapAndValidate(
+                dto,
+                source,
+                isBuiltIn,
+                validationMode,
+                out var definition,
+                out var error,
+                out var loadWarnings))
             return WorkflowLoadResult.Invalid(source, error!);
 
         return WorkflowLoadResult.Valid(source, definition!, isBuiltIn, loadWarnings);
@@ -48,6 +65,7 @@ public static class WorkflowDefinitionLoader
         WorkflowYamlDto dto,
         string source,
         bool isBuiltIn,
+        WorkflowDefinitionValidationMode validationMode,
         out WorkflowDefinition? definition,
         out string? error,
         out IReadOnlyList<string> warnings)
@@ -67,8 +85,8 @@ public static class WorkflowDefinitionLoader
         // Nodes.
         if (dto.Nodes is null || dto.Nodes.Count == 0)
             return Fail(source, "a workflow must declare at least one node.", out error);
-        if (dto.Nodes.Count > 128)
-            return Fail(source, "a workflow cannot declare more than 128 nodes.", out error);
+        if (dto.Nodes.Count > WorkflowGrammarContract.MaxNodes)
+            return Fail(source, $"a workflow cannot declare more than {WorkflowGrammarContract.MaxNodes} nodes.", out error);
 
         var nodes = new List<WorkflowNode>(dto.Nodes.Count);
         var nodeIds = new HashSet<string>(StringComparer.Ordinal);
@@ -80,12 +98,14 @@ public static class WorkflowDefinitionLoader
                 return Fail(source, $"duplicate node id '{n.Id}'.", out error);
             if (string.IsNullOrWhiteSpace(n.Type))
                 return Fail(source, $"node '{n.Id}' is missing its required 'type'.", out error);
-            if (!TryParseNodeType(n.Type, out var nodeType))
+            if (Normalize(n.Type) == "publish")
+                return Fail(source, $"node '{n.Id}' requests unsupported capability 'publish'. Publication targets are not supported.", out error);
+            if (!WorkflowGrammarContract.TryParseNodeType(n.Type, out var nodeType))
                 return Fail(source, $"node '{n.Id}' has unknown type '{n.Type}'.", out error);
-            if (n.Prompt?.Length > 16_384)
-                return Fail(source, $"node '{n.Id}' prompt exceeds the 16384 character limit.", out error);
-            if (n.Charter?.Length > 8_192)
-                return Fail(source, $"node '{n.Id}' charter exceeds the 8192 character limit.", out error);
+            if (n.Prompt?.Length > WorkflowGrammarContract.MaxPromptCharacters)
+                return Fail(source, $"node '{n.Id}' prompt exceeds the {WorkflowGrammarContract.MaxPromptCharacters} character limit.", out error);
+            if (n.Charter?.Length > WorkflowGrammarContract.MaxCharterCharacters)
+                return Fail(source, $"node '{n.Id}' charter exceeds the {WorkflowGrammarContract.MaxCharterCharacters} character limit.", out error);
 
             nodes.Add(new WorkflowNode
             {
@@ -121,8 +141,8 @@ public static class WorkflowDefinitionLoader
         var edges = new List<WorkflowEdge>();
         if (dto.Edges is not null)
         {
-            if (dto.Edges.Count > 512)
-                return Fail(source, "a workflow cannot declare more than 512 edges.", out error);
+            if (dto.Edges.Count > WorkflowGrammarContract.MaxEdges)
+                return Fail(source, $"a workflow cannot declare more than {WorkflowGrammarContract.MaxEdges} edges.", out error);
             foreach (var e in dto.Edges)
             {
                 if (string.IsNullOrWhiteSpace(e.From) || string.IsNullOrWhiteSpace(e.To))
@@ -147,6 +167,22 @@ public static class WorkflowDefinitionLoader
             switch (node.Type)
             {
                 case WorkflowNodeType.Check:
+                    if (validationMode == WorkflowDefinitionValidationMode.Authoring)
+                    {
+                        if (string.IsNullOrWhiteSpace(node.GateKind))
+                            return Fail(source, $"check node '{node.Id}' must declare explicit 'gate_kind' for authoring.", out error);
+                        if (!NodeClassifier.IsCanonicalGateKind(node.GateKind))
+                            return Fail(
+                                source,
+                                $"check node '{node.Id}' has non-canonical gate_kind '{node.GateKind}'; expected rai, human-review, or rubberduck.",
+                                out error);
+                    }
+                    else if (NodeClassifier.LegacyGateKindFromId(node) is { } legacyGateKind)
+                    {
+                        collectedWarnings.Add(
+                            $"{source}: legacy check node '{node.Id}' inferred gate_kind '{legacyGateKind}' from its id; save the workflow with explicit gate_kind to migrate it.");
+                    }
+
                     // FR-016: a check must route on at least one verdict, and every declared verdict
                     // must have a matching outgoing edge.
                     var outgoing = edges.Where(x => string.Equals(x.From, node.Id, StringComparison.Ordinal)).ToList();
@@ -206,8 +242,8 @@ public static class WorkflowDefinitionLoader
             return Fail(source, "declare either 'trigger' or 'triggers', not both.", out error);
 
         var triggerDtos = dto.Triggers ?? (dto.Trigger is null ? [] : [dto.Trigger]);
-        if (triggerDtos.Count > 16)
-            return Fail(source, "a workflow cannot declare more than 16 triggers.", out error);
+        if (triggerDtos.Count > WorkflowGrammarContract.MaxTriggers)
+            return Fail(source, $"a workflow cannot declare more than {WorkflowGrammarContract.MaxTriggers} triggers.", out error);
 
         var triggers = new List<WorkflowTrigger>(triggerDtos.Count);
         var triggerTypes = new HashSet<WorkflowTriggerType>();
@@ -573,26 +609,6 @@ public static class WorkflowDefinitionLoader
     private static string Normalize(string raw) =>
         raw.Trim().Replace('-', '_').Replace(' ', '_').ToLowerInvariant();
 
-    private static bool TryParseNodeType(string raw, out WorkflowNodeType type)
-    {
-        switch (Normalize(raw))
-        {
-            case "prompt": type = WorkflowNodeType.Prompt; return true;
-            case "peer_review": type = WorkflowNodeType.PeerReview; return true;
-            case "build_test": type = WorkflowNodeType.BuildTest; return true;
-            case "open_pull_request": type = WorkflowNodeType.OpenPullRequest; return true;
-            case "publish": type = WorkflowNodeType.Publish; return true;
-            case "check": type = WorkflowNodeType.Check; return true;
-            case "fan_out": type = WorkflowNodeType.FanOut; return true;
-            case "fan_in": type = WorkflowNodeType.FanIn; return true;
-            case "coordinator_composed": type = WorkflowNodeType.CoordinatorComposed; return true;
-            case "serial": type = WorkflowNodeType.Serial; return true;
-            case "merge": type = WorkflowNodeType.Merge; return true;
-            case "scribe": type = WorkflowNodeType.Scribe; return true;
-            case "terminal": type = WorkflowNodeType.Terminal; return true;
-            default: type = default; return false;
-        }
-    }
 }
 
 // ── YAML DTOs (snake_case via UnderscoredNamingConvention) ──────────────────────────────────────

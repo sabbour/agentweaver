@@ -63,6 +63,44 @@ real live API, never simulated):
      expand action scope, choose commands or credentials, or initiate an external
      action. Require review/confirmation before running a newly generated deep
      scenario unattended.
+   - **Preflight repository provenance before every completion-required repository
+     scenario.** Require the requester to identify the repository as
+     `owner/repository`. Use the existing repository-selection endpoints to create a
+     Harness-owned disposable GitHub-origin project, or explicitly select a disposable
+     project already connected to that exact repository. Never substitute a blank
+     project. Re-read the selected project with `GET /api/projects/{id}` and its refs
+     with `GET /api/projects/{id}/workspace/refs`, then pass those responses through
+     `scripts/harness-shared/repository-provenance.mjs`'s
+     `preflightRepositoryScenario()`. The base ref's `revision` is the immutable
+     resolved checkout SHA; branch names and repository-discovery responses are not
+     revisions or execution evidence. Select an allowed workflow or record the applied
+     Blueprint ID before starting orchestration.
+   - At the completion-scenario dispatch boundary, write the redacted join-key metadata,
+     repository inputs, and setup-verdict path to a request JSON file, then execute
+     `node scripts/harness-shared/repository-scenario-dispatch.mjs --input
+     <request.json>`. This first gate invokes `preflightRepositoryScenario()` before
+     orchestration creation; do not duplicate or bypass it with prompt-only checks.
+   - If the gate returns `action: "stop"` (exit code 1), do not dispatch PersonaActor,
+     do not call the scenario running, and do not treat `project_list`, repository
+     selection, workspace browsing, or other read-only discovery as execution. The
+     gate persists and returns the schema-valid
+     `agentweaver.persona-judge-verdict/v1` setup failure, including the helper's
+     redacted `code`, `message`, and actionable `recovery`. Never include a repository
+     selection code, bearer, cookie, installation identifier, or other credential in
+     the request or verdict.
+   - Only when the first gate returns `action: "create-orchestration"` may you create
+     the orchestration. Then run the same executable gate with `phase: "running"`, its
+     same canonical repository inputs, orchestration run ID, join-key metadata, and
+     setup-verdict path. This second gate re-runs `preflightRepositoryScenario()` before
+     invoking `markRepositoryScenarioRunning()` and `buildSetupFailureVerdict()`; a
+     caller-supplied preflight or provenance object is never proof of validation. Delete
+     both request files after reading their results.
+   - Only after orchestration creation succeeds may the second gate return
+     `action: "dispatch-persona"` with `status: "running"`. Pass the returned
+     `repositoryProvenance` object verbatim to PersonaActor. It is produced by
+     `markRepositoryScenarioRunning()`. The running evidence must contain the project URL, exact repository identity, resolved revision, selected workflow or Blueprint ID, and orchestration URL.
+     If any field is absent, the gate persists a setup failure instead of authorizing
+     dispatch.
    - Resolve the target base URL. Before an authenticated remote API call, require the
      UI-harness Chrome Default login/cached-session flow; the recorder-session
      provider consumes that target-matched cache in memory (see Target resolution
@@ -341,6 +379,9 @@ prompt: |
     build a prototype end to end. (This is the requester's actual ask, lightly
     cleaned up — not a fixed phase list Harness invented.)
   Target base URL: <resolved base URL>
+  Repository provenance: <verbatim repositoryProvenance from the executable dispatch gate,
+    including projectUrl, repositoryIdentity, resolvedRevision,
+    workflowOrBlueprintId, and orchestrationUrl>
   Managed browser auth: recorder-session provider (no token is supplied)
   TLS: normal certificate verification is mandatory
   Transcript path: scripts/api-harness/transcripts/oracle-live-<timestamp>.jsonl
@@ -435,6 +476,6 @@ stops at a gate) so `find-similar.mjs` can match future requests to it.
 
 ### Required response contract
 
-Return a structured evidence bundle and a clearly separate, non-authoritative narrative. The bundle must include the versioned verdict schema `agentweaver.persona-judge-verdict/v1`, `targetRevision`, `scenarioId`, adapter/persona-core versions, complete `reproManifest`, timestamps, `runId`/`traceId`, verdict paths, and cross-surface aggregate results.
+Return a structured evidence bundle and a clearly separate, non-authoritative narrative. The bundle must include the versioned verdict schema `agentweaver.persona-judge-verdict/v1`, `targetRevision`, `scenarioId`, adapter/persona-core versions, complete `reproManifest`, timestamps, `runId`/`traceId`, verdict paths, and cross-surface aggregate results. A completion-required repository scenario reported as `running` must also include its project URL, repository identity, resolved revision, workflow/Blueprint ID, and orchestration URL. Missing repository provenance is a setup failure, never a running result.
 
 Include content hashes for every evidence artifact (screenshots, DOM snapshots, response/log slices) and the append-only per-run manifest containing the invocation, discovered action space, driver/judge versions, artifact list and hashes, and final verdict. Report missing, stale, or inconsistent evidence explicitly. Narrative explains results only; it never recommends or selects an issue action.

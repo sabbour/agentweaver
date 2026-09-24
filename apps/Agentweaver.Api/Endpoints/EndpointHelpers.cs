@@ -93,6 +93,20 @@ internal static IResult AiExecutionError(AiExecutionPlanException exception) =>
         },
         statusCode: exception.StatusCode);
 
+internal static IResult CoordinatorStartupError(CoordinatorStartupException exception) =>
+    Results.Json(
+        new
+        {
+            error = exception.ErrorCode,
+            message = exception.Message,
+            run_id = exception.RunId,
+            retryable = exception.Retryable,
+            correlation_id = exception.CorrelationId,
+            diagnostic_url = exception.DiagnosticPath,
+            recovery = exception.RecoveryGuidance,
+        },
+        statusCode: StatusCodes.Status500InternalServerError);
+
 internal static async Task<IResult> DurableProviderBoundaryErrorAsync(
     AgentProviderException exception,
     string operationName,
@@ -532,7 +546,7 @@ internal static System.Text.Json.Nodes.JsonObject ProjectAgentSystemPromptPayloa
     if (source is null)
         return result;
 
-    CopyFixedString(source, result, "provider", "copilot");
+    CopyFixedString(source, result, "provider", "copilot", "byok");
     CopyGuidString(source, result, "runId");
     CopyGuidString(source, result, "projectId");
     CopyNonNegativeInt(source, result, "baseCharacters");

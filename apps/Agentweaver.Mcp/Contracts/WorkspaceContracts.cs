@@ -4,11 +4,12 @@ namespace Agentweaver.Mcp.Contracts;
 
 // ── Workspace refs ──────────────────────────────────────────────────────────
 
-/// <summary>One browsable git ref: the project base branch or an active run worktree.</summary>
+/// <summary>One browsable git ref and its resolved commit revision.</summary>
 public sealed record WorkspaceRef
 {
     [JsonPropertyName("kind")] public required string Kind { get; init; }                           // "base" | "worktree"
     [JsonPropertyName("branch")] public required string Branch { get; init; }
+    [JsonPropertyName("revision")] public string? Revision { get; init; }
     [JsonPropertyName("label")] public required string Label { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("run_status")] public string? RunStatus { get; init; }

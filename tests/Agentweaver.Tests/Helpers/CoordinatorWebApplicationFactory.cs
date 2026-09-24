@@ -7,6 +7,8 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Helpers;
@@ -41,21 +43,29 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
 
     private readonly string _agentExecutionMode;
     private readonly int? _memoryContextMaxTokens;
+    private readonly bool _useFakeWorkflowAgents;
 
-    public CoordinatorWebApplicationFactory() : this("in-api", null)
+    public CoordinatorWebApplicationFactory() : this("in-api", null, false)
     {
     }
 
-    public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run", null);
+    public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run", null, false);
 
     public static CoordinatorWebApplicationFactory CreateWithMemoryContextMaxTokens(int memoryContextMaxTokens) =>
-        new("in-api", memoryContextMaxTokens);
+        new("in-api", memoryContextMaxTokens, false);
 
-    private CoordinatorWebApplicationFactory(string agentExecutionMode, int? memoryContextMaxTokens)
+    public static CoordinatorWebApplicationFactory CreateWithFakeWorkflowAgents() =>
+        new("in-api", null, true);
+
+    private CoordinatorWebApplicationFactory(
+        string agentExecutionMode,
+        int? memoryContextMaxTokens,
+        bool useFakeWorkflowAgents)
         : base("agentweaver-coord", createWorkspaceRoot: true)
     {
         _agentExecutionMode         = agentExecutionMode;
         _memoryContextMaxTokens = memoryContextMaxTokens;
+        _useFakeWorkflowAgents = useFakeWorkflowAgents;
     }
 
     public HttpClient CreateOwnerClient() => CreateClientWithKey(OwnerApiKey);
@@ -149,6 +159,7 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
     public FakeAssemblyGateCodeClassifier AssemblyGateCodeClassifier { get; } = new();
     public FakeWorkflowSelectionModel WorkflowSelectionModel { get; } = new();
     public FakePreviewClassifier PreviewClassifier { get; } = new();
+    public TestFileEditAgentRunner TestAgentRunner { get; } = new();
 
     private HttpClient CreateClientWithKey(string apiKey)
     {
@@ -204,6 +215,15 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
 
             RemoveService<Agentweaver.Api.Coordinator.IPreviewClassifier>(services);
             services.AddSingleton<Agentweaver.Api.Coordinator.IPreviewClassifier>(PreviewClassifier);
+
+            if (_useFakeWorkflowAgents)
+            {
+                RemoveService<IAgentRunner>(services);
+                services.AddSingleton<IAgentRunner>(TestAgentRunner);
+                RemoveService<IWorkflowAgentFactory>(services);
+                services.AddSingleton<IWorkflowAgentFactory>(
+                    new FakeWorkflowAgentFactory(TestAgentRunner));
+            }
 
             // Any other agent path still fails closed (signed out) so it never reaches the network.
             // This is a real IGitHubTokenStore, not a mock.

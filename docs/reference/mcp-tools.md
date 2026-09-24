@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **107 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **111 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -50,7 +50,11 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
-| `blueprint_generate` | Generate a project blueprint from a natural language description of the team and goals. Returns the generated blueprint including roster and workflow assignments. The agent can inspect before creating a project. |
+| `blueprint_generate` | Start durable asynchronous Blueprint generation. Returns a job id and status/result/cancel/retry URLs immediately; use the Blueprint generation job tools to follow it. |
+| `blueprint_generation_cancel` | Cancel an authorized queued or running Blueprint generation job. |
+| `blueprint_generation_result` | Get the immutable Blueprint artifact for a completed generation job. |
+| `blueprint_generation_retry` | Retry an authorized failed or cancelled Blueprint generation job without creating another artifact identity. |
+| `blueprint_generation_status` | Get the authorized status of a durable Blueprint generation job. |
 | `list_blueprints` | List the predefined Agentweaver blueprints. Each blueprint specifies a team roster, workflow, review policy, and sandbox profile ready to apply at project creation. |
 | `validate_blueprint` | Validate a blueprint object against the schema and role constraints. Returns valid:true with an empty errors array on success, or valid:false with a list of validation errors. |
 
@@ -190,7 +194,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
-| `workflow_generate` | Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. Returns YAML draft — not yet saved. Use workflow_save to persist. The agent can inspect the YAML before saving. |
+| `workflow_generate` | Generate a new workflow definition from a natural language description, including schedule or event triggers when the description asks for them. Returns YAML draft — not yet saved. Use workflow_save to persist. Publication requests fail with an unsupported_capability response; they are never converted to agent prompts. Generated roles bind to confirmed team members; missing roles return workflow_team_binding_required with unresolved_roles. The agent can inspect the YAML before saving. |
 | `workflow_get` | Get the full definition of a single workflow by ID, including its nodes, edges, and trigger. MCP has no separate trigger-configure tool yet. |
 | `workflow_save` | Save a workflow YAML to the project workspace. This is the current MCP write path for trigger changes; there is no separate workflow_set_trigger tool. Validates and dry-run binds before saving. Returns the parsed workflow definition. |
 | `workflows_list` | List all discovered workflow definitions for a project, including their validation status, effective default, and any configured trigger. |
@@ -202,4 +206,4 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | --- | --- |
 | `get_project_workspace_file` | Get the content of a file in a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
 | `list_project_workspace` | List the flat file tree for a project workspace at a given ref. Defaults to the base branch when ref is omitted. |
-| `list_project_workspace_refs` | List the browsable git refs for a project workspace: the base branch and any active run worktrees. |
+| `list_project_workspace_refs` | List browsable project git refs with their resolved commit revisions: the base branch and any active run worktrees. |

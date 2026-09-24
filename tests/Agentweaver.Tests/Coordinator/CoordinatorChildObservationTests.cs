@@ -129,7 +129,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         var stream = new SqliteRunEventStream(_streamConfig);
         // Child is InProgress but emits no events — the stall TTL fires.
         var childRunId = await SeedChildRunAsync(RunStatus.InProgress, startedAt: DateTimeOffset.UtcNow.AddHours(-1));
-        const string coord = "obs-stall-coord";
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
         var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
         _streamStore.Create(coord, "owner");
 
@@ -383,7 +384,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.ToolError,
             new { requestId = "appr-expire", message = "URL fetch approval expired." }));
 
-        const string coord = "obs-approval-expire-coord";
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
         var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
         _streamStore.Create(coord, "owner");
 

@@ -518,7 +518,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             ?? throw new InvalidOperationException("SetupAsync must run before RebuildInnerAgent.");
 
         _instrumentedToolNames.Clear();
-        var sessionTools = BuildSessionConfigTools(
+        var sessionTools = FilterSessionTools(BuildSessionConfigTools(
             toolContext,
             _projectId,
             _agentName,
@@ -540,7 +540,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 _instrumentedToolNames.Add(tool.Name);
                 return new InstrumentedCustomAIFunction(
                     tool, EmitToolCallOnce, EmitToolResultOnce, EmitToolErrorOnce, StartToolSpan, CompleteToolSpan);
-            });
+            }));
         _registeredToolNames = sessionTools.Select(t => t.Name).ToList();
         _toolDeclarations = sessionTools.Cast<AIFunctionDeclaration>().ToList();
         _promptComposition = ComposePrompt(_systemPromptContext, _registeredToolNames);
@@ -2388,6 +2388,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? systemPromptContext,
         IEnumerable<string> registeredToolNames) =>
         AgentBasePrompt.Compose(systemPromptContext, registeredToolNames);
+
+    protected virtual IList<AIFunction> FilterSessionTools(IList<AIFunction> tools) => tools;
 
     /// <summary>
     /// Builds the tool list for <see cref="SessionConfig.Tools"/>:

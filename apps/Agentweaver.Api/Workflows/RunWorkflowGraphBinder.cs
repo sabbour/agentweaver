@@ -44,6 +44,14 @@ internal sealed record RunWorkflowBindings(
     int MaxIterations,
     IRunWorkflowWiringSupport Wiring);
 
+public sealed record WorkflowTransitionIssue(
+    string From,
+    string To,
+    string? When,
+    string FromKind,
+    string ToKind,
+    IReadOnlyList<string> Alternatives);
+
 /// <summary>
 /// Binds a <see cref="WorkflowDefinition"/> onto the live MAF graph (Feature 010 wf-maf-binding,
 /// generalized in Feature 015 US1). The full run pipeline is assembled by ITERATING the definition's
@@ -230,6 +238,37 @@ internal static class RunWorkflowGraphBinder
         return errors;
     }
 
+    public static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+
+        var issues = new List<WorkflowTransitionIssue>();
+        foreach (var edge in definition.Edges)
+        {
+            var fromNode = definition.Nodes.FirstOrDefault(
+                node => string.Equals(node.Id, edge.From, StringComparison.Ordinal));
+            var toNode = definition.Nodes.FirstOrDefault(
+                node => string.Equals(node.Id, edge.To, StringComparison.Ordinal));
+            if (fromNode is null || toNode is null)
+                continue;
+
+            var fromKind = EffectiveKind(definition, fromNode);
+            var toKind = EffectiveKind(definition, toNode);
+            if (WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
+                continue;
+
+            issues.Add(new WorkflowTransitionIssue(
+                edge.From,
+                edge.To,
+                edge.When,
+                WorkflowGrammarContract.TransitionKindName(fromKind),
+                WorkflowGrammarContract.TransitionKindName(toKind),
+                WorkflowGrammarContract.TransitionAlternatives(fromKind)));
+        }
+
+        return issues;
+    }
+
     /// <summary>
     /// The graph entry plumbing supplies <see cref="AgentTurnInput"/>. Verdict-style peer-review and
     /// build-test nodes instead consume a produced <see cref="AgentTurnOutput"/>; they can only be reached
@@ -239,7 +278,7 @@ internal static class RunWorkflowGraphBinder
         NodeClassifier.Classify(startNode) == NodeKind.PeerReview
             ? $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): peer_review and build_test " +
               "verdict gates require an AgentTurnOutput from a preceding producer, but workflow entry supplies " +
-              "AgentTurnInput. Choose a prompt or publish node as start and route its successful output to this gate."
+              "AgentTurnInput. Choose a prompt node as start and route its successful output to this gate."
             : null;
 
     /// <summary>Resolves the executor a definition's START node is entered at.</summary>
@@ -324,6 +363,9 @@ internal static class RunWorkflowGraphBinder
         WireContext ctx, WorkflowEdge edge, WorkflowNode fromNode, WorkflowNode toNode,
         NodeKind fromKind, NodeKind toKind)
     {
+        if (!WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
+            return false;
+
         var g = ctx.G;
         var b = ctx.B;
         var s = ctx.S;
@@ -355,6 +397,13 @@ internal static class RunWorkflowGraphBinder
                 g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), b.TerminalSafetyFailed,
                     output => output is not null && !output.RaiRevisionRequired
                         && string.IsNullOrEmpty(output.Diff) && output.ContentSafetyFlagged);
+                return true;
+
+            // No changes -> direct successful completion when the workflow has no scribe stage.
+            case (NodeKind.Rai, NodeKind.Terminal, "no-changes"):
+                g.AddEdge<AgentTurnOutput>(ResolveRai(fromNode, b), b.TerminalNoOp,
+                    output => output is not null && !output.RaiRevisionRequired
+                        && string.IsNullOrEmpty(output.Diff) && !output.ContentSafetyFlagged);
                 return true;
 
             // No changes -> no-op -> scribe path.
@@ -457,6 +506,18 @@ internal static class RunWorkflowGraphBinder
                  .AddEdge(path.Input, path.Scribe)
                  .AddEdge(path.Scribe, path.Output);
                 ctx.ScribeOutputs.Add(path.Output);
+                return true;
+            }
+
+            // Producer-only workflow -> direct successful completion.
+            case (NodeKind.Agent, NodeKind.Terminal, null):
+            {
+                var terminal = s.AgentToTerminalAdapter(edge);
+                g.AddEdge<AgentTurnOutput>(
+                    s.ResolveAgentNode(fromNode),
+                    terminal,
+                    IsSuccessfulAgentTurn);
+                ctx.DirectTerminalOutputs.Add(terminal);
                 return true;
             }
 
@@ -780,55 +841,7 @@ internal static class RunWorkflowGraphBinder
         var toKind = EffectiveKind(definition, toNode);
         var when = edge.When;
 
-        return (fromKind, toKind, when) switch
-        {
-            (NodeKind.Agent, NodeKind.Rai, null) => true,
-            (NodeKind.Rai, NodeKind.Agent, "revise") => true,
-            (NodeKind.Rai, NodeKind.Terminal, "safety-failed") => true,
-            (NodeKind.Rai, NodeKind.Terminal, "no-changes") => true,
-            (NodeKind.Rai, NodeKind.Terminal, "review") => true,
-            (NodeKind.Rai, NodeKind.Scribe, "no-changes") => true,
-            (NodeKind.Rai, NodeKind.HumanReview, "review") => true,
-            (NodeKind.HumanReview, NodeKind.Merge, "approved") => true,
-            (NodeKind.HumanReview, NodeKind.Agent, "request-changes") => true,
-            (NodeKind.HumanReview, NodeKind.Terminal, "declined") => true,
-            (NodeKind.Merge, NodeKind.Scribe, "merged") => true,
-            (NodeKind.Merge, NodeKind.OpenPullRequest, "merged") => true,
-            (NodeKind.Merge, NodeKind.HumanReview, "blocked") => true,
-            (NodeKind.Scribe, NodeKind.Terminal, null) => true,
-            (NodeKind.Agent, NodeKind.Agent, null) => true,
-            (NodeKind.Agent, NodeKind.PeerReview, null) => true,
-            (NodeKind.Agent, NodeKind.Scribe, null) => true,
-            (NodeKind.Agent, NodeKind.Terminal, null) => true,
-            (NodeKind.Agent, NodeKind.HumanReview, null) => true,
-            (NodeKind.Agent, NodeKind.Rubberduck, null) => true,
-            (NodeKind.Agent, NodeKind.OpenPullRequest, null) => true,
-            (NodeKind.PeerReview, NodeKind.OpenPullRequest, "approved" or "pass") => true,
-            (NodeKind.OpenPullRequest, NodeKind.Scribe, null) => true,
-            (NodeKind.Rai, NodeKind.Merge, "review") => true,
-            (NodeKind.Rai, NodeKind.Agent, "review") => true,
-            (NodeKind.Rai, NodeKind.PeerReview, "approved" or "pass" or "review") => true,
-            (NodeKind.Rai, NodeKind.Rubberduck, "review") => true,
-            (NodeKind.PeerReview, NodeKind.Merge, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.PeerReview, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.HumanReview, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Rai, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Rubberduck, "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Agent, "request-changes" or "fail") => true,
-            (NodeKind.PeerReview, NodeKind.Agent, "approved" or "pass") => true,
-            (NodeKind.PeerReview, NodeKind.Terminal, "approved" or "pass" or "declined") => true,
-            (NodeKind.HumanReview, NodeKind.Agent, "approved") => true,
-            (NodeKind.HumanReview, NodeKind.Scribe, "approved") => true,
-            (NodeKind.HumanReview, NodeKind.Terminal, "approved") => true,
-            (NodeKind.Rubberduck, NodeKind.HumanReview, "pass") => true,
-            (NodeKind.Rubberduck, NodeKind.Merge, "pass") => true,
-            (NodeKind.Rubberduck, NodeKind.Terminal, "pass") => true,
-            (NodeKind.Rubberduck, NodeKind.Agent, "pass") => true,
-            (NodeKind.Rubberduck, NodeKind.Agent, "revise") => true,
-            (NodeKind.Merge, NodeKind.PeerReview, "blocked") => true,
-            (NodeKind.Merge, NodeKind.Agent, "blocked") => true,
-            _ => false,
-        };
+        return WorkflowGrammarContract.SupportsTransition(fromKind, toKind, when);
     }
 
     private static ExecutorBinding ResolveRai(WorkflowNode node, RunWorkflowBindings b) =>
@@ -879,6 +892,11 @@ internal static class RunWorkflowGraphBinder
             g.WithOutputFrom(b.TerminalDeclined);
             return;
         }
+        if (incoming.Any(e => string.Equals(e.When, "no-changes", StringComparison.Ordinal)))
+        {
+            g.WithOutputFrom(b.TerminalNoOp);
+            return;
+        }
         if (incoming.Any(e => string.Equals(e.When, "approved", StringComparison.Ordinal)
                            || string.Equals(e.When, "pass", StringComparison.Ordinal)))
         {
@@ -888,6 +906,12 @@ internal static class RunWorkflowGraphBinder
                     $"Cannot bind outputs for terminal node '{terminal.Id}': it is reached from an approved/pass " +
                     "review verdict but no direct terminal output executor was wired.", terminal.Id);
             g.WithOutputFrom(outputs);
+            return;
+        }
+        if (incoming.Any(e => e.When is null)
+            && ctx.DirectTerminalOutputs.Distinct().ToArray() is { Length: > 0 } directOutputs)
+        {
+            g.WithOutputFrom(directOutputs);
             return;
         }
         // A terminal reached from a scribe stage is the run's "done" sink; every scribe-output executor

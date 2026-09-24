@@ -6,8 +6,12 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore;
+using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Generation;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
@@ -315,6 +319,11 @@ public sealed class WorkflowGeneratorTests
             label: Build & Test
             role: review
             agent: qa-engineer
+          - id: peer-review
+            type: peer_review
+            label: Peer Review
+            role: backend-engineer
+            prompt: "Review the tested implementation for release readiness."
           - id: human-review
             type: check
             label: Human Review
@@ -340,12 +349,21 @@ public sealed class WorkflowGeneratorTests
             to: implement
             when: revise
           - from: build-test
-            to: human-review
+            to: peer-review
             when: approved
           - from: build-test
             to: implement
             when: request-changes
           - from: build-test
+            to: declined
+            when: declined
+          - from: peer-review
+            to: human-review
+            when: approved
+          - from: peer-review
+            to: implement
+            when: request-changes
+          - from: peer-review
             to: declined
             when: declined
           - from: human-review
@@ -535,6 +553,10 @@ public sealed class WorkflowGeneratorTests
         CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
         CountOccurrences(prompt, "`from`/`to` MUST reference existing node ids").Should().Be(1);
         CountOccurrences(prompt, "at most one schedule trigger").Should().Be(1);
+        prompt.Should().Contain("SUPPORTED REVIEW TRANSITIONS");
+        prompt.Should().Contain("rai -> peer-review/build-test (when: approved | pass | review)");
+        prompt.Should().Contain("peer-review/build-test -> peer-review/build-test (when: approved | pass)");
+        prompt.Should().NotContain("rai -> peer-review/build-test (when: no-changes)");
     }
 
     [Fact]
@@ -645,7 +667,38 @@ public sealed class WorkflowGeneratorTests
         result.Workflow.Id.Should().Be("weekly-aks-issue-triage");
         runner.CallCount.Should().Be(2);
         runner.LastTask.Should().Contain("Cannot bind start node 'review-prds'");
-        runner.LastTask.Should().Contain("Choose a prompt or publish node as start");
+        runner.LastTask.Should().Contain("Choose a prompt node as start");
+    }
+
+    [Theory]
+    [InlineData("Publish the reviewed artifact to the public site.")]
+    [InlineData("Create a publication for the approved report.")]
+    [InlineData("Deploy the approved artifact externally.")]
+    [InlineData("Externally deploy the approved artifact.")]
+    [InlineData("Release the approved package to production.")]
+    [InlineData("Deploy the approved artifact to a public site.")]
+    [InlineData("Release the approved package to external service.")]
+    public async Task GenerateAsync_ExternalPublicationRequest_FailsBeforeInvokingModel(string description)
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var act = () => generator.GenerateAsync(new WorkflowGenerationRequest(description));
+
+        var exception = await act.Should().ThrowAsync<WorkflowUnsupportedCapabilityException>();
+        exception.Which.Capability.Should().Be("publish");
+        runner.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_NeutralReleaseWorkflow_StillInvokesModel()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest("Generate a release readiness workflow."));
+
+        runner.CallCount.Should().Be(1);
     }
 
     [Fact]
@@ -659,6 +712,26 @@ public sealed class WorkflowGeneratorTests
         result.WasCorrected.Should().BeTrue();
         result.Workflow.Id.Should().Be("generated-flow");
         runner.CallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task LegacyGateIdWithoutExplicitGateKind_TriggersCorrectionPass()
+    {
+        var legacyShaped = ValidWorkflowYaml.Replace(
+            "gate_kind: human-review",
+            "kind: review",
+            StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(legacyShaped, ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Generate a workflow with human approval."));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Nodes.Single(node => node.Id == "human-review").GateKind
+            .Should().Be("human-review");
+        runner.CallCount.Should().Be(2);
+        runner.LastTask.Should().Contain("must declare explicit 'gate_kind' for authoring");
     }
 
     [Fact]
@@ -743,6 +816,42 @@ public sealed class WorkflowGeneratorTests
         result.WasCorrected.Should().BeFalse();
         runner.CallCount.Should().Be(1);
         RunWorkflowGraphBinder.GetBindabilityErrors(result.Workflow).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_UnbindableBaseYaml_ReturnsAlternativesBeforeGeneratorExecution()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"WfUnbindableEdit Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        var unsupported = SoftwareWorkflowWithRaiBeforeBuildTestYaml
+            .Replace("  - pass", "  - no-changes", StringComparison.Ordinal)
+            .Replace("    when: pass", "    when: no-changes", StringComparison.Ordinal);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/generate",
+            new { description = "Keep this review chain.", base_yaml = unsupported });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_not_bindable");
+        body.GetProperty("transition_issues").GetArrayLength().Should().Be(1);
+        body.GetProperty("transition_issues")[0].GetProperty("alternatives").GetArrayLength()
+            .Should().BeGreaterThan(0);
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.CallCount.Should().Be(0);
     }
 
     [Fact]
@@ -1064,6 +1173,97 @@ public sealed class WorkflowGeneratorTests
     private static int CountOccurrences(string value, string text) =>
         value.Split(text, StringSplitOptions.None).Length - 1;
 
+    private static async Task<(JsonElement Job, JsonElement Result)> GenerateThroughDurableJobAsync(
+        StubWorkflowGeneratorFactory factory,
+        HttpClient client,
+        string projectId,
+        object body,
+        string? idempotencyKey = null)
+    {
+        var (accepted, job) = await SubmitDurableJobAsync(client, projectId, body, idempotencyKey);
+        accepted.StatusCode.Should().Be(HttpStatusCode.Accepted, await accepted.Content.ReadAsStringAsync());
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        _ = await worker.RunOneAsync(CancellationToken.None);
+        var result = await client.GetAsync(job.GetProperty("result_url").GetString());
+        result.StatusCode.Should().Be(HttpStatusCode.OK, await result.Content.ReadAsStringAsync());
+        return (job, await result.Content.ReadFromJsonAsync<JsonElement>());
+    }
+
+    private static async Task<(HttpResponseMessage Response, JsonElement Body)> SubmitDurableJobAsync(
+        HttpClient client,
+        string projectId,
+        object body,
+        string? idempotencyKey = null)
+    {
+        using var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/projects/{projectId}/workflows/generate")
+        {
+            Content = JsonContent.Create(body),
+        };
+        message.Headers.Add("Idempotency-Key", idempotencyKey ?? Guid.NewGuid().ToString("N"));
+        var accepted = await client.SendAsync(message);
+        var job = await accepted.Content.ReadFromJsonAsync<JsonElement>();
+        return (accepted, job);
+    }
+
+    private static async Task<(string ProjectId, string Directory)> CreateProjectAsync(
+        StubWorkflowGeneratorFactory factory,
+        HttpClient client,
+        string name)
+    {
+        var directory = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"{name} {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = directory,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
+        return (projectId, directory);
+    }
+
+    private static async Task<JsonElement> ConfirmQuickSoftwareTeamAsync(
+        StubWorkflowGeneratorFactory factory,
+        HttpClient client,
+        string projectId)
+    {
+        await factory.PrepareAiExecutionAsync(client, "casting_generation", projectId);
+        var propose = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/casting/proposals",
+            new { mode = "scenario", template_id = "quick-software-development" });
+        propose.StatusCode.Should().Be(HttpStatusCode.OK, await propose.Content.ReadAsStringAsync());
+        var proposalId = (await propose.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("proposal_id").GetString()!;
+
+        var confirm = await client.PostAsJsonAsync(
+            $"/api/projects/{projectId}/casting/proposals/{proposalId}/confirm", new { });
+        confirm.StatusCode.Should().Be(HttpStatusCode.OK, await confirm.Content.ReadAsStringAsync());
+        return await confirm.Content.ReadFromJsonAsync<JsonElement>();
+    }
+
+    private static string SimpleRoleWorkflowYaml(string role) => $$"""
+        id: role-bound
+        name: Role Bound
+        description: A workflow with a castable worker.
+        version: "1.0"
+        start: worker
+        nodes:
+          - id: worker
+            type: prompt
+            label: Worker
+            role: {{role}}
+            prompt: "Do the work."
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: worker
+            to: done
+        """;
+
     // â”€â”€ Endpoint integration (stub generator) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
@@ -1098,10 +1298,11 @@ public sealed class WorkflowGeneratorTests
         confirm.StatusCode.Should().Be(HttpStatusCode.OK, await confirm.Content.ReadAsStringAsync());
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        _ = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "A manual review-and-merge workflow." });
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
 
         var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
             .Should().BeOfType<StubWorkflowGenerator>().Subject;
@@ -1112,7 +1313,202 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateEndpoint_Returns200_WithYamlAndWorkflowId()
+    public async Task GenerateEndpoint_WithConfirmedTeam_BindsGeneratedRoleToCastMember()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, _) = await CreateProjectAsync(factory, client, "WfGen BoundRole Test");
+        var team = await ConfirmQuickSoftwareTeamAsync(factory, client, projectId);
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.ResponseFactory = request => SimpleRoleWorkflowYaml(request.TeamRoles!.First());
+
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+        var (_, result) = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
+            new { description = "Create a simple role-bound workflow.", content_only = true });
+
+        var yaml = result.GetProperty("yaml").GetString()!;
+        yaml.Should().Contain($"agent: {team.GetProperty("members")[0].GetProperty("name").GetString()}");
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_WithMissingTeamRole_ReturnsRequirementsWithoutPersistingArtifact()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, _) = await CreateProjectAsync(factory, client, "WfGen MissingGeneratedRole Test");
+        await ConfirmQuickSoftwareTeamAsync(factory, client, projectId);
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.ResponseFactory = _ => SimpleRoleWorkflowYaml("lead-researcher");
+
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+        var (accepted, job) = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description = "Create a role-bound workflow.", content_only = true });
+        accepted.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+
+        var status = await client.GetFromJsonAsync<JsonElement>(job.GetProperty("status_url").GetString()!);
+        status.GetProperty("status").GetString().Should().Be("failed");
+        var failure = status.GetProperty("failure");
+        failure.GetProperty("code").GetString().Should().Be("workflow_team_binding_required");
+        failure.GetProperty("unresolved_roles")[0].GetProperty("nodeId").GetString().Should().Be("worker");
+
+        var result = await client.GetAsync(job.GetProperty("result_url").GetString());
+        result.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var resultBody = await result.Content.ReadFromJsonAsync<JsonElement>();
+        resultBody.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
+        resultBody.GetProperty("unresolved_roles")[0].GetProperty("nodeId").GetString().Should().Be("worker");
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var jobId = job.GetProperty("job_id").GetString()!;
+        (await db.BlueprintGenerationArtifacts.CountAsync(x => x.JobId == jobId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_WithoutTeam_ReturnsRequirementsWithoutPersistingArtifact()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, _) = await CreateProjectAsync(factory, client, "WfGen NoTeam Test");
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.ResponseFactory = _ => SimpleRoleWorkflowYaml("lead-researcher");
+
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+        var (accepted, job) = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description = "Create a role-bound workflow.", content_only = true });
+        accepted.StatusCode.Should().Be(HttpStatusCode.Accepted);
+
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+
+        var status = await client.GetFromJsonAsync<JsonElement>(job.GetProperty("status_url").GetString()!);
+        status.GetProperty("status").GetString().Should().Be("failed");
+        var failure = status.GetProperty("failure");
+        failure.GetProperty("code").GetString().Should().Be("workflow_team_binding_required");
+        var unresolved = failure.GetProperty("unresolved_roles")[0];
+        unresolved.GetProperty("nodeId").GetString().Should().Be("worker");
+        unresolved.GetProperty("availableRoles").GetArrayLength().Should().Be(0);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var jobId = job.GetProperty("job_id").GetString()!;
+        (await db.BlueprintGenerationArtifacts.CountAsync(x => x.JobId == jobId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SaveEndpoint_WithMissingTeamRole_ReturnsRequirementsBeforeWriting()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, dir) = await CreateProjectAsync(factory, client, "WfGen MissingRole Test");
+        await ConfirmQuickSoftwareTeamAsync(factory, client, projectId);
+
+        var yaml = SimpleRoleWorkflowYaml("lead-researcher");
+        var response = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/missing-role",
+            new { yaml = yaml.Replace("id: role-bound", "id: missing-role", StringComparison.Ordinal) });
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
+        body.GetProperty("unresolved_roles")[0].GetProperty("nodeId").GetString().Should().Be("worker");
+        File.Exists(Path.Combine(dir, ".agentweaver", "workflows", "missing-role.yaml"))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task SaveEndpoint_WithoutTeam_ReturnsRequirementsBeforeWriting()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, dir) = await CreateProjectAsync(factory, client, "WfGen SaveNoTeam Test");
+
+        var yaml = SimpleRoleWorkflowYaml("lead-researcher");
+        var response = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/no-team",
+            new { yaml = yaml.Replace("id: role-bound", "id: no-team", StringComparison.Ordinal) });
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
+        var unresolved = body.GetProperty("unresolved_roles")[0];
+        unresolved.GetProperty("nodeId").GetString().Should().Be("worker");
+        unresolved.GetProperty("availableRoles").GetArrayLength().Should().Be(0);
+        File.Exists(Path.Combine(dir, ".agentweaver", "workflows", "no-team.yaml"))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunEndpoint_WithMissingTeamRole_ReturnsTheSameRequirements()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, dir) = await CreateProjectAsync(factory, client, "WfGen RunMissingRole Test");
+        await ConfirmQuickSoftwareTeamAsync(factory, client, projectId);
+
+        var workflowsDir = Path.Combine(dir, ".agentweaver", "workflows");
+        Directory.CreateDirectory(workflowsDir);
+        await File.WriteAllTextAsync(
+            Path.Combine(workflowsDir, "missing-role.yaml"),
+            SimpleRoleWorkflowYaml("lead-researcher").Replace("id: role-bound", "id: missing-role", StringComparison.Ordinal));
+
+        var response = await client.PostAsync(
+            $"/api/projects/{projectId}/workflows/missing-role/run",
+            content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
+        body.GetProperty("unresolved_roles")[0].GetProperty("nodeId").GetString().Should().Be("worker");
+    }
+
+    [Fact]
+    public async Task RunEndpoint_WithoutTeam_ReturnsRequirementsBeforePublishingReadyTask()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, dir) = await CreateProjectAsync(factory, client, "WfGen RunNoTeam Test");
+
+        var workflowsDir = Path.Combine(dir, ".agentweaver", "workflows");
+        Directory.CreateDirectory(workflowsDir);
+        await File.WriteAllTextAsync(
+            Path.Combine(workflowsDir, "no-team.yaml"),
+            SimpleRoleWorkflowYaml("lead-researcher").Replace("id: role-bound", "id: no-team", StringComparison.Ordinal));
+
+        var response = await client.PostAsync(
+            $"/api/projects/{projectId}/workflows/no-team/run",
+            content: null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_team_binding_required");
+        var unresolved = body.GetProperty("unresolved_roles")[0];
+        unresolved.GetProperty("nodeId").GetString().Should().Be("worker");
+        unresolved.GetProperty("availableRoles").GetArrayLength().Should().Be(0);
+
+        var tasks = await factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .ListByProjectAsync(ProjectId.Parse(projectId));
+        tasks.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_ReturnsAcceptedJob_WithDurableYamlIdVersionAndGraph()
     {
         await using var factory = new StubWorkflowGeneratorFactory();
         var client = factory.CreateAuthenticatedClient();
@@ -1128,15 +1524,18 @@ public sealed class WorkflowGeneratorTests
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        var (job, result) = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "A manual review-and-merge workflow." });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("yaml").GetString().Should().Contain("id: generated-flow");
-        body.GetProperty("workflowId").GetString().Should().Be("generated-flow");
-        body.GetProperty("wasCorrected").GetBoolean().Should().BeFalse();
+        job.GetProperty("status").GetString().Should().Be("queued");
+        result.GetProperty("yaml").GetString().Should().Contain("id: generated-flow");
+        result.GetProperty("workflow_id").GetString().Should().Be("generated-flow");
+        result.GetProperty("version").GetInt32().Should().Be(1);
+        result.GetProperty("was_corrected").GetBoolean().Should().BeFalse();
+        result.GetProperty("graph").GetProperty("nodes").GetArrayLength().Should().BeGreaterThan(0);
 
         var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
             .Should().BeOfType<StubWorkflowGenerator>().Subject;
@@ -1168,10 +1567,11 @@ public sealed class WorkflowGeneratorTests
         update.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        _ = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "A manual review workflow." });
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
             .Should().BeOfType<StubWorkflowGenerator>().Subject;
@@ -1196,16 +1596,16 @@ public sealed class WorkflowGeneratorTests
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        var (_, body) = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "Add a QA gate.", base_workflow_id = "default" });
 
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("mode").GetString().Should().Be("edit");
         body.GetProperty("base_workflow_id").GetString().Should().Be("default");
         body.GetProperty("base_workflow_is_built_in").GetBoolean().Should().BeTrue();
-        body.GetProperty("workflowId").GetString().Should().Be("generated-flow");
+        body.GetProperty("workflow_id").GetString().Should().Be("generated-flow");
 
         var workflowsDir = Path.Combine(dir, ".agentweaver", "workflows");
         File.Exists(Path.Combine(workflowsDir, "generated-flow.yaml")).Should().BeFalse(
@@ -1237,17 +1637,167 @@ public sealed class WorkflowGeneratorTests
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("project_id").GetString()!;
 
         await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
-        var resp = await client.PostAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/generate",
+        _ = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
             new { description = "Rename the first step.", base_yaml = ValidWorkflowYaml });
-
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
         var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
             .Should().BeOfType<StubWorkflowGenerator>().Subject;
         generator.LastRequest.Should().NotBeNull();
         generator.LastRequest!.IsEdit.Should().BeTrue();
         generator.LastRequest.BaseWorkflowId.Should().Be("generated-flow");
         generator.LastRequest.BaseWorkflowYaml.Should().Be(ValidWorkflowYaml);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_IdempotencyReturnsOneJobAndPersistsOneArtifact()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Idempotency Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+
+        const string key = "workflow-generation-stable-retry";
+        var first = await SubmitDurableJobAsync(
+            client, projectId, new { description = "Generate a release workflow." }, key);
+        var repeated = await SubmitDurableJobAsync(
+            client, projectId, new { description = "Generate a release workflow." }, key);
+        first.Response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        repeated.Response.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        repeated.Body.GetProperty("job_id").GetString()
+            .Should().Be(first.Body.GetProperty("job_id").GetString());
+        first.Body.GetProperty("provider_snapshot").GetProperty("provider_key").GetString()
+            .Should().NotBeNullOrWhiteSpace();
+
+        var conflict = await SubmitDurableJobAsync(
+            client, projectId, new { description = "Generate a different workflow." }, key);
+        conflict.Response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        var otherCreate = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Other Project {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var otherProjectId = (await otherCreate.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        var crossProject = await client.GetAsync(
+            $"/api/projects/{otherProjectId}/workflows/generation-jobs/{first.Body.GetProperty("job_id").GetString()}");
+        crossProject.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        _ = await worker.RunOneAsync(CancellationToken.None);
+        JsonElement status = default;
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            status = await client.GetFromJsonAsync<JsonElement>(
+                first.Body.GetProperty("status_url").GetString()!);
+            if (status.GetProperty("status").GetString() == BlueprintGenerationJobStatuses.Completed)
+                break;
+            await Task.Delay(25);
+        }
+        status.GetProperty("status").GetString().Should().Be(BlueprintGenerationJobStatuses.Completed);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var jobId = first.Body.GetProperty("job_id").GetString()!;
+        (await db.BlueprintGenerationArtifacts.CountAsync(x => x.JobId == jobId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_ProviderTimeoutHasCanonicalRetryableFailureAndRetryCompletes()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var dir = factory.NewWorkingDirectory();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Timeout Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.Hang = true;
+        var (_, job) = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description = "Generate an advanced release readiness workflow." },
+            "workflow-timeout-retry");
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+
+        var statusUrl = job.GetProperty("status_url").GetString()!;
+        var failed = await client.GetFromJsonAsync<JsonElement>(statusUrl);
+        failed.GetProperty("status").GetString().Should().Be("failed");
+        failed.GetProperty("failure").GetProperty("code").GetString()
+            .Should().Be("workflow_provider_timeout");
+        failed.GetProperty("failure").GetProperty("retryable").GetBoolean().Should().BeTrue();
+
+        generator.Hang = false;
+        var retry = await client.PostAsJsonAsync(job.GetProperty("retry_url").GetString(), new { });
+        retry.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+        var result = await client.GetAsync(job.GetProperty("result_url").GetString());
+        result.StatusCode.Should().Be(HttpStatusCode.OK, await result.Content.ReadAsStringAsync());
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var jobId = job.GetProperty("job_id").GetString()!;
+        (await db.BlueprintGenerationArtifacts.CountAsync(x => x.JobId == jobId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_CancelledQueuedJobDoesNotRunAndCanBeRetried()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Cancel Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+        var (_, job) = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description = "Generate a cancellable workflow." },
+            "workflow-cancel-retry");
+
+        var cancelled = await client.PostAsJsonAsync(job.GetProperty("cancel_url").GetString(), new { });
+        cancelled.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await cancelled.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("status").GetString().Should().Be("cancelled");
+        var worker = factory.Services.GetServices<IHostedService>()
+            .OfType<BlueprintGenerationJobWorker>()
+            .Single();
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeFalse();
+
+        var retry = await client.PostAsJsonAsync(job.GetProperty("retry_url").GetString(), new { });
+        retry.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
+        var result = await client.GetAsync(job.GetProperty("result_url").GetString());
+        result.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]
@@ -1271,6 +1821,84 @@ public sealed class WorkflowGeneratorTests
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("error").GetString().Should().Contain("description");
+    }
+
+    [Theory]
+    [InlineData("Publish the approved artifact to the public site.")]
+    [InlineData("Create a publication for the approved report.")]
+    [InlineData("Deploy the approved artifact externally.")]
+    [InlineData("Externally deploy the approved artifact.")]
+    [InlineData("Release the approved package to production.")]
+    [InlineData("Deploy the approved artifact to a public site.")]
+    [InlineData("Release the approved package to external service.")]
+    public async Task GenerateEndpoint_ExternalPublicationRequest_ReturnsStructured400BeforeJobOrModelExecution(
+        string description)
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Unsupported Publish Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+
+        var response = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new { description });
+
+        response.Response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Body.GetProperty("error").GetString().Should().Be("unsupported_capability");
+        response.Body.GetProperty("capability").GetString().Should().Be("publish");
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_PublishBaseYaml_ReturnsStructured400BeforeJobOrModelExecution()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Unsupported Base Publish Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+
+        var response = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new
+            {
+                description = "Revise the supplied workflow draft.",
+                base_yaml = """
+                    id: publish-output
+                    name: Publish output
+                    start: publish
+                    nodes:
+                      - id: publish
+                        type: publish
+                        label: Publish
+                    """,
+            });
+
+        response.Response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Body.GetProperty("error").GetString().Should().Be("unsupported_capability");
+        response.Body.GetProperty("capability").GetString().Should().Be("publish");
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.CallCount.Should().Be(0);
     }
 
     /// <summary>Scripted <see cref="IAgentRunner"/>: returns a queued response per call so the
@@ -1330,13 +1958,19 @@ public sealed class WorkflowGeneratorTests
     {
         public int CallCount { get; private set; }
         public WorkflowGenerationRequest? LastRequest { get; private set; }
+        public Func<WorkflowGenerationRequest, string>? ResponseFactory { get; set; }
 
-        public Task<WorkflowGenerationResult> GenerateAsync(WorkflowGenerationRequest request, CancellationToken ct = default)
+        public bool Hang { get; set; }
+
+        public async Task<WorkflowGenerationResult> GenerateAsync(WorkflowGenerationRequest request, CancellationToken ct = default)
         {
             CallCount++;
             LastRequest = request;
-            var loaded = WorkflowDefinitionLoader.Load(ValidWorkflowYaml, "stub");
-            return Task.FromResult(new WorkflowGenerationResult(loaded.Definition!, ValidWorkflowYaml, WasCorrected: false));
+            if (Hang)
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            var yaml = ResponseFactory?.Invoke(request) ?? ValidWorkflowYaml;
+            var loaded = WorkflowDefinitionLoader.Load(yaml, "stub");
+            return new WorkflowGenerationResult(loaded.Definition!, yaml, WasCorrected: false);
         }
     }
 
@@ -1397,6 +2031,7 @@ public sealed class WorkflowGeneratorTests
             configuration["Auth:User"] = TestUser;
             configuration["Auth:GitHub:ClientId"] = "test-github-client-id";
             configuration["Auth:GitHub:BaseUrl"] = "https://github.com";
+            configuration["Generation:DurableJobTimeoutSeconds"] = "1";
         }
 
         protected override void ConfigureTestServices(IServiceCollection services)

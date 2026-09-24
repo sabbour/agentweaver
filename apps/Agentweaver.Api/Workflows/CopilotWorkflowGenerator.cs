@@ -57,6 +57,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.Description))
             throw new ArgumentException("A description is required to generate a workflow.", nameof(request));
+        if (WorkflowUnsupportedCapabilityException.ForDescription(request.Description) is { } unsupported)
+            throw unsupported;
 
         var basePrompt = BuildPrompt(request);
 
@@ -79,9 +81,13 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         if (defSecond is not null)
             return new WorkflowGenerationResult(defSecond, yamlSecond, WasCorrected: true);
 
+        var transitionIssues = GetTransitionIssues(yamlSecond);
         throw new WorkflowGenerationException(
             "The generated workflow could not be validated after one correction pass. " +
-            $"Unresolved problem: {errorSecond}");
+            $"Unresolved problem: {errorSecond}",
+            transitionIssues.Count > 0 ? "workflow_not_bindable" : "workflow_generation_failed",
+            [errorSecond ?? "The generated workflow did not validate."],
+            transitionIssues);
     }
 
     /// <summary>Cleans model output, ensures a valid id, and validates it. Returns the cleaned YAML, the
@@ -94,7 +100,10 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         string raw, WorkflowGenerationRequest request)
     {
         var yaml = EnsureWorkflowId(StripFences(raw), request.Description);
-        var result = WorkflowDefinitionLoader.Load(yaml, "generated");
+        var result = WorkflowDefinitionLoader.Load(
+            yaml,
+            "generated",
+            validationMode: WorkflowDefinitionValidationMode.Authoring);
         if (!result.IsValid || result.Definition is null)
             return (yaml, null, result.Error ?? "The generated YAML did not validate.");
 
@@ -123,6 +132,14 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         return (yaml, result.Definition, null);
     }
 
+    private static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(string yaml)
+    {
+        var load = WorkflowDefinitionLoader.Load(yaml, "generated");
+        return load.Definition is null
+            ? []
+            : RunWorkflowGraphBinder.GetTransitionIssues(load.Definition);
+    }
+
     private static string? ValidateSoftwareReviewGate(
         WorkflowDefinition workflow,
         bool contentOnly)
@@ -147,8 +164,11 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                            IsApprovalVerdict(edge.When))
             .ToArray();
         if (successfulBuildTestEdges.Length == 0 || successfulBuildTestEdges.Any(edge =>
-                !string.Equals(edge.To, humanReviewId, StringComparison.OrdinalIgnoreCase)))
-            return "Every approved or pass build_test route in a software workflow must target the human-review sign-off gate.";
+                !string.Equals(edge.To, humanReviewId, StringComparison.OrdinalIgnoreCase) &&
+                workflow.Nodes.Single(node =>
+                    string.Equals(node.Id, edge.To, StringComparison.OrdinalIgnoreCase)).Type !=
+                    WorkflowNodeType.PeerReview))
+            return "Every approved or pass build_test route in a software workflow must target the human-review sign-off gate or a peer-review chain that ends there.";
 
         var reachableNodeIds = GetReachableNodeIds(workflow, workflow.Start);
         var reachableSafetyGates = workflow.Nodes
@@ -251,6 +271,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
         var examples = BuildFewShotExamples();
         var gateRequirement = request.ContentOnly ? WorkflowGatePromptGuidance.ContentOnlyExemption : WorkflowGatePromptGuidance.SoftwareBuildTestRequirement;
+        var transitionMatrix = WorkflowGrammarContract.ToGenerationPromptMatrix();
 
         // SECURITY: the description is untrusted human input. Fence it and instruct the model to treat
         // the fenced content as data describing the workflow to author, never as instructions to follow.
@@ -301,15 +322,19 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - build_test: platform-owned Build & Test gate. Do NOT set a prompt; the runtime supplies the
               canonical build/test/preview instruction. Defaults to `agent: qa-engineer` when omitted.
               It emits verdicts routed with `when: approved`, `when: request-changes`, and `when: declined`.
-            - check: a routing gate. MUST declare `branches:` (the verdict strings it routes on) and
-              have exactly one outgoing edge per declared branch. Optional `gate_kind` field for specialised
-              gates: `rai` (responsible-AI safety gate), `rubberduck` (AI critique gate; verdicts
+            - check: a routing gate. MUST declare `branches:` (the verdict strings it routes on), an explicit
+              `gate_kind`, and exactly one outgoing edge per declared branch. Allowed gate kinds:
+              `rai` (responsible-AI safety gate), `rubberduck` (AI critique gate; verdicts
               pass | revise), `human-review` (human HITL review gate).
             - merge / scribe: platform-owned final actions. DO NOT author these nodes; the coordinator
               appends its merge-and-scribe tail after authored gates.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
+            - publish is unsupported. Never replace a requested publication with a prompt or another node.
 
             {{gateRequirement}}
+
+            SUPPORTED REVIEW TRANSITIONS — this matrix is runtime-owned. Emit only these combinations:
+            {{transitionMatrix}}
 
             VALIDATION RULES (your output MUST satisfy all):
             - id, name, start, and at least one node are required.
@@ -381,6 +406,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         var rolesList = roles.Count == 0 ? "(none — preserve existing agent fields when possible)" : string.Join("\n", roles);
         var baseId = string.IsNullOrWhiteSpace(request.BaseWorkflowId) ? "(unsaved draft)" : request.BaseWorkflowId!.Trim();
         var gateRequirement = request.ContentOnly ? WorkflowGatePromptGuidance.ContentOnlyExemption : WorkflowGatePromptGuidance.SoftwareBuildTestRequirement;
+        var transitionMatrix = WorkflowGrammarContract.ToGenerationPromptMatrix();
         var builtInRule = request.BaseWorkflowIsBuiltIn
             ? $"The base workflow '{baseId}' is built-in/library and immutable. You MUST fork it into a project-owned customized copy: change `id` to a new kebab-case id that is NOT '{baseId}', keep the name recognizable, and preserve the original intent except for the requested edit."
             : $"The base workflow '{baseId}' is project-owned or an unsaved draft. Keep its `id` unchanged unless the edit explicitly asks to rename it.";
@@ -404,8 +430,12 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               coordinator_composed because those node types are not currently bindable at runtime.
             - Do NOT add merge or scribe nodes to generated/custom workflows; the coordinator appends
               its hardcoded tail after authored gates.
+            - publish is unsupported. Never replace a requested publication with a prompt or another node.
 
             {{gateRequirement}}
+
+            SUPPORTED REVIEW TRANSITIONS — preserve or emit only these runtime-bindable combinations:
+            {{transitionMatrix}}
 
             Available roles for `agent`/`role` fields:
             {{rolesList}}

@@ -155,16 +155,101 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
         CreatedAt = now,
         UpdatedAt = now,
     };
-    memoryDb.AgentMemory.Add(memory);
-    await memoryDb.SaveChangesAsync(ct);
+    var (storedMemory, created) = await MemoryWriteDeduplicator
+        .GetOrCreateMemoryAsync(memoryDb, memory, ct);
     // The database write is the durable record. Filesystem export rewrites the full project
     // memory snapshot and may target a remote workspace volume, so it must not delay this
     // latency-sensitive agent tool call. Scribe invokes /memory/export explicitly at run end.
-    return Results.Created($"/api/projects/{id}/agents/{name}/memory/{memory.Id}", new
+    var response = new
+    {
+        storedMemory.Id, storedMemory.AgentName, storedMemory.SessionId, storedMemory.Type,
+        storedMemory.Importance, storedMemory.Content, storedMemory.Tags, storedMemory.SourceKind,
+        storedMemory.SourceIdentity, storedMemory.SourceRunId, storedMemory.TrustState,
+        created_at = storedMemory.CreatedAt,
+    };
+    return created
+        ? Results.Created($"/api/projects/{id}/agents/{name}/memory/{storedMemory.Id}", response)
+        : Results.Ok(response);
+});
+
+// PUT /api/projects/{id}/agents/{name}/memory/{memId}
+app.MapPut("/api/projects/{id}/agents/{name}/memory/{memId}", async (
+    string id,
+    string name,
+    int memId,
+    UpdateMemoryRequest request,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
+    if (request.Type is null && request.Content is null && request.Importance is null && request.Tags is null)
+        return Results.BadRequest(new { error = "type, content, importance, or tags is required." });
+
+    var memory = await memoryDb.AgentMemory
+        .AsNoTracking()
+        .SingleOrDefaultAsync(m => m.Id == memId, ct);
+    if (memory is null || memory.ProjectId != id || !string.Equals(memory.AgentName, name, StringComparison.OrdinalIgnoreCase))
+        return Results.NotFound();
+
+    var changed = false;
+    var memoryType = memory.Type;
+    var importance = memory.Importance;
+    var content = memory.Content;
+    var tags = memory.Tags;
+    if (request.Type is not null)
+    {
+        memoryType = request.Type.Trim().ToLowerInvariant();
+        if (!MemoryWritePolicy.IsMemoryType(memoryType))
+            return Results.BadRequest(new { error = "type must be core_context, learning, pattern, or update." });
+        changed |= memory.Type != memoryType;
+    }
+    if (request.Importance is not null)
+    {
+        importance = request.Importance.Trim().ToLowerInvariant();
+        if (!MemoryWritePolicy.IsImportance(importance))
+            return Results.BadRequest(new { error = "importance must be low, medium, or high." });
+        changed |= memory.Importance != importance;
+    }
+    if (request.Content is not null)
+    {
+        if (string.IsNullOrWhiteSpace(request.Content))
+            return Results.BadRequest(new { error = "content must not be empty." });
+        changed |= memory.Content != request.Content;
+        content = request.Content;
+    }
+    if (request.Tags is not null)
+    {
+        tags = MemoryWritePolicy.NormalizeTags(request.Tags);
+        changed |= memory.Tags != tags;
+    }
+
+    if (changed)
+    {
+        var updatedAt = DateTimeOffset.UtcNow;
+        if (!await MemoryPromotionHelpers.TryApplyUpdateAsync(
+            memoryDb, memory, memoryType, importance, content, tags, updatedAt, ct))
+        {
+            return Results.NotFound();
+        }
+        await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
+        memory = await memoryDb.AgentMemory
+            .AsNoTracking()
+            .SingleAsync(m => m.Id == memId, ct);
+    }
+
+    return Results.Ok(new
     {
         memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
-        memory.SourceKind, memory.SourceIdentity, memory.SourceRunId, memory.TrustState,
-        created_at = memory.CreatedAt,
+        memory.SourceKind, memory.SourceIdentity, memory.SourceRunId, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt,
+        created_at = memory.CreatedAt, updated_at = memory.UpdatedAt,
     });
 });
 
@@ -200,18 +285,43 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
         return forbid;
     }
 
-    var memory = await memoryDb.AgentMemory.FindAsync(new object[] { memId }, ct);
+    var memory = await memoryDb.AgentMemory
+        .AsNoTracking()
+        .SingleOrDefaultAsync(m => m.Id == memId, ct);
     if (memory is null || memory.ProjectId != id || !string.Equals(memory.AgentName, name, StringComparison.OrdinalIgnoreCase))
         return Results.NotFound();
     if (memory.TrustState == MemoryTrustStates.Approved)
         return Results.Ok(new { memory.Id, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt });
 
-    memory.TrustState = MemoryTrustStates.Approved;
-    memory.ApprovedBy = approver.SourceIdentity;
-    memory.ApprovedAt = DateTimeOffset.UtcNow;
-    memory.UpdatedAt = memory.ApprovedAt.Value;
-    await memoryDb.SaveChangesAsync(ct);
-    return Results.Ok(new { memory.Id, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt });
+    var approvedAt = DateTimeOffset.UtcNow;
+    if (!await MemoryPromotionHelpers.TryPromoteReviewedAsync(
+        memoryDb, memory, approver.SourceIdentity, approvedAt, ct))
+    {
+        var current = await memoryDb.AgentMemory
+            .AsNoTracking()
+            .SingleOrDefaultAsync(m => m.Id == memId, ct);
+        if (current is null || current.ProjectId != id ||
+            !string.Equals(current.AgentName, name, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.NotFound();
+        }
+        if (current.TrustState == MemoryTrustStates.Approved)
+            return Results.Ok(new { current.Id, current.TrustState, current.ApprovedBy, current.ApprovedAt });
+
+        return Results.Conflict(new
+        {
+            error = "memory_changed_since_review",
+            updated_at = current.UpdatedAt,
+        });
+    }
+
+    return Results.Ok(new
+    {
+        memory.Id,
+        TrustState = MemoryTrustStates.Approved,
+        ApprovedBy = approver.SourceIdentity,
+        ApprovedAt = approvedAt,
+    });
 });
 
 // GET /api/projects/{id}/agents/{name}/memory/{memId}
@@ -276,6 +386,7 @@ app.MapPost("/api/projects/{id}/sessions", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -320,7 +431,7 @@ app.MapPost("/api/projects/{id}/sessions", async (
     memoryDb.SessionContexts.Add(session);
     await memoryDb.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Created($"/api/projects/{id}/sessions/current", new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -337,6 +448,7 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -359,7 +471,7 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
     if (request.SerializedState is not null) session.SerializedState = request.SerializedState;
     if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -435,6 +547,7 @@ app.MapMethods("/api/projects/{id}/sessions/{sessionId}", new[] { "PATCH" }, asy
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -452,7 +565,7 @@ app.MapMethods("/api/projects/{id}/sessions/{sessionId}", new[] { "PATCH" }, asy
     if (request.SerializedState is not null) session.SerializedState = request.SerializedState;
     if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -468,6 +581,7 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -485,12 +599,16 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     {
         // Explicit sync action (spec #25): must report success OR an actionable error — never a
         // false success. ExportAsync throws on failure so it is surfaced here rather than swallowed.
-        export = await MemoryLedgerExporter.ExportAsync(id, project.WorkingDirectory, memoryDb, ct);
-        await MemoryLedgerExporter.CommitExportAsync(project.WorkingDirectory, project.DefaultBranch, ct);
+        export = (await ledgerSync.ExportAndCommitAsync(
+            id, project.WorkingDirectory, project.DefaultBranch, ct)).Export;
     }
     catch (OperationCanceledException)
     {
         throw;
+    }
+    catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+    {
+        return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
     }
     catch (Exception ex)
     {
@@ -510,6 +628,53 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     });
 });
 
+app.MapPost("/api/projects/{id}/scribe/finalize", async (
+    string id,
+    FinalizeScribeRequest request,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IRunAuthorshipCapabilityStore capabilityStore,
+    ScribeFinalizationService finalization,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "invalid_project" });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (!RunId.TryParse(request.RunId, out var runId))
+        return Results.BadRequest(new { error = "invalid_run" });
+
+    var capabilityRunId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
+    var capabilityToken = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+    if (!string.Equals(capabilityRunId, request.RunId, StringComparison.Ordinal)
+        || !await capabilityStore.ValidateAsync(capabilityRunId, capabilityToken, ct)
+            .ConfigureAwait(false))
+    {
+        return Results.Json(
+            new { error = "invalid_scribe_capability" },
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    var result = await finalization.FinalizeAsync(
+        projectId,
+        runId,
+        request.LifecycleGeneration,
+        request.AgentName,
+        request.SubmittingUser,
+        request.TerminalStatus,
+        ct).ConfigureAwait(false);
+    if (!result.Completed)
+    {
+        return Results.Json(
+            new { error = result.Error },
+            statusCode: result.Error == "scribe_run_not_found"
+                ? StatusCodes.Status404NotFound
+                : StatusCodes.Status403Forbidden);
+    }
+
+    return Results.Ok(new { completed = true });
+}).InternalService();
+
 // POST /api/projects/{id}/memory/import
 app.MapPost("/api/projects/{id}/memory/import", async (
     string id,
@@ -517,6 +682,7 @@ app.MapPost("/api/projects/{id}/memory/import", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -525,44 +691,73 @@ app.MapPost("/api/projects/{id}/memory/import", async (
     if (project is null) return Results.NotFound();
     if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
 
-    var importer = new Agentweaver.Squad.Memory.SquadMemoryImporter(project.WorkingDirectory);
-    var parsed = importer.ScanInboxFiles().ToList();
-    int newCount = 0;
-    foreach (var p in parsed)
+    try
     {
-        var exists = await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.Slug == p.Slug, ct);
-        if (!exists)
-        {
-            var now = DateTimeOffset.UtcNow;
-            memoryDb.DecisionInbox.Add(new DecisionInboxEntry
-            {
-                ProjectId = id, AgentName = p.AgentName, Slug = p.Slug,
-                Type = p.Type, Title = p.Title, Content = p.Content,
-                Rationale = p.Rationale, Status = "pending",
-                CreatedAt = now, UpdatedAt = now,
-            });
-            newCount++;
-        }
+        var sync = await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
+        return Results.Ok(new { imported = sync.Imported, mirror_exported = true });
     }
-    await memoryDb.SaveChangesAsync(ct);
-    var mirrorExported = await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
-    return Results.Ok(new { imported = newCount, mirror_exported = mirrorExported });
+    catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+    {
+        return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
+    }
 });
     }
 }
 
-internal static class MemoryExportHelpers
+internal static class MemoryPromotionHelpers
 {
-    /// <summary>
-    /// Best-effort refresh of the workspace file mirror after a DB write. Returns whether the
-    /// mirror was written so callers can honestly report <c>mirror_exported</c> instead of implying
-    /// unconditional success. Never fails the caller's authoritative DB write.
-    /// </summary>
-    public static Task<bool> TryExportAsync(
-        string projectId,
-        string projectWorkingDirectory,
+    public static async Task<bool> TryApplyUpdateAsync(
         MemoryDbContext memoryDb,
-        CancellationToken ct,
-        ILogger logger)
-        => MemoryLedgerExporter.TryExportAsync(projectId, projectWorkingDirectory, memoryDb, ct, logger);
+        AgentMemory reviewed,
+        string type,
+        string importance,
+        string content,
+        string? tags,
+        DateTimeOffset updatedAt,
+        CancellationToken ct)
+    {
+        var updated = await memoryDb.AgentMemory
+            .Where(memory =>
+                memory.Id == reviewed.Id &&
+                memory.ProjectId == reviewed.ProjectId &&
+                memory.AgentName == reviewed.AgentName)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(memory => memory.Type, type)
+                .SetProperty(memory => memory.Importance, importance)
+                .SetProperty(memory => memory.Content, content)
+                .SetProperty(memory => memory.Tags, tags)
+                .SetProperty(memory => memory.TrustState, MemoryTrustStates.Pending)
+                .SetProperty(memory => memory.ApprovedBy, (string?)null)
+                .SetProperty(memory => memory.ApprovedAt, (DateTimeOffset?)null)
+                .SetProperty(memory => memory.UpdatedAt, updatedAt), ct);
+
+        return updated == 1;
+    }
+
+    public static async Task<bool> TryPromoteReviewedAsync(
+        MemoryDbContext memoryDb,
+        AgentMemory reviewed,
+        string? approvedBy,
+        DateTimeOffset approvedAt,
+        CancellationToken ct)
+    {
+        var updated = await memoryDb.AgentMemory
+            .Where(memory =>
+                memory.Id == reviewed.Id &&
+                memory.ProjectId == reviewed.ProjectId &&
+                memory.AgentName == reviewed.AgentName &&
+                memory.Type == reviewed.Type &&
+                memory.Importance == reviewed.Importance &&
+                memory.Content == reviewed.Content &&
+                memory.Tags == reviewed.Tags &&
+                memory.TrustState == MemoryTrustStates.Pending &&
+                memory.UpdatedAt == reviewed.UpdatedAt)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(memory => memory.TrustState, MemoryTrustStates.Approved)
+                .SetProperty(memory => memory.ApprovedBy, approvedBy)
+                .SetProperty(memory => memory.ApprovedAt, approvedAt)
+                .SetProperty(memory => memory.UpdatedAt, approvedAt), ct);
+
+        return updated == 1;
+    }
 }

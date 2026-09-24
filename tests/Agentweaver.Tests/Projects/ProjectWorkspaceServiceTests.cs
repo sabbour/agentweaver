@@ -107,11 +107,13 @@ public sealed class ProjectWorkspaceServiceTests : IAsyncDisposable
         var baseRef = result.Value.Refs[0];
         baseRef.Kind.Should().Be("base");
         baseRef.Branch.Should().Be("main");
+        baseRef.Revision.Should().MatchRegex("^[0-9a-f]{40}$");
         baseRef.Label.Should().Be("main (base)");
 
         var worktreeRef = result.Value.Refs[1];
         worktreeRef.Kind.Should().Be("worktree");
         worktreeRef.Branch.Should().Be(branch);
+        worktreeRef.Revision.Should().Be(baseRef.Revision);
         worktreeRef.RunStatus.Should().Be("in_progress");
         worktreeRef.OriginatingBranch.Should().Be("main");
         worktreeRef.RunId.Should().NotBeNullOrEmpty();
@@ -169,6 +171,7 @@ public sealed class ProjectWorkspaceServiceTests : IAsyncDisposable
 
         json.Should().Contain("\"current_branch\"");
         json.Should().Contain("\"refs\"");
+        json.Should().Contain("\"revision\"");
         json.Should().Contain("\"run_id\"");
         json.Should().Contain("\"run_status\"");
         json.Should().Contain("\"originating_branch\"");

@@ -171,6 +171,80 @@ public sealed record WorkflowYamlResponse
     [JsonPropertyName("yaml")] public required string Yaml { get; init; }
 }
 
+public sealed record WorkflowGrammarDto
+{
+    [JsonPropertyName("grammar_version")] public required string GrammarVersion { get; init; }
+    [JsonPropertyName("format")] public required string Format { get; init; }
+    [JsonPropertyName("root")] public required WorkflowRootGrammarDto Root { get; init; }
+    [JsonPropertyName("node_fields")] public required WorkflowNodeFieldsGrammarDto NodeFields { get; init; }
+    [JsonPropertyName("node_types")] public required IReadOnlyList<WorkflowNodeTypeGrammarDto> NodeTypes { get; init; }
+    [JsonPropertyName("edge")] public required WorkflowEdgeGrammarDto Edge { get; init; }
+    [JsonPropertyName("triggers")] public required WorkflowTriggerGrammarDto Triggers { get; init; }
+    [JsonPropertyName("compatibility")] public required WorkflowCompatibilityGrammarDto Compatibility { get; init; }
+}
+
+public sealed record WorkflowRootGrammarDto
+{
+    [JsonPropertyName("required_fields")] public required IReadOnlyList<string> RequiredFields { get; init; }
+    [JsonPropertyName("optional_fields")] public required IReadOnlyList<string> OptionalFields { get; init; }
+    [JsonPropertyName("maximum_document_characters")] public required int MaximumDocumentCharacters { get; init; }
+    [JsonPropertyName("maximum_nodes")] public required int MaximumNodes { get; init; }
+    [JsonPropertyName("maximum_edges")] public required int MaximumEdges { get; init; }
+    [JsonPropertyName("maximum_triggers")] public required int MaximumTriggers { get; init; }
+}
+
+public sealed record WorkflowNodeFieldsGrammarDto
+{
+    [JsonPropertyName("required_fields")] public required IReadOnlyList<string> RequiredFields { get; init; }
+    [JsonPropertyName("optional_fields")] public required IReadOnlyList<string> OptionalFields { get; init; }
+    [JsonPropertyName("maximum_prompt_characters")] public required int MaximumPromptCharacters { get; init; }
+    [JsonPropertyName("maximum_charter_characters")] public required int MaximumCharterCharacters { get; init; }
+}
+
+public sealed record WorkflowNodeTypeGrammarDto
+{
+    [JsonPropertyName("yaml_type")] public required string YamlType { get; init; }
+    [JsonPropertyName("api_type")] public required string ApiType { get; init; }
+    [JsonPropertyName("label")] public required string Label { get; init; }
+    [JsonPropertyName("authorable")] public required bool Authorable { get; init; }
+    [JsonPropertyName("runtime_bindable")] public required bool RuntimeBindable { get; init; }
+    [JsonPropertyName("runtime_kinds")] public required IReadOnlyList<string> RuntimeKinds { get; init; }
+    [JsonPropertyName("required_fields")] public required IReadOnlyList<string> RequiredFields { get; init; }
+    [JsonPropertyName("allowed_gate_kinds")] public required IReadOnlyList<string> AllowedGateKinds { get; init; }
+}
+
+public sealed record WorkflowEdgeGrammarDto
+{
+    [JsonPropertyName("required_fields")] public required IReadOnlyList<string> RequiredFields { get; init; }
+    [JsonPropertyName("optional_fields")] public required IReadOnlyList<string> OptionalFields { get; init; }
+    [JsonPropertyName("conditions_are_case_sensitive")] public required bool ConditionsAreCaseSensitive { get; init; }
+    [JsonPropertyName("transitions")] public required IReadOnlyList<WorkflowTransitionGrammarDto> Transitions { get; init; }
+}
+
+public sealed record WorkflowTransitionGrammarDto
+{
+    [JsonPropertyName("from_kind")] public required string FromKind { get; init; }
+    [JsonPropertyName("to_kind")] public required string ToKind { get; init; }
+    [JsonPropertyName("unconditional")] public required bool Unconditional { get; init; }
+    [JsonPropertyName("when")] public required IReadOnlyList<string> When { get; init; }
+}
+
+public sealed record WorkflowTriggerGrammarDto
+{
+    [JsonPropertyName("types")] public required IReadOnlyList<string> Types { get; init; }
+    [JsonPropertyName("schedule_intervals")] public required IReadOnlyList<string> ScheduleIntervals { get; init; }
+    [JsonPropertyName("review_states")] public required IReadOnlyList<string> ReviewStates { get; init; }
+    [JsonPropertyName("ref_match_modes")] public required IReadOnlyList<string> RefMatchModes { get; init; }
+    [JsonPropertyName("predicate_types")] public required IReadOnlyList<string> PredicateTypes { get; init; }
+}
+
+public sealed record WorkflowCompatibilityGrammarDto
+{
+    [JsonPropertyName("legacy_loading_only")] public required bool LegacyLoadingOnly { get; init; }
+    [JsonPropertyName("check_gate_id_matching")] public required string CheckGateIdMatching { get; init; }
+    [JsonPropertyName("check_gate_id_fallbacks")] public required IReadOnlyDictionary<string, string> CheckGateIdFallbacks { get; init; }
+}
+
 /// <summary>A node in a workflow graph descriptor (US6). role/node_type match the GraphNode shape
 /// consumed by WorkflowGraphPanel on the frontend; kind is always "planned".</summary>
 public sealed record WorkflowGraphNodeDto
@@ -216,41 +290,70 @@ public sealed record GenerateWorkflowRequest
     [JsonPropertyName("content_only")] public bool ContentOnly { get; init; }
 }
 
-/// <summary>Response body for a generated workflow draft (US10). The YAML is unsaved — the client opens
-/// it in the editor for review before any save. <c>wasCorrected</c> reports whether the single
-/// correction pass (FR-060) was needed.</summary>
-public sealed record GenerateWorkflowResponse
+public sealed record WorkflowGenerationProviderSnapshotDto
 {
+    [JsonPropertyName("provider_kind")] public required string ProviderKind { get; init; }
+    [JsonPropertyName("provider_type")] public string? ProviderType { get; init; }
+    [JsonPropertyName("provider_key")] public required string ProviderKey { get; init; }
+    [JsonPropertyName("provider_scope")] public required string ProviderScope { get; init; }
+    [JsonPropertyName("resolution_scope")] public required string ResolutionScope { get; init; }
+    [JsonPropertyName("workflow_model")] public string? WorkflowModel { get; init; }
+    [JsonPropertyName("credential_binding_version")] public string? CredentialBindingVersion { get; init; }
+}
+
+public sealed record WorkflowGenerationFailureDto
+{
+    [JsonPropertyName("code")] public required string Code { get; init; }
+    [JsonPropertyName("message")] public required string Message { get; init; }
+    [JsonPropertyName("retryable")] public bool Retryable { get; init; }
+    [JsonPropertyName("unresolved_roles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<WorkflowRoleRequirement>? UnresolvedRoles { get; init; }
+}
+
+public sealed record WorkflowGenerationArtifactDto
+{
+    [JsonPropertyName("artifact_id")] public required string ArtifactId { get; init; }
+    [JsonPropertyName("workflow_id")] public required string WorkflowId { get; init; }
+    [JsonPropertyName("version")] public int Version { get; init; }
+}
+
+public sealed record WorkflowGenerationJobResponse
+{
+    [JsonPropertyName("job_id")] public required string JobId { get; init; }
+    [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("attempt")] public int Attempt { get; init; }
+    [JsonPropertyName("project_id")] public required string ProjectId { get; init; }
+    [JsonPropertyName("provider_snapshot")] public required WorkflowGenerationProviderSnapshotDto ProviderSnapshot { get; init; }
+    [JsonPropertyName("artifact")] public WorkflowGenerationArtifactDto? Artifact { get; init; }
+    [JsonPropertyName("failure")] public WorkflowGenerationFailureDto? Failure { get; init; }
+    [JsonPropertyName("created_at")] public DateTimeOffset CreatedAt { get; init; }
+    [JsonPropertyName("updated_at")] public DateTimeOffset UpdatedAt { get; init; }
+    [JsonPropertyName("status_url")] public required string StatusUrl { get; init; }
+    [JsonPropertyName("result_url")] public required string ResultUrl { get; init; }
+    [JsonPropertyName("cancel_url")] public required string CancelUrl { get; init; }
+    [JsonPropertyName("retry_url")] public required string RetryUrl { get; init; }
+    [JsonPropertyName("ai_execution_context")] public AiExecutionContextResponse? AiExecutionContext { get; init; }
+}
+
+public sealed record WorkflowGenerationResultResponse
+{
+    [JsonPropertyName("job_id")] public required string JobId { get; init; }
+    [JsonPropertyName("artifact_id")] public required string ArtifactId { get; init; }
+    [JsonPropertyName("workflow_id")] public required string WorkflowId { get; init; }
+    [JsonPropertyName("version")] public int Version { get; init; }
     [JsonPropertyName("yaml")] public required string Yaml { get; init; }
-    [JsonPropertyName("workflowId")] public required string WorkflowId { get; init; }
-    [JsonPropertyName("wasCorrected")] public required bool WasCorrected { get; init; }
-    [JsonPropertyName("mode")] public string Mode { get; init; } = "create";
+    [JsonPropertyName("was_corrected")] public bool WasCorrected { get; init; }
+    [JsonPropertyName("mode")] public required string Mode { get; init; }
     [JsonPropertyName("base_workflow_id")] public string? BaseWorkflowId { get; init; }
     [JsonPropertyName("base_workflow_is_built_in")] public bool BaseWorkflowIsBuiltIn { get; init; }
-    [JsonPropertyName("ai_execution_context")]
-    public AiExecutionContextResponse? AiExecutionContext { get; init; }
+    [JsonPropertyName("graph")] public required WorkflowGraphDto Graph { get; init; }
 }
 
 /// <summary>Maps the workflow domain model to API DTOs (server-side only, Principles III/IV).</summary>
 public static class WorkflowDtoMapper
 {
-    public static string NodeTypeToApi(WorkflowNodeType t) => t switch
-    {
-        WorkflowNodeType.Prompt => "prompt",
-        WorkflowNodeType.PeerReview => "peer-review",
-        WorkflowNodeType.BuildTest => "build-test",
-        WorkflowNodeType.OpenPullRequest => "open-pull-request",
-        WorkflowNodeType.Publish => "publish",
-        WorkflowNodeType.Check => "check",
-        WorkflowNodeType.FanOut => "fan-out",
-        WorkflowNodeType.FanIn => "fan-in",
-        WorkflowNodeType.CoordinatorComposed => "coordinator-composed",
-        WorkflowNodeType.Serial => "serial",
-        WorkflowNodeType.Merge => "merge",
-        WorkflowNodeType.Scribe => "scribe",
-        WorkflowNodeType.Terminal => "terminal",
-        _ => throw new ArgumentOutOfRangeException(nameof(t)),
-    };
+    public static string NodeTypeToApi(WorkflowNodeType t) => WorkflowGrammarContract.ApiType(t);
 
     public static WorkflowSummaryDto ToSummary(WorkflowLoadResult result, string effectiveDefaultId)
     {
@@ -392,7 +495,6 @@ public static class WorkflowDtoMapper
         WorkflowNodeType.PeerReview         => "review",
         WorkflowNodeType.BuildTest          => "review",
         WorkflowNodeType.OpenPullRequest    => "action",
-        WorkflowNodeType.Publish            => "agent",
         WorkflowNodeType.Merge              => "merge",
         WorkflowNodeType.Scribe             => "scribe",
         WorkflowNodeType.CoordinatorComposed => "coordinator",
@@ -407,7 +509,6 @@ public static class WorkflowDtoMapper
         WorkflowNodeType.PeerReview => "gate",
         WorkflowNodeType.BuildTest  => "gate",
         WorkflowNodeType.OpenPullRequest => "action",
-        WorkflowNodeType.Publish    => "action",
         WorkflowNodeType.FanOut     => "action",
         WorkflowNodeType.FanIn      => "action",
         WorkflowNodeType.Merge      => "action",

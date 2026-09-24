@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { VERDICT_SCHEMA, validateVerdict } from '../verdict-schema.mjs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const contract = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'verdict-contract.json'), 'utf8'));
 
 function validVerdict(overrides = {}) {
   return {
@@ -47,6 +53,21 @@ test('validateVerdict accepts a fully conforming cross-surface verdict', () => {
   });
   assert.equal(result.ok, true);
 });
+
+for (const [name, fields] of Object.entries(contract.valid)) {
+  test(`validateVerdict accepts representative ${name} output`, () => {
+    const result = validateVerdict(validVerdict(fields));
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.ok, true);
+  });
+}
+
+for (const [name, fields] of Object.entries(contract.invalid)) {
+  test(`validateVerdict rejects observed invalid ${name} shape`, () => {
+    const result = validateVerdict(validVerdict(fields));
+    assert.equal(result.ok, false);
+  });
+}
 
 test('validateVerdict rejects not_assessed frustration with a numeric score', () => {
   const result = validateVerdict(validVerdict({

@@ -1041,6 +1041,15 @@ public sealed record RecordMemoryRequest
     [JsonPropertyName("tags")] public string? Tags { get; init; }
 }
 
+/// <summary>Request body for updating editable agent-memory fields.</summary>
+public sealed record UpdateMemoryRequest
+{
+    [JsonPropertyName("type")] public string? Type { get; init; }
+    [JsonPropertyName("importance")] public string? Importance { get; init; }
+    [JsonPropertyName("content")] public string? Content { get; init; }
+    [JsonPropertyName("tags")] public string? Tags { get; init; }
+}
+
 /// <summary>Request body for starting or rehydrating the current cross-agent working session for a project.</summary>
 public sealed record StartSessionRequest
 {
@@ -1059,6 +1068,15 @@ public sealed record UpdateSessionRequest
     [JsonPropertyName("summary")] public string? Summary { get; init; }
     [JsonPropertyName("serialized_state")] public string? SerializedState { get; init; }
     [JsonPropertyName("end")] public bool? End { get; init; }
+}
+
+public sealed record FinalizeScribeRequest
+{
+    [JsonPropertyName("run_id")] public string? RunId { get; init; }
+    [JsonPropertyName("lifecycle_generation")] public int LifecycleGeneration { get; init; }
+    [JsonPropertyName("agent_name")] public string? AgentName { get; init; }
+    [JsonPropertyName("submitting_user")] public string? SubmittingUser { get; init; }
+    [JsonPropertyName("terminal_status")] public string? TerminalStatus { get; init; }
 }
 
 // -----------------------------------------------------------------------

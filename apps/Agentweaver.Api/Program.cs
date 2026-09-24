@@ -157,6 +157,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>(
 // SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + advisory lock).
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
+builder.Services.AddScoped<DecisionLedgerSyncService>();
 
 // Workflow services
 builder.Services.AddSingleton<RunWorkflowRegistry>();
@@ -614,6 +615,7 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
         AgentHostA2APath = builder.Configuration["Sandbox:AgentHost:A2APath"] ?? "/a2a/agent",
     };
     builder.Services.AddSingleton(sandboxAgentOptions);
+    builder.Services.AddSingleton<IAgentHostDispatchBoundaryValidator, AgentHostDispatchBoundaryValidator>();
 
     // ISandboxAgentEndpointResolver: Kubernetes-native when in-cluster, no-op otherwise.
     // The no-op resolver causes a clear error if pod-per-run is attempted outside K8s.
@@ -636,10 +638,11 @@ builder.Services.AddSingleton<ISandboxExecutor>(sp =>
             // agent_pod_reconciler_error) on the run when a lazy pod launch fails.
             var runStore = sp.GetService<Agentweaver.Api.Infrastructure.IRunStore>();
             var launchContextResolver = sp.GetService<IRunAgentHostContextResolver>();
+            var dispatchBoundaryValidator = sp.GetRequiredService<IAgentHostDispatchBoundaryValidator>();
             return new KubernetesPodAgentEndpointResolver(
                 k8sClient, podRegistry, ns, sandboxAgentOptions,
                 loggerFactory.CreateLogger<KubernetesPodAgentEndpointResolver>(),
-                podLifecycle, runStore, launchContextResolver);
+                podLifecycle, runStore, launchContextResolver, dispatchBoundaryValidator);
         }
         catch
         {
@@ -1090,6 +1093,9 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
 }
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();
+builder.Services.AddScoped<IScribeExportOperation, ScribeExportOperation>();
+builder.Services.AddScoped<ScribeHousekeepingService>();
+builder.Services.AddScoped<ScribeFinalizationService>();
 builder.Services.AddSingleton<Agentweaver.Api.Projects.ProjectWorkspaceService>();
 
 // Checkpoint GC background service (Guardrail 8)
@@ -1124,6 +1130,8 @@ builder.Services.AddSingleton<CastingService>();
 builder.Services.AddSingleton<IBlueprintGenerator, CopilotBlueprintGenerator>();
 builder.Services.AddSingleton<BlueprintService>();
 builder.Services.AddSingleton<GitHubRepoBlueprintSuggestionService>();
+builder.Services.AddScoped<BlueprintGenerationJobStore>();
+builder.Services.AddHostedService<BlueprintGenerationJobWorker>();
 
 // Workflow generation (Feature 015 US10) — LLM → YAML draft, validated + one correction pass.
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowGenerator, Agentweaver.Api.Workflows.CopilotWorkflowGenerator>();
