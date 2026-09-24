@@ -37,21 +37,18 @@ public sealed class DecisionPromotionPostgresTests(PostgresFixture pg)
         }
 
         const int replicaCount = 100;
-        var readyCount = 0;
+        using var connectionReadinessTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var connectedCount = 0;
+        var connectionsReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        await using var lockHolder = await pg.CreateDbContextAsync();
-        await using var lockTransaction = await lockHolder.Database.BeginTransactionAsync();
-        await lockHolder.Database.ExecuteSqlRawAsync(
-            "SELECT pg_advisory_xact_lock(hashtextextended({0}, 0));",
-            [$"decision-inbox:{projectId}:{entryId}"]);
 
         async Task<DecisionPromotionResult?> PromoteAsync()
         {
-            if (Interlocked.Increment(ref readyCount) == replicaCount)
-                start.TrySetResult();
-            await start.Task;
             await using var db = await pg.CreateDbContextAsync();
+            await db.Database.OpenConnectionAsync(connectionReadinessTimeout.Token);
+            if (Interlocked.Increment(ref connectedCount) == replicaCount)
+                connectionsReady.TrySetResult();
+            await start.Task.WaitAsync(connectionReadinessTimeout.Token);
             return await DecisionPromotion.PromoteEntryAsync(
                 db,
                 projectId,
@@ -63,7 +60,24 @@ public sealed class DecisionPromotionPostgresTests(PostgresFixture pg)
 
         var promotions = Enumerable.Range(0, replicaCount).Select(_ => PromoteAsync()).ToArray();
 
-        await start.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        try
+        {
+            await connectionsReady.Task.WaitAsync(connectionReadinessTimeout.Token);
+            connectionReadinessTimeout.CancelAfter(Timeout.InfiniteTimeSpan);
+        }
+        catch
+        {
+            connectionReadinessTimeout.Cancel();
+            throw;
+        }
+
+        await using var lockHolder = await pg.CreateDbContextAsync();
+        await using var lockTransaction = await lockHolder.Database.BeginTransactionAsync();
+        await lockHolder.Database.ExecuteSqlRawAsync(
+            "SELECT pg_advisory_xact_lock(hashtextextended({0}, 0));",
+            [$"decision-inbox:{projectId}:{entryId}"]);
+
+        start.TrySetResult();
         await WaitForAdvisoryLockWaitersAsync(lockHolder, replicaCount);
         promotions.Should().OnlyContain(promotion => !promotion.IsCompleted,
             "all 100 physical replicas must be waiting on the held promotion lock before it is released");
