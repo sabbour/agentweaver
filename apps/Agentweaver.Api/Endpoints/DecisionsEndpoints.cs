@@ -208,23 +208,22 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/merge", async (
         httpContext, project, configuration, runResolver, turnTokens, ct);
     if (approvalFailure is not null) return approvalFailure;
 
-    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
-    var entry = await memoryDb.DecisionInbox
-        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
-    if (entry is null)
+    var promotion = await DecisionPromotion.PromoteEntryAsync(
+        memoryDb, id, entryId, DateTimeOffset.UtcNow, approver!.SourceIdentity, ct);
+    if (promotion is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
-    var now = DateTimeOffset.UtcNow;
-    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, approver!.SourceIdentity, ct);
-    await tx.CommitAsync(ct);
     await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
-    return Results.Created($"/api/projects/{id}/decisions/{decision.Id}", new
+    var response = new
     {
-        id = entry.Id,
-        entry.Status,
-        decisionId = decision.Id,
-        mergedAt = entry.MergedAt,
-    });
+        id = promotion.Entry.Id,
+        promotion.Entry.Status,
+        decisionId = promotion.Decision.Id,
+        mergedAt = promotion.Entry.MergedAt,
+    };
+    return promotion.Promoted
+        ? Results.Created($"/api/projects/{id}/decisions/{promotion.Decision.Id}", response)
+        : Results.Ok(response);
 });
 
 // POST /api/projects/{id}/decisions/inbox/{entryId}/promote (alias for /merge)
@@ -247,22 +246,18 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/promote", async (
         httpContext, project, configuration, runResolver, turnTokens, ct);
     if (approvalFailure is not null) return approvalFailure;
 
-    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
-    var entry = await memoryDb.DecisionInbox
-        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
-    if (entry is null)
+    var promotion = await DecisionPromotion.PromoteEntryAsync(
+        memoryDb, id, entryId, DateTimeOffset.UtcNow, approver!.SourceIdentity, ct);
+    if (promotion is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
-    var now = DateTimeOffset.UtcNow;
-    var decision = await DecisionPromotion.PromoteEntry(memoryDb, entry, now, approver!.SourceIdentity, ct);
-    await tx.CommitAsync(ct);
     await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new
     {
-        id = entry.Id,
-        entry.Status,
-        decisionId = decision.Id,
-        mergedAt = entry.MergedAt,
+        id = promotion.Entry.Id,
+        promotion.Entry.Status,
+        decisionId = promotion.Decision.Id,
+        mergedAt = promotion.Entry.MergedAt,
     });
 });
 
@@ -286,16 +281,11 @@ app.MapPost("/api/projects/{id}/decisions/inbox/{entryId}/reject", async (
         httpContext, project, configuration, runResolver, turnTokens, ct);
     if (approvalFailure is not null) return approvalFailure;
 
-    await using var tx = await memoryDb.Database.BeginTransactionAsync(ct);
-    var entry = await memoryDb.DecisionInbox
-        .FirstOrDefaultAsync(e => e.Id == entryId && e.ProjectId == id && e.Status == "pending", ct);
+    var entry = await DecisionPromotion.RejectEntryAsync(
+        memoryDb, id, entryId, DateTimeOffset.UtcNow, ct);
     if (entry is null)
         return Results.Conflict(new { error = "Entry is not pending or does not exist." });
 
-    entry.Status = "rejected";
-    entry.UpdatedAt = DateTimeOffset.UtcNow;
-    await memoryDb.SaveChangesAsync(ct);
-    await tx.CommitAsync(ct);
     await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new { entry.Id, entry.Status });
 });

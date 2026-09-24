@@ -165,6 +165,11 @@ entries stay pending. Manual merge, promote, and reject require a project owner 
 verified Coordinator; Coordinator finalization may promote architectural and scope
 entries authored by that same verified Coordinator run.
 
+Inbox promotion is atomic across API replicas. Concurrent merge/promote requests and
+deterministic Scribe reruns resolve the existing inbox-to-decision link, return the same
+decision id, and retain one completed Scribe audit outcome. PostgreSQL serialization,
+deadlock, and bounded lock-wait conflicts are retried before the operation fails.
+
 ### `SessionContext`
 
 Tracks the current work focus for a project. One open session at a time (`EndedAt = null`).

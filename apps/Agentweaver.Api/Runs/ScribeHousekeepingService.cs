@@ -3,7 +3,9 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Agentweaver.Api.Runs;
 
@@ -150,18 +152,10 @@ public sealed class ScribeHousekeepingService(
                 "decision_inbox_merge",
                 async token =>
                 {
-                    var entry = await memoryDb.DecisionInbox
-                        .SingleOrDefaultAsync(candidate =>
-                            candidate.Id == entryId
-                            && candidate.ProjectId == projectId
-                            && candidate.Status == "pending", token)
-                        .ConfigureAwait(false);
-                    if (entry is null)
-                        return;
-
-                    await DecisionPromotion.PromoteEntry(
+                    await DecisionPromotion.PromoteEntryAsync(
                         memoryDb,
-                        entry,
+                        projectId,
+                        entryId,
                         DateTimeOffset.UtcNow,
                         $"scribe:{runId}",
                         token).ConfigureAwait(false);
@@ -352,67 +346,90 @@ public sealed class ScribeHousekeepingService(
         var operationKey =
             $"scribe:{run.Id}:generation:{run.LifecycleGeneration}:{suffix}";
 
-        if (await memoryDb.ScribeOperationAttempts.AsNoTracking().AnyAsync(
-                attempt => attempt.OperationKey == operationKey && attempt.Status == "completed", ct)
-            .ConfigureAwait(false))
-            return;
-
-        await using var transaction = await memoryDb.Database
-            .BeginTransactionAsync(IsolationLevel.Serializable, ct)
-            .ConfigureAwait(false);
-        var attempt = new ScribeOperationAttempt
+        var writeAttempt = 1;
+        while (true)
         {
-            OperationKey = operationKey,
-            ProjectId = run.ProjectId!.Value.ToString(),
-            RunId = run.Id.ToString(),
-            LifecycleGeneration = run.LifecycleGeneration,
-            OperationType = operationType,
-            Status = "started",
-            StartedAt = DateTimeOffset.UtcNow,
-        };
-        memoryDb.ScribeOperationAttempts.Add(attempt);
-
-        try
-        {
-            if (await memoryDb.ScribeOperationAttempts.AsNoTracking().AnyAsync(
-                    candidate => candidate.OperationKey == operationKey
-                        && candidate.Status == "completed", ct)
-                .ConfigureAwait(false))
-            {
-                await transaction.RollbackAsync(ct).ConfigureAwait(false);
-                return;
-            }
-
-            await mutation(ct).ConfigureAwait(false);
-            attempt.Status = "completed";
-            attempt.CompletedAt = DateTimeOffset.UtcNow;
-            await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
-            await transaction.CommitAsync(ct).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
-            memoryDb.ChangeTracker.Clear();
-            memoryDb.ScribeOperationAttempts.Add(new ScribeOperationAttempt
+            await using var transaction = await memoryDb.Database
+                .BeginTransactionAsync(IsolationLevel.Serializable, ct)
+                .ConfigureAwait(false);
+            var attempt = new ScribeOperationAttempt
             {
                 OperationKey = operationKey,
                 ProjectId = run.ProjectId!.Value.ToString(),
                 RunId = run.Id.ToString(),
                 LifecycleGeneration = run.LifecycleGeneration,
                 OperationType = operationType,
-                Status = "failed",
-                FailureCode = ScribeFailureClassifier.Classify(ex).Code,
-                StartedAt = attempt.StartedAt,
-                CompletedAt = DateTimeOffset.UtcNow,
-            });
-            await memoryDb.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
-            logger.LogWarning(
-                "Scribe housekeeping failed for run {RunId}; operation={OperationType}; code={FailureCode}",
-                run.Id,
-                operationType,
-                ScribeFailureClassifier.Classify(ex).Code);
-            throw;
+                Status = "started",
+                StartedAt = DateTimeOffset.UtcNow,
+            };
+            memoryDb.ScribeOperationAttempts.Add(attempt);
+
+            try
+            {
+                if (await memoryDb.ScribeOperationAttempts.AsNoTracking().AnyAsync(
+                        candidate => candidate.OperationKey == operationKey
+                            && candidate.Status == "completed", ct)
+                    .ConfigureAwait(false))
+                {
+                    memoryDb.Entry(attempt).State = EntityState.Detached;
+                    await transaction.RollbackAsync(ct).ConfigureAwait(false);
+                    return;
+                }
+
+                await mutation(ct).ConfigureAwait(false);
+                attempt.Status = "completed";
+                attempt.CompletedAt = DateTimeOffset.UtcNow;
+                await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (
+                writeAttempt < 5 && IsRetryableOperationConflict(ex))
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                memoryDb.ChangeTracker.Clear();
+                await Task.Delay(DecisionPromotion.RetryDelay(writeAttempt++), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                memoryDb.ChangeTracker.Clear();
+                memoryDb.ScribeOperationAttempts.Add(new ScribeOperationAttempt
+                {
+                    OperationKey = operationKey,
+                    ProjectId = run.ProjectId!.Value.ToString(),
+                    RunId = run.Id.ToString(),
+                    LifecycleGeneration = run.LifecycleGeneration,
+                    OperationType = operationType,
+                    Status = "failed",
+                    FailureCode = ScribeFailureClassifier.Classify(ex).Code,
+                    StartedAt = attempt.StartedAt,
+                    CompletedAt = DateTimeOffset.UtcNow,
+                });
+                await memoryDb.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+                logger.LogWarning(
+                    "Scribe housekeeping failed for run {RunId}; operation={OperationType}; code={FailureCode}",
+                    run.Id,
+                    operationType,
+                    ScribeFailureClassifier.Classify(ex).Code);
+                throw;
+            }
         }
+    }
+
+    private static bool IsRetryableOperationConflict(Exception exception)
+    {
+        if (DecisionPromotion.IsRetryable(exception))
+            return true;
+
+        return ExceptionChain.Contains(
+            exception,
+            current => current is PostgresException
+                {
+                    SqlState: PostgresErrorCodes.UniqueViolation,
+                    ConstraintName: "IX_scribe_operation_attempts_OperationKey",
+                }
+                or SqliteException { SqliteErrorCode: 19 });
     }
 }
 
