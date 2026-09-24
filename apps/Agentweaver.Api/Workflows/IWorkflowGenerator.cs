@@ -76,12 +76,24 @@ public class WorkflowGenerationException : Exception
 public sealed class WorkflowUnsupportedCapabilityException(string capability, string message)
     : WorkflowGenerationException(message)
 {
+    private const string UnsupportedMessage =
+        "Publication is not a supported workflow capability. Use an approved external publication process instead.";
+
     public string Capability { get; } = capability;
 
     public static WorkflowUnsupportedCapabilityException? ForDescription(string description) =>
-        Regex.IsMatch(description, @"\bpublish(?:ing|ed|ation)?\b", RegexOptions.IgnoreCase)
-            ? new(
-                "publish",
-                "Publication is not a supported workflow capability. Use an approved external publication process instead.")
+        Regex.IsMatch(
+            description,
+            @"\b(?:publish(?:es|ed|ing)?|publications?)\b|"
+            + @"\b(?:deploy(?:s|ed|ing)?|releas(?:e|es|ed|ing))\b"
+            + @"[^\r\n.!?]{0,80}\b(?:externally|publicly|to\s+(?:the\s+)?(?:public|production|an?\s+external\s+(?:site|service|system)))\b|"
+            + @"\b(?:externally|publicly)\b[^\r\n.!?]{0,40}\b(?:deploy(?:s|ed|ing)?|releas(?:e|es|ed|ing))\b",
+            RegexOptions.IgnoreCase)
+            ? new("publish", UnsupportedMessage)
+            : null;
+
+    public static WorkflowUnsupportedCapabilityException? ForLoadError(string? error) =>
+        error?.Contains("unsupported capability 'publish'", StringComparison.Ordinal) == true
+            ? new("publish", error)
             : null;
 }

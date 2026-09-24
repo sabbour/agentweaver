@@ -491,12 +491,12 @@ public static class WorkflowDefinitionEndpoints
                 request.Yaml,
                 workflowId,
                 validationMode: WorkflowDefinitionValidationMode.Authoring);
-            if (loadResult.Error?.Contains("unsupported capability 'publish'", StringComparison.Ordinal) == true)
+            if (WorkflowUnsupportedCapabilityException.ForLoadError(loadResult.Error) is { } unsupported)
                 return Results.BadRequest(new
                 {
                     error = "unsupported_capability",
-                    capability = "publish",
-                    message = loadResult.Error,
+                    capability = unsupported.Capability,
+                    message = unsupported.Message,
                 });
             if (!loadResult.IsValid || loadResult.Definition is null)
                 return Results.BadRequest(new
@@ -655,6 +655,13 @@ public static class WorkflowDefinitionEndpoints
             if (!string.IsNullOrWhiteSpace(baseYaml))
             {
                 var load = WorkflowDefinitionLoader.Load(baseYaml!, "draft");
+                if (WorkflowUnsupportedCapabilityException.ForLoadError(load.Error) is { } unsupportedBase)
+                    return Results.BadRequest(new
+                    {
+                        error = "unsupported_capability",
+                        capability = unsupportedBase.Capability,
+                        message = unsupportedBase.Message,
+                    });
                 if (!load.IsValid || load.Definition is null)
                     return Results.BadRequest(new
                     {

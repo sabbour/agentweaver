@@ -670,18 +670,33 @@ public sealed class WorkflowGeneratorTests
         runner.LastTask.Should().Contain("Choose a prompt node as start");
     }
 
-    [Fact]
-    public async Task GenerateAsync_PublicationRequest_FailsBeforeInvokingModel()
+    [Theory]
+    [InlineData("Publish the reviewed artifact to the public site.")]
+    [InlineData("Create a publication for the approved report.")]
+    [InlineData("Deploy the approved artifact externally.")]
+    [InlineData("Externally deploy the approved artifact.")]
+    [InlineData("Release the approved package to production.")]
+    public async Task GenerateAsync_ExternalPublicationRequest_FailsBeforeInvokingModel(string description)
     {
         var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
         var generator = CreateGenerator(runner);
 
-        var act = () => generator.GenerateAsync(
-            new WorkflowGenerationRequest("Publish the reviewed artifact to the public site."));
+        var act = () => generator.GenerateAsync(new WorkflowGenerationRequest(description));
 
         var exception = await act.Should().ThrowAsync<WorkflowUnsupportedCapabilityException>();
         exception.Which.Capability.Should().Be("publish");
         runner.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_NeutralReleaseWorkflow_StillInvokesModel()
+    {
+        var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        await generator.GenerateAsync(new WorkflowGenerationRequest("Generate a release readiness workflow."));
+
+        runner.CallCount.Should().Be(1);
     }
 
     [Fact]
@@ -1556,8 +1571,14 @@ public sealed class WorkflowGeneratorTests
         body.GetProperty("error").GetString().Should().Contain("description");
     }
 
-    [Fact]
-    public async Task GenerateEndpoint_PublicationRequest_ReturnsStructured400BeforeJobOrModelExecution()
+    [Theory]
+    [InlineData("Publish the approved artifact to the public site.")]
+    [InlineData("Create a publication for the approved report.")]
+    [InlineData("Deploy the approved artifact externally.")]
+    [InlineData("Externally deploy the approved artifact.")]
+    [InlineData("Release the approved package to production.")]
+    public async Task GenerateEndpoint_ExternalPublicationRequest_ReturnsStructured400BeforeJobOrModelExecution(
+        string description)
     {
         await using var factory = new StubWorkflowGeneratorFactory();
         var client = factory.CreateAuthenticatedClient();
@@ -1574,7 +1595,48 @@ public sealed class WorkflowGeneratorTests
         var response = await SubmitDurableJobAsync(
             client,
             projectId,
-            new { description = "Publish the approved artifact to the public site." });
+            new { description });
+
+        response.Response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Body.GetProperty("error").GetString().Should().Be("unsupported_capability");
+        response.Body.GetProperty("capability").GetString().Should().Be("publish");
+
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.CallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_PublishBaseYaml_ReturnsStructured400BeforeJobOrModelExecution()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Wf Unsupported Base Publish Test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+
+        var response = await SubmitDurableJobAsync(
+            client,
+            projectId,
+            new
+            {
+                description = "Revise the supplied workflow draft.",
+                base_yaml = """
+                    id: publish-output
+                    name: Publish output
+                    start: publish
+                    nodes:
+                      - id: publish
+                        type: publish
+                        label: Publish
+                    """,
+            });
 
         response.Response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         response.Body.GetProperty("error").GetString().Should().Be("unsupported_capability");

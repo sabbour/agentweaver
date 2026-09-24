@@ -117,7 +117,9 @@ public sealed class WorkflowTools(AgentweaverApiClient api)
         {
             throw new McpApiException(404, $"Project {Uri.EscapeDataString(project_id)} not found");
         }
-        catch (McpApiException ex) when (ex.StatusCode == 400)
+        catch (McpApiException ex) when (
+            ex.StatusCode == 400
+            && !string.Equals(ex.ApiErrorCode, "unsupported_capability", StringComparison.Ordinal))
         {
             throw new McpApiException(400, $"Workflow generation failed: {ex.Message}");
         }

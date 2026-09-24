@@ -247,6 +247,61 @@ public sealed class McpActionableErrorsTests
         ex.Which.Error.Should().NotContain("Project 'proj-456' not found.");
     }
 
+    [Fact]
+    public async Task WorkflowGenerate_UnsupportedPublication_PreservesCapabilityError()
+    {
+        var calls = 0;
+        var tools = new WorkflowTools(CreateApiClient((request, _) =>
+        {
+            calls++;
+            return request.RequestUri!.AbsolutePath switch
+            {
+                "/api/ai/execution-context" => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        ai_required = true,
+                        operation = "workflow_generation",
+                        phase = "prepared",
+                        execution_key = "opaque-provider-key",
+                        expires_at = DateTimeOffset.UtcNow.AddMinutes(5),
+                        effective_model_provider = new
+                        {
+                            state = "resolved",
+                            provider_kind = "github_copilot",
+                            resolution_scope = "project",
+                            provider_scope = "project",
+                            model_id = "gpt-5",
+                            provider_key = "provider-fingerprint",
+                        },
+                    }),
+                }),
+                "/api/projects/proj-456/workflows/generate" => Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.BadRequest)
+                    {
+                        Content = JsonContent.Create(new
+                        {
+                            error = "unsupported_capability",
+                            capability = "publish",
+                            message = "Publication is not a supported workflow capability.",
+                        }),
+                    }),
+                _ => throw new InvalidOperationException($"Unexpected request: {request.RequestUri}"),
+            };
+        }));
+
+        var act = () => tools.WorkflowGenerateAsync(
+            "proj-456",
+            "Create a publication for the approved report.",
+            ct: CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<McpApiException>();
+        ex.Which.StatusCode.Should().Be(400);
+        ex.Which.ApiErrorCode.Should().Be("unsupported_capability");
+        ex.Which.Error.Should().Be("Publication is not a supported workflow capability.");
+        calls.Should().Be(2);
+    }
+
 
     private static ProjectTools CreateProjectTools(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
         new(CreateApiClient(handler));
