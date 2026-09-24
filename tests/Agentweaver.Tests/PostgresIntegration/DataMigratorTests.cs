@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Agentweaver.Tests.PostgresIntegration;
 
@@ -403,8 +404,15 @@ public sealed class DataMigratorTests : IDisposable
         Directory.GetFiles(root, "*.md", SearchOption.AllDirectories)
             .ToDictionary(
                 path => Path.GetRelativePath(root, path).Replace('\\', '/'),
-                File.ReadAllText,
+                path => NormalizeGeneratedMetadata(
+                    Path.GetRelativePath(root, path).Replace('\\', '/'),
+                    File.ReadAllText(path)),
                 StringComparer.Ordinal);
+
+    private static string NormalizeGeneratedMetadata(string relativePath, string content) =>
+        relativePath == ".squad/identity/now.md"
+            ? Regex.Replace(content, @"(?m)^updated_at:.*(?:\r?\n|$)", string.Empty)
+            : content;
 
     private static MemoryFixture SeedMemoryDb(string dbPath, string projectId)
     {
