@@ -567,7 +567,12 @@ export function WorkflowsPage() {
       setGenerateContentOnly(false);
     }
     setGenerateError(null);
-    setGenerateOpen(true);
+    if (pendingGeneration) {
+      // Let Fluent finish tearing down the prior modal before reopening it.
+      setTimeout(() => setGenerateOpen(true), 0);
+    } else {
+      setGenerateOpen(true);
+    }
   }, [pendingGeneration]);
 
   const applyGenerationOutcome = useCallback((result: WorkflowGenerationOutcome) => {
@@ -1019,11 +1024,9 @@ export function WorkflowsPage() {
             )}
           </DialogContent>
           <DialogActions>
-            <DialogTrigger disableButtonEnhancement>
-              <Button appearance="subtle" disabled={generating}>
-                Cancel
-              </Button>
-            </DialogTrigger>
+            <Button appearance="subtle" disabled={generating} onClick={() => setGenerateOpen(false)}>
+              Cancel
+            </Button>
             {pendingGeneration ? (
               <Button
                 appearance="primary"
