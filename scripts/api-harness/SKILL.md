@@ -92,17 +92,22 @@ For any completion-required scenario that will execute against a repository, req
 an explicit `owner/repository` target and preflight it before dispatch. Create a
 Harness-owned disposable project with the existing repository-selection/project
 creation APIs, or explicitly select a disposable project connected to the exact
-repository. Fetch the canonical project plus `/api/projects/{id}/workspace/refs`,
-then validate them with
-`scripts/harness-shared/repository-provenance.mjs`. The base ref must contain an
-immutable `revision`, and a workflow or applied Blueprint ID must be selected. Never
-substitute a blank project or count read-only discovery as a running scenario.
+repository. Fetch the canonical project plus `/api/projects/{id}/workspace/refs` and select a
+workflow or applied Blueprint. Before orchestration creation, run
+`node scripts/harness-shared/repository-scenario-dispatch.mjs
+--input <request.json>` with verdict join-key metadata, a setup-verdict path,
+and the repository inputs. Create the orchestration only when it returns
+`action: "create-orchestration"`. Never substitute a blank project or count
+read-only discovery as a running scenario.
 
-If preflight fails, persist the helper's actionable recovery through
-`buildSetupFailureVerdict()` from `scripts/harness-judge/core.mjs`; do not dispatch
-PersonaActor. After orchestration creation, `markRepositoryScenarioRunning()` must
-produce the project URL, repository identity, resolved revision, workflow/Blueprint
-ID, and orchestration URL before Harness reports `running`.
+After orchestration creation, run the gate again with `phase: "running"`, the
+returned `repositoryPreflight`, base URL, orchestration run ID, metadata, and
+verdict path. The executable phases invoke the repository preflight, running marker,
+and setup failure verdict builder. Dispatch PersonaActor only when the second returns
+`action: "dispatch-persona"`, and pass its `repositoryProvenance` verbatim. If it
+returns `action: "stop"`, it has persisted the schema-valid setup failure; do not
+dispatch. The running evidence contains the project URL, repository identity,
+resolved revision, workflow/Blueprint ID, and orchestration URL.
 
 There is no curated list of named scenario subcommands, no per-persona fixed
 step sequence, and no scripted HTTP-calling layer standing between the driving

@@ -75,19 +75,31 @@ real live API, never simulated):
      resolved checkout SHA; branch names and repository-discovery responses are not
      revisions or execution evidence. Select an allowed workflow or record the applied
      Blueprint ID before starting orchestration.
-   - If repository preflight fails, do not dispatch PersonaActor, do not call the
-     scenario running, and do not treat `project_list`, repository selection, workspace
-     browsing, or other read-only discovery as execution. Persist a schema-valid
-     `agentweaver.persona-judge-verdict/v1` setup failure with
-     `buildSetupFailureVerdict()` from `scripts/harness-judge/core.mjs`, including the
-     helper's redacted `code`, `message`, and actionable `recovery`. Never include a
-     repository selection code, bearer, cookie, installation identifier, or other
-     credential in that verdict.
-   - Only after orchestration creation succeeds may the scenario be called `running`.
-     Pass its run ID to `markRepositoryScenarioRunning()`. The running evidence must
-     contain the project URL, exact repository identity, resolved revision, selected
-     workflow or Blueprint ID, and orchestration URL. If any field is absent, report the
-     resulting setup failure instead of a running scenario.
+   - At the completion-scenario dispatch boundary, write the redacted join-key metadata,
+     repository inputs, and setup-verdict path to a request JSON file, then execute
+     `node scripts/harness-shared/repository-scenario-dispatch.mjs --input
+     <request.json>`. This first gate invokes `preflightRepositoryScenario()` before
+     orchestration creation; do not duplicate or bypass it with prompt-only checks.
+   - If the gate returns `action: "stop"` (exit code 1), do not dispatch PersonaActor,
+     do not call the scenario running, and do not treat `project_list`, repository
+     selection, workspace browsing, or other read-only discovery as execution. The
+     gate persists and returns the schema-valid
+     `agentweaver.persona-judge-verdict/v1` setup failure, including the helper's
+     redacted `code`, `message`, and actionable `recovery`. Never include a repository
+     selection code, bearer, cookie, installation identifier, or other credential in
+     the request or verdict.
+   - Only when the first gate returns `action: "create-orchestration"` may you create
+     the orchestration. Then run the same executable gate with `phase: "running"`, its
+     returned `repositoryPreflight`, the base URL, orchestration run ID, join-key
+     metadata, and setup-verdict path. This second gate invokes
+     `markRepositoryScenarioRunning()` and `buildSetupFailureVerdict()`. Delete both
+     request files after reading their results.
+   - Only after orchestration creation succeeds may the second gate return
+     `action: "dispatch-persona"` with `status: "running"`. Pass the returned
+     `repositoryProvenance` object verbatim to PersonaActor. It is produced by
+     `markRepositoryScenarioRunning()`. The running evidence must contain the project URL, exact repository identity, resolved revision, selected workflow or Blueprint ID, and orchestration URL.
+     If any field is absent, the gate persists a setup failure instead of authorizing
+     dispatch.
    - Resolve the target base URL. Before an authenticated remote API call, require the
      UI-harness Chrome Default login/cached-session flow; the recorder-session
      provider consumes that target-matched cache in memory (see Target resolution
@@ -366,7 +378,7 @@ prompt: |
     build a prototype end to end. (This is the requester's actual ask, lightly
     cleaned up — not a fixed phase list Harness invented.)
   Target base URL: <resolved base URL>
-  Repository provenance: <verbatim redacted output from markRepositoryScenarioRunning,
+  Repository provenance: <verbatim repositoryProvenance from the executable dispatch gate,
     including projectUrl, repositoryIdentity, resolvedRevision,
     workflowOrBlueprintId, and orchestrationUrl>
   Managed browser auth: recorder-session provider (no token is supplied)
