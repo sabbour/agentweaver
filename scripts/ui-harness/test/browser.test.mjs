@@ -29,6 +29,26 @@ test('semantic project-name automation uses the exact accessible textbox target'
   }]);
 });
 
+test('semantic repository automation uses the exact accessible option target', () => {
+  const locator = {};
+  const calls = [];
+  const page = {
+    getByRole: (role, options) => {
+      calls.push({ role, options });
+      return locator;
+    },
+  };
+
+  assert.equal(
+    keyedLocator(page, { role: 'option', name: 'sabbour/agentweaver' }),
+    locator,
+  );
+  assert.deepEqual(calls, [{
+    role: 'option',
+    options: { name: 'sabbour/agentweaver', exact: true },
+  }]);
+});
+
 test('UI sessions launch installed Google Chrome rather than Playwright Chromium', () => {
   const launch = installedChromeLaunchOptions(
     { headless: true },

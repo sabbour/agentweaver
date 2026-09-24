@@ -652,15 +652,19 @@ function CreateFromGitHubDialog({
               aria-label="Repository"
               freeform
               placeholder={reposLoading ? 'Loading repositories...' : 'Search or select a repository'}
-              value={d.sourceRepository}
-              onInput={(e) => { const val = (e.target as HTMLInputElement).value; setRepoFilter(val); d.setSourceRepository(val); if (val.includes('/')) applyRepo(val); }}
+              value={repoFilter}
+              selectedOptions={repos.some((repo) => repo.fullName === d.sourceRepository) ? [d.sourceRepository] : []}
+              onChange={(e) => {
+                setRepoFilter(e.target.value);
+                if (e.target.value !== d.sourceRepository) d.setSourceRepository('');
+              }}
               onOptionSelect={(_, data) => { if (data.optionValue) applyRepo(data.optionValue); }}
               disabled={reposLoading}
             >
               {filteredRepos.map((repo) => {
                 const fullName = repo.fullName ?? '';
                 return (
-                  <Option key={fullName} value={fullName} text={fullName}>
+                  <Option key={fullName} value={fullName} text={fullName} aria-label={fullName}>
                     <span className={styles.repoOption}>
                       <span className={styles.githubMark}>GH</span>
                       <Text weight="semibold">{repoDisplayName(fullName)}</Text>
