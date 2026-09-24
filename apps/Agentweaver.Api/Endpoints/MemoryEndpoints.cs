@@ -192,49 +192,56 @@ app.MapPut("/api/projects/{id}/agents/{name}/memory/{memId}", async (
     if (request.Type is null && request.Content is null && request.Importance is null && request.Tags is null)
         return Results.BadRequest(new { error = "type, content, importance, or tags is required." });
 
-    var memory = await memoryDb.AgentMemory.FindAsync(new object[] { memId }, ct);
+    var memory = await memoryDb.AgentMemory
+        .AsNoTracking()
+        .SingleOrDefaultAsync(m => m.Id == memId, ct);
     if (memory is null || memory.ProjectId != id || !string.Equals(memory.AgentName, name, StringComparison.OrdinalIgnoreCase))
         return Results.NotFound();
 
     var changed = false;
+    var memoryType = memory.Type;
+    var importance = memory.Importance;
+    var content = memory.Content;
+    var tags = memory.Tags;
     if (request.Type is not null)
     {
-        var memoryType = request.Type.Trim().ToLowerInvariant();
+        memoryType = request.Type.Trim().ToLowerInvariant();
         if (!MemoryWritePolicy.IsMemoryType(memoryType))
             return Results.BadRequest(new { error = "type must be core_context, learning, pattern, or update." });
         changed |= memory.Type != memoryType;
-        memory.Type = memoryType;
     }
     if (request.Importance is not null)
     {
-        var importance = request.Importance.Trim().ToLowerInvariant();
+        importance = request.Importance.Trim().ToLowerInvariant();
         if (!MemoryWritePolicy.IsImportance(importance))
             return Results.BadRequest(new { error = "importance must be low, medium, or high." });
         changed |= memory.Importance != importance;
-        memory.Importance = importance;
     }
     if (request.Content is not null)
     {
         if (string.IsNullOrWhiteSpace(request.Content))
             return Results.BadRequest(new { error = "content must not be empty." });
         changed |= memory.Content != request.Content;
-        memory.Content = request.Content;
+        content = request.Content;
     }
     if (request.Tags is not null)
     {
-        var tags = MemoryWritePolicy.NormalizeTags(request.Tags);
+        tags = MemoryWritePolicy.NormalizeTags(request.Tags);
         changed |= memory.Tags != tags;
-        memory.Tags = tags;
     }
 
     if (changed)
     {
-        memory.TrustState = MemoryTrustStates.Pending;
-        memory.ApprovedBy = null;
-        memory.ApprovedAt = null;
-        memory.UpdatedAt = DateTimeOffset.UtcNow;
-        await memoryDb.SaveChangesAsync(ct);
+        var updatedAt = DateTimeOffset.UtcNow;
+        if (!await MemoryPromotionHelpers.TryApplyUpdateAsync(
+            memoryDb, memory, memoryType, importance, content, tags, updatedAt, ct))
+        {
+            return Results.NotFound();
+        }
         await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+        memory = await memoryDb.AgentMemory
+            .AsNoTracking()
+            .SingleAsync(m => m.Id == memId, ct);
     }
 
     return Results.Ok(new
@@ -277,18 +284,43 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
         return forbid;
     }
 
-    var memory = await memoryDb.AgentMemory.FindAsync(new object[] { memId }, ct);
+    var memory = await memoryDb.AgentMemory
+        .AsNoTracking()
+        .SingleOrDefaultAsync(m => m.Id == memId, ct);
     if (memory is null || memory.ProjectId != id || !string.Equals(memory.AgentName, name, StringComparison.OrdinalIgnoreCase))
         return Results.NotFound();
     if (memory.TrustState == MemoryTrustStates.Approved)
         return Results.Ok(new { memory.Id, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt });
 
-    memory.TrustState = MemoryTrustStates.Approved;
-    memory.ApprovedBy = approver.SourceIdentity;
-    memory.ApprovedAt = DateTimeOffset.UtcNow;
-    memory.UpdatedAt = memory.ApprovedAt.Value;
-    await memoryDb.SaveChangesAsync(ct);
-    return Results.Ok(new { memory.Id, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt });
+    var approvedAt = DateTimeOffset.UtcNow;
+    if (!await MemoryPromotionHelpers.TryPromoteReviewedAsync(
+        memoryDb, memory, approver.SourceIdentity, approvedAt, ct))
+    {
+        var current = await memoryDb.AgentMemory
+            .AsNoTracking()
+            .SingleOrDefaultAsync(m => m.Id == memId, ct);
+        if (current is null || current.ProjectId != id ||
+            !string.Equals(current.AgentName, name, StringComparison.OrdinalIgnoreCase))
+        {
+            return Results.NotFound();
+        }
+        if (current.TrustState == MemoryTrustStates.Approved)
+            return Results.Ok(new { current.Id, current.TrustState, current.ApprovedBy, current.ApprovedAt });
+
+        return Results.Conflict(new
+        {
+            error = "memory_changed_since_review",
+            updated_at = current.UpdatedAt,
+        });
+    }
+
+    return Results.Ok(new
+    {
+        memory.Id,
+        TrustState = MemoryTrustStates.Approved,
+        ApprovedBy = approver.SourceIdentity,
+        ApprovedAt = approvedAt,
+    });
 });
 
 // GET /api/projects/{id}/agents/{name}/memory/{memId}
@@ -672,6 +704,64 @@ app.MapPost("/api/projects/{id}/memory/import", async (
     var mirrorExported = await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
     return Results.Ok(new { imported = newCount, mirror_exported = mirrorExported });
 });
+    }
+}
+
+internal static class MemoryPromotionHelpers
+{
+    public static async Task<bool> TryApplyUpdateAsync(
+        MemoryDbContext memoryDb,
+        AgentMemory reviewed,
+        string type,
+        string importance,
+        string content,
+        string? tags,
+        DateTimeOffset updatedAt,
+        CancellationToken ct)
+    {
+        var updated = await memoryDb.AgentMemory
+            .Where(memory =>
+                memory.Id == reviewed.Id &&
+                memory.ProjectId == reviewed.ProjectId &&
+                memory.AgentName == reviewed.AgentName)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(memory => memory.Type, type)
+                .SetProperty(memory => memory.Importance, importance)
+                .SetProperty(memory => memory.Content, content)
+                .SetProperty(memory => memory.Tags, tags)
+                .SetProperty(memory => memory.TrustState, MemoryTrustStates.Pending)
+                .SetProperty(memory => memory.ApprovedBy, (string?)null)
+                .SetProperty(memory => memory.ApprovedAt, (DateTimeOffset?)null)
+                .SetProperty(memory => memory.UpdatedAt, updatedAt), ct);
+
+        return updated == 1;
+    }
+
+    public static async Task<bool> TryPromoteReviewedAsync(
+        MemoryDbContext memoryDb,
+        AgentMemory reviewed,
+        string? approvedBy,
+        DateTimeOffset approvedAt,
+        CancellationToken ct)
+    {
+        var updated = await memoryDb.AgentMemory
+            .Where(memory =>
+                memory.Id == reviewed.Id &&
+                memory.ProjectId == reviewed.ProjectId &&
+                memory.AgentName == reviewed.AgentName &&
+                memory.Type == reviewed.Type &&
+                memory.Importance == reviewed.Importance &&
+                memory.Content == reviewed.Content &&
+                memory.Tags == reviewed.Tags &&
+                memory.TrustState == MemoryTrustStates.Pending &&
+                memory.UpdatedAt == reviewed.UpdatedAt)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(memory => memory.TrustState, MemoryTrustStates.Approved)
+                .SetProperty(memory => memory.ApprovedBy, approvedBy)
+                .SetProperty(memory => memory.ApprovedAt, approvedAt)
+                .SetProperty(memory => memory.UpdatedAt, approvedAt), ct);
+
+        return updated == 1;
     }
 }
 
