@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using agenthost::Agentweaver.AgentHost;
 using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using FluentAssertions;
@@ -141,10 +142,13 @@ public sealed class A2ARoundTripIntegrationTests
             textB.Should().Be("revised:second task");
 
             // ── Assertions: RunEvents emitted pod-side arrive decoded at the worker ──
-            // Two turns × three events each (agent.task, agent.message.delta, agent.turn.end),
+            // Two turns × four events each (runtime context, agent.task, agent.message.delta,
+            // agent.turn.end),
             // all forwarded through the real A2A DataPart codec.
-            received.Should().HaveCount(6, "each turn emits agent.task + agent.message.delta + agent.turn.end");
-            received.Select(r => r.Type).Should().Contain("agent.task")
+            received.Should().HaveCount(8,
+                "each turn emits runtime context + agent.task + agent.message.delta + agent.turn.end");
+            received.Select(r => r.Type).Should().Contain(EventTypes.AgentRuntimeContext)
+                .And.Contain("agent.task")
                 .And.Contain("agent.message.delta")
                 .And.Contain(EventTypes.AgentTurnEnd);
 
@@ -292,6 +296,74 @@ public sealed class A2ARoundTripIntegrationTests
                 .Should().Be("agent_turn_internal_error");
             workerEvents.Reader.TryRead(out _).Should().BeFalse(
                 "normalization must not add a second terminal event");
+        }
+        finally
+        {
+            await app.StopAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RemoteAgentProxy_Resiliency_PreservesKnownProviderFailureWithoutPriorRunFailed()
+    {
+        var port = GetFreeTcpPort();
+        var runner = new KnownProviderFailingTurnRunner();
+        var builder = WebApplication.CreateBuilder();
+        builder.Logging.ClearProviders();
+        builder.WebHost.UseUrls($"http://localhost:{port}");
+        var agentHostedBuilder = builder.AddAIAgent(
+            A2ATurnBridgeAgent.AgentName,
+            (sp, _) => new A2ATurnBridgeAgent(
+                new MinimalInnerAgent(),
+                runner,
+                NullLogger<A2ATurnBridgeAgent>.Instance),
+            ServiceLifetime.Singleton);
+#pragma warning disable MEAI001
+        agentHostedBuilder.AddA2AServer(options => options.AgentRunMode = AgentRunMode.DisallowBackground);
+#pragma warning restore MEAI001
+
+        await using var app = builder.Build();
+        app.MapA2AHttpJson(agentHostedBuilder, "/a2a/agent");
+        await app.StartAsync();
+
+        try
+        {
+            using var clientServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
+            var httpFactory = clientServices.GetRequiredService<IHttpClientFactory>();
+            var resolver = new FixedEndpointResolver(new Uri($"http://localhost:{port}/a2a/agent"));
+            await using var proxy = new RemoteAgentProxy(
+                resolver,
+                httpFactory,
+                NullLoggerFactory.Instance,
+                RemoteApiBaseUrl);
+            var workerEvents = Channel.CreateUnbounded<RunEvent>();
+            await proxy.SetupAsync(
+                "/workspace",
+                "/workspace",
+                "run-known-provider-failure-1545",
+                modelId: null,
+                systemPromptContext: null,
+                workerEvents.Writer,
+                projectId: null,
+                agentName: null,
+                apiBaseUrl: null,
+                apiKey: null,
+                TestCt,
+                userId: null);
+
+            var act = () => proxy.RunTurnAsync("review", isRevision: false, TestCt);
+
+            var ex = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+            ex.Which.Reason.Should().Be("github_copilot_auth_required");
+            ex.Which.IsRetryable.Should().BeFalse();
+
+            var forwarded = await workerEvents.Reader.ReadAsync(TestCt);
+            var failure = StructuredRunFailureTerminal.TryRead(forwarded);
+            failure.Should().NotBeNull();
+            failure!.ErrorCode.Should().Be("github_copilot_auth_required");
+            failure.IsRetryable.Should().BeFalse();
+            workerEvents.Reader.TryRead(out _).Should().BeFalse(
+                "the bridge and proxy must preserve exactly one terminal outcome");
         }
         finally
         {
@@ -704,15 +776,23 @@ public sealed class A2ARoundTripIntegrationTests
             Calls.Add((task, isRevision));
             var writer = _writer ?? throw new InvalidOperationException("Stream writer not attached.");
 
-            await writer.WriteAsync(new RunEvent(1, "agent.task", new { task }), cancellationToken)
+            await writer.WriteAsync(
+                new RunEvent(1, EventTypes.AgentRuntimeContext, new
+                {
+                    inputTokens = 4,
+                    contextWindowTokens = 16,
+                    contextUtilizationPercent = 25,
+                }),
+                cancellationToken).ConfigureAwait(false);
+            await writer.WriteAsync(new RunEvent(2, "agent.task", new { task }), cancellationToken)
                 .ConfigureAwait(false);
             await writer.WriteAsync(
-                new RunEvent(2, "agent.message.delta", new { delta = "Hello from pod", messageId = "m1" }),
+                new RunEvent(3, "agent.message.delta", new { delta = "Hello from pod", messageId = "m1" }),
                 cancellationToken).ConfigureAwait(false);
             // Definitive per-turn completion marker every real pod runner emits (CopilotAIAgent) —
             // the worker requires it to distinguish a finished turn from a truncated stream (#242).
             await writer.WriteAsync(
-                new RunEvent(3, EventTypes.AgentTurnEnd, new { turnId = "0" }),
+                new RunEvent(4, EventTypes.AgentTurnEnd, new { turnId = "0" }),
                 cancellationToken).ConfigureAwait(false);
 
             return isRevision ? $"revised:{task}" : $"fresh:{task}";
@@ -787,6 +867,22 @@ public sealed class A2ARoundTripIntegrationTests
                 .ConfigureAwait(false);
             throw new InvalidOperationException("transport terminated");
         }
+    }
+
+    private sealed class KnownProviderFailingTurnRunner : IPodTurnRunner
+    {
+        public void SetTurnStreamWriter(ChannelWriter<RunEvent>? streamWriter) { }
+
+        public Task<string> RunTurnAsync(
+            string task,
+            bool isRevision,
+            CancellationToken cancellationToken) =>
+            Task.FromException<string>(new AgentProviderException(
+                ModelSource.GitHubCopilot,
+                AgentProviderFailureKind.Authorization,
+                "github_copilot_auth_required",
+                "GitHub Copilot authorization is required.",
+                isRetryable: false));
     }
 
     /// <summary>Fixed endpoint resolver pointing the proxy at the loopback Kestrel listener.</summary>

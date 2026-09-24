@@ -297,13 +297,15 @@ an unconditional agent-to-review shortcut.
 
 ### Agent turn infrastructure failures
 
-The run timeline reports `agent_turn_internal_error` when Agentweaver must supply a
-structured fallback: the pod bridge's turn throws without first emitting a structured
-`run.failed`, the worker receives an unstructured `run.failed`, or the A2A stream ends
-on an unsupported or unset event. This is an execution-infrastructure failure, not a
-model request for changes. The fallback is marked `retryable: true` because the
-surrounding workflow may retry or redispatch the turn; it does not mean that the
-interrupted turn completed successfully.
+The run timeline reports `agent_turn_internal_error` only when Agentweaver must supply
+an unclassified structured fallback: the pod bridge's turn throws an unknown exception
+without first emitting a structured `run.failed`, the worker receives an unstructured
+`run.failed`, or the A2A stream ends on an unsupported or unset event. Known provider
+and runtime failures now cross the AgentHost boundary with their allowlisted error code,
+retryability, server-generated correlation ID, and bounded exception-type chain intact.
+The internal fallback remains an execution-infrastructure failure, not a model request
+for changes. It is marked `retryable: true` because the surrounding workflow may retry
+or redispatch the turn; it does not mean that the interrupted turn completed successfully.
 
 Agentweaver does not replace more specific outcomes with this fallback:
 
