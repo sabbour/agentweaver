@@ -70,6 +70,10 @@ internal interface IRunWorkflowWiringSupport
     /// at a terminal node when the approved verdict is the authored final state.</summary>
     ExecutorBinding ReviewToTerminalAdapter(WorkflowEdge edge);
 
+    /// <summary><c>AgentTurnOutput → NoChangesOutput</c>: complete a producer-only workflow directly
+    /// at a terminal node.</summary>
+    ExecutorBinding AgentToTerminalAdapter(WorkflowEdge edge);
+
     /// <summary><c>AgentTurnOutput → WorkflowReviewRequest</c>: store the diff and raise a human review
     /// request directly from an agent turn (a producer that flows straight into a human-review gate).</summary>
     ExecutorBinding AgentToReviewRequestAdapter(WorkflowEdge edge);

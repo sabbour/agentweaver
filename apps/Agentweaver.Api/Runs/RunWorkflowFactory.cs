@@ -1190,6 +1190,15 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 });
         }
 
+        public ExecutorBinding AgentToTerminalAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("agent-to-terminal", edge);
+            return new VisualFunctionExecutor<AgentTurnOutput, NoChangesOutput>(
+                id, id, "Done", "plumbing", "terminal", true,
+                (output, ctx, ct) =>
+                    new ValueTask<NoChangesOutput>(new NoChangesOutput(output.RunId)));
+        }
+
         public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge)
         {
             var id = EdgeId("agent-to-merge", edge);
