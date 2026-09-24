@@ -57,16 +57,16 @@ export async function prepareRepositoryScenarioDispatch({
 
 export async function markRepositoryScenarioDispatchRunning({
   metadata,
-  repositoryPreflight,
-  baseUrl,
+  repository,
   orchestrationRunId,
   verdictPath,
 } = {}, dependencies = {}) {
   const persist = dependencies.writeJson ?? writeLifecycleJson;
   let running;
   try {
-    running = markRepositoryScenarioRunning(repositoryPreflight, {
-      baseUrl,
+    const preflight = preflightRepositoryScenario(repository);
+    running = markRepositoryScenarioRunning(preflight, {
+      baseUrl: repository?.baseUrl,
       orchestrationRunId,
     });
   } catch {
@@ -81,8 +81,8 @@ export async function markRepositoryScenarioDispatchRunning({
       ? running
       : boundaryFailure(
         'repository_preflight_missing',
-        'The verified repository preflight result is missing.',
-        'Run the repository dispatch preflight before creating orchestration.',
+        'The canonical repository inputs could not be validated.',
+        'Refresh the project, workspace refs, and workflow inputs before retrying dispatch.',
       );
     const stopped = setupFailure(metadata, failure);
     if (!verdictPath) {

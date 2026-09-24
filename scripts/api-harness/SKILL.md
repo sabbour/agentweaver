@@ -101,13 +101,14 @@ and the repository inputs. Create the orchestration only when it returns
 read-only discovery as a running scenario.
 
 After orchestration creation, run the gate again with `phase: "running"`, the
-returned `repositoryPreflight`, base URL, orchestration run ID, metadata, and
-verdict path. The executable phases invoke the repository preflight, running marker,
-and setup failure verdict builder. Dispatch PersonaActor only when the second returns
-`action: "dispatch-persona"`, and pass its `repositoryProvenance` verbatim. If it
-returns `action: "stop"`, it has persisted the schema-valid setup failure; do not
-dispatch. The running evidence contains the project URL, repository identity,
-resolved revision, workflow/Blueprint ID, and orchestration URL.
+same canonical repository inputs, orchestration run ID, metadata, and verdict path.
+The running phase re-runs repository preflight; never supply or trust a caller-created
+`repositoryPreflight` or provenance object as proof. The executable phases invoke the
+repository preflight, running marker, and setup failure verdict builder. Dispatch
+PersonaActor only when the second returns `action: "dispatch-persona"`, and pass its
+`repositoryProvenance` verbatim. If it returns `action: "stop"`, it has persisted the
+schema-valid setup failure; do not dispatch. The running evidence contains the project
+URL, repository identity, resolved revision, workflow/Blueprint ID, and orchestration URL.
 
 There is no curated list of named scenario subcommands, no per-persona fixed
 step sequence, and no scripted HTTP-calling layer standing between the driving
