@@ -1019,9 +1019,11 @@ export function WorkflowsPage() {
             )}
           </DialogContent>
           <DialogActions>
-            <Button appearance="subtle" disabled={generating} onClick={() => setGenerateOpen(false)}>
-              Cancel
-            </Button>
+            <DialogTrigger disableButtonEnhancement>
+              <Button appearance="subtle" disabled={generating}>
+                Cancel
+              </Button>
+            </DialogTrigger>
             {pendingGeneration ? (
               <Button
                 appearance="primary"
