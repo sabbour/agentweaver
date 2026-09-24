@@ -31,6 +31,8 @@ public sealed class ScribeHousekeepingServiceTests
         (await db.Decisions.CountAsync()).Should().Be(1);
         (await db.DecisionInbox.SingleAsync(entry => entry.Type == "learning")).Status.Should().Be("merged");
         (await db.DecisionInbox.SingleAsync(entry => entry.Type == "architectural")).Status.Should().Be("pending");
+        (await db.ScribeOperationAttempts.CountAsync(attempt =>
+            attempt.OperationType == "decision_inbox_merge")).Should().Be(1);
         var summary = (await db.SessionContexts.SingleAsync()).Summary!;
         summary.Split('\n').Should().ContainSingle();
         (await db.ScribeOperationAttempts.CountAsync(attempt => attempt.Status == "completed"))
@@ -113,12 +115,15 @@ public sealed class ScribeHousekeepingServiceTests
                     new ScribeHousekeepingRequest(run2, ScribeAuthority.Worker, "completed"),
                     CancellationToken.None)));
 
-            results.Count(result => result is null).Should().BeGreaterThanOrEqualTo(1);
+            results.All(result => result is null).Should().BeTrue();
             await using var verify = CreateContext($"Data Source={path}");
             (await verify.Decisions.CountAsync()).Should().Be(1);
             (await verify.SessionContexts.SingleAsync()).Summary!.Split('\n').Should().ContainSingle();
             (await verify.ScribeOperationAttempts.CountAsync(attempt => attempt.Status == "failed"))
-                .Should().BeLessThanOrEqualTo(1);
+                .Should().Be(0);
+            (await verify.ScribeOperationAttempts.CountAsync(attempt =>
+                attempt.OperationType == "decision_inbox_merge"
+                && attempt.Status == "completed")).Should().Be(1);
         }
         finally
         {
