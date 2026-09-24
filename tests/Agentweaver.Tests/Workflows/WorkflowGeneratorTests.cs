@@ -676,6 +676,8 @@ public sealed class WorkflowGeneratorTests
     [InlineData("Deploy the approved artifact externally.")]
     [InlineData("Externally deploy the approved artifact.")]
     [InlineData("Release the approved package to production.")]
+    [InlineData("Deploy the approved artifact to a public site.")]
+    [InlineData("Release the approved package to external service.")]
     public async Task GenerateAsync_ExternalPublicationRequest_FailsBeforeInvokingModel(string description)
     {
         var runner = new ScriptedAgentRunner(ValidWorkflowYaml);
@@ -1577,6 +1579,8 @@ public sealed class WorkflowGeneratorTests
     [InlineData("Deploy the approved artifact externally.")]
     [InlineData("Externally deploy the approved artifact.")]
     [InlineData("Release the approved package to production.")]
+    [InlineData("Deploy the approved artifact to a public site.")]
+    [InlineData("Release the approved package to external service.")]
     public async Task GenerateEndpoint_ExternalPublicationRequest_ReturnsStructured400BeforeJobOrModelExecution(
         string description)
     {

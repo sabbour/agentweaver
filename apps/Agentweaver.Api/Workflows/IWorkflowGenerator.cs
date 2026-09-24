@@ -86,7 +86,7 @@ public sealed class WorkflowUnsupportedCapabilityException(string capability, st
             description,
             @"\b(?:publish(?:es|ed|ing)?|publications?)\b|"
             + @"\b(?:deploy(?:s|ed|ing)?|releas(?:e|es|ed|ing))\b"
-            + @"[^\r\n.!?]{0,80}\b(?:externally|publicly|to\s+(?:the\s+)?(?:public|production|an?\s+external\s+(?:site|service|system)))\b|"
+            + @"[^\r\n.!?]{0,80}\b(?:externally|publicly|to\s+(?:(?:the|an?)\s+)?(?:public|production|external)(?:\s+(?:site|service|system))?)\b|"
             + @"\b(?:externally|publicly)\b[^\r\n.!?]{0,40}\b(?:deploy(?:s|ed|ing)?|releas(?:e|es|ed|ing))\b",
             RegexOptions.IgnoreCase)
             ? new("publish", UnsupportedMessage)
