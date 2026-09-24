@@ -58,18 +58,25 @@ the requested `owner/repository`. A blank project is not a substitute.
 
 Re-read the project through `GET /api/projects/{id}` and call
 `GET /api/projects/{id}/workspace/refs`. The base ref includes `revision`, the
-resolved immutable commit SHA for that checkout. Validate the project response,
-workspace refs, and selected workflow/Blueprint with
-`scripts/harness-shared/repository-provenance.mjs` before starting orchestration.
+resolved immutable commit SHA for that checkout. Validate the project response, workspace refs, and selected workflow/Blueprint
+at the executable dispatch boundary before orchestration creation:
+`node scripts/harness-shared/repository-scenario-dispatch.mjs --input
+<request.json>`. The request contains verdict join-key metadata, a setup-verdict
+path, and the repository inputs.
 Repository discovery, project listing, and workspace browsing are setup only; none
 may be reported as scenario execution.
 
-After orchestration creation, call `markRepositoryScenarioRunning()` with the run
-ID. A running result is valid only when it contains `projectUrl`,
+The first gate imports and invokes `preflightRepositoryScenario()` and must return
+`action: "create-orchestration"` before orchestration creation. After creation,
+run the gate again with `phase: "running"`, the returned `repositoryPreflight`,
+base URL, orchestration run ID, metadata, and verdict path. The second phase invokes
+`markRepositoryScenarioRunning()` and `buildSetupFailureVerdict()`. PersonaActor
+may be dispatched only when it returns `action: "dispatch-persona"`; pass its
+`repositoryProvenance` verbatim. A running result is valid only when it contains `projectUrl`,
 `repositoryIdentity`, `resolvedRevision`, `workflowOrBlueprintId`, and
-`orchestrationUrl`. On any missing or mismatched precondition, do not dispatch the
-persona. Use `buildSetupFailureVerdict()` from `scripts/harness-judge/core.mjs` to
-persist an actionable, schema-valid `agentweaver.persona-judge-verdict/v1` failure.
+`orchestrationUrl`. On any missing or mismatched precondition the gate returns
+`action: "stop"` and persists an actionable, schema-valid
+`agentweaver.persona-judge-verdict/v1` failure; do not dispatch the persona.
 The shared redaction boundary applies to both success and failure evidence; selection
 codes, tokens, cookies, and installation identifiers must never be persisted.
 
