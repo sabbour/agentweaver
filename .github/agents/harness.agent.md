@@ -90,10 +90,11 @@ real live API, never simulated):
      the request or verdict.
    - Only when the first gate returns `action: "create-orchestration"` may you create
      the orchestration. Then run the same executable gate with `phase: "running"`, its
-     returned `repositoryPreflight`, the base URL, orchestration run ID, join-key
-     metadata, and setup-verdict path. This second gate invokes
-     `markRepositoryScenarioRunning()` and `buildSetupFailureVerdict()`. Delete both
-     request files after reading their results.
+     same canonical repository inputs, orchestration run ID, join-key metadata, and
+     setup-verdict path. This second gate re-runs `preflightRepositoryScenario()` before
+     invoking `markRepositoryScenarioRunning()` and `buildSetupFailureVerdict()`; a
+     caller-supplied preflight or provenance object is never proof of validation. Delete
+     both request files after reading their results.
    - Only after orchestration creation succeeds may the second gate return
      `action: "dispatch-persona"` with `status: "running"`. Pass the returned
      `repositoryProvenance` object verbatim to PersonaActor. It is produced by

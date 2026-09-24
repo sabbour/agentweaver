@@ -68,14 +68,15 @@ may be reported as scenario execution.
 
 The first gate imports and invokes `preflightRepositoryScenario()` and must return
 `action: "create-orchestration"` before orchestration creation. After creation,
-run the gate again with `phase: "running"`, the returned `repositoryPreflight`,
-base URL, orchestration run ID, metadata, and verdict path. The second phase invokes
-`markRepositoryScenarioRunning()` and `buildSetupFailureVerdict()`. PersonaActor
-may be dispatched only when it returns `action: "dispatch-persona"`; pass its
-`repositoryProvenance` verbatim. A running result is valid only when it contains `projectUrl`,
-`repositoryIdentity`, `resolvedRevision`, `workflowOrBlueprintId`, and
-`orchestrationUrl`. On any missing or mismatched precondition the gate returns
-`action: "stop"` and persists an actionable, schema-valid
+run the gate again with `phase: "running"`, the same canonical repository inputs,
+orchestration run ID, metadata, and verdict path. The second phase re-runs
+`preflightRepositoryScenario()` before invoking `markRepositoryScenarioRunning()` and
+`buildSetupFailureVerdict()`; it never trusts a caller-supplied preflight or provenance
+object. PersonaActor may be dispatched only when it returns
+`action: "dispatch-persona"`; pass its `repositoryProvenance` verbatim. A running result
+is valid only when it contains `projectUrl`, `repositoryIdentity`, `resolvedRevision`,
+`workflowOrBlueprintId`, and `orchestrationUrl`. On any missing or mismatched
+precondition the gate returns `action: "stop"` and persists an actionable, schema-valid
 `agentweaver.persona-judge-verdict/v1` failure; do not dispatch the persona.
 The shared redaction boundary applies to both success and failure evidence; selection
 codes, tokens, cookies, and installation identifiers must never be persisted.

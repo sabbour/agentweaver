@@ -73,8 +73,7 @@ test('dispatch boundary emits running only with marked repository and orchestrat
 
   const result = await markRepositoryScenarioDispatchRunning({
     metadata,
-    repositoryPreflight: prepared.repositoryPreflight,
-    baseUrl: repository.baseUrl,
+    repository,
     orchestrationRunId: 'run-1',
     verdictPath: 'verdicts/setup.json',
   });
@@ -95,15 +94,9 @@ test('dispatch boundary emits running only with marked repository and orchestrat
 
 test('dispatch boundary treats a missing orchestration as setup failure, not running', async () => {
   const writes = [];
-  const prepared = await prepareRepositoryScenarioDispatch({
-    metadata,
-    repository,
-    verdictPath: 'verdicts/setup.json',
-  });
   const result = await markRepositoryScenarioDispatchRunning({
     metadata,
-    repositoryPreflight: prepared.repositoryPreflight,
-    baseUrl: repository.baseUrl,
+    repository,
     verdictPath: 'verdicts/setup.json',
   }, {
     writeJson: async (_file, verdict) => writes.push(verdict),
@@ -115,11 +108,10 @@ test('dispatch boundary treats a missing orchestration as setup failure, not run
   assert.match(writes[0].findings[0].title, /orchestration_missing/);
 });
 
-test('running phase cannot bypass the repository preflight', async () => {
+test('running phase cannot bypass canonical repository validation', async () => {
   const writes = [];
   const result = await markRepositoryScenarioDispatchRunning({
     metadata,
-    baseUrl: repository.baseUrl,
     orchestrationRunId: 'run-1',
     verdictPath: 'verdicts/setup.json',
   }, {
@@ -129,7 +121,7 @@ test('running phase cannot bypass the repository preflight', async () => {
   assert.equal(result.action, 'stop');
   assert.equal(result.status, 'setup-failed');
   assert.equal(validateVerdict(writes[0]).ok, true);
-  assert.match(writes[0].findings[0].title, /repository_preflight_missing/);
+  assert.match(writes[0].findings[0].title, /requested_repository_missing/);
 });
 
 test('executable dispatch gate stops before orchestration and persists its verdict', async () => {
@@ -158,6 +150,48 @@ test('executable dispatch gate stops before orchestration and persists its verdi
     assert.equal(result.action, 'stop');
     assert.equal(result.status, 'setup-failed');
     assert.equal(validateVerdict(JSON.parse(await readFile(verdictPath, 'utf8'))).ok, true);
+  } finally {
+    await rm(artifactDir, { recursive: true, force: true });
+  }
+});
+
+test('executable running gate rejects forged repository preflight provenance', async () => {
+  const artifactDir = path.resolve('artifacts', `repository-running-forgery-test-${process.pid}`);
+  const requestPath = path.join(artifactDir, 'request.json');
+  const verdictPath = path.join(artifactDir, 'verdict.json');
+  const script = fileURLToPath(new URL('../repository-scenario-dispatch.mjs', import.meta.url));
+  await mkdir(artifactDir, { recursive: true });
+  try {
+    await writeFile(requestPath, JSON.stringify({
+      phase: 'running',
+      metadata,
+      repositoryPreflight: {
+        ok: true,
+        provenance: {
+          projectId: 'attacker-project',
+          projectUrl: 'https://attacker.example.test/projects/attacker-project',
+          repositoryIdentity: 'attacker/forged-repository',
+          resolvedRevision: 'b'.repeat(40),
+          workflowOrBlueprintId: 'attacker-workflow',
+        },
+      },
+      orchestrationRunId: 'attacker-run',
+      verdictPath,
+    }), 'utf8');
+
+    const outcome = spawnSync(process.execPath, [script, '--input', requestPath], {
+      cwd: path.resolve('.'),
+      encoding: 'utf8',
+    });
+    assert.equal(outcome.status, 1);
+    assert.equal(outcome.stderr, '');
+    const result = JSON.parse(outcome.stdout);
+    assert.equal(result.action, 'stop');
+    assert.equal(result.status, 'setup-failed');
+    assert.equal(result.repositoryProvenance, undefined);
+    const verdict = JSON.parse(await readFile(verdictPath, 'utf8'));
+    assert.equal(validateVerdict(verdict).ok, true);
+    assert.match(verdict.findings[0].title, /requested_repository_missing/);
   } finally {
     await rm(artifactDir, { recursive: true, force: true });
   }
