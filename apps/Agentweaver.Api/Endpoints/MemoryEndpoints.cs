@@ -172,6 +172,79 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
         : Results.Ok(response);
 });
 
+// PUT /api/projects/{id}/agents/{name}/memory/{memId}
+app.MapPut("/api/projects/{id}/agents/{name}/memory/{memId}", async (
+    string id,
+    string name,
+    int memId,
+    UpdateMemoryRequest request,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
+    if (request.Type is null && request.Content is null && request.Importance is null && request.Tags is null)
+        return Results.BadRequest(new { error = "type, content, importance, or tags is required." });
+
+    var memory = await memoryDb.AgentMemory.FindAsync(new object[] { memId }, ct);
+    if (memory is null || memory.ProjectId != id || !string.Equals(memory.AgentName, name, StringComparison.OrdinalIgnoreCase))
+        return Results.NotFound();
+
+    var changed = false;
+    if (request.Type is not null)
+    {
+        var memoryType = request.Type.Trim().ToLowerInvariant();
+        if (!MemoryWritePolicy.IsMemoryType(memoryType))
+            return Results.BadRequest(new { error = "type must be core_context, learning, pattern, or update." });
+        changed |= memory.Type != memoryType;
+        memory.Type = memoryType;
+    }
+    if (request.Importance is not null)
+    {
+        var importance = request.Importance.Trim().ToLowerInvariant();
+        if (!MemoryWritePolicy.IsImportance(importance))
+            return Results.BadRequest(new { error = "importance must be low, medium, or high." });
+        changed |= memory.Importance != importance;
+        memory.Importance = importance;
+    }
+    if (request.Content is not null)
+    {
+        if (string.IsNullOrWhiteSpace(request.Content))
+            return Results.BadRequest(new { error = "content must not be empty." });
+        changed |= memory.Content != request.Content;
+        memory.Content = request.Content;
+    }
+    if (request.Tags is not null)
+    {
+        var tags = MemoryWritePolicy.NormalizeTags(request.Tags);
+        changed |= memory.Tags != tags;
+        memory.Tags = tags;
+    }
+
+    if (changed)
+    {
+        memory.TrustState = MemoryTrustStates.Pending;
+        memory.ApprovedBy = null;
+        memory.ApprovedAt = null;
+        memory.UpdatedAt = DateTimeOffset.UtcNow;
+        await memoryDb.SaveChangesAsync(ct);
+        await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    }
+
+    return Results.Ok(new
+    {
+        memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
+        memory.SourceKind, memory.SourceIdentity, memory.SourceRunId, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt,
+        created_at = memory.CreatedAt, updated_at = memory.UpdatedAt,
+    });
+});
+
 // POST /api/projects/{id}/agents/{name}/memory/{memId}/promote
 app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
     string id,

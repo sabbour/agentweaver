@@ -187,6 +187,112 @@ public sealed class ProjectRoleAssignmentTests : IClassFixture<EntraWebApplicati
     }
 
     [Fact]
+    public async Task Contributor_CanUpdateAgentMemory_WithDurableReadback_AndReapprovalRequired()
+    {
+        using var owner = CreateClient(OwnerOid, PlatformRoles.ProjectCreator);
+        using var contributor = CreateClient(ContributorOid, PlatformRoles.Contributor);
+        var projectId = await CreateProjectAsync(owner);
+
+        (await owner.PostAsJsonAsync($"/api/projects/{projectId}/role-assignments", new
+        {
+            principal_id = ContributorOid,
+            role = "Contributor",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var create = await contributor.PostAsJsonAsync($"/api/projects/{projectId}/agents/smith/memory", new
+        {
+            type = "learning",
+            importance = "high",
+            content = "Before update",
+            tags = "api",
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var created = await create.Content.ReadFromJsonAsync<JsonElement>();
+        var memoryId = created.GetProperty("id").GetInt32();
+        var sourceIdentity = created.GetProperty("sourceIdentity").GetString();
+
+        (await owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/agents/smith/memory/{memoryId}/promote",
+            new { })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var update = await contributor.PutAsJsonAsync(
+            $"/api/projects/{projectId}/agents/smith/memory/{memoryId}",
+            new
+            {
+                type = "pattern",
+                importance = "low",
+                content = "After update",
+                tags = "api, durable, API",
+            });
+
+        update.StatusCode.Should().Be(HttpStatusCode.OK, await update.Content.ReadAsStringAsync());
+        var updated = await update.Content.ReadFromJsonAsync<JsonElement>();
+        updated.GetProperty("content").GetString().Should().Be("After update");
+        updated.GetProperty("type").GetString().Should().Be("pattern");
+        updated.GetProperty("importance").GetString().Should().Be("low");
+        updated.GetProperty("tags").GetString().Should().Be(",api,durable,");
+        updated.GetProperty("trustState").GetString().Should().Be("pending");
+        updated.GetProperty("approvedBy").ValueKind.Should().Be(JsonValueKind.Null);
+        updated.GetProperty("approvedAt").ValueKind.Should().Be(JsonValueKind.Null);
+        updated.GetProperty("sourceIdentity").GetString().Should().Be(sourceIdentity);
+
+        var readback = await contributor.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/agents/smith/memory/{memoryId}");
+        readback.GetProperty("content").GetString().Should().Be("After update");
+        readback.GetProperty("updated_at").GetDateTimeOffset()
+            .Should().BeAfter(readback.GetProperty("created_at").GetDateTimeOffset());
+
+        (await contributor.PutAsJsonAsync(
+            $"/api/projects/{projectId}/agents/smith/memory/{memoryId}",
+            new { type = "decision" })).StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await contributor.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/agents/smith/memory/{memoryId}"))
+            .GetProperty("type").GetString().Should().Be("pattern");
+    }
+
+    [Fact]
+    public async Task AgentMemoryUpdate_RejectsViewerAndCrossProjectOrAgentRecords()
+    {
+        using var owner = CreateClient(OwnerOid, PlatformRoles.ProjectCreator);
+        using var contributor = CreateClient(ContributorOid, PlatformRoles.Contributor);
+        using var viewer = CreateClient(ViewerOid, PlatformRoles.Viewer);
+        var projectId = await CreateProjectAsync(owner);
+        var otherProjectId = await CreateProjectAsync(owner);
+
+        (await owner.PostAsJsonAsync($"/api/projects/{projectId}/role-assignments", new
+        {
+            principal_id = ContributorOid,
+            role = "Contributor",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await owner.PostAsJsonAsync($"/api/projects/{projectId}/role-assignments", new
+        {
+            principal_id = ViewerOid,
+            role = "Viewer",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var create = await owner.PostAsJsonAsync($"/api/projects/{otherProjectId}/agents/smith/memory", new
+        {
+            type = "learning",
+            content = "Other project memory",
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var memoryId = (await create.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetInt32();
+
+        (await viewer.PutAsJsonAsync(
+            $"/api/projects/{projectId}/agents/smith/memory/{memoryId}",
+            new { content = "Viewer edit" })).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await contributor.PutAsJsonAsync(
+            $"/api/projects/{projectId}/agents/smith/memory/{memoryId}",
+            new { content = "Cross-project id" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await owner.PutAsJsonAsync(
+            $"/api/projects/{otherProjectId}/agents/trinity/memory/{memoryId}",
+            new { content = "Cross-agent id" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await contributor.PutAsJsonAsync(
+            $"/api/projects/{otherProjectId}/agents/smith/memory/{memoryId}",
+            new { content = "Unauthorized project" })).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
     public async Task LegacyProject_WithoutLinkedGitHubOwner_FailsClosed_WithClaimGuidance()
     {
         var projectId = await CreateLegacyProjectAsync("legacy-owner");

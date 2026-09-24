@@ -1041,6 +1041,15 @@ public sealed record RecordMemoryRequest
     [JsonPropertyName("tags")] public string? Tags { get; init; }
 }
 
+/// <summary>Request body for updating editable agent-memory fields.</summary>
+public sealed record UpdateMemoryRequest
+{
+    [JsonPropertyName("type")] public string? Type { get; init; }
+    [JsonPropertyName("importance")] public string? Importance { get; init; }
+    [JsonPropertyName("content")] public string? Content { get; init; }
+    [JsonPropertyName("tags")] public string? Tags { get; init; }
+}
+
 /// <summary>Request body for starting or rehydrating the current cross-agent working session for a project.</summary>
 public sealed record StartSessionRequest
 {
