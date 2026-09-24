@@ -456,10 +456,17 @@ public sealed class A2ARoundTripIntegrationTests
             Purpose: AgentHostPurpose.OperatorAssistant,
             ProjectId: "proj-1",
             AgentName: "Operator",
-            McpBrokerToken: "broker-token-xyz")).Should().BeTrue();
+            McpBrokerToken: "broker-token-xyz",
+            ByokProviderConfiguration: new ByokProviderConfiguration(
+                "provider-1",
+                "Private provider",
+                "azure",
+                "https://private-provider.example",
+                "private-model",
+                "private-byok-key"))).Should().BeTrue();
 
         var approvalGate = new InMemoryToolApprovalGate();
-        var fakeAssistant = new GatedFakeOperatorAssistantAgent();
+        var fakeAssistant = new GatedFakeOperatorAssistantAgent(promptProvider: "byok");
         var operatorRunner = new OperatorPodTurnRunner(
             fakeAssistant, runtimeState, approvalGate, NullLogger<OperatorPodTurnRunner>.Instance);
         var routingRunner = new RoutingPodTurnRunner(
@@ -573,10 +580,14 @@ public sealed class A2ARoundTripIntegrationTests
                 "prompt metadata must not add or replace the turn's single completion marker");
             JsonSerializer.Serialize(received.Single(r => r.Type == EventTypes.AgentSystemPrompt).Payload)
                 .Should().Contain("\"RunId\":\"run-operator-roundtrip-1\"")
+                .And.Contain("\"Provider\":\"byok\"")
                 .And.Contain("\"CallableMemoryGuidanceIncluded\":false")
                 .And.NotContain("You are the operator.")
                 .And.NotContain("please run the tool")
-                .And.NotContain("broker-token");
+                .And.NotContain("broker-token")
+                .And.NotContain("private-provider")
+                .And.NotContain("private-model")
+                .And.NotContain("private-byok-key");
 
             var resolved = received.First(r => r.Type == EventTypes.ToolApprovalResolved);
             JsonSerializer.Serialize(resolved.Payload).Should().Contain("\"approved\":true");
@@ -873,7 +884,8 @@ public sealed class A2ARoundTripIntegrationTests
     /// <see cref="OperatorPodTurnRunner"/> wires the pod's own <see cref="IToolApprovalGate"/> into the
     /// turn without needing a live MCP server or Copilot client.
     /// </summary>
-    private sealed class GatedFakeOperatorAssistantAgent : IOperatorAssistantAgent
+    private sealed class GatedFakeOperatorAssistantAgent(string promptProvider = "copilot")
+        : IOperatorAssistantAgent
     {
         private const string ToolName = "run_something";
 
@@ -895,7 +907,7 @@ public sealed class A2ARoundTripIntegrationTests
                 var totalCharacters = 200 + request.Message.Length;
                 await sink.OnPromptMetadataAsync(
                     new AgentRuntimeContextMetrics(
-                        "copilot",
+                        promptProvider,
                         request.ConversationId,
                         request.ProjectId,
                         BaseCharacters: 120,

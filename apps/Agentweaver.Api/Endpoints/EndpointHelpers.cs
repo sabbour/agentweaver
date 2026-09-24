@@ -546,7 +546,7 @@ internal static System.Text.Json.Nodes.JsonObject ProjectAgentSystemPromptPayloa
     if (source is null)
         return result;
 
-    CopyFixedString(source, result, "provider", "copilot");
+    CopyFixedString(source, result, "provider", "copilot", "byok");
     CopyGuidString(source, result, "runId");
     CopyGuidString(source, result, "projectId");
     CopyNonNegativeInt(source, result, "baseCharacters");

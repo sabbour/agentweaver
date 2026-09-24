@@ -209,18 +209,14 @@ public sealed class OperatorAssistantAgent(
                     providerFailure.ErrorCode)).ConfigureAwait(false);
 
             var systemPrompt = BuildSystemPrompt(request, toolDeclarations.Count);
-            var runtimeContext = AgentRuntimeContextMetricsComposer.ComposeFlat(
-                provider: "copilot",
-                request.ConversationId,
-                request.ProjectId,
-                request.Message,
-                systemPrompt,
-                toolDeclarations);
             if (sink is not null)
             {
-                await sink.OnPromptMetadataAsync(
-                    runtimeContext,
-                    callableMemoryGuidanceIncluded: false,
+                await EmitPromptMetadataAsync(
+                    request,
+                    systemPrompt,
+                    toolDeclarations,
+                    modelSource,
+                    sink,
                     ct).ConfigureAwait(false);
             }
 
@@ -664,19 +660,30 @@ public sealed class OperatorAssistantAgent(
             McpBrokerToken: "test",
             History: []), mcpToolCount);
 
-    internal static AgentRuntimeContextMetrics ComposeRuntimeContextForTests(
+    internal static async ValueTask<AgentRuntimeContextMetrics> EmitPromptMetadataAsync(
         OperatorAssistantRequest request,
-        IReadOnlyList<AIFunctionDeclaration> toolDeclarations)
+        string systemPrompt,
+        IReadOnlyList<AIFunctionDeclaration> toolDeclarations,
+        ModelSource modelSource,
+        IOperatorAssistantTurnSink sink,
+        CancellationToken ct)
     {
-        var systemPrompt = BuildSystemPrompt(request, toolDeclarations.Count);
-        return AgentRuntimeContextMetricsComposer.ComposeFlat(
-            "copilot",
+        var runtimeContext = AgentRuntimeContextMetricsComposer.ComposeFlat(
+            PromptMetadataProvider(modelSource),
             request.ConversationId,
             request.ProjectId,
             request.Message,
             systemPrompt,
             toolDeclarations);
+        await sink.OnPromptMetadataAsync(
+            runtimeContext,
+            callableMemoryGuidanceIncluded: false,
+            ct).ConfigureAwait(false);
+        return runtimeContext;
     }
+
+    private static string PromptMetadataProvider(ModelSource modelSource) =>
+        modelSource == ModelSource.Byok ? "byok" : "copilot";
 
     private static string BuildSystemPrompt(OperatorAssistantRequest request, int mcpToolCount = 0)
     {
