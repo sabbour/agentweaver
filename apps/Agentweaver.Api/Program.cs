@@ -157,6 +157,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>(
 // SQLite → SqliteRunEventStream (raw SQLite WAL); Postgres → EfRunEventStream (EF + advisory lock).
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
+builder.Services.AddScoped<DecisionLedgerSyncService>();
 
 // Workflow services
 builder.Services.AddSingleton<RunWorkflowRegistry>();

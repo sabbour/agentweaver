@@ -37,3 +37,18 @@ public sealed record InboxImportDto(
     string Title,
     string Content,
     string? Rationale);
+
+public sealed record InboxImportConflict(
+    string Path,
+    string Reason);
+
+public sealed record InboxImportScanResult(
+    IReadOnlyList<InboxImportDto> Entries,
+    IReadOnlyList<InboxImportConflict> Conflicts);
+
+public sealed record DecisionImportDto(
+    string AgentName,
+    string Type,
+    string Title,
+    string Content,
+    string? Rationale);

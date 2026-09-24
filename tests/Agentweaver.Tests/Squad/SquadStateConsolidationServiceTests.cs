@@ -3,8 +3,12 @@ using LibGit2Sharp;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Squad;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
@@ -25,6 +29,8 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
     private readonly TestSqliteDb _testDb;
     private readonly SqliteProjectStore _projects;
     private readonly RepositoryMergeLock _mergeLock;
+    private readonly MemoryDbContext _memoryDb;
+    private readonly string _memoryDbPath;
     private readonly SquadStateConsolidationService _service;
     private readonly List<string> _tempDirs = new();
 
@@ -42,19 +48,32 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
             .Build();
 
         _mergeLock = new RepositoryMergeLock(configuration, NullLogger<RepositoryMergeLock>.Instance);
+        _memoryDbPath = Path.Combine(Path.GetTempPath(), $"aw-squad-ledger-{Guid.NewGuid():N}.db");
+        _memoryDb = new MemoryDbContext(
+            new DbContextOptionsBuilder<MemoryDbContext>()
+                .UseSqlite($"Data Source={_memoryDbPath}")
+                .Options);
+        _memoryDb.Database.EnsureCreated();
 
         var services = new ServiceCollection();
         services.AddSingleton<IProjectStore>(_projects);
+        services.AddSingleton(_memoryDb);
+        services.AddSingleton(new DecisionLedgerSyncService(
+            _memoryDb, _mergeLock, NullLogger<DecisionLedgerSyncService>.Instance));
         var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
 
         _service = new SquadStateConsolidationService(
-            scopeFactory, _mergeLock, configuration,
+            scopeFactory, configuration,
             NullLogger<SquadStateConsolidationService>.Instance);
     }
 
     public async ValueTask DisposeAsync()
     {
         await _testDb.DisposeAsync();
+        await _memoryDb.DisposeAsync();
+        SqliteConnection.ClearAllPools();
+        if (File.Exists(_memoryDbPath))
+            File.Delete(_memoryDbPath);
         foreach (var dir in _tempDirs)
         {
             try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
@@ -86,7 +105,7 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
         decisions.Should().Contain("Externalized Squad state.");
         decisions.Should().Contain("UI polish decision.");
         decisions.Should().Contain("## existing", "existing ledger content must be preserved");
-        decisions.Should().Contain("<!-- squad-consolidated:", "each entry gets a content-addressed marker");
+        (await _memoryDb.Decisions.CountAsync()).Should().Be(3);
 
         // Inbox entries removed from the committed tree.
         repo.Head.Tip.Tree[".squad/decisions/inbox/dozer-first-decision.md"].Should().BeNull();
@@ -144,6 +163,95 @@ public sealed class SquadStateConsolidationServiceTests : IAsyncDisposable
         var appended = await _service.ConsolidateProjectAsync(project, CancellationToken.None);
 
         appended.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ConcurrentScribeAndConsolidation_PreserveAcceptedDecisionsAndConverge()
+    {
+        var repoPath = CreateSquadRepo(
+            decisions: "# Squad Decisions\n\n## existing\n\nExisting accepted decision.\n",
+            inbox: new()
+            {
+                ["scribe-race.md"] = "# Race decision\n\nPreserve this accepted decision.\n",
+            });
+        var project = await SeedActiveProjectAsync(repoPath);
+
+        await using var scribeDb = new MemoryDbContext(
+            new DbContextOptionsBuilder<MemoryDbContext>()
+                .UseSqlite($"Data Source={_memoryDbPath};Default Timeout=5")
+                .Options);
+        var scribeSync = new DecisionLedgerSyncService(
+            scribeDb, _mergeLock, NullLogger<DecisionLedgerSyncService>.Instance);
+        var scribe = new ScribeExportOperation(scribeSync);
+
+        await Task.WhenAll(
+            _service.ConsolidateProjectAsync(project, CancellationToken.None),
+            scribe.ApplyAsync(
+                project.Id.ToString(),
+                repoPath,
+                project.DefaultBranch,
+                "scribe:race:export",
+                CancellationToken.None));
+
+        await scribeSync.ExportAndCommitAsync(
+            project.Id.ToString(), repoPath, project.DefaultBranch, CancellationToken.None);
+        (await _service.ConsolidateProjectAsync(project, CancellationToken.None)).Should().Be(0);
+
+        await using var verify = new MemoryDbContext(
+            new DbContextOptionsBuilder<MemoryDbContext>()
+                .UseSqlite($"Data Source={_memoryDbPath}")
+                .Options);
+        var decisions = await verify.Decisions
+            .Where(decision => decision.ProjectId == project.Id.ToString())
+            .ToListAsync();
+        decisions.Should().HaveCount(2);
+        decisions.Should().Contain(decision => decision.Content.Contains(
+            "Existing accepted decision.", StringComparison.Ordinal));
+        decisions.Should().Contain(decision => decision.Content.Contains(
+            "Preserve this accepted decision.", StringComparison.Ordinal));
+
+        using var repo = new Repository(repoPath);
+        var ledger = ReadTreeText(repo, ".squad/decisions.md");
+        ledger.Should().Contain("Existing accepted decision.");
+        ledger.Should().Contain("Preserve this accepted decision.");
+        repo.Head.Tip.Tree[".squad/decisions/inbox/scribe-race.md"].Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Consolidate_ReportsConflictWithoutOverwritingEitherSource()
+    {
+        var repoPath = CreateSquadRepo(
+            decisions: "# Squad Decisions\n",
+            inbox: new()
+            {
+                ["shared-slug.md"] =
+                    "---\nagent: repository\nslug: shared-slug\ntype: process\ntitle: Repository title\n---\n\nRepository content\n",
+            });
+        var project = await SeedActiveProjectAsync(repoPath);
+        var now = DateTimeOffset.UtcNow;
+        _memoryDb.DecisionInbox.Add(new DecisionInboxEntry
+        {
+            ProjectId = project.Id.ToString(),
+            AgentName = "repository",
+            Slug = "shared-slug",
+            Type = "process",
+            Title = "Database title",
+            Content = "Database content",
+            Status = "pending",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _memoryDb.SaveChangesAsync();
+
+        (await _service.ConsolidateProjectAsync(project, CancellationToken.None)).Should().Be(0);
+
+        (await _memoryDb.DecisionInbox.SingleAsync(entry => entry.Slug == "shared-slug"))
+            .Content.Should().Be("Database content");
+        File.ReadAllText(Path.Combine(
+                repoPath, ".squad", "decisions", "inbox", "shared-slug.md"))
+            .Should().Contain("Repository content");
+        using var repo = new Repository(repoPath);
+        ReadTreeText(repo, ".squad/decisions.md").Should().NotContain("Database content");
     }
 
     // -------------------------------------------------------------------------

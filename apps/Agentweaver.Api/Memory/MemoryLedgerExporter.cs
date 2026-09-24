@@ -11,16 +11,22 @@ namespace Agentweaver.Api.Memory;
 /// on-disk <c>.squad/</c> + <c>.agentweaver/context/</c> file mirror for a given target directory.
 ///
 /// <para>
-/// Consolidates logic that was previously duplicated across the <c>/memory/export</c> endpoint,
-/// the per-write best-effort refresh (<c>MemoryExportHelpers.TryExportAsync</c>), and
-/// <see cref="Agentweaver.Api.Runs.PostRunScribeService"/>. It is also used to mirror the ledger
-/// into a run's git worktree immediately before commit, so the ledger rides the same commit/push
-/// flow as the run's other changes (issue #539).
+/// Generates the file mirror used by <see cref="DecisionLedgerSyncService"/> and mirrors the
+/// authoritative state into a run's git worktree immediately before commit, so the ledger rides
+/// the same commit/push flow as the run's other changes (issue #539).
 /// </para>
 /// </summary>
-internal static class MemoryLedgerExporter
+public static class MemoryLedgerExporter
 {
-    internal sealed record ExportResult(IReadOnlyList<string> Files);
+    public sealed record ExportResult(IReadOnlyList<string> Files);
+    internal sealed record ReconcileResult(int Imported, IReadOnlyList<DecisionInboxEntry> Entries);
+    internal sealed record AcceptedReconcileResult(int Imported);
+
+    public sealed class DecisionLedgerConflictException(IReadOnlyList<string> conflicts)
+        : InvalidOperationException($"Decision ledger conflicts: {string.Join("; ", conflicts)}")
+    {
+        public IReadOnlyList<string> Conflicts { get; } = conflicts;
+    }
 
     private static readonly string[] FixedExportPaths =
     [
@@ -82,6 +88,137 @@ internal static class MemoryLedgerExporter
                 session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary),
             ct).ConfigureAwait(false);
         return new ExportResult(files);
+    }
+
+    internal static async Task<ReconcileResult> ReconcileInboxAsync(
+        string projectId,
+        string targetDirectory,
+        MemoryDbContext memoryDb,
+        CancellationToken ct)
+    {
+        var scan = new SquadMemoryImporter(targetDirectory).ScanInbox();
+        var conflicts = scan.Conflicts
+            .Select(conflict => $"{conflict.Path}: {conflict.Reason}")
+            .ToList();
+        var existing = await memoryDb.DecisionInbox
+            .Where(entry => entry.ProjectId == projectId)
+            .ToDictionaryAsync(entry => entry.Slug, StringComparer.Ordinal, ct)
+            .ConfigureAwait(false);
+
+        foreach (var candidate in scan.Entries)
+        {
+            if (!existing.TryGetValue(candidate.Slug, out var stored))
+                continue;
+
+            if (stored.Status == "rejected")
+            {
+                conflicts.Add($"{candidate.Slug}: repository entry conflicts with a rejected DB entry");
+                continue;
+            }
+
+            if (!Same(candidate, stored))
+                conflicts.Add($"{candidate.Slug}: repository and DB entries have different content");
+        }
+
+        if (conflicts.Count > 0)
+            throw new DecisionLedgerConflictException(conflicts);
+
+        var imported = 0;
+        var entries = new List<DecisionInboxEntry>(scan.Entries.Count);
+        foreach (var candidate in scan.Entries)
+        {
+            if (existing.TryGetValue(candidate.Slug, out var stored))
+            {
+                entries.Add(stored);
+                continue;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var entry = new DecisionInboxEntry
+            {
+                ProjectId = projectId,
+                AgentName = candidate.AgentName,
+                Slug = candidate.Slug,
+                Type = candidate.Type,
+                Title = candidate.Title,
+                Content = candidate.Content,
+                Rationale = candidate.Rationale,
+                Status = "pending",
+                SourceKind = MemorySourceKinds.Legacy,
+                SourceIdentity = $"repository:.squad/decisions/inbox/{candidate.Slug}.md",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            memoryDb.DecisionInbox.Add(entry);
+            entries.Add(entry);
+            imported++;
+        }
+
+        if (imported > 0)
+            await memoryDb.SaveChangesAsync(ct).ConfigureAwait(false);
+
+        return new ReconcileResult(imported, entries);
+    }
+
+    internal static async Task<AcceptedReconcileResult> ReconcileAcceptedDecisionsAsync(
+        string projectId,
+        string targetDirectory,
+        MemoryDbContext memoryDb,
+        CancellationToken ct)
+    {
+        var candidates = new SquadMemoryImporter(targetDirectory).ScanAcceptedDecisions();
+        var existing = await memoryDb.Decisions
+            .Where(decision => decision.ProjectId == projectId
+                            && decision.TrustState == MemoryTrustStates.Approved)
+            .ToListAsync(ct).ConfigureAwait(false);
+        var conflicts = new List<string>();
+        foreach (var candidate in candidates)
+        {
+            var sameTitle = existing
+                .Where(decision => string.Equals(
+                    decision.Title, candidate.Title, StringComparison.Ordinal))
+                .ToList();
+            if (sameTitle.Count > 0 && sameTitle.All(decision => !Same(candidate, decision)))
+                conflicts.Add($"{candidate.Title}: Markdown and DB decisions have different content");
+        }
+
+        if (conflicts.Count > 0)
+            throw new DecisionLedgerConflictException(conflicts);
+
+        var imported = 0;
+        foreach (var candidate in candidates)
+        {
+            if (existing.Any(decision => Same(candidate, decision)))
+                continue;
+
+            var now = DateTimeOffset.UtcNow;
+            var decision = new Decision
+            {
+                ProjectId = projectId,
+                AgentName = candidate.AgentName,
+                Type = candidate.Type,
+                Status = "active",
+                Title = candidate.Title,
+                Content = candidate.Content,
+                Rationale = candidate.Rationale,
+                SourceKind = MemorySourceKinds.Legacy,
+                SourceIdentity = "repository:.squad/decisions.md",
+                TrustState = MemoryTrustStates.Approved,
+                ApprovedBy = "repository:.squad/decisions.md",
+                ApprovedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            var (_, created) = await MemoryWriteDeduplicator
+                .GetOrCreateDecisionAsync(memoryDb, decision, ct).ConfigureAwait(false);
+            if (created)
+            {
+                existing.Add(decision);
+                imported++;
+            }
+        }
+
+        return new AcceptedReconcileResult(imported);
     }
 
     /// <summary>
@@ -259,4 +396,18 @@ internal static class MemoryLedgerExporter
             }
         }
     }
+
+    private static bool Same(InboxImportDto candidate, DecisionInboxEntry stored) =>
+        string.Equals(candidate.AgentName, stored.AgentName, StringComparison.Ordinal)
+        && string.Equals(candidate.Type, stored.Type, StringComparison.Ordinal)
+        && string.Equals(candidate.Title, stored.Title, StringComparison.Ordinal)
+        && string.Equals(candidate.Content, stored.Content, StringComparison.Ordinal)
+        && string.Equals(candidate.Rationale, stored.Rationale, StringComparison.Ordinal);
+
+    private static bool Same(DecisionImportDto candidate, Decision stored) =>
+        string.Equals(candidate.AgentName, stored.AgentName, StringComparison.Ordinal)
+        && string.Equals(candidate.Type, stored.Type, StringComparison.Ordinal)
+        && string.Equals(candidate.Title, stored.Title, StringComparison.Ordinal)
+        && string.Equals(candidate.Content, stored.Content, StringComparison.Ordinal)
+        && string.Equals(candidate.Rationale, stored.Rationale, StringComparison.Ordinal);
 }

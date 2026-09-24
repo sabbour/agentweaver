@@ -73,7 +73,8 @@ Session context is the current work focus for a project. It records the active s
 
 ### File mirror
 
-The database is authoritative for API reads and writes. Files are an interoperability mirror:
+The database is authoritative for API reads, prompt context, and file generation. Files are an
+interoperability mirror:
 
 - `.squad/decisions.md` for accepted decisions;
 - `.squad/decisions/inbox/{slug}.md` for pending inbox entries;
@@ -83,6 +84,14 @@ The database is authoritative for API reads and writes. Files are an interoperab
 - `.agentweaver/context/patterns.md` for reusable patterns.
 
 This mirror makes memory inspectable and git-friendly without making markdown parsing the primary consistency mechanism.
+
+All canonical sync paths use one ownership contract. API import/export, scheduled inbox
+consolidation, and Scribe acquire the same repository lock, reconcile repository-only accepted
+decisions and inbox entries into the database, then regenerate and optionally commit the mirror.
+Matching reruns are idempotent. If a Markdown entry and a database row use the same identity but
+have different content, synchronization reports `decision_ledger_conflict` and leaves both sources
+unchanged instead of choosing a winner. This preserves accepted decisions when older repositories
+already contain Markdown-only ledger entries while keeping the database authoritative afterward.
 
 ## Why a shared ledger?
 

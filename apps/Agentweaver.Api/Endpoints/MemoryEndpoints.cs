@@ -182,6 +182,7 @@ app.MapPut("/api/projects/{id}/agents/{name}/memory/{memId}", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -238,7 +239,7 @@ app.MapPut("/api/projects/{id}/agents/{name}/memory/{memId}", async (
         {
             return Results.NotFound();
         }
-        await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+        await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
         memory = await memoryDb.AgentMemory
             .AsNoTracking()
             .SingleAsync(m => m.Id == memId, ct);
@@ -385,6 +386,7 @@ app.MapPost("/api/projects/{id}/sessions", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -429,7 +431,7 @@ app.MapPost("/api/projects/{id}/sessions", async (
     memoryDb.SessionContexts.Add(session);
     await memoryDb.SaveChangesAsync(ct);
     await tx.CommitAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Created($"/api/projects/{id}/sessions/current", new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -446,6 +448,7 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -468,7 +471,7 @@ app.MapPut("/api/projects/{id}/sessions/current", async (
     if (request.SerializedState is not null) session.SerializedState = request.SerializedState;
     if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -544,6 +547,7 @@ app.MapMethods("/api/projects/{id}/sessions/{sessionId}", new[] { "PATCH" }, asy
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -561,7 +565,7 @@ app.MapMethods("/api/projects/{id}/sessions/{sessionId}", new[] { "PATCH" }, asy
     if (request.SerializedState is not null) session.SerializedState = request.SerializedState;
     if (request.End == true) session.EndedAt = DateTimeOffset.UtcNow;
     await memoryDb.SaveChangesAsync(ct);
-    await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
     return Results.Ok(new
     {
         session.Id, session.SessionId, session.FocusArea, session.ActiveIssues, session.Summary,
@@ -577,6 +581,7 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -594,12 +599,16 @@ app.MapPost("/api/projects/{id}/memory/export", async (
     {
         // Explicit sync action (spec #25): must report success OR an actionable error — never a
         // false success. ExportAsync throws on failure so it is surfaced here rather than swallowed.
-        export = await MemoryLedgerExporter.ExportAsync(id, project.WorkingDirectory, memoryDb, ct);
-        await MemoryLedgerExporter.CommitExportAsync(project.WorkingDirectory, project.DefaultBranch, ct);
+        export = (await ledgerSync.ExportAndCommitAsync(
+            id, project.WorkingDirectory, project.DefaultBranch, ct)).Export;
     }
     catch (OperationCanceledException)
     {
         throw;
+    }
+    catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+    {
+        return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
     }
     catch (Exception ex)
     {
@@ -673,6 +682,7 @@ app.MapPost("/api/projects/{id}/memory/import", async (
     IProjectStore projectStore,
     IConfiguration configuration,
     MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
     CancellationToken ct) =>
 {
     if (!ProjectId.TryParse(id, out var projectId))
@@ -681,28 +691,15 @@ app.MapPost("/api/projects/{id}/memory/import", async (
     if (project is null) return Results.NotFound();
     if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
 
-    var importer = new Agentweaver.Squad.Memory.SquadMemoryImporter(project.WorkingDirectory);
-    var parsed = importer.ScanInboxFiles().ToList();
-    int newCount = 0;
-    foreach (var p in parsed)
+    try
     {
-        var exists = await memoryDb.DecisionInbox.AnyAsync(e => e.ProjectId == id && e.Slug == p.Slug, ct);
-        if (!exists)
-        {
-            var now = DateTimeOffset.UtcNow;
-            memoryDb.DecisionInbox.Add(new DecisionInboxEntry
-            {
-                ProjectId = id, AgentName = p.AgentName, Slug = p.Slug,
-                Type = p.Type, Title = p.Title, Content = p.Content,
-                Rationale = p.Rationale, Status = "pending",
-                CreatedAt = now, UpdatedAt = now,
-            });
-            newCount++;
-        }
+        var sync = await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
+        return Results.Ok(new { imported = sync.Imported, mirror_exported = true });
     }
-    await memoryDb.SaveChangesAsync(ct);
-    var mirrorExported = await MemoryExportHelpers.TryExportAsync(id, project.WorkingDirectory, memoryDb, ct, logger);
-    return Results.Ok(new { imported = newCount, mirror_exported = mirrorExported });
+    catch (MemoryLedgerExporter.DecisionLedgerConflictException ex)
+    {
+        return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
+    }
 });
     }
 }
@@ -763,20 +760,4 @@ internal static class MemoryPromotionHelpers
 
         return updated == 1;
     }
-}
-
-internal static class MemoryExportHelpers
-{
-    /// <summary>
-    /// Best-effort refresh of the workspace file mirror after a DB write. Returns whether the
-    /// mirror was written so callers can honestly report <c>mirror_exported</c> instead of implying
-    /// unconditional success. Never fails the caller's authoritative DB write.
-    /// </summary>
-    public static Task<bool> TryExportAsync(
-        string projectId,
-        string projectWorkingDirectory,
-        MemoryDbContext memoryDb,
-        CancellationToken ct,
-        ILogger logger)
-        => MemoryLedgerExporter.TryExportAsync(projectId, projectWorkingDirectory, memoryDb, ct, logger);
 }

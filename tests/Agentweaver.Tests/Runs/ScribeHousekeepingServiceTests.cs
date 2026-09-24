@@ -1,10 +1,12 @@
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Git;
 using Agentweaver.Domain;
 using FluentAssertions;
 using LibGit2Sharp;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Runs;
@@ -152,7 +154,7 @@ public sealed class ScribeHousekeepingServiceTests
             await using var db2 = CreateContext($"Data Source={path};Default Timeout=5");
             var project = ProjectFor(seededRun, repositoryPath);
             var exporter = new RecordingExportOperation(
-                new ScribeExportOperation(db1),
+                CreateScribeExportOperation(db1),
                 blockApply: true);
             var service1 = new ScribeHousekeepingService(
                 db1,
@@ -218,7 +220,7 @@ public sealed class ScribeHousekeepingServiceTests
         await db.SaveChangesAsync();
 
         var project = ProjectFor(run, repositoryPath);
-        var realExporter = new ScribeExportOperation(db);
+        var realExporter = CreateScribeExportOperation(db);
         await realExporter.ApplyAsync(
             run.ProjectId!.Value.ToString(),
             repositoryPath,
@@ -274,7 +276,7 @@ public sealed class ScribeHousekeepingServiceTests
         await db.SaveChangesAsync();
 
         var project = ProjectFor(run, repositoryPath);
-        var exporter = new RecordingExportOperation(new ScribeExportOperation(db));
+        var exporter = new RecordingExportOperation(CreateScribeExportOperation(db));
         var service = new ScribeHousekeepingService(
             db,
             new SingleProjectStore(project),
@@ -403,6 +405,16 @@ public sealed class ScribeHousekeepingServiceTests
 
     private static MemoryDbContext CreateContext(string connectionString) =>
         new(new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(connectionString).Options);
+
+    private static ScribeExportOperation CreateScribeExportOperation(MemoryDbContext db)
+    {
+        var configuration = new ConfigurationBuilder().Build();
+        var mergeLock = new RepositoryMergeLock(
+            configuration, NullLogger<RepositoryMergeLock>.Instance);
+        var sync = new DecisionLedgerSyncService(
+            db, mergeLock, NullLogger<DecisionLedgerSyncService>.Instance);
+        return new ScribeExportOperation(sync);
+    }
 
     private static string CreateRepository()
     {
