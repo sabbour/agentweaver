@@ -104,6 +104,41 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
     }
 
     [Fact]
+    public async Task PutNewWorkflow_RejectsLegacyGateIdFallbackWithoutExplicitGateKind()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        var yaml = """
+            id: legacy-gate
+            name: Legacy gate
+            start: author
+            nodes:
+              - id: author
+                type: prompt
+              - id: review
+                type: check
+                branches:
+                  - declined
+              - id: done
+                type: terminal
+            edges:
+              - from: author
+                to: review
+              - from: review
+                to: done
+                when: declined
+            """;
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/legacy-gate",
+            new { yaml });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should()
+            .Contain("must declare explicit 'gate_kind' for authoring");
+    }
+
+    [Fact]
     public async Task PutNewWorkflow_WorkflowIsValidAndSelectable()
     {
         var (projectId, _) = await CreateProjectAsync();

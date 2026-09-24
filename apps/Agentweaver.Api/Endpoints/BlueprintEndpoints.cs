@@ -354,7 +354,10 @@ public static class BlueprintEndpoints
         IReadOnlySet<string>? extraKnownWorkflowIds = null;
         if (!string.IsNullOrWhiteSpace(request.Blueprint.GeneratedWorkflowYaml))
         {
-            var generated = WorkflowDefinitionLoader.Load(request.Blueprint.GeneratedWorkflowYaml, "generated");
+            var generated = WorkflowDefinitionLoader.Load(
+                request.Blueprint.GeneratedWorkflowYaml,
+                "generated",
+                validationMode: WorkflowDefinitionValidationMode.Authoring);
             if (!generated.IsValid || generated.Definition is null)
             {
                 return Results.Ok(new ValidateBlueprintResponse

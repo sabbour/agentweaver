@@ -662,6 +662,26 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task LegacyGateIdWithoutExplicitGateKind_TriggersCorrectionPass()
+    {
+        var legacyShaped = ValidWorkflowYaml.Replace(
+            "gate_kind: human-review",
+            "kind: review",
+            StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(legacyShaped, ValidWorkflowYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Generate a workflow with human approval."));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Nodes.Single(node => node.Id == "human-review").GateKind
+            .Should().Be("human-review");
+        runner.CallCount.Should().Be(2);
+        runner.LastTask.Should().Contain("must declare explicit 'gate_kind' for authoring");
+    }
+
+    [Fact]
     public async Task SoftwareWorkflowWithoutHumanSignOff_TriggersCorrectionPass()
     {
         var runner = new ScriptedAgentRunner(

@@ -62,7 +62,9 @@ Returns the versioned, machine-readable YAML workflow grammar used by runtime va
 binding. The response publishes required and optional fields, limits, YAML and API node type names,
 runtime bindability, gate kinds, edge conditions and supported transitions, and trigger vocabulary.
 OpenAPI-guided clients can use this contract to construct a workflow that passes both parsing and
-runtime bindability checks.
+runtime bindability checks. New authoring requires every `check` node to declare a canonical explicit
+`gate_kind`. The `compatibility` object separately documents the legacy persisted node-id fallbacks
+that remain available only while loading and executing historical workflows.
 
 ### POST /api/runs
 

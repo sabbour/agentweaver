@@ -1196,7 +1196,10 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             IReadOnlySet<string>? extraKnownWorkflowIds = null;
             if (!string.IsNullOrWhiteSpace(request.GeneratedWorkflowYaml))
             {
-                var genWf = WorkflowDefinitionLoader.Load(request.GeneratedWorkflowYaml, "generated");
+                var genWf = WorkflowDefinitionLoader.Load(
+                    request.GeneratedWorkflowYaml,
+                    "generated",
+                    validationMode: WorkflowDefinitionValidationMode.Authoring);
                 if (genWf.IsValid && genWf.Definition is not null)
                     extraKnownWorkflowIds = new HashSet<string>([genWf.Definition.Id], StringComparer.Ordinal);
             }

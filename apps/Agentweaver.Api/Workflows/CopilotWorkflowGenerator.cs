@@ -94,7 +94,10 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         string raw, WorkflowGenerationRequest request)
     {
         var yaml = EnsureWorkflowId(StripFences(raw), request.Description);
-        var result = WorkflowDefinitionLoader.Load(yaml, "generated");
+        var result = WorkflowDefinitionLoader.Load(
+            yaml,
+            "generated",
+            validationMode: WorkflowDefinitionValidationMode.Authoring);
         if (!result.IsValid || result.Definition is null)
             return (yaml, null, result.Error ?? "The generated YAML did not validate.");
 
@@ -301,9 +304,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - build_test: platform-owned Build & Test gate. Do NOT set a prompt; the runtime supplies the
               canonical build/test/preview instruction. Defaults to `agent: qa-engineer` when omitted.
               It emits verdicts routed with `when: approved`, `when: request-changes`, and `when: declined`.
-            - check: a routing gate. MUST declare `branches:` (the verdict strings it routes on) and
-              have exactly one outgoing edge per declared branch. Optional `gate_kind` field for specialised
-              gates: `rai` (responsible-AI safety gate), `rubberduck` (AI critique gate; verdicts
+            - check: a routing gate. MUST declare `branches:` (the verdict strings it routes on), an explicit
+              `gate_kind`, and exactly one outgoing edge per declared branch. Allowed gate kinds:
+              `rai` (responsible-AI safety gate), `rubberduck` (AI critique gate; verdicts
               pass | revise), `human-review` (human HITL review gate).
             - merge / scribe: platform-owned final actions. DO NOT author these nodes; the coordinator
               appends its merge-and-scribe tail after authored gates.

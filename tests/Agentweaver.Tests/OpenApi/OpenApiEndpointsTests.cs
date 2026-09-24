@@ -187,6 +187,12 @@ public sealed class OpenApiEndpointsTests : IDisposable
         check.GetProperty("required_fields").EnumerateArray()
             .Select(field => field.GetString())
             .Should().Contain(["branches", "gate_kind"]);
+        var compatibility = grammar.GetProperty("compatibility");
+        compatibility.GetProperty("legacy_loading_only").GetBoolean().Should().BeTrue();
+        compatibility.GetProperty("check_gate_id_matching").GetString()
+            .Should().Contain("case-insensitive");
+        compatibility.GetProperty("check_gate_id_fallbacks").GetProperty("review").GetString()
+            .Should().Be("human-review");
 
         var gateKind = check.GetProperty("allowed_gate_kinds").EnumerateArray()
             .Select(value => value.GetString()!)

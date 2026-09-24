@@ -89,6 +89,13 @@ allowed gate kinds, edge conditions and transitions, and trigger vocabulary. The
 catalog drives YAML parsing, serialization, binding, and the published OpenAPI response, so a client
 does not need hidden workflow grammar knowledge.
 
+Every newly generated or saved `check` node must declare an explicit canonical `gate_kind`
+(`rai`, `human-review`, or `rubberduck`). Historical persisted workflows whose check ids are `rai`,
+`review`, or `rubberduck` still load and execute through the grammar's documented
+`compatibility.check_gate_id_fallbacks` boundary. When Agentweaver reserializes one of those legacy
+definitions, it writes the inferred `gate_kind` explicitly so the workflow migrates to the current
+authoring contract.
+
 ### YAML editor
 
 Click **New workflow** to open the visual editor with a YAML-backed template. Use **Edit** on an existing project workflow when you prefer to edit its YAML directly.

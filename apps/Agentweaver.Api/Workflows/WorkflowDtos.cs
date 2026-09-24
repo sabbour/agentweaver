@@ -180,6 +180,7 @@ public sealed record WorkflowGrammarDto
     [JsonPropertyName("node_types")] public required IReadOnlyList<WorkflowNodeTypeGrammarDto> NodeTypes { get; init; }
     [JsonPropertyName("edge")] public required WorkflowEdgeGrammarDto Edge { get; init; }
     [JsonPropertyName("triggers")] public required WorkflowTriggerGrammarDto Triggers { get; init; }
+    [JsonPropertyName("compatibility")] public required WorkflowCompatibilityGrammarDto Compatibility { get; init; }
 }
 
 public sealed record WorkflowRootGrammarDto
@@ -235,6 +236,13 @@ public sealed record WorkflowTriggerGrammarDto
     [JsonPropertyName("review_states")] public required IReadOnlyList<string> ReviewStates { get; init; }
     [JsonPropertyName("ref_match_modes")] public required IReadOnlyList<string> RefMatchModes { get; init; }
     [JsonPropertyName("predicate_types")] public required IReadOnlyList<string> PredicateTypes { get; init; }
+}
+
+public sealed record WorkflowCompatibilityGrammarDto
+{
+    [JsonPropertyName("legacy_loading_only")] public required bool LegacyLoadingOnly { get; init; }
+    [JsonPropertyName("check_gate_id_matching")] public required string CheckGateIdMatching { get; init; }
+    [JsonPropertyName("check_gate_id_fallbacks")] public required IReadOnlyDictionary<string, string> CheckGateIdFallbacks { get; init; }
 }
 
 /// <summary>A node in a workflow graph descriptor (US6). role/node_type match the GraphNode shape

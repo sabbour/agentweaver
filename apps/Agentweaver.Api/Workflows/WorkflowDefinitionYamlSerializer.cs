@@ -23,7 +23,10 @@ public static class WorkflowDefinitionYamlSerializer
             Line(sb, "    label", node.Label);
             Line(sb, "    role", node.Role);
             Line(sb, "    kind", node.Kind);
-            Line(sb, "    gate_kind", node.GateKind);
+            var gateKind = node.Type == WorkflowNodeType.Check
+                ? node.GateKind ?? NodeClassifier.LegacyGateKindFromId(node)
+                : node.GateKind;
+            Line(sb, "    gate_kind", gateKind);
             Line(sb, "    agent", node.Agent);
             BlockOrLine(sb, "    prompt", node.Prompt);
             BlockOrLine(sb, "    charter", node.Charter);

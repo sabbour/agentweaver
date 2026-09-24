@@ -119,6 +119,86 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Theory]
+    [InlineData("rai", "safety-failed", "rai")]
+    [InlineData("review", "declined", "human-review")]
+    [InlineData("rubberduck", "pass", "rubberduck")]
+    public void LegacyPersistedGateIds_LoadBindAndReserializeWithExplicitGateKind(
+        string nodeId,
+        string verdict,
+        string expectedGateKind)
+    {
+        var yaml = $"""
+            id: legacy-gate
+            name: Legacy gate
+            start: author
+            nodes:
+              - id: author
+                type: prompt
+              - id: {nodeId}
+                type: check
+                branches:
+                  - {verdict}
+              - id: done
+                type: terminal
+            edges:
+              - from: author
+                to: {nodeId}
+              - from: {nodeId}
+                to: done
+                when: {verdict}
+            """;
+
+        var legacyLoad = WorkflowDefinitionLoader.Load(yaml, "persisted.yaml");
+
+        legacyLoad.IsValid.Should().BeTrue(legacyLoad.Error);
+        legacyLoad.Warnings.Should().ContainSingle(message =>
+            message.Contains($"inferred gate_kind '{expectedGateKind}'", StringComparison.Ordinal));
+        RunWorkflowGraphBinder.GetBindabilityErrors(legacyLoad.Definition!).Should().BeEmpty();
+
+        var migratedYaml = WorkflowDefinitionYamlSerializer.Serialize(legacyLoad.Definition!);
+        migratedYaml.Should().Contain($"gate_kind: {expectedGateKind}");
+        WorkflowDefinitionLoader.Load(
+                migratedYaml,
+                "migrated.yaml",
+                validationMode: WorkflowDefinitionValidationMode.Authoring)
+            .IsValid.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("rai")]
+    [InlineData("review")]
+    [InlineData("rubberduck")]
+    public void AuthoringContract_RejectsLegacyGateIdFallback(string nodeId)
+    {
+        var result = WorkflowDefinitionLoader.Load(
+            $"""
+            id: new-gate
+            name: New gate
+            start: author
+            nodes:
+              - id: author
+                type: prompt
+              - id: {nodeId}
+                type: check
+                branches:
+                  - pass
+              - id: done
+                type: terminal
+            edges:
+              - from: author
+                to: {nodeId}
+              - from: {nodeId}
+                to: done
+                when: pass
+            """,
+            "new.yaml",
+            validationMode: WorkflowDefinitionValidationMode.Authoring);
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("must declare explicit 'gate_kind' for authoring");
+    }
+
+    [Theory]
     [InlineData(WorkflowNodeType.PeerReview)]
     [InlineData(WorkflowNodeType.BuildTest)]
     public void VerdictStyleNode_AsStart_IsRejectedBeforeRuntime(WorkflowNodeType verdictNodeType)
