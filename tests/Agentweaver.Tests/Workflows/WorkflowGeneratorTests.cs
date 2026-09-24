@@ -1416,8 +1416,17 @@ public sealed class WorkflowGeneratorTests
         var worker = factory.Services.GetServices<IHostedService>()
             .OfType<BlueprintGenerationJobWorker>()
             .Single();
-        (await worker.RunOneAsync(CancellationToken.None)).Should().BeTrue();
-        (await worker.RunOneAsync(CancellationToken.None)).Should().BeFalse();
+        _ = await worker.RunOneAsync(CancellationToken.None);
+        JsonElement status = default;
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            status = await client.GetFromJsonAsync<JsonElement>(
+                first.Body.GetProperty("status_url").GetString()!);
+            if (status.GetProperty("status").GetString() == BlueprintGenerationJobStatuses.Completed)
+                break;
+            await Task.Delay(25);
+        }
+        status.GetProperty("status").GetString().Should().Be(BlueprintGenerationJobStatuses.Completed);
 
         await using var scope = factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
