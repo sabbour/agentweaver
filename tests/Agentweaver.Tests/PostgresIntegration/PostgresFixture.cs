@@ -14,7 +14,7 @@ public sealed class PostgresFixture : IAsyncLifetime
 
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine")
         .WithDatabase("awtest").WithUsername("awtest").WithPassword("awtest")
-        .WithCommand("postgres", "-c", $"max_connections={MaxDatabaseConnections}")
+        .WithCommand("-c", $"max_connections={MaxDatabaseConnections}")
         .WithCleanUp(true).Build();
 
     public IDbContextFactory<MemoryDbContext> Factory { get; private set; } = null!;
