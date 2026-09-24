@@ -51,8 +51,9 @@ to evidence.
 
 The matching `staging.storageState.json.sessionStorage.json` sidecar is also the sole
 authentication handoff to the API harness. Its `recorder-session` provider validates
-the target origin and uses the bearer only in memory, so a completed Chrome Default SSO
-login is not repeated for an API harness run.
+the target origin and returns the complete `Authorization` value only in memory. API
+callers pass that value to the header unchanged, so a completed Chrome Default SSO login
+is not repeated for an API harness run.
 
 `init` owns one headless browser worker per session. Separate action invocations reuse
 that worker's page, so navigation and browser state survive a documented

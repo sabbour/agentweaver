@@ -6,7 +6,7 @@ request/response evidence, and emit a normalized
 end-to-end validation; use the UI or MCP harness for those surfaces.
 
 Run all commands below from the repository root. The harness requires Node 18 or
-newer. At its first authenticated call, it obtains the bearer only through the cached
+newer. At its first authenticated call, it obtains the complete `Authorization` value only through the cached
 UI-harness recorder-session provider, in memory, and never accepts bearer material in
 process arguments or borrows
 `gh auth token` or `GITHUB_TOKEN` for a remote target.
@@ -16,7 +16,8 @@ process arguments or borrows
 Agentweaver staging uses Entra Conditional Access. Before an authenticated API run,
 run the documented UI-harness Chrome Default-profile login once for that target. The
 `recorder-session` provider reads its cached UI storage/session sidecar, verifies it
-belongs to the requested origin, and returns the bearer only in memory. It never
+belongs to the requested origin, and returns the complete `Authorization` value only in
+memory. Pass that value to the header unchanged; do not add another scheme. It never
 starts a second browser sign-in or exports the value to an environment variable, CLI
 argument, transcript, finding, verdict, or log:
 
@@ -134,7 +135,7 @@ $transcript = "scripts/api-harness/transcripts/priya-live-<timestamp>.jsonl"
 import { createRecorderSessionAuthProvider } from './scripts/api-harness/lib/auth-providers/recorder-session.mjs';
 const authorization = await createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL }).getAuthorization();
 const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
-  headers: { Authorization: `Bearer ${authorization}` },
+  headers: { Authorization: authorization },
   redirect: 'error',
 });
 console.log(await response.text());

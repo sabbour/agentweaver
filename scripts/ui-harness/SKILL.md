@@ -79,8 +79,9 @@ never automates reauthentication. On `AUTH_EXPIRED`, run the login script again
 (or pass `--storage-state <local-path>` consistently).
 
 After a successful login, the API harness's `recorder-session` provider reuses these
-same cached artifacts for the matching Agentweaver origin. It returns the bearer only
-in memory; it does not start a second browser sign-in or export the value. If the
+same cached artifacts for the matching Agentweaver origin. It returns the complete
+`Authorization` value only in memory; API callers pass that value to the header unchanged.
+It does not start a second browser sign-in or export the value. If the
 artifacts are missing, expired, or for another origin, the API harness tells you to
 rerun this login command.
 

@@ -26,7 +26,8 @@ The JSON and YAML variants describe the same live route surface. Prefer the YAML
 `PersonaActor` is dispatched after Harness resolves the target. It drives one real
 call at a time. Its recorder-session provider reuses the target-matched cached session
 created by `scripts/ui-harness/login-chrome-default.mjs`; it does not start another
-Chrome sign-in. Raw tokens never enter prompts, argv, or transcripts. Missing,
+Chrome sign-in. The provider returns the complete `Authorization` value, which callers
+pass to the header unchanged. Raw tokens never enter prompts, argv, or transcripts. Missing,
 expired, or wrong-origin UI state fails with the login command needed to refresh it.
 Transcript, lifecycle, Judge, hash, finding, and evidence boundaries use the shared
 redactor before persistence or hashing. Sensitive descriptor/value pairs such as
@@ -38,7 +39,7 @@ values are replaced, including nested arrays and JSON-encoded strings.
 import { createRecorderSessionAuthProvider } from './scripts/api-harness/lib/auth-providers/recorder-session.mjs';
 const authorization = await createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL }).getAuthorization();
 const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
-  headers: { Authorization: `Bearer ${authorization}` },
+  headers: { Authorization: authorization },
   redirect: 'error',
 });
 console.log(await response.text());
