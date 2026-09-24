@@ -22,14 +22,14 @@ public sealed class SquadMemoryImporter
     public InboxImportScanResult ScanInbox()
     {
         var inboxDir = Path.Combine(_workingDirectory, ".squad", "decisions", "inbox");
-        if (!Directory.Exists(inboxDir))
-            return new InboxImportScanResult([], []);
-
         var entries = new List<InboxImportDto>();
         var conflicts = new List<InboxImportConflict>();
         try
         {
             EnsureSafePath(inboxDir);
+            if (!Directory.Exists(inboxDir))
+                return new InboxImportScanResult([], []);
+
             foreach (var file in Directory.EnumerateFiles(inboxDir, "*.md"))
             {
                 try
@@ -58,10 +58,10 @@ public sealed class SquadMemoryImporter
     public IReadOnlyList<DecisionImportDto> ScanAcceptedDecisions()
     {
         var path = Path.Combine(_workingDirectory, ".squad", "decisions.md");
+        EnsureSafePath(path);
         if (!File.Exists(path))
             return [];
 
-        EnsureSafePath(path);
         var text = File.ReadAllText(path).Replace("\r\n", "\n", StringComparison.Ordinal);
         var decisions = new List<DecisionImportDto>();
         const string marker = "<!-- agentweaver-decision:id=";
@@ -212,13 +212,32 @@ public sealed class SquadMemoryImporter
         if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Ledger path escapes the repository root.");
         var relative = Path.GetRelativePath(_workingDirectory, fullPath);
-        var current = _workingDirectory;
+        var current = Path.GetFullPath(_workingDirectory);
+        EnsurePathIsNotReparsePoint(current);
         foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
         {
             if (segment is "." or "") continue;
             current = Path.Combine(current, segment);
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            EnsurePathIsNotReparsePoint(current);
+        }
+    }
+
+    private static void EnsurePathIsNotReparsePoint(string path)
+    {
+        try
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidOperationException("Ledger paths must not traverse symbolic links or reparse points.");
+        }
+        catch (FileNotFoundException)
+        {
+            // LinkTarget identifies dangling links that File.GetAttributes cannot resolve.
+            if (new FileInfo(path).LinkTarget is not null || new DirectoryInfo(path).LinkTarget is not null)
+                throw new InvalidOperationException("Ledger paths must not traverse symbolic links or reparse points.");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // A nonexistent ordinary target is allowed; later segments cannot exist.
         }
     }
 }
