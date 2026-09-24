@@ -49,9 +49,254 @@ public sealed class SqliteToPostgresMigrator
         // Legacy GitHub OAuth, linked-identity, and MCP broker state is intentionally not
         // transferred. Only GitHub connections records below remain valid after the Entra-only cutover.
         await MigrateGitHubConnectionsRecordsAsync(memoryDbPath, db, ct);
+        await MigrateMemoryStateAsync(memoryDbPath, db, ct);
 
         _logger.LogInformation("Migration complete.");
     }
+
+    private async Task MigrateMemoryStateAsync(
+        string memoryDbPath,
+        MemoryDbContext destination,
+        CancellationToken ct)
+    {
+        if (!File.Exists(memoryDbPath))
+            return;
+
+        var sourceOptions = new DbContextOptionsBuilder<MemoryDbContext>()
+            .UseSqlite(
+                $"Data Source={memoryDbPath}",
+                sqlite => sqlite.MigrationsAssembly(typeof(SqliteToPostgresMigrator).Assembly.GetName().Name))
+            .Options;
+        await using var source = new MemoryDbContext(sourceOptions);
+        await PrepareGitHubConnectionsSourceSchemaAsync(source, ct).ConfigureAwait(false);
+
+        List<AgentMemory> memories;
+        List<Decision> decisions;
+        List<DecisionInboxEntry> inbox;
+        List<SessionContext> sessions;
+        try
+        {
+            memories = await source.AgentMemory.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            decisions = await source.Decisions.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            inbox = await source.DecisionInbox.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            sessions = await source.SessionContexts.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
+                                        ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("SQLite source predates memory persistence; no memory state to migrate.");
+            return;
+        }
+
+        if (memories.Count + decisions.Count + inbox.Count + sessions.Count == 0)
+            return;
+
+        var projectIds = memories.Select(x => x.ProjectId)
+            .Concat(decisions.Select(x => x.ProjectId))
+            .Concat(inbox.Select(x => x.ProjectId))
+            .Concat(sessions.Select(x => x.ProjectId))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var destinationProjectIds = await destination.Projects.AsNoTracking()
+            .Where(x => projectIds.Contains(x.ProjectId))
+            .Select(x => x.ProjectId)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        if (destinationProjectIds.Count != projectIds.Length)
+            throw new InvalidOperationException(
+                "Memory state transfer aborted: a source project is missing from the destination.");
+
+        var migratedMemories = 0;
+        var migratedDecisions = 0;
+        var migratedInbox = 0;
+        var migratedSessions = 0;
+        await using var transaction = await destination.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            foreach (var memory in memories)
+            {
+                var existing = await destination.AgentMemory.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Id == memory.Id, ct)
+                    .ConfigureAwait(false);
+                if (existing is null)
+                {
+                    destination.AgentMemory.Add(memory);
+                    migratedMemories++;
+                }
+                else if (!MemoryMatches(memory, existing))
+                {
+                    throw new InvalidOperationException(
+                        $"Memory state transfer aborted: AgentMemory id {memory.Id} conflicts with the destination.");
+                }
+            }
+            await destination.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            var supersessionLinks = new Dictionary<int, int?>();
+            foreach (var decision in decisions)
+            {
+                var existing = await destination.Decisions.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Id == decision.Id, ct)
+                    .ConfigureAwait(false);
+                if (existing is null)
+                {
+                    supersessionLinks[decision.Id] = decision.SupersededById;
+                    decision.SupersededById = null;
+                    destination.Decisions.Add(decision);
+                    migratedDecisions++;
+                }
+                else if (!DecisionMatches(decision, existing))
+                {
+                    throw new InvalidOperationException(
+                        $"Memory state transfer aborted: Decision id {decision.Id} conflicts with the destination.");
+                }
+            }
+            await destination.SaveChangesAsync(ct).ConfigureAwait(false);
+            foreach (var (decisionId, supersededById) in supersessionLinks)
+            {
+                var decision = await destination.Decisions
+                    .SingleAsync(x => x.Id == decisionId, ct)
+                    .ConfigureAwait(false);
+                decision.SupersededById = supersededById;
+            }
+            await destination.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            foreach (var entry in inbox)
+            {
+                var existing = await destination.DecisionInbox.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Id == entry.Id, ct)
+                    .ConfigureAwait(false);
+                if (existing is null)
+                {
+                    destination.DecisionInbox.Add(entry);
+                    migratedInbox++;
+                }
+                else if (!InboxEntryMatches(entry, existing))
+                {
+                    throw new InvalidOperationException(
+                        $"Memory state transfer aborted: DecisionInbox id {entry.Id} conflicts with the destination.");
+                }
+            }
+            foreach (var session in sessions)
+            {
+                var existing = await destination.SessionContexts.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Id == session.Id, ct)
+                    .ConfigureAwait(false);
+                if (existing is null)
+                {
+                    destination.SessionContexts.Add(session);
+                    migratedSessions++;
+                }
+                else if (!SessionMatches(session, existing))
+                {
+                    throw new InvalidOperationException(
+                        $"Memory state transfer aborted: SessionContext id {session.Id} conflicts with the destination.");
+                }
+            }
+            await destination.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            if (destination.Database.IsNpgsql())
+            {
+                await ResetPostgresIdentityAsync(destination, "AgentMemory", ct).ConfigureAwait(false);
+                await ResetPostgresIdentityAsync(destination, "Decisions", ct).ConfigureAwait(false);
+                await ResetPostgresIdentityAsync(destination, "DecisionInbox", ct).ConfigureAwait(false);
+                await ResetPostgresIdentityAsync(destination, "SessionContexts", ct).ConfigureAwait(false);
+            }
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        _logger.LogInformation(
+            "  Memory state migrated: {Memories} memories, {Decisions} decisions, {Inbox} inbox entries, {Sessions} sessions.",
+            migratedMemories,
+            migratedDecisions,
+            migratedInbox,
+            migratedSessions);
+    }
+
+    private static Task ResetPostgresIdentityAsync(
+        MemoryDbContext db,
+        string table,
+        CancellationToken ct)
+    {
+        var sql = table switch
+        {
+            "AgentMemory" => """SELECT setval(pg_get_serial_sequence('"AgentMemory"', 'Id'), (SELECT COALESCE(MAX("Id"), 1) FROM "AgentMemory"), true);""",
+            "Decisions" => """SELECT setval(pg_get_serial_sequence('"Decisions"', 'Id'), (SELECT COALESCE(MAX("Id"), 1) FROM "Decisions"), true);""",
+            "DecisionInbox" => """SELECT setval(pg_get_serial_sequence('"DecisionInbox"', 'Id'), (SELECT COALESCE(MAX("Id"), 1) FROM "DecisionInbox"), true);""",
+            "SessionContexts" => """SELECT setval(pg_get_serial_sequence('"SessionContexts"', 'Id'), (SELECT COALESCE(MAX("Id"), 1) FROM "SessionContexts"), true);""",
+            _ => throw new ArgumentOutOfRangeException(nameof(table), table, "Unknown identity table."),
+        };
+        return db.Database.ExecuteSqlRawAsync(sql, ct);
+    }
+
+    private static bool MemoryMatches(AgentMemory source, AgentMemory destination) =>
+        source.ProjectId == destination.ProjectId &&
+        source.AgentName == destination.AgentName &&
+        source.SessionId == destination.SessionId &&
+        source.Type == destination.Type &&
+        source.Importance == destination.Importance &&
+        source.Content == destination.Content &&
+        source.Tags == destination.Tags &&
+        source.SourceKind == destination.SourceKind &&
+        source.SourceIdentity == destination.SourceIdentity &&
+        source.SourceRunId == destination.SourceRunId &&
+        source.TrustState == destination.TrustState &&
+        source.ApprovedBy == destination.ApprovedBy &&
+        NormalizeTimestamp(source.ApprovedAt) == NormalizeTimestamp(destination.ApprovedAt) &&
+        source.IdentityKey == destination.IdentityKey &&
+        NormalizeTimestamp(source.CreatedAt) == NormalizeTimestamp(destination.CreatedAt) &&
+        NormalizeTimestamp(source.UpdatedAt) == NormalizeTimestamp(destination.UpdatedAt);
+
+    private static bool DecisionMatches(Decision source, Decision destination) =>
+        source.ProjectId == destination.ProjectId &&
+        source.AgentName == destination.AgentName &&
+        source.Type == destination.Type &&
+        source.Status == destination.Status &&
+        source.Title == destination.Title &&
+        source.Content == destination.Content &&
+        source.Rationale == destination.Rationale &&
+        source.Tags == destination.Tags &&
+        source.SupersededById == destination.SupersededById &&
+        source.SourceKind == destination.SourceKind &&
+        source.SourceIdentity == destination.SourceIdentity &&
+        source.SourceRunId == destination.SourceRunId &&
+        source.TrustState == destination.TrustState &&
+        source.ApprovedBy == destination.ApprovedBy &&
+        NormalizeTimestamp(source.ApprovedAt) == NormalizeTimestamp(destination.ApprovedAt) &&
+        source.IdentityKey == destination.IdentityKey &&
+        NormalizeTimestamp(source.CreatedAt) == NormalizeTimestamp(destination.CreatedAt) &&
+        NormalizeTimestamp(source.UpdatedAt) == NormalizeTimestamp(destination.UpdatedAt);
+
+    private static bool InboxEntryMatches(DecisionInboxEntry source, DecisionInboxEntry destination) =>
+        source.ProjectId == destination.ProjectId &&
+        source.AgentName == destination.AgentName &&
+        source.Slug == destination.Slug &&
+        source.Type == destination.Type &&
+        source.Title == destination.Title &&
+        source.Content == destination.Content &&
+        source.Rationale == destination.Rationale &&
+        source.Status == destination.Status &&
+        source.DecisionId == destination.DecisionId &&
+        source.SourceKind == destination.SourceKind &&
+        source.SourceIdentity == destination.SourceIdentity &&
+        source.SourceRunId == destination.SourceRunId &&
+        NormalizeTimestamp(source.CreatedAt) == NormalizeTimestamp(destination.CreatedAt) &&
+        NormalizeTimestamp(source.UpdatedAt) == NormalizeTimestamp(destination.UpdatedAt) &&
+        NormalizeTimestamp(source.MergedAt) == NormalizeTimestamp(destination.MergedAt);
+
+    private static bool SessionMatches(SessionContext source, SessionContext destination) =>
+        source.ProjectId == destination.ProjectId &&
+        source.SessionId == destination.SessionId &&
+        source.FocusArea == destination.FocusArea &&
+        source.ActiveIssues == destination.ActiveIssues &&
+        source.Summary == destination.Summary &&
+        source.SerializedState == destination.SerializedState &&
+        NormalizeTimestamp(source.StartedAt) == NormalizeTimestamp(destination.StartedAt) &&
+        NormalizeTimestamp(source.EndedAt) == NormalizeTimestamp(destination.EndedAt);
 
     private async Task MigrateGitHubConnectionsRecordsAsync(string memoryDbPath, MemoryDbContext destination, CancellationToken ct)
     {
