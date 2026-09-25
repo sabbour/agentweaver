@@ -229,8 +229,14 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     public Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default) =>
         inner.UpdateWorkflowSelectionReasonAsync(runId, reason, ct);
 
+    public Task UpdateExecutableWorkflowPinAsync(
+        RunId runId,
+        ExecutableWorkflowPin pin,
+        CancellationToken ct = default) =>
+        Inner.UpdateExecutableWorkflowPinAsync(runId, pin, ct);
+
     public Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default) =>
-        inner.UpdateModelSourceAsync(runId, modelSource, ct);
+        Inner.UpdateModelSourceAsync(runId, modelSource, ct);
 
     public Task<bool> TryBeginPreviewPublicationAsync(
         RunId runId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
@@ -1421,10 +1423,30 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false,
         int? steeringDirectiveId = null, int? steeringAttempt = null)
     {
-        var effectiveWorkflow = isChild
-            ? null
-            : await ResolveEffectiveWorkflowAsync(input.ProjectId, runId, ct).ConfigureAwait(false);
-        var effectiveDefinition = effectiveWorkflow?.Definition;
+        WorkflowDefinition? effectiveDefinition = null;
+        if (!isChild)
+        {
+            var parsedRunId = RunId.Parse(runId);
+            var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (run?.GetExecutableWorkflowPin() is { } existingPin)
+            {
+                effectiveDefinition = LoadPinnedExecutableWorkflow(runId, existingPin);
+            }
+            else
+            {
+                if (input.IsRevision && run?.ExecutableWorkflowPinRequired == true)
+                {
+                    throw new WorkflowBindException(
+                        $"Run '{runId}' requires a pinned executable workflow manifest before revision execution, but none is stored. " +
+                        "Revision launch cannot safely select the current project default.",
+                        runId);
+                }
+
+                var effectiveWorkflow = await ResolveEffectiveWorkflowAsync(input.ProjectId, runId, ct).ConfigureAwait(false);
+                effectiveDefinition = effectiveWorkflow.Definition;
+                await PersistExecutableWorkflowPinAsync(parsedRunId, effectiveWorkflow, ct).ConfigureAwait(false);
+            }
+        }
         if (!isChild)
             _workflowWorktreeMaterializer?.TryMaterialize(input.WorktreePath, effectiveDefinition);
         var (workflow, descriptor, executorMeta) = BuildWorkflow(isChild, effectiveDefinition);
@@ -1504,7 +1526,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         var isChild = run.ParentRunId is not null;
         var effectiveDefinition = isChild
             ? null
-            : (await ResolveEffectiveWorkflowAsync(run.ProjectId?.ToString(), run.Id.ToString(), ct).ConfigureAwait(false)).Definition;
+            : await ResolveExecutableWorkflowDefinitionAsync(
+                run, run.ProjectId?.ToString(), run.Id.ToString(), captureIfMissing: false, ct)
+                .ConfigureAwait(false);
         return BuildWorkflow(isChild, effectiveDefinition).Descriptor;
     }
 
@@ -1550,6 +1574,98 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 $"Project '{project.Id}' workflow could not be resolved: {workflowResult.Error ?? "unknown workflow error"}");
 
         return workflowResult;
+    }
+
+    private async Task<WorkflowDefinition?> ResolveExecutableWorkflowDefinitionAsync(
+        Agentweaver.Domain.Run? run,
+        string? projectId,
+        string runId,
+        bool captureIfMissing,
+        CancellationToken ct)
+    {
+        if (run?.GetExecutableWorkflowPin() is { } pin)
+            return LoadPinnedExecutableWorkflow(runId, pin);
+
+        if (run?.ExecutableWorkflowPinRequired == true && !captureIfMissing)
+        {
+            throw new WorkflowBindException(
+                $"Run '{runId}' requires a pinned executable workflow manifest, but none is stored. " +
+                "Resume cannot safely select the current project default; retry or recover the missing run manifest.",
+                runId);
+        }
+
+        var resolved = await ResolveEffectiveWorkflowAsync(projectId, runId, ct).ConfigureAwait(false);
+        if (captureIfMissing && run?.ExecutableWorkflowPinRequired == true && resolved.Definition is not null)
+            await PersistExecutableWorkflowPinAsync(RunId.Parse(runId), resolved, ct).ConfigureAwait(false);
+        return resolved.Definition;
+    }
+
+    private async Task PersistExecutableWorkflowPinAsync(
+        RunId runId,
+        WorkflowLoadResult resolved,
+        CancellationToken ct)
+    {
+        if (resolved.Definition is null)
+            throw new WorkflowBindException(
+                $"Run '{runId}' executable workflow could not be pinned because no resolved definition was available.",
+                runId.ToString());
+
+        var yaml = WorkflowDefinitionYamlSerializer.Serialize(resolved.Definition);
+        var pin = new ExecutableWorkflowPin
+        {
+            ManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+            DefinitionId = resolved.Definition.Id,
+            DefinitionVersion = resolved.Definition.Version,
+            Source = resolved.Source,
+            ContentDigest = ComputeSha256Digest(yaml),
+            DefinitionYaml = yaml,
+            PinnedAt = DateTimeOffset.UtcNow,
+        };
+        await _runStore.UpdateExecutableWorkflowPinAsync(runId, pin, ct).ConfigureAwait(false);
+    }
+
+    private static WorkflowDefinition LoadPinnedExecutableWorkflow(string runId, ExecutableWorkflowPin pin)
+    {
+        if (pin.ManifestSchemaVersion != ExecutableWorkflowPin.CurrentSchemaVersion)
+        {
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow manifest schema version {pin.ManifestSchemaVersion} is not supported by this application.",
+                runId);
+        }
+
+        var actualDigest = ComputeSha256Digest(pin.DefinitionYaml);
+        if (!string.Equals(actualDigest, pin.ContentDigest, StringComparison.Ordinal))
+        {
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow content digest mismatch: expected {pin.ContentDigest}, computed {actualDigest}.",
+                runId);
+        }
+
+        var loaded = WorkflowDefinitionLoader.Load(
+            pin.DefinitionYaml,
+            pin.Source,
+            validationMode: WorkflowDefinitionValidationMode.LegacyCompatible);
+        if (!loaded.IsValid || loaded.Definition is null)
+        {
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow '{pin.DefinitionId}' could not be loaded: {loaded.Error ?? "unknown workflow error"}",
+                runId);
+        }
+
+        if (!string.Equals(loaded.Definition.Id, pin.DefinitionId, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow identity mismatch: manifest references '{pin.DefinitionId}' but content contains '{loaded.Definition.Id}'.",
+                runId);
+        }
+
+        return loaded.Definition;
+    }
+
+    private static string ComputeSha256Digest(string content)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(content));
+        return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private async Task<string?> ResolveWorkflowOverrideIdAsync(string? runId, CancellationToken ct)
@@ -1604,10 +1720,11 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         {
             var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
             isChild = run?.ParentRunId is not null;
-            var effectiveWorkflow = isChild
+            var effectiveDefinition = isChild
                 ? null
-                : await ResolveEffectiveWorkflowAsync(run?.ProjectId?.ToString(), checkpointInfo.SessionId, ct).ConfigureAwait(false);
-            var effectiveDefinition = effectiveWorkflow?.Definition;
+                : await ResolveExecutableWorkflowDefinitionAsync(
+                    run, run?.ProjectId?.ToString(), checkpointInfo.SessionId, captureIfMissing: false, ct)
+                    .ConfigureAwait(false);
             if (!isChild && run is not null)
                 _workflowWorktreeMaterializer?.TryMaterialize(run.WorktreePath ?? string.Empty, effectiveDefinition);
             var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(isChild, effectiveDefinition);

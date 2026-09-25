@@ -371,6 +371,14 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.SandboxClaimName).HasColumnName("sandbox_claim_name");
             e.Property(r => r.SandboxPodName).HasColumnName("sandbox_pod_name");
             e.Property(r => r.SandboxNamespace).HasColumnName("sandbox_namespace");
+            e.Property(r => r.ExecutableWorkflowPinRequired).HasColumnName("executable_workflow_pin_required").HasDefaultValue(false);
+            e.Property(r => r.ExecutableWorkflowManifestSchemaVersion).HasColumnName("executable_workflow_manifest_schema_version");
+            e.Property(r => r.ExecutableWorkflowDefinitionId).HasColumnName("executable_workflow_definition_id");
+            e.Property(r => r.ExecutableWorkflowDefinitionVersion).HasColumnName("executable_workflow_definition_version");
+            e.Property(r => r.ExecutableWorkflowSource).HasColumnName("executable_workflow_source");
+            e.Property(r => r.ExecutableWorkflowContentDigest).HasColumnName("executable_workflow_content_digest");
+            e.Property(r => r.ExecutableWorkflowDefinitionYaml).HasColumnName("executable_workflow_definition_yaml");
+            e.Property(r => r.ExecutableWorkflowPinnedAt).HasColumnName("executable_workflow_pinned_at");
             e.Property(r => r.PreviewPublicationLeaseUntil).HasColumnName("preview_publication_lease_until");
             e.Property(r => r.PreviewPublicationLeaseOwner).HasColumnName("preview_publication_lease_owner");
             e.HasIndex(r => new { r.ProjectId, r.Status }).HasDatabaseName("IX_runs_project_status");

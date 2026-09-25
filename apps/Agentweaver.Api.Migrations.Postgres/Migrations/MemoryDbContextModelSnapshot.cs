@@ -2308,6 +2308,40 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("ended_at");
 
+                    b.Property<string>("ExecutableWorkflowContentDigest")
+                        .HasColumnType("text")
+                        .HasColumnName("executable_workflow_content_digest");
+
+                    b.Property<string>("ExecutableWorkflowDefinitionId")
+                        .HasColumnType("text")
+                        .HasColumnName("executable_workflow_definition_id");
+
+                    b.Property<string>("ExecutableWorkflowDefinitionVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("executable_workflow_definition_version");
+
+                    b.Property<string>("ExecutableWorkflowDefinitionYaml")
+                        .HasColumnType("text")
+                        .HasColumnName("executable_workflow_definition_yaml");
+
+                    b.Property<int?>("ExecutableWorkflowManifestSchemaVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("executable_workflow_manifest_schema_version");
+
+                    b.Property<bool>("ExecutableWorkflowPinRequired")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("executable_workflow_pin_required");
+
+                    b.Property<DateTimeOffset?>("ExecutableWorkflowPinnedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("executable_workflow_pinned_at");
+
+                    b.Property<string>("ExecutableWorkflowSource")
+                        .HasColumnType("text")
+                        .HasColumnName("executable_workflow_source");
+
                     b.Property<long>("FencingToken")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint")

@@ -162,6 +162,12 @@ public interface IRunStore
     Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default);
     Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default);
 
+    Task UpdateExecutableWorkflowPinAsync(
+        RunId runId,
+        ExecutableWorkflowPin pin,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not implement UpdateExecutableWorkflowPinAsync.");
+
     /// <summary>
     /// Repoints a run at a different <see cref="ModelSource"/>. Used by long-lived Assistant/Operator
     /// sessions, whose effective model provider is re-resolved at the start of every turn (a platform

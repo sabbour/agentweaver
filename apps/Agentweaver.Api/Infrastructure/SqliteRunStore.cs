@@ -29,6 +29,7 @@ public sealed class SqliteRunStore : IRunStore
                               agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id,
                               origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
                               sandbox_pod_name, sandbox_namespace, workflow_selection_reason,
+                              executable_workflow_pin_required,
                               launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
                               approval_policy_source,
                               approval_policy_captured_at, approval_policy_settings_updated_at,
@@ -39,6 +40,7 @@ public sealed class SqliteRunStore : IRunStore
                     $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId,
                     $origin, $retriedFrom, $archivedAt, $sandboxBackend, $sandboxClaimName,
                     $sandboxPodName, $sandboxNamespace, $workflowSelectionReason,
+                    $executableWorkflowPinRequired,
                     $launchAutoApproveTools, $launchAutopilot, $approvalPolicySnapshotId,
                     $approvalPolicySource,
                     $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt,
@@ -72,6 +74,7 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$sandboxPodName", (object?)run.SandboxPodName ?? DBNull.Value);
         command.Parameters.AddWithValue("$sandboxNamespace", (object?)run.SandboxNamespace ?? DBNull.Value);
         command.Parameters.AddWithValue("$workflowSelectionReason", (object?)run.WorkflowSelectionReason ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executableWorkflowPinRequired", run.ParentRunId is null && run.ProjectId is not null ? 1 : 0);
         command.Parameters.AddWithValue("$launchAutoApproveTools", run.LaunchAutoApproveTools is { } autoApproveTools ? autoApproveTools ? 1 : 0 : DBNull.Value);
         command.Parameters.AddWithValue("$launchAutopilot", run.LaunchAutopilot is { } autopilot ? autopilot ? 1 : 0 : DBNull.Value);
         command.Parameters.AddWithValue("$approvalPolicySnapshotId", (object?)run.ApprovalPolicySnapshotId ?? DBNull.Value);
@@ -979,7 +982,8 @@ public sealed class SqliteRunStore : IRunStore
                               retried_from, launch_auto_approve_tools, launch_autopilot,
                               approval_policy_snapshot_id,
                               approval_policy_source, approval_policy_captured_at,
-                              approval_policy_settings_updated_at, approval_policy_inherited_from_run_id)
+                              approval_policy_settings_updated_at, approval_policy_inherited_from_run_id,
+                              executable_workflow_pin_required)
             SELECT $runId, $repo, $branch, $modelSource, $task,
                    $user, $status, $startedAt, NULL, NULL,
                    NULL, NULL, $projectId, $modelId,
@@ -987,7 +991,8 @@ public sealed class SqliteRunStore : IRunStore
                    $retriedFrom, $launchAutoApproveTools, $launchAutopilot,
                    $approvalPolicySnapshotId,
                    $approvalPolicySource, $approvalPolicyCapturedAt,
-                   $approvalPolicySettingsUpdatedAt, $approvalPolicyInheritedFromRunId
+                   $approvalPolicySettingsUpdatedAt, $approvalPolicyInheritedFromRunId,
+                   $executableWorkflowPinRequired
             WHERE EXISTS (
                 SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
             );
@@ -1015,6 +1020,7 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$approvalPolicyCapturedAt", NullableTs(run.ApprovalPolicyCapturedAt));
         command.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", NullableTs(run.ApprovalPolicySettingsUpdatedAt));
         command.Parameters.AddWithValue("$approvalPolicyInheritedFromRunId", (object?)run.ApprovalPolicyInheritedFromRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executableWorkflowPinRequired", run.ParentRunId is null && run.ProjectId is not null ? 1 : 0);
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -1030,6 +1036,10 @@ public sealed class SqliteRunStore : IRunStore
     //           34=launch_auto_approve_tools 35=launch_autopilot 36=approval_policy_snapshot_id
     //           37=approval_policy_source 38=approval_policy_captured_at
     //           39=approval_policy_settings_updated_at 40=approval_policy_inherited_from_run_id
+    //           41=executable_workflow_pin_required 42=executable_workflow_manifest_schema_version
+    //           43=executable_workflow_definition_id 44=executable_workflow_definition_version
+    //           45=executable_workflow_source 46=executable_workflow_content_digest
+    //           47=executable_workflow_definition_yaml 48=executable_workflow_pinned_at
     private const string SelectSql =
         """
         SELECT run_id, repository_path, originating_branch, model_source, task,
@@ -1042,7 +1052,11 @@ public sealed class SqliteRunStore : IRunStore
                launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
                approval_policy_source,
                approval_policy_captured_at, approval_policy_settings_updated_at,
-               approval_policy_inherited_from_run_id
+               approval_policy_inherited_from_run_id,
+               executable_workflow_pin_required, executable_workflow_manifest_schema_version,
+               executable_workflow_definition_id, executable_workflow_definition_version,
+               executable_workflow_source, executable_workflow_content_digest,
+               executable_workflow_definition_yaml, executable_workflow_pinned_at
           FROM runs
         """;
 
@@ -1090,6 +1104,14 @@ public sealed class SqliteRunStore : IRunStore
         ApprovalPolicyCapturedAt = r.IsDBNull(38) ? null : DateTimeOffset.Parse(r.GetString(38), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         ApprovalPolicySettingsUpdatedAt = r.IsDBNull(39) ? null : DateTimeOffset.Parse(r.GetString(39), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         ApprovalPolicyInheritedFromRunId = r.IsDBNull(40) ? null : r.GetString(40),
+        ExecutableWorkflowPinRequired = !r.IsDBNull(41) && r.GetInt32(41) != 0,
+        ExecutableWorkflowManifestSchemaVersion = r.IsDBNull(42) ? null : r.GetInt32(42),
+        ExecutableWorkflowDefinitionId = r.IsDBNull(43) ? null : r.GetString(43),
+        ExecutableWorkflowDefinitionVersion = r.IsDBNull(44) ? null : r.GetString(44),
+        ExecutableWorkflowSource = r.IsDBNull(45) ? null : r.GetString(45),
+        ExecutableWorkflowContentDigest = r.IsDBNull(46) ? null : r.GetString(46),
+        ExecutableWorkflowDefinitionYaml = r.IsDBNull(47) ? null : r.GetString(47),
+        ExecutableWorkflowPinnedAt = r.IsDBNull(48) ? null : DateTimeOffset.Parse(r.GetString(48), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);
@@ -1120,6 +1142,38 @@ public sealed class SqliteRunStore : IRunStore
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
         WarnIfNoRows(rows, runId, "update workflow selection reason");
+    }
+
+    public async Task UpdateExecutableWorkflowPinAsync(
+        RunId runId,
+        ExecutableWorkflowPin pin,
+        CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET executable_workflow_pin_required = 1,
+                   executable_workflow_manifest_schema_version = $schemaVersion,
+                   executable_workflow_definition_id = $definitionId,
+                   executable_workflow_definition_version = $definitionVersion,
+                   executable_workflow_source = $source,
+                   executable_workflow_content_digest = $contentDigest,
+                   executable_workflow_definition_yaml = $definitionYaml,
+                   executable_workflow_pinned_at = $pinnedAt
+             WHERE run_id = $runId;
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$schemaVersion", pin.ManifestSchemaVersion);
+                cmd.Parameters.AddWithValue("$definitionId", pin.DefinitionId);
+                cmd.Parameters.AddWithValue("$definitionVersion", (object?)pin.DefinitionVersion ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$source", pin.Source);
+                cmd.Parameters.AddWithValue("$contentDigest", pin.ContentDigest);
+                cmd.Parameters.AddWithValue("$definitionYaml", pin.DefinitionYaml);
+                cmd.Parameters.AddWithValue("$pinnedAt", Ts(pin.PinnedAt));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        WarnIfNoRows(rows, runId, "pin executable workflow");
     }
 
     public async Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default)

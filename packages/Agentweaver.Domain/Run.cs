@@ -109,6 +109,39 @@ public sealed record Run
     /// </summary>
     public string? WorkflowSelectionReason { get; init; }
 
+    /// <summary>
+    /// True for post-v0.34 root workflow runs, whose resume path must use the pinned executable
+    /// workflow definition or fail explicitly. False/null preserves legacy in-flight runs.
+    /// </summary>
+    public bool ExecutableWorkflowPinRequired { get; init; }
+
+    public int? ExecutableWorkflowManifestSchemaVersion { get; init; }
+    public string? ExecutableWorkflowDefinitionId { get; init; }
+    public string? ExecutableWorkflowDefinitionVersion { get; init; }
+    public string? ExecutableWorkflowSource { get; init; }
+    public string? ExecutableWorkflowContentDigest { get; init; }
+    public string? ExecutableWorkflowDefinitionYaml { get; init; }
+    public DateTimeOffset? ExecutableWorkflowPinnedAt { get; init; }
+
+    public ExecutableWorkflowPin? GetExecutableWorkflowPin() =>
+        ExecutableWorkflowManifestSchemaVersion is not { } schemaVersion
+        || string.IsNullOrWhiteSpace(ExecutableWorkflowDefinitionId)
+        || string.IsNullOrWhiteSpace(ExecutableWorkflowSource)
+        || string.IsNullOrWhiteSpace(ExecutableWorkflowContentDigest)
+        || string.IsNullOrWhiteSpace(ExecutableWorkflowDefinitionYaml)
+        || ExecutableWorkflowPinnedAt is not { } pinnedAt
+            ? null
+            : new ExecutableWorkflowPin
+            {
+                ManifestSchemaVersion = schemaVersion,
+                DefinitionId = ExecutableWorkflowDefinitionId!,
+                DefinitionVersion = ExecutableWorkflowDefinitionVersion,
+                Source = ExecutableWorkflowSource!,
+                ContentDigest = ExecutableWorkflowContentDigest!,
+                DefinitionYaml = ExecutableWorkflowDefinitionYaml!,
+                PinnedAt = pinnedAt,
+            };
+
     /// <summary>When set, the run is archived off project board/list projections.</summary>
     public DateTimeOffset? ArchivedAt { get; init; }
     public string? SandboxBackend { get; init; }

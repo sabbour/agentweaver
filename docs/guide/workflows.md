@@ -44,6 +44,24 @@ warning instead of silently changing the user's choice.
 The matched workflow is shown in the run detail. If the auto-match picks the wrong one, you can
 override it at submission time.
 
+## Resume safety and workflow pinning
+
+When a root workflow run starts, Agentweaver stores the resolved executable workflow YAML with a
+manifest schema version and a `sha256:` content digest on the run row before execution. Resume and
+run graph reconstruction use that pinned definition, so editing, renaming, deleting, or changing the
+project default workflow after a run starts does not move a suspended run into today's graph.
+
+The pin covers the executable workflow definition only: workflow id/source/version, normalized YAML,
+digest, and pin timestamp. It deliberately does not copy credentials, authorization grants,
+capability policies, or approval authority. Those checks still use current state when execution or
+resume happens, so revoked repository access, removed model credentials, or stricter safety/tool
+policy can still block a pinned run.
+
+If a post-v0.34 run requires a workflow pin but the stored manifest is missing, uses an unsupported
+schema version, or fails its content-digest check, resume fails explicitly instead of selecting the
+current project default. Legacy in-flight runs created before workflow pinning do not have complete
+manifests; they keep the previous compatibility behavior rather than being broken by the upgrade.
+
 ## Workflows in your project
 
 The **Workflows** page distinguishes built-in catalog workflows from project-local
