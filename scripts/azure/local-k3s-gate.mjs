@@ -80,12 +80,14 @@ export async function probeWslK3s({ exec = execDefault } = {}) {
     "pgrep -a k3s >/dev/null 2>&1 && echo k3s_process=present || echo k3s_process=absent",
     "test -f /etc/rancher/k3s/k3s.yaml && echo k3s_kubeconfig=present || echo k3s_kubeconfig=absent",
     "kubectl config current-context 2>/dev/null | sed 's/^/current_context=/' || true",
+    "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl config current-context 2>/dev/null | sed 's/^/k3s_context=/' || true",
   ].join("; ");
   const result = await exec.capture("wsl", ["-d", distro, "--", "sh", "-lc", script], { allowFailure: true });
   return {
     distro,
     available: result.code === 0
       && /k3s_binary=present/.test(result.stdout)
+      && /k3s_process=present/.test(result.stdout)
       && /k3s_kubeconfig=present/.test(result.stdout),
     stdout: result.stdout,
     stderr: result.stderr,
@@ -107,6 +109,15 @@ export async function ensureWslK3s({ exec = execDefault, log = logDefault } = {}
   if (probe.available) return probe;
 
   log.warn(k3sInstallGuidance(probe.distro));
+  if (/k3s_binary=present/.test(probe.stdout) && /k3s_kubeconfig=present/.test(probe.stdout)) {
+    log.info("k3s is installed but not running; attempting non-interactive service start in WSL...");
+    await exec.capture("wsl", [
+      "-d", probe.distro, "--", "sh", "-lc",
+      "sudo -n systemctl start k3s 2>/dev/null || sudo -n service k3s start 2>/dev/null || true",
+    ], { allowFailure: true, timeoutMs: 60_000 });
+    probe = await probeWslK3s({ exec });
+    if (probe.available) return probe;
+  }
   log.info("Attempting non-interactive k3s installation in WSL...");
   const installScript = [
     "set -eu",
@@ -197,6 +208,12 @@ function removeEnv(env, name) {
   if (index >= 0) env.splice(index, 1);
 }
 
+function upsertVolumeMount(mounts, entry) {
+  const index = mounts.findIndex((item) => item.name === entry.name);
+  if (index >= 0) mounts[index] = entry;
+  else mounts.push(entry);
+}
+
 function localizeDeployment(deployment, { role, imageTag }) {
   const copy = structuredClone(deployment);
   copy.metadata.namespace = "agentweaver";
@@ -224,16 +241,21 @@ function localizeDeployment(deployment, { role, imageTag }) {
       upsertEnv(env, { name: "Auth__Keys__0__PlatformRoles", value: "PlatformAdmin" });
     }
     upsertEnv(env, { name: "Auth__ApiKey", valueFrom: { secretKeyRef: { name: "agentweaver-secrets", key: "mcp-api-key" } } });
+    upsertEnv(env, { name: "Auth__FileSecretStore__Path", value: "/var/agentweaver/local-secrets" });
+    upsertEnv(env, { name: "Auth__FileSecretStore__AllowOutsideDevelopment", value: role === "worker" ? "true" : "false" });
     upsertEnv(env, { name: "AiExecution__ProviderKeySigningKey", valueFrom: { secretKeyRef: { name: "agentweaver-secrets", key: "ai-execution-provider-key-signing-key" } } });
     removeEnv(env, "Auth__KeyVault__Uri");
     removeEnv(env, "DataProtection__KeyVault__VaultUri");
     removeEnv(env, "APPLICATIONINSIGHTS_CONNECTION_STRING");
     removeEnv(env, "APPLICATIONINSIGHTS_WORKSPACE_ID");
+    const mounts = container.volumeMounts ??= [];
+    upsertVolumeMount(mounts, { name: "local-secret-store", mountPath: "/var/agentweaver/local-secrets" });
   }
   pod.volumes = [
     { name: "workspace", emptyDir: {} },
     { name: "tmp", emptyDir: {} },
     { name: "logs", emptyDir: {} },
+    { name: "local-secret-store", hostPath: { path: "/var/lib/rancher/k3s/agentweaver-local-secrets", type: "DirectoryOrCreate" } },
     { name: "secrets-store", secret: { secretName: "agentweaver-secrets" } },
     { name: "a2a-client-tls", secret: { secretName: "agentweaver-a2a-client-tls", defaultMode: 0o400 } },
   ];
@@ -341,12 +363,13 @@ async function buildAndLoadApiImage({ exec, repoRoot, imageTag, distro, skipBuil
 }
 
 async function applyAndWaitLocalK3s({ exec, distro, manifestYaml, timeoutSeconds }) {
-  await wsl(exec, distro, "kubectl apply -f -", { input: manifestYaml, timeoutMs: 5 * 60_000 });
+  const kubectl = "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl";
+  await wsl(exec, distro, `${kubectl} apply -f -`, { input: manifestYaml, timeoutMs: 5 * 60_000 });
   for (const name of ["agentweaver-postgres", "agentweaver-api", "agentweaver-worker"]) {
     await wsl(
       exec,
       distro,
-      `kubectl -n agentweaver rollout status deployment/${name} --timeout=${Math.floor(timeoutSeconds)}s`,
+      `${kubectl} -n agentweaver rollout status deployment/${name} --timeout=${Math.floor(timeoutSeconds)}s`,
       { timeoutMs: timeoutSeconds * 1000 },
     );
   }
@@ -354,8 +377,8 @@ async function applyAndWaitLocalK3s({ exec, distro, manifestYaml, timeoutSeconds
 
 function startPortForward({ distro }) {
   const child = spawn("wsl", [
-    "-d", distro, "--", "kubectl", "-n", "agentweaver",
-    "port-forward", "svc/agentweaver-api", "18080:8080",
+    "-d", distro, "--", "sh", "-lc",
+    "KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n agentweaver port-forward svc/agentweaver-api 18080:8080",
   ], { stdio: "ignore", windowsHide: true });
   return {
     target: "http://127.0.0.1:18080",
@@ -363,6 +386,22 @@ function startPortForward({ distro }) {
       if (!child.killed) child.kill();
     },
   };
+}
+
+async function waitForHttpReady(target, { timeoutSeconds }) {
+  const deadline = Date.now() + Math.min(timeoutSeconds * 1000, 60_000);
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(new URL("/api/version", target), { redirect: "error" });
+      if (response.ok) return;
+      lastError = new Error(`status ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`Timed out waiting for local API port-forward at ${target}: ${lastError?.message ?? "not ready"}`);
 }
 
 async function runSmoke(target, { repoRoot, timeoutSeconds, exec }) {
@@ -438,6 +477,7 @@ export async function run(input = [], opts = {}) {
     });
     portForward = startPortForward({ distro: probe.distro });
     target = portForward.target;
+    await waitForHttpReady(target, { timeoutSeconds: args.timeoutSeconds });
   }
 
   if (args.skipSmoke) return { ok: true, smoke: "skipped", imageTag: rendered.imageTag };
