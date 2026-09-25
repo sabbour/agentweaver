@@ -320,11 +320,6 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.match(builtYaml, /name: Auth__RepoApp__PrivateKeySecretName\s*\n\s*valueFrom:\s*\n\s*configMapKeyRef:\s*\n\s*key: REPO_APP_PRIVATE_KEY_SECRET_NAME\s*\n\s*name: agentweaver-runtime-config/);
   assert.match(builtYaml, /REPO_APP_PRIVATE_KEY_SECRET_NAME: repo-app-private-key/);
   assert.match(builtYaml, /name: Auth__CopilotApp__ClientId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: copilot-app-client-id\s*\n\s*name: agentweaver-secrets/);
-  assert.match(
-    builtYaml,
-    /name: AiExecution__ProviderKeySigningKey\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: ai-execution-provider-key-signing-key\s*\n\s*name: agentweaver-secrets/,
-    "all API replicas must read execution-key signing material from the same Kubernetes Secret",
-  );
   assert.match(builtYaml, /name: Auth__RepoApp__AppId\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: repo-app-id\s*\n\s*name: agentweaver-secrets/);
   assert.match(builtYaml, /objectName: mcp-api-key[\s\S]*?objectName: ai-execution-provider-key-signing-key[\s\S]*?objectName: appinsights-connection-string/);
   assert.match(builtYaml, /objectName: copilot-app-client-id[\s\S]*?objectName: copilot-app-client-secret[\s\S]*?objectName: repo-app-client-id[\s\S]*?objectName: repo-app-client-secret[\s\S]*?objectName: repo-app-id/);
@@ -335,6 +330,18 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
   assert.doesNotMatch(builtYaml, /mcp-oauth-signing-key|Auth__OAuth__(?:SigningKey|Issuer|Audience)|OAUTH_ISSUER|OAUTH_AUDIENCE/);
 
   const docs = parseBuiltDocs(builtYaml);
+  const apiDeployment = manifestForFilename(docs, "api-deployment.yaml");
+  assert.match(
+    apiDeployment,
+    /name: AiExecution__ProviderKeySigningKey\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: ai-execution-provider-key-signing-key\s*\n\s*name: agentweaver-secrets/,
+    "API replicas must read execution-context signing material from agentweaver-secrets",
+  );
+  const workerDeployment = manifestForFilename(docs, "worker-deployment.yaml");
+  assert.match(
+    workerDeployment,
+    /name: AiExecution__ProviderKeySigningKey\s*\n\s*valueFrom:\s*\n\s*secretKeyRef:\s*\n\s*key: ai-execution-provider-key-signing-key\s*\n\s*name: agentweaver-secrets/,
+    "workers must read execution-context signing material from agentweaver-secrets",
+  );
   // issue #471: the AgentHost ServiceAccount must be wired to the DEDICATED KV-less identity, while
   // the API/MCP ServiceAccounts keep the KV-privileged API identity.
   const agentHostSaManifest = manifestForFilename(docs, "serviceaccount-agenthost.yaml");
@@ -379,7 +386,6 @@ test("writeOverlay() + kubectl kustomize builds cleanly and every resource resol
     /Auth__Entra__|Auth__Mode|AllowGitHubPassthrough|AGENTWEAVER_API_KEY|AGENTWEAVER_ALLOW_SHARED_KEY/,
     "MCP must not retain direct-Entra, GitHub-token, or internal-key fallback configuration",
   );
-  const apiDeployment = manifestForFilename(docs, "api-deployment.yaml");
   assert.doesNotMatch(apiDeployment, /Auth__Mcp__AllowGitHubPassthrough/);
 
   const mcpRoute = manifestForFilename(docs, "mcp-httproute.yaml");
