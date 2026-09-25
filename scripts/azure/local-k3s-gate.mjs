@@ -16,6 +16,20 @@ function localBearer() {
   return process.env.AGENTWEAVER_LOCAL_TEST_BEARER || "agentweaver-local-k3s-test-bearer";
 }
 
+function isLoopbackTarget(target) {
+  let url;
+  try {
+    url = new URL(target);
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  return host === "localhost"
+    || host.endsWith(".localhost")
+    || host === "::1"
+    || /^127(?:\.\d{1,3}){0,3}$/.test(host);
+}
+
 export const HELP_TEXT = `Agentweaver local k3s release gate
 
 Usage:
@@ -63,6 +77,9 @@ export function parseArgs(argv = []) {
 
   if (!Number.isFinite(args.timeoutSeconds) || args.timeoutSeconds <= 0) {
     throw new Error("--timeout must be a positive number of seconds");
+  }
+  if (args.target && !isLoopbackTarget(args.target)) {
+    throw new Error("--target must be a loopback URL for the local k3s gate.");
   }
   return args;
 }

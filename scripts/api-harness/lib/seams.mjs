@@ -433,6 +433,12 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
         && !!blueprintRequest.result.responseBody?.blueprint,
       `result status=${blueprintRequest.result?.status ?? '(not fetched)'}`,
     );
+  } else if (scenario.requireDurableJobs && blueprintRequest?.accepted) {
+    add(
+      'Blueprint generation uses the durable job contract (202)',
+      false,
+      `status ${blueprintRequest.accepted.status}`,
+    );
   }
   if (blueprintResult.replacement?.retried) {
     add(
@@ -620,6 +626,12 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
           && !!workflowRequest.result.responseBody?.artifact_id
           && !!workflowRequest.result.responseBody?.yaml,
         `result status=${workflowRequest.result?.status ?? '(not fetched)'}`,
+      );
+    } else if (scenario.requireDurableJobs && workflowRequest?.accepted) {
+      add(
+        'Advanced workflow generation uses the durable job contract (202)',
+        false,
+        `status ${workflowRequest.accepted.status}`,
       );
     }
     if (cancelRetryContext?.ready) {
