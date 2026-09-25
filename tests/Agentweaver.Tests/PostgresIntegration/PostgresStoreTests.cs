@@ -38,6 +38,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         migrations.Should().Contain("20260717003000_AddSkillProjectOwnershipCascades");
         migrations.Should().Contain("20260921182700_AddTerminalRunOutcomes");
         migrations.Should().Contain("20260922030000_AddTerminalProjectionEventSequence");
+        migrations.Should().Contain("20260925165110_AddExecutableWorkflowPins");
     }
 
     [PostgresFact]

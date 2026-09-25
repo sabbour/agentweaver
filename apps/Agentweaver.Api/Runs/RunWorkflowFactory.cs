@@ -1428,13 +1428,20 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         {
             var parsedRunId = RunId.Parse(runId);
             var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
-            if (run?.GetExecutableWorkflowPin() is { } existingPin)
+            if (run is null)
+            {
+                throw new WorkflowBindException(
+                    $"Run '{runId}' cannot start because its durable run record is missing.",
+                    runId);
+            }
+
+            if (run.GetExecutableWorkflowPin() is { } existingPin)
             {
                 effectiveDefinition = LoadPinnedExecutableWorkflow(runId, existingPin);
             }
             else
             {
-                if (input.IsRevision && run?.ExecutableWorkflowPinRequired == true)
+                if (input.IsRevision && run.ExecutableWorkflowPinRequired)
                 {
                     throw new WorkflowBindException(
                         $"Run '{runId}' requires a pinned executable workflow manifest before revision execution, but none is stored. " +
@@ -1659,6 +1666,13 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 runId);
         }
 
+        if (!string.Equals(loaded.Definition.Version, pin.DefinitionVersion, StringComparison.Ordinal))
+        {
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow version mismatch: manifest references '{pin.DefinitionVersion}' but content contains '{loaded.Definition.Version}'.",
+                runId);
+        }
+
         return loaded.Definition;
     }
 
@@ -1719,13 +1733,20 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         if (RunId.TryParse(checkpointInfo.SessionId, out var rid))
         {
             var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
-            isChild = run?.ParentRunId is not null;
+            if (run is null)
+            {
+                throw new WorkflowBindException(
+                    $"Run '{checkpointInfo.SessionId}' cannot resume because its durable run record is missing.",
+                    checkpointInfo.SessionId);
+            }
+
+            isChild = run.ParentRunId is not null;
             var effectiveDefinition = isChild
                 ? null
                 : await ResolveExecutableWorkflowDefinitionAsync(
-                    run, run?.ProjectId?.ToString(), checkpointInfo.SessionId, captureIfMissing: false, ct)
+                    run, run.ProjectId?.ToString(), checkpointInfo.SessionId, captureIfMissing: false, ct)
                     .ConfigureAwait(false);
-            if (!isChild && run is not null)
+            if (!isChild)
                 _workflowWorktreeMaterializer?.TryMaterialize(run.WorktreePath ?? string.Empty, effectiveDefinition);
             var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(isChild, effectiveDefinition);
             _runExecutorMeta[checkpointInfo.SessionId] = executorMetaForRun;
