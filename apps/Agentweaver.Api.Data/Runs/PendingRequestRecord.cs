@@ -7,13 +7,11 @@ namespace Agentweaver.Api.Runs;
 /// load-balancing across API replicas.
 ///
 /// The background workflow watch loop arms this gate when the MAF runtime suspends at the
-/// request port (<c>RequestInfoEvent</c>); a LATER HTTP review/confirm request consumes it.
+/// request port (<c>RequestInfoEvent</c>); a LATER HTTP review/confirm request resolves it.
 /// At <c>replicas:2</c> the consuming request may land on a DIFFERENT pod than the one that
 /// armed the gate, so the gate must live in <c>MemoryDbContext</c> (Postgres in prod, SQLite in
-/// dev) rather than per-pod memory. Single-consume is enforced atomically across replicas by a
-/// conditional <c>ExecuteDeleteAsync</c> on <see cref="RunId"/> (read-then-conditional-delete):
-/// the caller whose delete affected the row wins; a zero-rows result means the gate was already
-/// consumed (replay / double-POST protection — at-most-once delivery).
+/// dev) rather than per-pod memory. Delivery is fenced by a state machine on this same row: the
+/// exact request id and decision identity are retained until the workflow response is acknowledged.
 /// </summary>
 public sealed class PendingRequestRecord
 {
@@ -28,12 +26,49 @@ public sealed class PendingRequestRecord
     /// </summary>
     public required string RequestJson { get; set; }
 
+    /// <summary>The MAF request id from <see cref="RequestJson"/>; fences stale decisions for old gates.</summary>
+    public string? RequestId { get; set; }
+
     /// <summary>The submitting user that owns this run (IDOR defense-in-depth on consume).</summary>
     public required string OwnerUser { get; set; }
+
+    /// <summary>Durable delivery state: waiting, ready, delivering, or delivered.</summary>
+    public string DeliveryState { get; set; } = PendingRequestDeliveryStates.Waiting;
+
+    /// <summary>Stable kind discriminator for the serialized response payload.</summary>
+    public string? DeliveryKind { get; set; }
+
+    /// <summary>Stable identity of the decision/result being delivered to this exact request id.</summary>
+    public string? DecisionIdentity { get; set; }
+
+    /// <summary>Serialized response payload that will be passed to <c>ExternalRequest.CreateResponse</c>.</summary>
+    public string? ResponseJson { get; set; }
+
+    /// <summary>Current delivery owner while <see cref="DeliveryState"/> is delivering.</summary>
+    public string? DeliveryClaimOwner { get; set; }
+
+    /// <summary>When the current delivery claim was acquired.</summary>
+    public DateTimeOffset? DeliveryClaimedAt { get; set; }
+
+    /// <summary>When the workflow response was acknowledged.</summary>
+    public DateTimeOffset? DeliveredAt { get; set; }
 
     /// <summary>When this gate was armed.</summary>
     public DateTimeOffset CreatedAt { get; set; }
 
     /// <summary>Optional expiry for opportunistic garbage collection; null = no expiry.</summary>
     public DateTimeOffset? ExpiresAt { get; set; }
+}
+
+public static class PendingRequestDeliveryStates
+{
+    public const string Waiting = "waiting";
+    public const string Ready = "ready";
+    public const string Delivering = "delivering";
+    public const string Delivered = "delivered";
+}
+
+public static class PendingRequestDeliveryKinds
+{
+    public const string WorkflowReview = "workflow_review";
 }

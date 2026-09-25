@@ -265,6 +265,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         });
 
         model.Entity<PendingRequestRecord>().HasIndex(p => p.RunId).IsUnique();
+        model.Entity<PendingRequestRecord>().HasIndex(p => new { p.RunId, p.RequestId, p.DecisionIdentity });
+        model.Entity<PendingRequestRecord>().HasIndex(p => new { p.DeliveryState, p.DeliveryClaimedAt });
+        model.Entity<PendingRequestRecord>().Property(p => p.DeliveryState)
+            .HasDefaultValue(PendingRequestDeliveryStates.Waiting);
         model.Entity<PendingRequestRecord>().HasIndex(p => p.ExpiresAt);
         model.Entity<HeartbeatStatusRecord>().HasKey(h => h.PodName);
         model.Entity<CoordinatorDeferredDecisionRecord>().HasIndex(d => d.RunId).IsUnique();

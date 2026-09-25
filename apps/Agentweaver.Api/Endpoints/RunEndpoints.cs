@@ -981,7 +981,15 @@ app.MapPost("/api/runs/{id}/review", async (
     var streamingRunForReview = workflowRegistry.Get(id);
     var pendingForReview = await pendingStore.GetAsync(id, ct);
     if (streamingRunForReview is not null && pendingForReview is null)
+    {
+        if (await pendingStore.ExistsUndeliveredAsync(id, ct).ConfigureAwait(false))
+        {
+            var queuedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+            return Results.Json(new ReviewResponse { RunId = id, Status = queuedStatus, MergeResult = null });
+        }
+
         return Results.StatusCode(StatusCodes.Status409Conflict);
+    }
 
     var operationName = run.ParentRunId is null
         && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
@@ -1030,17 +1038,130 @@ app.MapPost("/api/runs/{id}/review", async (
             && !caller.Owns(pendingForDefer.OwnerUser))
             return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-        if (!await DeferReviewDecisionAsync(id, decision, scopeFactory, logger, CancellationToken.None)
+        if (!await workflowFactory.HasCheckpointAsync(id, ct).ConfigureAwait(false))
+        {
+            if (request.RequestChanges)
+            {
+                var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
+                if (!transitioned)
+                    return Results.StatusCode(StatusCodes.Status409Conflict);
+            }
+            else if (!request.Approved)
+            {
+                var declined = await runStore.TryMutateTerminalOutcomeAsync(
+                    runId,
+                    new TerminalRunMutation(
+                        TerminalRunOutcome.Create(RunStatus.Declined, EventTypes.ReviewDeclined, new { }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                        null,
+                        new HashSet<RunStatus> { RunStatus.AwaitingReview },
+                        caller.User),
+                    ct);
+                if (!declined)
+                    return Results.StatusCode(StatusCodes.Status409Conflict);
+                await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+                    .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
+            }
+
+            logger.LogInformation(
+                "Review decision: {Decision} (direct no-checkpoint path). RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
+                request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
+                id, run.SubmittingUser, caller.User);
+            return await ExecuteDirectReviewAsync(
+                id, runId, run, request, runStore, streamStore, terminalOutcomeProjector, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
+        }
+
+        if (!await pendingStore.TryQueueDeliveryAsync(
+                id,
+                PendingRequestDeliveryKinds.WorkflowReview,
+                PendingRequestStore.CreateDecisionIdentity(pendingForDefer.Request.RequestId, decision),
+                decision,
+                pendingForDefer.OwnerUser,
+                CancellationToken.None)
             .ConfigureAwait(false))
             return Results.StatusCode(StatusCodes.Status409Conflict);
 
-        if (request.RequestChanges)
+        var deferredStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+        return Results.Json(new ReviewResponse { RunId = id, Status = deferredStatus, MergeResult = null });
+    }
+
+    PendingEntry? pendingEntry = null;
+    string? decisionIdentity = null;
+    if (streamingRunForReview is not null)
+    {
+        pendingEntry = await pendingStore.GetAsync(id, ct);
+        if (pendingEntry is null)
+            return Results.StatusCode(409);
+
+        // Guardrail 9: IDOR defense-in-depth — verify caller owns the pending request.
+        if (run.ProjectId is null
+            && !caller.Owns(pendingEntry.OwnerUser))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+        decisionIdentity = PendingRequestStore.CreateDecisionIdentity(pendingEntry.Request.RequestId, decision);
+        if (!await pendingStore.TryQueueDeliveryAsync(
+                id,
+                PendingRequestDeliveryKinds.WorkflowReview,
+                decisionIdentity,
+                decision,
+                pendingEntry.OwnerUser,
+                CancellationToken.None).ConfigureAwait(false))
+            return Results.StatusCode(StatusCodes.Status409Conflict);
+    }
+
+    if (pendingEntry is null
+        && await pendingStore.ExistsUndeliveredAsync(id, ct).ConfigureAwait(false))
+    {
+        if (!await workflowFactory.HasCheckpointAsync(id, ct).ConfigureAwait(false))
         {
-            var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, CancellationToken.None);
+            if (request.RequestChanges)
+            {
+                var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
+                if (!transitioned)
+                    return Results.StatusCode(StatusCodes.Status409Conflict);
+            }
+            else if (!request.Approved)
+            {
+                var declined = await runStore.TryMutateTerminalOutcomeAsync(
+                    runId,
+                    new TerminalRunMutation(
+                        TerminalRunOutcome.Create(RunStatus.Declined, EventTypes.ReviewDeclined, new { }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                        null,
+                        new HashSet<RunStatus> { RunStatus.AwaitingReview },
+                        caller.User),
+                    ct);
+                if (!declined)
+                    return Results.StatusCode(StatusCodes.Status409Conflict);
+                await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+                    .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
+            }
+
+            logger.LogInformation(
+                "Review decision: {Decision} (direct queued no-checkpoint path). RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
+                request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
+                id, run.SubmittingUser, caller.User);
+            return await ExecuteDirectReviewAsync(
+                id, runId, run, request, runStore, streamStore, terminalOutcomeProjector, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
+        }
+
+        var queuedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+        return Results.Json(new ReviewResponse { RunId = id, Status = queuedStatus, MergeResult = null });
+    }
+
+    if (streamingRunForReview is null)
+    {
+        if (request.Approved)
+        {
+            // Live MAF owns the AwaitingReview -> Merging CAS at the actual merge executor.
+            // The direct fallback below still performs the merge synchronously.
+        }
+        else if (request.RequestChanges)
+        {
+            // RequestChanges: transition run back to in-progress so the agent can revise.
+            var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
             if (!transitioned)
                 return Results.StatusCode(StatusCodes.Status409Conflict);
         }
-        else if (!request.Approved)
+        else
         {
             var declined = await runStore.TryMutateTerminalOutcomeAsync(
                 runId,
@@ -1049,49 +1170,14 @@ app.MapPost("/api/runs/{id}/review", async (
                     null,
                     new HashSet<RunStatus> { RunStatus.AwaitingReview },
                     caller.User),
-                CancellationToken.None);
+                ct);
             if (!declined)
                 return Results.StatusCode(StatusCodes.Status409Conflict);
             await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
-                .ProjectPendingAsync(CancellationToken.None, streamStore).ConfigureAwait(false);
+                .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
         }
-
-        var deferredStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
-        return Results.Json(new ReviewResponse { RunId = id, Status = deferredStatus, MergeResult = null });
     }
 
-    if (request.Approved)
-    {
-        // Live MAF owns the AwaitingReview -> Merging CAS at the actual merge executor. Stage 2
-        // policies can insert executable gates (e.g. rubberduck) after human approval but before merge,
-        // so moving to Merging here would make request-changes loops from those gates inconsistent.
-        // The direct fallback below still performs the merge synchronously.
-    }
-    else if (request.RequestChanges)
-    {
-        // RequestChanges: transition run back to in-progress so the agent can revise.
-        var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
-        if (!transitioned)
-            return Results.StatusCode(StatusCodes.Status409Conflict);
-    }
-    else
-    {
-        var declined = await runStore.TryMutateTerminalOutcomeAsync(
-            runId,
-            new TerminalRunMutation(
-                TerminalRunOutcome.Create(RunStatus.Declined, EventTypes.ReviewDeclined, new { }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
-                null,
-                new HashSet<RunStatus> { RunStatus.AwaitingReview },
-                caller.User),
-            ct);
-        if (!declined)
-            return Results.StatusCode(StatusCodes.Status409Conflict);
-        await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
-            .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
-    }
-
-    // Guardrail 10: Atomic TryRemove for replay/double-POST protection.
-    var pendingEntry = await pendingStore.TryRemoveAsync(id, ct);
     if (pendingEntry is null)
     {
         // Guardrail 2: On-demand fallback — if pending store is empty (e.g., after restart
@@ -1112,16 +1198,27 @@ app.MapPost("/api/runs/{id}/review", async (
                 id, runId, run, request, runStore, streamStore, terminalOutcomeProjector, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
         }
         // If the run is registered but no pending request, the request was already consumed.
+        if (await pendingStore.ExistsUndeliveredAsync(id, ct).ConfigureAwait(false))
+        {
+            var queuedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+            return Results.Json(new ReviewResponse { RunId = id, Status = queuedStatus, MergeResult = null });
+        }
         return Results.StatusCode(409);
     }
 
-    // Guardrail 9: IDOR defense-in-depth — verify caller owns the pending request.
-    if (run.ProjectId is null
-        && !caller.Owns(pendingEntry.OwnerUser))
-        return Results.StatusCode(StatusCodes.Status403Forbidden);
-
     if (streamingRunForReview is null)
         return Results.Conflict(new { error = "Workflow run is no longer active." });
+
+    var delivery = await pendingStore.TryClaimDeliveryAsync(
+        id,
+        $"http:{caller.User}",
+        staleAfter: TimeSpan.FromSeconds(15),
+        ct).ConfigureAwait(false);
+    if (delivery is null || delivery.DecisionIdentity != decisionIdentity)
+    {
+        var queuedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+        return Results.Json(new ReviewResponse { RunId = id, Status = queuedStatus, MergeResult = null });
+    }
 
     // S3: Structured operational record for the review decision.
     logger.LogInformation(
@@ -1156,17 +1253,18 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     // Create the response and send it to the workflow to resume.
-    var externalResponse = pendingEntry.Request.CreateResponse(decision);
+    var externalResponse = delivery.Request.CreateResponse(decision);
     try
     {
         await streamingRunForReview.SendResponseAsync(externalResponse);
     }
     catch (Exception ex)
     {
-        // SendResponseAsync failed after the CAS and pending-request removal already
-        // committed. The run is stuck in `merging` with no active workflow. Transition
-        // deterministically to Failed so the state is always explicit and the client
-        // can observe the outcome via the stream rather than polling indefinitely.
+        await pendingStore.ReleaseDeliveryAsync(
+            id, decisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None).ConfigureAwait(false);
+        // SendResponseAsync failed after the delivery claim was acquired. Release the claim for
+        // recovery, then transition deterministically to Failed so the client can observe the
+        // outcome via the stream rather than polling indefinitely.
         logger.LogError(ex, "SendResponseAsync failed for run {RunId}; transitioning to failed", id);
         var failedEntry = streamStore.Get(id);
         try
@@ -3196,42 +3294,6 @@ static async Task<IResult> ExecuteDirectReviewAsync(
         default:
             throw new InvalidOperationException($"Unexpected merge execution outcome: {mergeExecResult.Outcome}");
     }
-}
-
-static async Task<bool> DeferReviewDecisionAsync(
-    string runId,
-    WorkflowReviewDecision decision,
-    IServiceScopeFactory scopeFactory,
-    ILogger<Program> logger,
-    CancellationToken ct)
-{
-    var json = System.Text.Json.JsonSerializer.Serialize(decision, JsonDefaults.Options);
-    using var scope = scopeFactory.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-    var existing = await db.DeferredDecisions
-        .FirstOrDefaultAsync(d => d.RunId == runId, ct)
-        .ConfigureAwait(false);
-    if (existing is not null)
-        return false;
-
-    db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
-    {
-        RunId = runId,
-        DecisionJson = json,
-        CreatedAt = DateTimeOffset.UtcNow,
-    });
-
-    try
-    {
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
-    }
-    catch (DbUpdateException)
-    {
-        return false;
-    }
-    logger.LogInformation("Review decision for run {RunId} deferred for owner replica pickup", runId);
-    return true;
 }
 
 /// <summary>

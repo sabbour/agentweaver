@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -181,25 +180,27 @@ public sealed class RunWatchLoopService
             if (_registry.Get(runId) is null)
                 return;
 
-            WorkflowReviewDecision? decision;
+            PendingDelivery? delivery;
+            WorkflowReviewDecision decision;
             try
             {
-                using var scope = _scopeFactory.CreateScope();
-                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-                var row = await db.DeferredDecisions
-                    .FirstOrDefaultAsync(d => d.RunId == runId, ct)
-                    .ConfigureAwait(false);
-                if (row is null)
+                delivery = await _pendingStore.TryClaimDeliveryAsync(
+                    runId,
+                    _workerId,
+                    staleAfter: TimeSpan.FromSeconds(15),
+                    ct).ConfigureAwait(false);
+                if (delivery is null)
                     continue;
 
-                decision = JsonSerializer.Deserialize<WorkflowReviewDecision>(row.DecisionJson, JsonDefaults.Options);
-                var deleted = await db.DeferredDecisions
-                    .Where(d => d.RunId == runId)
-                    .ExecuteDeleteAsync(ct)
-                    .ConfigureAwait(false);
-                if (deleted == 0 || decision is null)
+                if (!string.Equals(delivery.DeliveryKind, PendingRequestDeliveryKinds.WorkflowReview, StringComparison.Ordinal))
+                {
+                    await _pendingStore.ReleaseDeliveryAsync(
+                        runId, delivery.DecisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
+                        .ConfigureAwait(false);
                     continue;
+                }
+
+                decision = delivery.GetResponse<WorkflowReviewDecision>();
             }
             catch (OperationCanceledException)
             {
@@ -211,22 +212,18 @@ public sealed class RunWatchLoopService
                 continue;
             }
 
-            var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
-            if (pending is null)
-            {
-                _logger.LogWarning("Deferred review decision for run {RunId}: pending gate already consumed", runId);
-                return;
-            }
-
             RecordDeferredReviewDecisionEvents(runId, entry, decision);
 
             try
             {
-                await streamingRun.SendResponseAsync(pending.Request.CreateResponse(decision)).ConfigureAwait(false);
+                await streamingRun.SendResponseAsync(delivery.Request.CreateResponse(decision)).ConfigureAwait(false);
                 _logger.LogInformation("Deferred review decision for run {RunId} applied on owner replica", runId);
             }
             catch (Exception ex)
             {
+                await _pendingStore.ReleaseDeliveryAsync(
+                    runId, delivery.DecisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
+                    .ConfigureAwait(false);
                 _logger.LogError(ex, "Deferred review SendResponseAsync failed for run {RunId}; transitioning to failed", runId);
                 await FailRunSafeAsync(runId, entry, "send_response_failed").ConfigureAwait(false);
             }
@@ -313,6 +310,10 @@ public sealed class RunWatchLoopService
 
         await foreach (var evt in streamingRun.WatchStreamAsync(ct))
         {
+            if (evt is not RequestInfoEvent)
+                await _pendingStore.MarkObservedWorkflowAdvanceAsync(runId, CancellationToken.None)
+                    .ConfigureAwait(false);
+
             // Any event means the workflow is actively executing again. If we were parked awaiting a
             // human decision, this is the resume signal (the operator responded and the workflow
             // re-emitted): the human-wait span just ended, so re-arm the active-phase watchdog for the
@@ -368,7 +369,7 @@ public sealed class RunWatchLoopService
                     // WorkflowRestartService before this consumer reads the event), skip to
                     // avoid double-processing. WatchStreamAsync is single-consumer per run;
                     // WorkflowRestartService only reads briefly on startup to repopulate.
-                    if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is null)
+                    if (!await _pendingStore.ExistsForRequestAsync(runId, rie.Request.RequestId, ct).ConfigureAwait(false))
                     {
                         // Workflow paused at review-gate.
                         await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);

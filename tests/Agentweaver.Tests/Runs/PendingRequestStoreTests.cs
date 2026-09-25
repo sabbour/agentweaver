@@ -4,6 +4,7 @@ using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 
@@ -121,6 +122,182 @@ public sealed class PendingRequestStoreTests : IDisposable
         using var scope = NewReplicaServiceProvider().CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await db.PendingRequests.CountAsync(p => p.RunId == runId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DeferredDecisionClaim_CrashBeforeSend_KeepsDecisionRetryable()
+    {
+        const string runId = "run-deferred-crash-before-send";
+        var decision = new WorkflowReviewDecision(
+            Approved: true,
+            RequestChanges: false,
+            Feedback: "ship it",
+            ReviewedBy: "octocat");
+
+        await NewStoreOnSeparateReplica().SetAsync(runId, NewRequest("req-deferred"), "octocat");
+
+        var queued = await NewStoreOnSeparateReplica().TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            PendingRequestStore.CreateDecisionIdentity("req-deferred", decision),
+            decision,
+            "octocat");
+        queued.Should().BeTrue("the deferred decision must be persisted before the owner replica sends it");
+        using (var scope = NewReplicaServiceProvider().CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.PendingRequests.AsNoTracking().SingleAsync(p => p.RunId == runId);
+            row.DeliveryState.Should().Be(PendingRequestDeliveryStates.Ready);
+            row.DecisionIdentity.Should().NotBeNull();
+            row.ResponseJson.Should().NotBeNull();
+        }
+
+        var firstClaim = await NewStoreOnSeparateReplica().TryClaimDeliveryAsync(
+            runId,
+            "owner-a",
+            staleAfter: TimeSpan.FromHours(1));
+        firstClaim.Should().NotBeNull("the owner replica should be able to claim the queued decision");
+        firstClaim!.Request.RequestId.Should().Be("req-deferred");
+        firstClaim.GetResponse<WorkflowReviewDecision>().Should().BeEquivalentTo(decision);
+
+        // Fault injection: owner-a dies after claiming the durable decision but before SendResponseAsync.
+        // A recovery scanner must be able to reclaim the exact same gate/decision identity; the old
+        // read-then-delete consume path loses both rows and cannot satisfy this assertion.
+        var retryClaim = await NewStoreOnSeparateReplica().TryClaimDeliveryAsync(
+            runId,
+            "owner-b",
+            staleAfter: TimeSpan.Zero);
+        retryClaim.Should().NotBeNull("a crash before send must not destroy the resume handoff");
+        retryClaim!.Request.RequestId.Should().Be("req-deferred");
+        retryClaim.DecisionIdentity.Should().Be(firstClaim.DecisionIdentity);
+        retryClaim.GetResponse<WorkflowReviewDecision>().Should().BeEquivalentTo(decision);
+    }
+
+    [Fact]
+    public async Task DeliveredDecision_IsNotClaimedAgain()
+    {
+        const string runId = "run-deferred-delivered";
+        var decision = new WorkflowReviewDecision(
+            Approved: true,
+            RequestChanges: false,
+            Feedback: null,
+            ReviewedBy: "octocat");
+        var identity = PendingRequestStore.CreateDecisionIdentity("req-delivered", decision);
+
+        var store = NewStoreOnSeparateReplica();
+        await store.SetAsync(runId, NewRequest("req-delivered"), "octocat");
+        (await store.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            identity,
+            decision,
+            "octocat")).Should().BeTrue();
+
+        var claim = await store.TryClaimDeliveryAsync(runId, "owner-a", TimeSpan.Zero);
+        claim.Should().NotBeNull();
+        (await store.MarkDeliveredAsync(runId, identity, claim!.ClaimOwner, claim.ClaimedAt)).Should().BeTrue();
+
+        (await NewStoreOnSeparateReplica().TryClaimDeliveryAsync(runId, "owner-b", TimeSpan.Zero))
+            .Should().BeNull("delivered gates must no-op during recovery instead of advancing twice");
+        (await NewStoreOnSeparateReplica().GetAsync(runId))
+            .Should().BeNull("a delivered handoff is no longer a human-pending gate");
+    }
+
+    [Fact]
+    public async Task RearmingSameRequest_DoesNotReopenDeliveredDecision()
+    {
+        const string runId = "run-rearm-delivered";
+        var request = NewRequest("req-delivered-rearm");
+        var decision = new WorkflowReviewDecision(
+            Approved: true,
+            RequestChanges: false,
+            Feedback: null,
+            ReviewedBy: "octocat");
+        var identity = PendingRequestStore.CreateDecisionIdentity(request.RequestId, decision);
+
+        var store = NewStoreOnSeparateReplica();
+        await store.SetAsync(runId, request, "octocat");
+        (await store.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            identity,
+            decision,
+            "octocat")).Should().BeTrue();
+        var claim = await store.TryClaimDeliveryAsync(runId, "owner-a", TimeSpan.Zero);
+        claim.Should().NotBeNull();
+        (await store.MarkDeliveredAsync(runId, identity, claim!.ClaimOwner, claim.ClaimedAt)).Should().BeTrue();
+
+        await NewStoreOnSeparateReplica().SetAsync(runId, request, "octocat");
+
+        (await NewStoreOnSeparateReplica().GetAsync(runId))
+            .Should().BeNull("same-request restart replay must not reopen a delivered gate");
+        (await NewStoreOnSeparateReplica().TryClaimDeliveryAsync(runId, "owner-b", TimeSpan.Zero))
+            .Should().BeNull("same-request restart replay must not make a delivered decision retryable");
+    }
+
+    [Fact]
+    public async Task RearmingSameRequest_DoesNotEraseQueuedDecision()
+    {
+        const string runId = "run-rearm-queued";
+        var decision = new WorkflowReviewDecision(
+            Approved: true,
+            RequestChanges: false,
+            Feedback: "ship it",
+            ReviewedBy: "octocat");
+        var request = NewRequest("req-rearm");
+        var identity = PendingRequestStore.CreateDecisionIdentity(request.RequestId, decision);
+
+        var store = NewStoreOnSeparateReplica();
+        await store.SetAsync(runId, request, "octocat");
+        (await store.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            identity,
+            decision,
+            "octocat")).Should().BeTrue();
+
+        await NewStoreOnSeparateReplica().SetAsync(runId, request, "octocat");
+
+        var retryClaim = await NewStoreOnSeparateReplica().TryClaimDeliveryAsync(runId, "owner-after-rearm", TimeSpan.Zero);
+        retryClaim.Should().NotBeNull("restart re-arm for the same request must not erase a queued decision");
+        retryClaim!.DecisionIdentity.Should().Be(identity);
+        retryClaim.GetResponse<WorkflowReviewDecision>().Should().BeEquivalentTo(decision);
+    }
+
+    [Fact]
+    public async Task QueueDelivery_ToleratesPreMigrationRowsWithoutRequestIdColumnValue()
+    {
+        const string runId = "run-premigration-null-request-id";
+        var request = NewRequest("req-premigration");
+        var decision = new WorkflowReviewDecision(
+            Approved: true,
+            RequestChanges: false,
+            Feedback: null,
+            ReviewedBy: "octocat");
+        var identity = PendingRequestStore.CreateDecisionIdentity(request.RequestId, decision);
+
+        var store = NewStoreOnSeparateReplica();
+        await store.SetAsync(runId, request, "octocat");
+        using (var scope = NewReplicaServiceProvider().CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.PendingRequests.SingleAsync(p => p.RunId == runId);
+            row.RequestId = null;
+            await db.SaveChangesAsync();
+        }
+
+        (await store.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            identity,
+            decision,
+            "octocat")).Should().BeTrue("rows created before the RequestId column existed still carry it in RequestJson");
+
+        using var assertScope = NewReplicaServiceProvider().CreateScope();
+        var assertDb = assertScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var updated = await assertDb.PendingRequests.AsNoTracking().SingleAsync(p => p.RunId == runId);
+        updated.RequestId.Should().Be(request.RequestId);
+        updated.DecisionIdentity.Should().Be(identity);
     }
 
     public void Dispose()
