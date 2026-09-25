@@ -200,6 +200,20 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
             _logger.LogError(exSweep, "Heartbeat: coordinator reconciler sweep failed");
         }
 
+        try
+        {
+            var childWork = sp.GetRequiredService<Agentweaver.Api.Workflows.WorkflowChildWorkService>();
+            await childWork.SweepAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exSweep)
+        {
+            _logger.LogError(exSweep, "Heartbeat: workflow child-work reconciler sweep failed");
+        }
+
         // #272 watchdog: drain outcome-spec confirm/revise decisions that were deferred to the DB but
         // have no live drain path (a coordinator parked at awaiting_confirmation whose reasoning ran in
         // a now-reaped AgentHost pod has no resident PollDeferredDecisionsAsync). The reconciler sweep

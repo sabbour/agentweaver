@@ -9,6 +9,7 @@ using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
@@ -225,6 +226,28 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
 
         reArmed.Should().Be(0);
         dispatch.StartDispatchCalls.Should().BeEmpty("an already-active coordinator is never re-armed");
+    }
+
+    [Theory]
+    [InlineData(WorkPlanStatus.Dispatching)]
+    [InlineData(WorkPlanStatus.AwaitingAssembly)]
+    public async Task Sweep_ParentCorrelatedPlan_IsOwnedOnlyByChildWorkRecovery(string status)
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var (planId, _) = await SeedPlanAsync(
+            coord,
+            new[] { (SubtaskStatus.AssembleReady, (string?)null) },
+            parentRunId: RunId.New().ToString());
+        await SetPlanStatusAsync(planId, status);
+        var dispatch = new RecordingDispatch();
+        var reconciler = BuildReconciler(dispatch);
+
+        (await reconciler.SweepAsync(default)).Should().Be(0);
+
+        dispatch.StartDispatchCalls.Should().BeEmpty();
+        _assembly.Started.Should().BeEmpty(
+            "correlated workflow child work must never enter ordinary coordinator dispatch or Git assembly");
     }
 
     [Fact]
@@ -730,7 +753,8 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     private async Task<(int PlanId, List<int> SubtaskIds)> SeedPlanAsync(
         string coordinatorRunId,
         (string Status, string? ChildRunId)[] subtasks,
-        (int Dependent, int DependsOn)? dependency = null)
+        (int Dependent, int DependsOn)? dependency = null,
+        string? parentRunId = null)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -755,6 +779,10 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
             OutcomeSpecId = spec.Id,
             ProjectId = "proj-1",
             CoordinatorRunId = coordinatorRunId,
+            ParentRunId = parentRunId,
+            ParentWorkflowId = parentRunId is null ? null : "workflow-v1",
+            ParentWorkflowNodeId = parentRunId is null ? null : "fan",
+            ParentResumeState = parentRunId is null ? null : WorkflowChildWorkResumeStates.Waiting,
             Status = WorkPlanStatus.Dispatching,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,

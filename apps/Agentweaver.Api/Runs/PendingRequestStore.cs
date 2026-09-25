@@ -113,6 +113,26 @@ public sealed class PendingRequestStore
             .ConfigureAwait(false);
     }
 
+    public async Task<PendingDeliveryState?> GetDeliveryStateAsync(
+        string runId,
+        string deliveryKind,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .Where(p => p.RunId == runId && p.DeliveryKind == deliveryKind)
+            .Select(p => new PendingDeliveryState(
+                p.DeliveryState,
+                p.DecisionIdentity,
+                p.DeliveryClaimOwner,
+                p.DeliveryClaimedAt,
+                p.DeliveredAt))
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        return row;
+    }
+
     public async Task<bool> MatchesUndeliveredDeliveryAsync<TResponse>(
         string runId,
         string deliveryKind,
@@ -406,6 +426,24 @@ public sealed class PendingRequestStore
         return deleted == 1;
     }
 
+    public async Task<bool> DiscardWorkflowChildWorkAsync(
+        string runId,
+        string requestId,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var deleted = await db.PendingRequests
+            .Where(p => p.RunId == runId
+                && p.RequestId == requestId
+                && (p.DeliveryKind == null
+                    || p.DeliveryKind == PendingRequestDeliveryKinds.WorkflowChildWork)
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+        return deleted == 1;
+    }
+
     // ── Serialization ──────────────────────────────────────────────────────────
     // Only PortInfo + RequestId are persisted: these are all that CreateResponse needs to build the
     // response and resume the suspended workflow. The original request Data (PortableValue) is not
@@ -451,3 +489,10 @@ public sealed record PendingDelivery(
         JsonSerializer.Deserialize<TResponse>(ResponseJson, JsonDefaults.Options)
         ?? throw new InvalidOperationException("Stored pending delivery response could not be deserialized.");
 }
+
+public sealed record PendingDeliveryState(
+    string State,
+    string? DecisionIdentity,
+    string? ClaimOwner,
+    DateTimeOffset? ClaimedAt,
+    DateTimeOffset? DeliveredAt);

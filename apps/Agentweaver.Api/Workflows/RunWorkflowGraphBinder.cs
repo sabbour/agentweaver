@@ -52,6 +52,14 @@ public sealed record WorkflowTransitionIssue(
     string ToKind,
     IReadOnlyList<string> Alternatives);
 
+internal sealed record StaticFanRegionValidation(
+    IReadOnlyList<string> Errors,
+    IReadOnlySet<string> BranchNodeIds,
+    IReadOnlySet<(string From, string To)> DeclaredEdges)
+{
+    public bool IsValid => Errors.Count == 0 && BranchNodeIds.Count > 0;
+}
+
 /// <summary>
 /// Binds a <see cref="WorkflowDefinition"/> onto the live MAF graph (Feature 010 wf-maf-binding,
 /// generalized in Feature 015 US1). The full run pipeline is assembled by ITERATING the definition's
@@ -166,6 +174,8 @@ internal static class RunWorkflowGraphBinder
         ArgumentNullException.ThrowIfNull(definition);
 
         var errors = new List<string>();
+        var fanRegion = ValidateSingleFanRegion(definition);
+        errors.AddRange(fanRegion.Errors);
         var outgoingByNode = definition.Edges
             .GroupBy(e => e.From, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
@@ -203,6 +213,7 @@ internal static class RunWorkflowGraphBinder
             }
 
             if ((node.Type == WorkflowNodeType.PeerReview || node.Type == WorkflowNodeType.BuildTest)
+                && !(fanRegion.IsValid && fanRegion.BranchNodeIds.Contains(node.Id))
                 && !HasVerdictRouting(definition, node))
             {
                 errors.Add(
@@ -226,7 +237,8 @@ internal static class RunWorkflowGraphBinder
                 continue;
             }
 
-            if (!CanBindTransition(definition, edge, fromNode, toNode))
+            if (!CanBindTransition(definition, edge, fromNode, toNode)
+                && !(fanRegion.IsValid && fanRegion.DeclaredEdges.Contains((edge.From, edge.To))))
             {
                 var fromKind = EffectiveKind(definition, fromNode);
                 var toKind = EffectiveKind(definition, toNode);
@@ -236,6 +248,151 @@ internal static class RunWorkflowGraphBinder
         }
 
         return errors;
+    }
+
+    public static IReadOnlyList<string> GetTopologyErrors(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        return ValidateSingleFanRegion(definition).Errors;
+    }
+
+    private static StaticFanRegionValidation ValidateSingleFanRegion(WorkflowDefinition definition)
+    {
+        var fanOutNodes = definition.Nodes
+            .Where(node => node.Type == WorkflowNodeType.FanOut)
+            .ToList();
+        var fanInNodes = definition.Nodes
+            .Where(node => node.Type == WorkflowNodeType.FanIn)
+            .ToList();
+        if (fanOutNodes.Count == 0 && fanInNodes.Count == 0)
+            return new StaticFanRegionValidation([], new HashSet<string>(), new HashSet<(string, string)>());
+
+        var errors = new List<string>();
+        if (fanOutNodes.Count != 1 || fanInNodes.Count != 1)
+        {
+            errors.Add(
+                "Static fan topology requires exactly one fan_out node and exactly one fan_in node when either is present.");
+            return new StaticFanRegionValidation(errors, new HashSet<string>(), new HashSet<(string, string)>());
+        }
+
+        var fanOut = fanOutNodes[0];
+        var fanIn = fanInNodes[0];
+        var outgoing = definition.Edges
+            .Where(edge => string.Equals(edge.From, fanOut.Id, StringComparison.Ordinal))
+            .ToList();
+        var incomingToJoin = definition.Edges
+            .Where(edge => string.Equals(edge.To, fanIn.Id, StringComparison.Ordinal))
+            .ToList();
+        var joinOutgoing = definition.Edges
+            .Where(edge => string.Equals(edge.From, fanIn.Id, StringComparison.Ordinal))
+            .ToList();
+
+        if (outgoing.Count < 2)
+            errors.Add($"fan_out node '{fanOut.Id}' must declare at least two outgoing branches.");
+        if (outgoing.Any(edge => !string.IsNullOrWhiteSpace(edge.When)))
+            errors.Add($"fan_out node '{fanOut.Id}' branches must all be unconditional; dynamic or verdict routes are not supported.");
+        if (outgoing.Select(edge => edge.To).Distinct(StringComparer.Ordinal).Count() != outgoing.Count)
+            errors.Add($"fan_out node '{fanOut.Id}' must target a distinct node for every declared branch.");
+        if (fanOut.Steps.Count > 0 || fanOut.Branches.Count > 0)
+            errors.Add($"fan_out node '{fanOut.Id}' cannot declare dynamic steps, verdict branches, or partial policies.");
+
+        if (fanIn.Target is not null
+            && !string.Equals(fanIn.Target, fanOut.Id, StringComparison.Ordinal))
+        {
+            errors.Add(
+                $"fan_in node '{fanIn.Id}' target must be null or match paired fan_out node '{fanOut.Id}'; got '{fanIn.Target}'.");
+        }
+        if (fanIn.Steps.Count > 0 || fanIn.Branches.Count > 0)
+            errors.Add($"fan_in node '{fanIn.Id}' cannot declare dynamic, quorum, or partial join policies.");
+        if (joinOutgoing.Count != 1 || joinOutgoing.Any(edge => !string.IsNullOrWhiteSpace(edge.When)))
+            errors.Add($"fan_in node '{fanIn.Id}' must have exactly one unconditional outgoing edge.");
+
+        var branchIds = outgoing
+            .Select(edge => edge.To)
+            .ToHashSet(StringComparer.Ordinal);
+        var nodeById = definition.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        var agentBackedTypes = new HashSet<WorkflowNodeType>
+        {
+            WorkflowNodeType.Prompt,
+            WorkflowNodeType.PeerReview,
+            WorkflowNodeType.BuildTest,
+        };
+
+        foreach (var branchId in branchIds)
+        {
+            if (!nodeById.TryGetValue(branchId, out var branch))
+            {
+                errors.Add($"fan_out node '{fanOut.Id}' references missing branch node '{branchId}'.");
+                continue;
+            }
+
+            if (!agentBackedTypes.Contains(branch.Type))
+            {
+                errors.Add(
+                    $"Static fan branch '{branchId}' must contain exactly one agent-backed node " +
+                    $"(prompt, peer_review, or build_test) before fan_in '{fanIn.Id}'; got '{branch.Type}'.");
+            }
+
+            var branchIncoming = definition.Edges
+                .Where(edge => string.Equals(edge.To, branchId, StringComparison.Ordinal))
+                .ToList();
+            if (branchIncoming.Count != 1
+                || !string.Equals(branchIncoming[0].From, fanOut.Id, StringComparison.Ordinal)
+                || !string.IsNullOrWhiteSpace(branchIncoming[0].When))
+            {
+                errors.Add(
+                    $"Static fan branch node '{branchId}' must have exactly one unconditional inbound edge from fan_out '{fanOut.Id}'.");
+            }
+
+            var branchOutgoing = definition.Edges
+                .Where(edge => string.Equals(edge.From, branchId, StringComparison.Ordinal))
+                .ToList();
+            if (branchOutgoing.Count != 1
+                || !string.Equals(branchOutgoing[0].To, fanIn.Id, StringComparison.Ordinal)
+                || !string.IsNullOrWhiteSpace(branchOutgoing[0].When))
+            {
+                errors.Add(
+                    $"Static fan branch node '{branchId}' must have exactly one unconditional outbound edge to common fan_in '{fanIn.Id}'.");
+            }
+        }
+
+        var expectedIncoming = branchIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+        var actualIncoming = incomingToJoin
+            .Where(edge => string.IsNullOrWhiteSpace(edge.When))
+            .Select(edge => edge.From)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        if (incomingToJoin.Any(edge => !string.IsNullOrWhiteSpace(edge.When))
+            || !actualIncoming.SequenceEqual(expectedIncoming, StringComparer.Ordinal))
+        {
+            errors.Add(
+                $"fan_in node '{fanIn.Id}' must receive exactly one unconditional edge from every declared branch and no other node.");
+        }
+
+        if (joinOutgoing.Count == 1
+            && (branchIds.Contains(joinOutgoing[0].To)
+                || string.Equals(joinOutgoing[0].To, fanOut.Id, StringComparison.Ordinal)
+                || string.Equals(joinOutgoing[0].To, fanIn.Id, StringComparison.Ordinal)))
+        {
+            errors.Add(
+                $"fan_in node '{fanIn.Id}' must continue outside the fan region; cycles and nested fan topology are not supported.");
+        }
+
+        var declaredEdges = new HashSet<(string From, string To)>();
+        foreach (var edge in definition.Edges)
+        {
+            if (string.Equals(edge.From, fanOut.Id, StringComparison.Ordinal)
+                || string.Equals(edge.To, fanOut.Id, StringComparison.Ordinal)
+                || string.Equals(edge.From, fanIn.Id, StringComparison.Ordinal)
+                || string.Equals(edge.To, fanIn.Id, StringComparison.Ordinal)
+                || branchIds.Contains(edge.From)
+                || branchIds.Contains(edge.To))
+            {
+                declaredEdges.Add((edge.From, edge.To));
+            }
+        }
+
+        return new StaticFanRegionValidation(errors, branchIds, declaredEdges);
     }
 
     public static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(WorkflowDefinition definition)

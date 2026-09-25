@@ -18,6 +18,16 @@ public interface IRunStore
         Task.CompletedTask;
     Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task<bool> TryParkForChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
+    Task<bool> TryResumeFromChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
     Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not implement terminal reopen.");
     Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default);
@@ -155,6 +165,11 @@ public interface IRunStore
     Task SetSandboxInfoAsync(RunId runId, string? backend, string? claimName, string? podName, string? @namespace, CancellationToken ct = default);
     Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default);
     Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default);
+    async Task<Run?> FindChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) =>
+        (await GetRunsByParentAsync(parentRunId, ct).ConfigureAwait(false))
+            .Where(run => string.Equals(run.SubtaskId, subtaskId, StringComparison.Ordinal))
+            .OrderByDescending(run => run.StartedAt)
+            .FirstOrDefault();
     Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default);
     Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, bool includeChildren = false, CancellationToken ct = default);
     Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default);

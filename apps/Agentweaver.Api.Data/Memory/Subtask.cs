@@ -6,6 +6,8 @@ public sealed class Subtask
 {
     [Key] public int Id { get; set; }
     public int WorkPlanId { get; set; }
+    public string? WorkflowBranchNodeId { get; set; }
+    public int? WorkflowBranchOrdinal { get; set; }
     public required string Title { get; set; }
     public required string Scope { get; set; }
     public required string AssignedAgent { get; set; }

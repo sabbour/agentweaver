@@ -8,6 +8,16 @@ public sealed class WorkPlan
     public int OutcomeSpecId { get; set; }
     public required string ProjectId { get; set; }
     public required string CoordinatorRunId { get; set; }
+    public string? ParentRunId { get; set; }
+    public string? ParentWorkflowId { get; set; }
+    public string? ParentWorkflowNodeId { get; set; }
+    public string? ParentJoinNodeId { get; set; }
+    public string? ParentResumeRequestId { get; set; }
+    public string? ParentResumeState { get; set; }
+    public string? ParentResumeClaimOwner { get; set; }
+    public DateTimeOffset? ParentResumeClaimedAt { get; set; }
+    public DateTimeOffset? ParentResumeDeliveredAt { get; set; }
+    public string? ParentResumeResultJson { get; set; }
     public string? IsolationSummary { get; set; }
     public string? IntegrationBranch { get; set; }
 

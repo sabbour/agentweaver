@@ -3136,6 +3136,7 @@ public static class WorkPlanStatus
 
     /// <summary>The reviewer declined the collective output (not request-changes). Terminal.</summary>
     public const string AssemblyDeclined = "assembly_declined";
+    public const string Cancelled = "cancelled";
 
     /// <summary>Collective RAI flagged the aggregate diff; human override is required before merge.</summary>
     public const string RaiBlocked = "rai_blocked";

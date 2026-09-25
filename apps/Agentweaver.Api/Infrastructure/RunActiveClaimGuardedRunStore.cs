@@ -77,6 +77,24 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
 
+    public async Task<bool> TryParkForChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        return await inner.TryParkForChildWorkAsync(runId, lifecycleGeneration, ct).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryResumeFromChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        return await inner.TryResumeFromChildWorkAsync(runId, lifecycleGeneration, ct).ConfigureAwait(false);
+    }
+
     public Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
         inner.TryReopenTerminalToInProgressAsync(runId, ct);
 
@@ -208,6 +226,9 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
 
     public Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) =>
         inner.FindActiveChildAsync(parentRunId, subtaskId, ct);
+
+    public Task<Run?> FindChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) =>
+        inner.FindChildAsync(parentRunId, subtaskId, ct);
 
     public Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default) =>
         inner.GetRunsByParentAsync(parentRunId, ct);

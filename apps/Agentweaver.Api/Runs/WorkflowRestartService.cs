@@ -1,9 +1,12 @@
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 using RunStatus = Agentweaver.Domain.RunStatus;
@@ -64,12 +67,26 @@ public sealed class WorkflowRestartService
 
     public async Task RecoverAsync(CancellationToken ct)
     {
+        WorkflowChildWorkService? childWork;
+        using (var scope = _scopeFactory.CreateScope())
+            childWork = scope.ServiceProvider.GetService<WorkflowChildWorkService>();
+        if (childWork is not null)
+            await childWork.PrepareRestartRecoveryAsync(ct).ConfigureAwait(false);
+
         // 1. Fail stranded InProgress runs. Child turns stranded by a worker restart are safe to
         // redispatch as a fresh child: the coordinator owns their retry budget and will release
         // the old pod before dispatching. Root turns remain non-replayable.
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         foreach (var run in inProgress)
         {
+            if (await IsWorkflowChildWorkRunAsync(run.Id.ToString(), ct).ConfigureAwait(false))
+            {
+                _logger.LogInformation(
+                    "Deferring correlated workflow child-work run {RunId} to child-work restart recovery",
+                    run.Id);
+                continue;
+            }
+
             // A coordinator (parent) run is intentionally left InProgress while it dispatches children
             // and runs collective assembly (its stream stays open across that window). Those engines
             // are NOT MAF-checkpointed (D3 — service-driven), but every bit of their state is persisted
@@ -369,6 +386,18 @@ public sealed class WorkflowRestartService
                     .ConfigureAwait(false);
             }
         }
+
+        if (childWork is not null)
+            await childWork.SweepAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsWorkflowChildWorkRunAsync(string runId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .AnyAsync(plan => plan.ParentRunId == runId || plan.CoordinatorRunId == runId, ct)
+            .ConfigureAwait(false);
     }
 
     private async Task<RecoveryLeaseHandle?> TryAcquireRecoveryLeaseAsync(string runId, CancellationToken ct)
