@@ -81,39 +81,67 @@ public sealed class RunWatchLoopService
         StreamingRun streamingRun,
         RunStreamEntry entry,
         string ownerUser,
-        CancellationToken runCt)
+        CancellationToken runCt,
+        RunLeaseClaim? existingLease = null)
     {
         _ = Task.Run(async () =>
         {
-            var (claimed, fencingToken) = await _leaseStore.TryClaimAsync(
-                runId, _workerId, LeaseTtl, _appStopping).ConfigureAwait(false);
-            if (!claimed)
+            var leaseOwnerId = existingLease?.OwnerId ?? _workerId;
+            var fencingToken = existingLease?.FencingToken ?? 0;
+            if (existingLease is null)
             {
-                _logger.LogInformation(
-                    "Run {RunId}: lease already held by another worker; skipping (multi-replica dedup)", runId);
-                return;
+                var claim = await _leaseStore.TryClaimAsync(
+                    runId, leaseOwnerId, LeaseTtl, _appStopping).ConfigureAwait(false);
+                if (!claim.Claimed)
+                {
+                    _logger.LogInformation(
+                        "Run {RunId}: lease already held by another worker; skipping (multi-replica dedup)", runId);
+                    _registry.AbandonIfCurrent(runId, streamingRun);
+                    return;
+                }
+
+                fencingToken = claim.FencingToken;
             }
 
-            _activeLeases[runId] = (_workerId, fencingToken);
+            _activeLeases[runId] = (leaseOwnerId, fencingToken);
 
-            using var renewCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
-            _ = Task.Run(async () =>
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
+            using var renewCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
+            var leaseLost = 0;
+            var renewTask = Task.Run(async () =>
             {
                 var interval = TimeSpan.FromMilliseconds(LeaseTtl.TotalMilliseconds / 2);
                 while (!renewCts.Token.IsCancellationRequested)
                 {
                     try { await Task.Delay(interval, renewCts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
-                    var renewed = await _leaseStore.TryRenewAsync(
-                        runId, _workerId, fencingToken, LeaseTtl, CancellationToken.None).ConfigureAwait(false);
-                    if (!renewed)
-                        _logger.LogWarning(
-                            "Lease renewal failed for run {RunId} (token={Token}); lease may have been stolen",
+                    bool renewed;
+                    try
+                    {
+                        renewed = await _leaseStore.TryRenewAsync(
+                            runId, leaseOwnerId, fencingToken, LeaseTtl, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex,
+                            "Lease renewal errored for run {RunId} (token={Token}); stopping the owner",
                             runId, fencingToken);
+                        renewed = false;
+                    }
+
+                    if (!renewed)
+                    {
+                        Interlocked.Exchange(ref leaseLost, 1);
+                        _logger.LogWarning(
+                            "Lease renewal failed for run {RunId} (token={Token}); stopping the superseded owner",
+                            runId, fencingToken);
+                        _registry.AbandonIfCurrent(runId, streamingRun);
+                        await linkedCts.CancelAsync().ConfigureAwait(false);
+                        break;
+                    }
                 }
             }, renewCts.Token);
 
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
             // The watchdog bounds only ACTIVE execution spans, not human-decision-wait time. It is
             // armed/paused from inside WatchAsync as the run moves between active execution and being
             // parked at a RequestPort awaiting a human — so a run parked for a human decision can no
@@ -133,6 +161,12 @@ public sealed class RunWatchLoopService
             catch (OperationCanceledException) when (runCt.IsCancellationRequested && !_appStopping.IsCancellationRequested)
             {
                 _logger.LogInformation("Old workflow abandoned for run {RunId}", runId);
+            }
+            catch (OperationCanceledException) when (Volatile.Read(ref leaseLost) != 0)
+            {
+                _logger.LogInformation(
+                    "Run {RunId}: superseded lease owner stopped without publishing a terminal transition",
+                    runId);
             }
             catch (OperationCanceledException) when (linkedCts.IsCancellationRequested && !_appStopping.IsCancellationRequested)
             {
@@ -157,8 +191,14 @@ public sealed class RunWatchLoopService
                     _logger.LogWarning(ex, "Durable steering stop monitor failed for run {RunId}", runId);
                 }
                 renewCts.Cancel();
-                _activeLeases.TryRemove(runId, out _);
-                await _leaseStore.ReleaseAsync(runId, _workerId, fencingToken, CancellationToken.None).ConfigureAwait(false);
+                try { await renewTask.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+                ((ICollection<KeyValuePair<string, (string OwnerId, long FencingToken)>>)_activeLeases)
+                    .Remove(new KeyValuePair<string, (string OwnerId, long FencingToken)>(
+                        runId,
+                        (leaseOwnerId, fencingToken)));
+                await _leaseStore.ReleaseAsync(
+                    runId, leaseOwnerId, fencingToken, CancellationToken.None).ConfigureAwait(false);
             }
         }, _appStopping);
     }

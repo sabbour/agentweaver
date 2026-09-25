@@ -27,9 +27,12 @@ public sealed class WorkflowRestartService
     private readonly IWorktreeOperations _worktreeOps;
     private readonly RunWatchLoopService _watchLoop;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRunLeaseStore _leaseStore;
     private readonly IRunEventStream? _eventStream;
     private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
     private readonly ILogger<WorkflowRestartService> _logger;
+    private static readonly TimeSpan RecoveryLeaseTtl = TimeSpan.FromMinutes(5);
+    private readonly string _recoveryOwnerId = $"{Environment.MachineName}/startup-recovery/{Guid.NewGuid():N}";
 
     public WorkflowRestartService(
         IRunStore runStore,
@@ -40,6 +43,7 @@ public sealed class WorkflowRestartService
         IWorktreeOperations worktreeOps,
         RunWatchLoopService watchLoop,
         IServiceScopeFactory scopeFactory,
+        IRunLeaseStore leaseStore,
         ILogger<WorkflowRestartService> logger,
         IRunEventStream? eventStream = null,
         TerminalOutcomeProjector? terminalOutcomeProjector = null)
@@ -52,6 +56,7 @@ public sealed class WorkflowRestartService
         _worktreeOps = worktreeOps;
         _watchLoop = watchLoop;
         _scopeFactory = scopeFactory;
+        _leaseStore = leaseStore;
         _eventStream = eventStream;
         _terminalOutcomeProjector = terminalOutcomeProjector;
         _logger = logger;
@@ -78,13 +83,24 @@ public sealed class WorkflowRestartService
                 continue;
             }
 
+            await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(run.Id.ToString(), ct)
+                .ConfigureAwait(false);
+            if (recoveryLease is null)
+            {
+                _logger.LogInformation(
+                    "Leaving InProgress run {RunId} untouched because a peer owns its unexpired execution lease",
+                    run.Id);
+                continue;
+            }
+
             var retryableChildTransportFailure = run.ParentRunId is not null;
             var reason = retryableChildTransportFailure
                 ? "a2a_transport_interrupted"
                 : "stranded_in_progress";
             _logger.LogWarning(
-                "Failing stranded InProgress run {RunId} (reason={Reason}, retryable={Retryable})",
-                run.Id, reason, retryableChildTransportFailure);
+                "Failing abandoned InProgress run {RunId} after acquiring recovery lease " +
+                "(reason={Reason}, retryable={Retryable}, fencingToken={FencingToken})",
+                run.Id, reason, retryableChildTransportFailure, recoveryLease.FencingToken);
             await FailRecoveredRunAsync(
                     run,
                     reason,
@@ -101,6 +117,16 @@ public sealed class WorkflowRestartService
         var committing = await _runStore.GetByStatusAsync(RunStatus.Committing, ct).ConfigureAwait(false);
         foreach (var run in committing)
         {
+            await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(run.Id.ToString(), ct)
+                .ConfigureAwait(false);
+            if (recoveryLease is null)
+            {
+                _logger.LogInformation(
+                    "Leaving Committing run {RunId} untouched because a peer owns its unexpired execution lease",
+                    run.Id);
+                continue;
+            }
+
             _logger.LogWarning("Reverting interrupted commit for run {RunId} back to awaiting_review", run.Id);
             string? recoveredTreeHash = null;
             if (run.WorktreePath is not null && _worktreeOps.WorktreeExists(run.WorktreePath))
@@ -114,6 +140,16 @@ public sealed class WorkflowRestartService
         var merging = await _runStore.GetByStatusAsync(RunStatus.Merging, ct).ConfigureAwait(false);
         foreach (var run in merging)
         {
+            await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(run.Id.ToString(), ct)
+                .ConfigureAwait(false);
+            if (recoveryLease is null)
+            {
+                _logger.LogInformation(
+                    "Leaving Merging run {RunId} untouched because a peer owns its unexpired execution lease",
+                    run.Id);
+                continue;
+            }
+
             _logger.LogWarning("Reverting interrupted merge for run {RunId} back to awaiting_review", run.Id);
             await _runStore.RevertMergingAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
         }
@@ -126,6 +162,15 @@ public sealed class WorkflowRestartService
             // WorktreeBranch mid-iteration; the foreach iteration variable itself can't be reassigned.
             var run = awaitingRun;
             var runIdStr = run.Id.ToString();
+            await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(runIdStr, ct)
+                .ConfigureAwait(false);
+            if (recoveryLease is null)
+            {
+                _logger.LogInformation(
+                    "Leaving AwaitingReview run {RunId} untouched because a peer owns its unexpired execution lease",
+                    run.Id);
+                continue;
+            }
 
             var entry = _streamStore.Create(runIdStr, run.SubmittingUser);
             entry.MarkAwaitingReview();
@@ -299,7 +344,13 @@ public sealed class WorkflowRestartService
                     ctsRegistered = true;
 
                     // Start the supervised watch loop.
-                    _watchLoop.StartWatching(runIdStr, streamingRun, entry, run.SubmittingUser, runCt);
+                    _watchLoop.StartWatching(
+                        runIdStr,
+                        streamingRun,
+                        entry,
+                        run.SubmittingUser,
+                        runCt,
+                        recoveryLease.Transfer());
                 }
                 catch
                 {
@@ -310,12 +361,52 @@ public sealed class WorkflowRestartService
                     throw;
                 }
             }
+
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to resume workflow for run {RunId}; failing run", run.Id);
                 await FailRecoveredRunAsync(run, "workflow_resume_failed", entry, cleanupWorktree: false, ct: CancellationToken.None)
                     .ConfigureAwait(false);
             }
+        }
+    }
+
+    private async Task<RecoveryLeaseHandle?> TryAcquireRecoveryLeaseAsync(string runId, CancellationToken ct)
+    {
+        var claim = await _leaseStore.TryClaimAsync(
+            runId,
+            _recoveryOwnerId,
+            RecoveryLeaseTtl,
+            ct).ConfigureAwait(false);
+        return claim.Claimed
+            ? new RecoveryLeaseHandle(_leaseStore, runId, _recoveryOwnerId, claim.FencingToken)
+            : null;
+    }
+
+    private sealed class RecoveryLeaseHandle(
+        IRunLeaseStore leaseStore,
+        string runId,
+        string ownerId,
+        long fencingToken) : IAsyncDisposable
+    {
+        private bool _transferred;
+
+        public long FencingToken => fencingToken;
+
+        public RunLeaseClaim Transfer()
+        {
+            _transferred = true;
+            return new RunLeaseClaim(ownerId, fencingToken);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (!_transferred)
+                await leaseStore.ReleaseAsync(
+                    runId,
+                    ownerId,
+                    fencingToken,
+                    CancellationToken.None).ConfigureAwait(false);
         }
     }
 

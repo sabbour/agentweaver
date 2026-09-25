@@ -50,5 +50,19 @@ public sealed class RunWorkflowRegistry
         return true;
     }
 
+    public bool AbandonIfCurrent(string runId, StreamingRun expectedRun)
+    {
+        if (!_runs.TryGetValue(runId, out var pair) || !ReferenceEquals(pair.Run, expectedRun))
+            return false;
+
+        if (!((ICollection<KeyValuePair<string, (StreamingRun Run, CancellationTokenSource Cts)>>)_runs)
+            .Remove(new KeyValuePair<string, (StreamingRun Run, CancellationTokenSource Cts)>(runId, pair)))
+            return false;
+
+        pair.Cts.Cancel();
+        pair.Cts.Dispose();
+        return true;
+    }
+
     public bool Remove(string runId) => Abandon(runId);
 }

@@ -104,6 +104,8 @@ A live workflow receives the correlated decision through `SendResponseAsync`. A 
 
 Process-loss recovery instead loads the selected checkpoint store, rebuilds the appropriate full/child graph, calls `ResumeStreamingAsync`, and restarts observation. Recovery revalidates durable state and worktree/tree identity; it is not unconditional success.
 
+On multi-replica deployments, startup recovery first claims the run's durable execution lease before classifying an `in_progress` run as abandoned. A run with an unexpired peer lease is left untouched. If a running watch loop later loses its fencing token during lease renewal, that superseded owner stops without publishing a terminal transition; the new owner is responsible for recovery.
+
 Postgres checkpoints are shared rows. File checkpoints are the SQLite/dev provider choice, not an automatic fallback when production Postgres fails.
 
 ## Where Agentweaver deliberately does NOT use MAF (decision D3)
