@@ -1,10 +1,38 @@
+using System.Security.Cryptography;
+using System.Text;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Tests.Helpers;
 
 internal static class RunStoreTestExtensions
 {
+    public static Task PinDefaultExecutableWorkflowForTestAsync(
+        this IRunStore store,
+        RunId runId,
+        CancellationToken ct = default)
+    {
+        var resolved = BuiltInWorkflows.Default;
+        var definition = resolved.Definition
+            ?? throw new InvalidOperationException("The built-in default workflow is invalid.");
+        var yaml = WorkflowDefinitionYamlSerializer.Serialize(definition);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(yaml));
+        return store.UpdateExecutableWorkflowPinAsync(
+            runId,
+            new ExecutableWorkflowPin
+            {
+                ManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+                DefinitionId = definition.Id,
+                DefinitionVersion = definition.Version,
+                Source = resolved.Source,
+                ContentDigest = "sha256:" + Convert.ToHexString(hash).ToLowerInvariant(),
+                DefinitionYaml = yaml,
+                PinnedAt = DateTimeOffset.UtcNow,
+            },
+            ct);
+    }
+
     public static async Task<bool> TerminalizeForTestAsync(
         this IRunStore store,
         RunId runId,

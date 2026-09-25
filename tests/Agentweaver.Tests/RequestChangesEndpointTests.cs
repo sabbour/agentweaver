@@ -629,6 +629,7 @@ public sealed class RequestChangesEndpointTests
 
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
         await runStore.InsertAsync(run);
+        await runStore.PinDefaultExecutableWorkflowForTestAsync(runId);
         await runStore.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount: 0);
 
         var streamStore = _factory.Services.GetRequiredService<RunStreamStore>();

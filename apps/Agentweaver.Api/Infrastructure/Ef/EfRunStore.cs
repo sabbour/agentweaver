@@ -700,7 +700,8 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.ExecutableWorkflowContentDigest, pin.ContentDigest)
                 .SetProperty(r => r.ExecutableWorkflowDefinitionYaml, pin.DefinitionYaml)
                 .SetProperty(r => r.ExecutableWorkflowPinnedAt, pin.PinnedAt), ct);
-        WarnIfNoRows(rows, runId, "pin executable workflow");
+        if (rows == 0)
+            throw new InvalidOperationException($"Cannot pin executable workflow because run {runId} does not exist.");
     }
 
     public async Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default)

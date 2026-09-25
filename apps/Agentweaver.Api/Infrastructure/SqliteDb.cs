@@ -517,6 +517,8 @@ public sealed class SqliteDb
                 task               TEXT NOT NULL,
                 submitting_user    TEXT NOT NULL,
                 status             TEXT NOT NULL,
+                approval_generation INTEGER NOT NULL DEFAULT 1,
+                lifecycle_generation INTEGER NOT NULL DEFAULT 1,
                 started_at         TEXT NOT NULL,
                 ended_at           TEXT,
                 result             TEXT,
@@ -542,27 +544,62 @@ public sealed class SqliteDb
                 sandbox_claim_name TEXT,
                 sandbox_pod_name   TEXT,
                 sandbox_namespace  TEXT,
-                workflow_selection_reason TEXT
+                workflow_selection_reason TEXT,
+                preview_publication_lease_until TEXT,
+                preview_publication_lease_owner TEXT,
+                launch_auto_approve_tools INTEGER,
+                launch_autopilot INTEGER,
+                approval_policy_snapshot_id TEXT,
+                approval_policy_source TEXT,
+                approval_policy_captured_at TEXT,
+                approval_policy_settings_updated_at TEXT,
+                approval_policy_inherited_from_run_id TEXT,
+                executable_workflow_pin_required INTEGER NOT NULL DEFAULT 0,
+                executable_workflow_manifest_schema_version INTEGER,
+                executable_workflow_definition_id TEXT,
+                executable_workflow_definition_version TEXT,
+                executable_workflow_source TEXT,
+                executable_workflow_content_digest TEXT,
+                executable_workflow_definition_yaml TEXT,
+                executable_workflow_pinned_at TEXT
             );
 
             INSERT INTO runs__new (
                 run_id, repository_path, originating_branch, model_source, task,
-                submitting_user, status, started_at, ended_at, result,
+                submitting_user, status, approval_generation, lifecycle_generation,
+                started_at, ended_at, result,
                 worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
                 reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                 origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
-                sandbox_pod_name, sandbox_namespace, workflow_selection_reason
+                sandbox_pod_name, sandbox_namespace, workflow_selection_reason,
+                preview_publication_lease_until, preview_publication_lease_owner,
+                launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
+                approval_policy_source, approval_policy_captured_at,
+                approval_policy_settings_updated_at, approval_policy_inherited_from_run_id,
+                executable_workflow_pin_required, executable_workflow_manifest_schema_version,
+                executable_workflow_definition_id, executable_workflow_definition_version,
+                executable_workflow_source, executable_workflow_content_digest,
+                executable_workflow_definition_yaml, executable_workflow_pinned_at
             )
             SELECT
                 run_id, repository_path, originating_branch, model_source, task,
-                submitting_user, status, started_at, ended_at, result,
+                submitting_user, status, approval_generation, lifecycle_generation,
+                started_at, ended_at, result,
                 worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
                 reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                 COALESCE(origin, 'interactive'), retried_from, archived_at,
                 sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace,
-                workflow_selection_reason
+                workflow_selection_reason,
+                preview_publication_lease_until, preview_publication_lease_owner,
+                launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
+                approval_policy_source, approval_policy_captured_at,
+                approval_policy_settings_updated_at, approval_policy_inherited_from_run_id,
+                executable_workflow_pin_required, executable_workflow_manifest_schema_version,
+                executable_workflow_definition_id, executable_workflow_definition_version,
+                executable_workflow_source, executable_workflow_content_digest,
+                executable_workflow_definition_yaml, executable_workflow_pinned_at
             FROM runs;
 
             DROP TABLE runs;

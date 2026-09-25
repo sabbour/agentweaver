@@ -1,8 +1,13 @@
-using System.Security.Cryptography;
-using System.Text;
 using FluentAssertions;
+using LibGit2Sharp;
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Agentweaver.AgentRuntime;
+using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
@@ -129,13 +134,34 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
     }
 
     [Fact]
-    public async Task GetGraphDescriptorAsync_ProjectWorkflowMutationAfterRunStart_UsesStartedDefinition()
+    public async Task ResumeAsync_ProjectWorkflowMutationAndDeletionAfterCheckpoint_UsesStartedDefinition()
     {
-        var workingDirectory = _factory.NewWorkingDirectory();
+        using var baseFactory = new WorkflowWebApplicationFactory();
+        using var testFactory = baseFactory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IGitHubCopilotCapabilityCredentialProvider>();
+                services.AddSingleton<IGitHubCopilotCapabilityCredentialProvider>(
+                    new FixedGitHubCopilotCapabilityCredentialProvider());
+            }));
+        var services = testFactory.Services;
+        var workflowFactory = services.GetRequiredService<RunWorkflowFactory>();
+        var workingDirectory = Path.Combine(
+            Path.GetTempPath(), $"agentweaver-workflow-pin-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workingDirectory);
         var workflowsDirectory = Path.Combine(workingDirectory, ".agentweaver", "workflows");
         Directory.CreateDirectory(workflowsDirectory);
         var workflowPath = Path.Combine(workflowsDirectory, "custom.yaml");
         await File.WriteAllTextAsync(workflowPath, WorkflowYaml("original-agent", "Original Agent"));
+        Repository.Init(workingDirectory);
+        using (var repository = new Repository(workingDirectory))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial commit", signature, signature);
+            if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+                repository.Branches.Rename(repository.Head, "main");
+        }
 
         var project = new Project
         {
@@ -154,11 +180,14 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             UpdatedAt = DateTimeOffset.UtcNow,
             DefaultWorkflowId = "custom",
         };
-        await _factory.Services.GetRequiredService<IProjectStore>().InsertAsync(project);
+        await services.GetRequiredService<IProjectStore>().InsertAsync(project);
 
+        var runId = RunId.New();
+        var worktree = services.GetRequiredService<WorktreeManager>()
+            .AddWorktree(workingDirectory, "main", runId);
         var run = new DomainRun
         {
-            Id = RunId.New(),
+            Id = runId,
             RepositoryPath = workingDirectory,
             OriginatingBranch = "main",
             ModelSource = ModelSource.GitHubCopilot,
@@ -167,54 +196,161 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             Status = DomainRunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
             ProjectId = project.Id,
-            WorktreePath = workingDirectory,
+            WorktreePath = worktree.WorktreePath,
+            WorktreeBranch = worktree.BranchName,
         };
-        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var runStore = services.GetRequiredService<IRunStore>();
         await runStore.InsertAsync(run);
+
+        var input = new AgentTurnInput(
+            run.Id.ToString(),
+            run.Task,
+            worktree.WorktreePath,
+            worktree.BranchName,
+            workingDirectory,
+            "main",
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser,
+            ProjectId: project.Id.ToString(),
+            AgentName: "agent",
+            RunStartedAt: run.StartedAt);
+        var started = await workflowFactory.StartAsync(input, run.Id.ToString(), CancellationToken.None);
+        var eventTypes = new List<string>();
+        await foreach (var evt in started.WatchStreamAsync(CancellationToken.None))
+        {
+            eventTypes.Add(evt switch
+            {
+                ExecutorInvokedEvent invoked => $"{evt.GetType().Name}:{invoked.ExecutorId}",
+                ExecutorCompletedEvent completed =>
+                    $"{evt.GetType().Name}:{completed.ExecutorId}:{System.Text.Json.JsonSerializer.Serialize(completed.Data)}",
+                _ => evt.GetType().Name,
+            });
+            if (evt is RequestInfoEvent)
+                break;
+        }
 
         var persistedRun = await runStore.GetAsync(run.Id);
         persistedRun.Should().NotBeNull();
-        var missingPin = async () => await Factory.GetGraphDescriptorAsync(persistedRun!, CancellationToken.None);
-        await missingPin.Should().ThrowAsync<WorkflowBindException>()
-            .WithMessage("*requires a pinned executable workflow manifest*");
-
-        var originalDefinition = WorkflowDefinitionLoader.Load(
-            await File.ReadAllTextAsync(workflowPath),
-            "custom.yaml").Definition!;
-        var pinnedYaml = WorkflowDefinitionYamlSerializer.Serialize(originalDefinition);
-        await runStore.UpdateExecutableWorkflowPinAsync(
-            run.Id,
-            new ExecutableWorkflowPin
-            {
-                ManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
-                DefinitionId = originalDefinition.Id,
-                DefinitionVersion = originalDefinition.Version,
-                Source = "custom.yaml",
-                ContentDigest = TestDigest(pinnedYaml),
-                DefinitionYaml = pinnedYaml,
-                PinnedAt = DateTimeOffset.UtcNow,
-            });
-        persistedRun = await runStore.GetAsync(run.Id);
-        persistedRun.Should().NotBeNull();
-        var startedDescriptor = await Factory.GetGraphDescriptorAsync(persistedRun!, CancellationToken.None);
-        startedDescriptor.Nodes.Select(node => node.Id).Should().Contain("original-agent");
+        persistedRun!.GetExecutableWorkflowPin().Should().NotBeNull();
+        persistedRun.ExecutableWorkflowDefinitionId.Should().Be("custom");
+        var checkpoint = started.LastCheckpoint;
+        checkpoint.Should().NotBeNull("the started workflow should suspend at review; events: {0}",
+            string.Join(", ", eventTypes));
 
         await File.WriteAllTextAsync(workflowPath, WorkflowYaml("mutated-agent", "Mutated Agent"));
-
-        var pinnedRun = await runStore.GetAsync(run.Id);
-        pinnedRun.Should().NotBeNull();
-        var resumedDescriptor = await Factory.GetGraphDescriptorAsync(pinnedRun!, CancellationToken.None);
-
-        resumedDescriptor.Nodes.Select(node => node.Id).Should().Contain("original-agent");
-        resumedDescriptor.Nodes.Select(node => node.Id).Should().NotContain("mutated-agent");
+        await workflowFactory.ResumeAsync(checkpoint!, CancellationToken.None);
+        workflowFactory.TryGetExecutorMeta(
+            run.Id.ToString(), "agent-turn-original-agent", out var mutatedResumeMeta).Should().BeTrue();
+        mutatedResumeMeta.LogicalNodeId.Should().Be("original-agent");
+        workflowFactory.TryGetExecutorMeta(run.Id.ToString(), "agent-turn-mutated-agent", out _).Should().BeFalse();
 
         File.Delete(workflowPath);
-
-        var deletedDescriptor = await Factory.GetGraphDescriptorAsync(pinnedRun!, CancellationToken.None);
-
-        deletedDescriptor.Nodes.Select(node => node.Id).Should().Contain("original-agent");
-        deletedDescriptor.Nodes.Select(node => node.Id).Should().NotContain("agent");
+        await workflowFactory.ResumeAsync(checkpoint!, CancellationToken.None);
+        workflowFactory.TryGetExecutorMeta(
+            run.Id.ToString(), "agent-turn-original-agent", out var deletedResumeMeta).Should().BeTrue();
+        deletedResumeMeta.LogicalNodeId.Should().Be("original-agent");
+        workflowFactory.TryGetExecutorMeta(run.Id.ToString(), "agent-turn-agent", out _).Should().BeFalse();
     }
+
+    [Fact]
+    public async Task StartAsync_MissingDurableRun_FailsBeforeWorkflowExecution()
+    {
+        var runId = RunId.New().ToString();
+        var input = new AgentTurnInput(
+            runId,
+            "must not execute",
+            Path.GetTempPath(),
+            "agentweaver/missing",
+            Path.GetTempPath(),
+            "main",
+            ModelSource.GitHubCopilot.ToApiString(),
+            null,
+            CoordinatorWebApplicationFactory.OwnerUser);
+
+        var start = async () => await Factory.StartAsync(input, runId, CancellationToken.None);
+
+        await start.Should().ThrowAsync<WorkflowBindException>()
+            .WithMessage("*durable run record is missing*");
+    }
+
+    [Fact]
+    public async Task ResumeAsync_MissingDurableRun_FailsInsteadOfSelectingCurrentDefault()
+    {
+        var runId = RunId.New().ToString();
+        var checkpoint = new CheckpointInfo(runId, "missing-checkpoint");
+
+        var resume = async () => await Factory.ResumeAsync(checkpoint, CancellationToken.None);
+
+        await resume.Should().ThrowAsync<WorkflowBindException>()
+            .WithMessage("*durable run record is missing*");
+    }
+
+    [Fact]
+    public async Task GetGraphDescriptorAsync_UnsupportedPinnedManifestSchema_FailsExplicitly()
+    {
+        var run = PinnedRun(
+            manifestSchemaVersion: ExecutableWorkflowPin.CurrentSchemaVersion + 1,
+            contentDigest: new string('0', 64));
+
+        var load = async () => await Factory.GetGraphDescriptorAsync(run, CancellationToken.None);
+
+        await load.Should().ThrowAsync<WorkflowBindException>()
+            .WithMessage("*manifest schema version*not supported*");
+    }
+
+    [Fact]
+    public async Task GetGraphDescriptorAsync_PinnedManifestDigestMismatch_FailsExplicitly()
+    {
+        var run = PinnedRun(
+            manifestSchemaVersion: ExecutableWorkflowPin.CurrentSchemaVersion,
+            contentDigest: new string('0', 64));
+
+        var load = async () => await Factory.GetGraphDescriptorAsync(run, CancellationToken.None);
+
+        await load.Should().ThrowAsync<WorkflowBindException>()
+            .WithMessage("*content digest mismatch*");
+    }
+
+    [Fact]
+    public async Task GetGraphDescriptorAsync_PinnedManifestVersionMismatch_FailsExplicitly()
+    {
+        var yaml = WorkflowYaml("original-agent", "Original Agent");
+        var run = PinnedRun(
+            manifestSchemaVersion: ExecutableWorkflowPin.CurrentSchemaVersion,
+            contentDigest: "sha256:" + Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(yaml)))
+                .ToLowerInvariant()) with
+        {
+            ExecutableWorkflowDefinitionVersion = "different-version",
+        };
+
+        var load = async () => await Factory.GetGraphDescriptorAsync(run, CancellationToken.None);
+
+        await load.Should().ThrowAsync<WorkflowBindException>()
+            .WithMessage("*version mismatch*");
+    }
+
+    private static DomainRun PinnedRun(int manifestSchemaVersion, string contentDigest) =>
+        new()
+        {
+            Id = RunId.New(),
+            RepositoryPath = Path.GetTempPath(),
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "validate pinned workflow",
+            SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = DomainRunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ExecutableWorkflowPinRequired = true,
+            ExecutableWorkflowManifestSchemaVersion = manifestSchemaVersion,
+            ExecutableWorkflowDefinitionId = "custom",
+            ExecutableWorkflowDefinitionVersion = "1",
+            ExecutableWorkflowSource = "project",
+            ExecutableWorkflowContentDigest = contentDigest,
+            ExecutableWorkflowDefinitionYaml = WorkflowYaml("original-agent", "Original Agent"),
+            ExecutableWorkflowPinnedAt = DateTimeOffset.UtcNow,
+        };
 
     private static (string StartNodeId, HashSet<NodeShape> Nodes, HashSet<EdgeShape> Edges) Project(
         GraphDescriptor d) =>
@@ -242,15 +378,33 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             label: Done
             role: plumbing
             kind: terminal
+          - id: review
+            type: check
+            label: Human Review
+            role: review
+            kind: gate
+            gate_kind: human-review
+            branches:
+              - approved
+              - request-changes
+              - declined
+          - id: declined
+            type: terminal
+            label: Declined
+            role: plumbing
+            kind: terminal
         edges:
           - from: {{agentId}}
+            to: review
+          - from: review
             to: done
+            when: approved
+          - from: review
+            to: {{agentId}}
+            when: request-changes
+          - from: review
+            to: declined
+            when: declined
         """;
-
-    private static string TestDigest(string content)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(content));
-        return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
-    }
 
 }

@@ -1081,6 +1081,30 @@ public sealed class SqliteToPostgresMigrator
         var approvalGenerationColumn = await HasColumnAsync(conn, "runs", "approval_generation", ct)
             ? "COALESCE(approval_generation, 1)"
             : "1";
+        var executableWorkflowPinRequired = await HasColumnAsync(conn, "runs", "executable_workflow_pin_required", ct)
+            ? "COALESCE(executable_workflow_pin_required, 0)"
+            : "0 AS executable_workflow_pin_required";
+        var executableWorkflowManifestSchemaVersion = await HasColumnAsync(conn, "runs", "executable_workflow_manifest_schema_version", ct)
+            ? "executable_workflow_manifest_schema_version"
+            : "NULL AS executable_workflow_manifest_schema_version";
+        var executableWorkflowDefinitionId = await HasColumnAsync(conn, "runs", "executable_workflow_definition_id", ct)
+            ? "executable_workflow_definition_id"
+            : "NULL AS executable_workflow_definition_id";
+        var executableWorkflowDefinitionVersion = await HasColumnAsync(conn, "runs", "executable_workflow_definition_version", ct)
+            ? "executable_workflow_definition_version"
+            : "NULL AS executable_workflow_definition_version";
+        var executableWorkflowSource = await HasColumnAsync(conn, "runs", "executable_workflow_source", ct)
+            ? "executable_workflow_source"
+            : "NULL AS executable_workflow_source";
+        var executableWorkflowContentDigest = await HasColumnAsync(conn, "runs", "executable_workflow_content_digest", ct)
+            ? "executable_workflow_content_digest"
+            : "NULL AS executable_workflow_content_digest";
+        var executableWorkflowDefinitionYaml = await HasColumnAsync(conn, "runs", "executable_workflow_definition_yaml", ct)
+            ? "executable_workflow_definition_yaml"
+            : "NULL AS executable_workflow_definition_yaml";
+        var executableWorkflowPinnedAt = await HasColumnAsync(conn, "runs", "executable_workflow_pinned_at", ct)
+            ? "executable_workflow_pinned_at"
+            : "NULL AS executable_workflow_pinned_at";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             $"""
@@ -1091,7 +1115,15 @@ public sealed class SqliteToPostgresMigrator
                   reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                   COALESCE(origin,'interactive'), retried_from, review_ready_at, archived_at,
                   sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace,
-                  {approvalGenerationColumn}
+                  {approvalGenerationColumn},
+                  {executableWorkflowPinRequired},
+                  {executableWorkflowManifestSchemaVersion},
+                  {executableWorkflowDefinitionId},
+                  {executableWorkflowDefinitionVersion},
+                  {executableWorkflowSource},
+                  {executableWorkflowContentDigest},
+                  {executableWorkflowDefinitionYaml},
+                  {executableWorkflowPinnedAt}
               FROM runs;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1132,6 +1164,14 @@ public sealed class SqliteToPostgresMigrator
                 SandboxPodName = reader.IsDBNull(30) ? null : reader.GetString(30),
                 SandboxNamespace = reader.IsDBNull(31) ? null : reader.GetString(31),
                 ApprovalGeneration = reader.GetInt32(32),
+                ExecutableWorkflowPinRequired = reader.GetInt32(33) != 0,
+                ExecutableWorkflowManifestSchemaVersion = reader.IsDBNull(34) ? null : reader.GetInt32(34),
+                ExecutableWorkflowDefinitionId = reader.IsDBNull(35) ? null : reader.GetString(35),
+                ExecutableWorkflowDefinitionVersion = reader.IsDBNull(36) ? null : reader.GetString(36),
+                ExecutableWorkflowSource = reader.IsDBNull(37) ? null : reader.GetString(37),
+                ExecutableWorkflowContentDigest = reader.IsDBNull(38) ? null : reader.GetString(38),
+                ExecutableWorkflowDefinitionYaml = reader.IsDBNull(39) ? null : reader.GetString(39),
+                ExecutableWorkflowPinnedAt = reader.IsDBNull(40) ? null : ParseTs(reader.GetString(40)),
             });
         }
         return results;
