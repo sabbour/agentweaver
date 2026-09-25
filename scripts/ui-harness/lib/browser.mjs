@@ -123,6 +123,7 @@ export async function closeBrowserResources(context, browser, page) {
 /** Construct the browser boundary only after shared transport validation approves it. */
 export async function openBrowserSession(opts, {
   chromium: chromiumOverride,
+  environment = process.env,
   loadStorageStateForOriginImpl = loadStorageStateForOrigin,
   loadSessionStorageSeedImpl = loadSessionStorageSeed,
   resolveGoogleChromeExecutableFn = resolveGoogleChromeExecutable,
@@ -135,7 +136,7 @@ export async function openBrowserSession(opts, {
     const base = guardedUrl(opts.baseUrl, '/', opts);
     const chromium = chromiumOverride ?? await playwrightChromium();
     browserLaunchAttempted = true;
-    browser = await chromium.launch(browserLaunchOptions(opts, resolveGoogleChromeExecutableFn));
+    browser = await chromium.launch(browserLaunchOptions(opts, resolveGoogleChromeExecutableFn, environment));
     const contextOptions = {};
     if (opts.storageState) {
       contextOptions.storageState = await loadStorageStateForOriginImpl(opts.storageState, base.origin);
