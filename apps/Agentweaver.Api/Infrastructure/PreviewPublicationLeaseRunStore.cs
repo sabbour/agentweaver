@@ -306,6 +306,12 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default) =>
         Inner.UpdateWorkflowSelectionReasonAsync(runId, reason, ct);
 
+    public Task UpdateExecutableWorkflowPinAsync(
+        RunId runId,
+        ExecutableWorkflowPin pin,
+        CancellationToken ct = default) =>
+        Inner.UpdateExecutableWorkflowPinAsync(runId, pin, ct);
+
     public Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default) =>
         Inner.UpdateModelSourceAsync(runId, modelSource, ct);
 

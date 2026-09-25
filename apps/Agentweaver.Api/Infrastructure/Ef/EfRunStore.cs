@@ -682,6 +682,27 @@ public sealed class EfRunStore : IRunStore
         WarnIfNoRows(rows, runId, "update workflow selection reason");
     }
 
+    public async Task UpdateExecutableWorkflowPinAsync(
+        RunId runId,
+        ExecutableWorkflowPin pin,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var id = runId.ToString();
+        var rows = await db.Runs
+            .Where(r => r.RunId == id)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.ExecutableWorkflowPinRequired, true)
+                .SetProperty(r => r.ExecutableWorkflowManifestSchemaVersion, pin.ManifestSchemaVersion)
+                .SetProperty(r => r.ExecutableWorkflowDefinitionId, pin.DefinitionId)
+                .SetProperty(r => r.ExecutableWorkflowDefinitionVersion, pin.DefinitionVersion)
+                .SetProperty(r => r.ExecutableWorkflowSource, pin.Source)
+                .SetProperty(r => r.ExecutableWorkflowContentDigest, pin.ContentDigest)
+                .SetProperty(r => r.ExecutableWorkflowDefinitionYaml, pin.DefinitionYaml)
+                .SetProperty(r => r.ExecutableWorkflowPinnedAt, pin.PinnedAt), ct);
+        WarnIfNoRows(rows, runId, "pin executable workflow");
+    }
+
     public async Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
@@ -742,6 +763,14 @@ public sealed class EfRunStore : IRunStore
         SandboxClaimName = r.SandboxClaimName,
         SandboxPodName = r.SandboxPodName,
         SandboxNamespace = r.SandboxNamespace,
+        ExecutableWorkflowPinRequired = r.ParentRunId is null && r.ProjectId is not null,
+        ExecutableWorkflowManifestSchemaVersion = r.ExecutableWorkflowManifestSchemaVersion,
+        ExecutableWorkflowDefinitionId = r.ExecutableWorkflowDefinitionId,
+        ExecutableWorkflowDefinitionVersion = r.ExecutableWorkflowDefinitionVersion,
+        ExecutableWorkflowSource = r.ExecutableWorkflowSource,
+        ExecutableWorkflowContentDigest = r.ExecutableWorkflowContentDigest,
+        ExecutableWorkflowDefinitionYaml = r.ExecutableWorkflowDefinitionYaml,
+        ExecutableWorkflowPinnedAt = r.ExecutableWorkflowPinnedAt,
         ReviewReadyAt = null,
     };
 
@@ -789,6 +818,14 @@ public sealed class EfRunStore : IRunStore
         SandboxClaimName = r.SandboxClaimName,
         SandboxPodName = r.SandboxPodName,
         SandboxNamespace = r.SandboxNamespace,
+        ExecutableWorkflowPinRequired = r.ExecutableWorkflowPinRequired,
+        ExecutableWorkflowManifestSchemaVersion = r.ExecutableWorkflowManifestSchemaVersion,
+        ExecutableWorkflowDefinitionId = r.ExecutableWorkflowDefinitionId,
+        ExecutableWorkflowDefinitionVersion = r.ExecutableWorkflowDefinitionVersion,
+        ExecutableWorkflowSource = r.ExecutableWorkflowSource,
+        ExecutableWorkflowContentDigest = r.ExecutableWorkflowContentDigest,
+        ExecutableWorkflowDefinitionYaml = r.ExecutableWorkflowDefinitionYaml,
+        ExecutableWorkflowPinnedAt = r.ExecutableWorkflowPinnedAt,
     };
 
     private static void RejectTerminalStatus(RunStatus status)

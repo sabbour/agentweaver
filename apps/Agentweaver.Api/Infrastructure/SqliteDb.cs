@@ -122,6 +122,14 @@ public sealed class SqliteDb
         // publication commits its ready events or the lease expires.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN preview_publication_lease_until TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN preview_publication_lease_owner TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_pin_required INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_manifest_schema_version INTEGER;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_definition_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_definition_version TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_source TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_content_digest TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_definition_yaml TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_pinned_at TEXT;", ct);
 
         // Per-project backlog pickup configuration (Feature 009, FR-008a + unattended seeding).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);
@@ -613,7 +621,15 @@ public sealed class SqliteDb
             approval_policy_source TEXT,
             approval_policy_captured_at TEXT,
             approval_policy_settings_updated_at TEXT,
-            approval_policy_inherited_from_run_id TEXT
+            approval_policy_inherited_from_run_id TEXT,
+            executable_workflow_pin_required INTEGER NOT NULL DEFAULT 0,
+            executable_workflow_manifest_schema_version INTEGER,
+            executable_workflow_definition_id TEXT,
+            executable_workflow_definition_version TEXT,
+            executable_workflow_source TEXT,
+            executable_workflow_content_digest TEXT,
+            executable_workflow_definition_yaml TEXT,
+            executable_workflow_pinned_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS run_revisions (

@@ -1,10 +1,17 @@
+using System.Security.Cryptography;
+using System.Text;
 using FluentAssertions;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Api.Workflows;
+using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using DomainRun = Agentweaver.Domain.Run;
+using DomainRunStatus = Agentweaver.Domain.RunStatus;
 
 namespace Agentweaver.Tests.Graph;
 
@@ -121,6 +128,94 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             ]);
     }
 
+    [Fact]
+    public async Task GetGraphDescriptorAsync_ProjectWorkflowMutationAfterRunStart_UsesStartedDefinition()
+    {
+        var workingDirectory = _factory.NewWorkingDirectory();
+        var workflowsDirectory = Path.Combine(workingDirectory, ".agentweaver", "workflows");
+        Directory.CreateDirectory(workflowsDirectory);
+        var workflowPath = Path.Combine(workflowsDirectory, "custom.yaml");
+        await File.WriteAllTextAsync(workflowPath, WorkflowYaml("original-agent", "Original Agent"));
+
+        var project = new Project
+        {
+            Id = ProjectId.New(),
+            Name = "Pinned workflow project",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = workingDirectory,
+            DefaultBranch = "main",
+            Owner = CoordinatorWebApplicationFactory.OwnerUser,
+            ProviderSettings = new ProjectProviderSettings
+            {
+                DefaultProvider = ModelSource.GitHubCopilot,
+            },
+            State = ProjectState.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            DefaultWorkflowId = "custom",
+        };
+        await _factory.Services.GetRequiredService<IProjectStore>().InsertAsync(project);
+
+        var run = new DomainRun
+        {
+            Id = RunId.New(),
+            RepositoryPath = workingDirectory,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "prove workflow pinning",
+            SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = DomainRunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = project.Id,
+            WorktreePath = workingDirectory,
+        };
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        await runStore.InsertAsync(run);
+
+        var persistedRun = await runStore.GetAsync(run.Id);
+        persistedRun.Should().NotBeNull();
+        var missingPin = async () => await Factory.GetGraphDescriptorAsync(persistedRun!, CancellationToken.None);
+        await missingPin.Should().ThrowAsync<WorkflowBindException>()
+            .WithMessage("*requires a pinned executable workflow manifest*");
+
+        var originalDefinition = WorkflowDefinitionLoader.Load(
+            await File.ReadAllTextAsync(workflowPath),
+            "custom.yaml").Definition!;
+        var pinnedYaml = WorkflowDefinitionYamlSerializer.Serialize(originalDefinition);
+        await runStore.UpdateExecutableWorkflowPinAsync(
+            run.Id,
+            new ExecutableWorkflowPin
+            {
+                ManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+                DefinitionId = originalDefinition.Id,
+                DefinitionVersion = originalDefinition.Version,
+                Source = "custom.yaml",
+                ContentDigest = TestDigest(pinnedYaml),
+                DefinitionYaml = pinnedYaml,
+                PinnedAt = DateTimeOffset.UtcNow,
+            });
+        persistedRun = await runStore.GetAsync(run.Id);
+        persistedRun.Should().NotBeNull();
+        var startedDescriptor = await Factory.GetGraphDescriptorAsync(persistedRun!, CancellationToken.None);
+        startedDescriptor.Nodes.Select(node => node.Id).Should().Contain("original-agent");
+
+        await File.WriteAllTextAsync(workflowPath, WorkflowYaml("mutated-agent", "Mutated Agent"));
+
+        var pinnedRun = await runStore.GetAsync(run.Id);
+        pinnedRun.Should().NotBeNull();
+        var resumedDescriptor = await Factory.GetGraphDescriptorAsync(pinnedRun!, CancellationToken.None);
+
+        resumedDescriptor.Nodes.Select(node => node.Id).Should().Contain("original-agent");
+        resumedDescriptor.Nodes.Select(node => node.Id).Should().NotContain("mutated-agent");
+
+        File.Delete(workflowPath);
+
+        var deletedDescriptor = await Factory.GetGraphDescriptorAsync(pinnedRun!, CancellationToken.None);
+
+        deletedDescriptor.Nodes.Select(node => node.Id).Should().Contain("original-agent");
+        deletedDescriptor.Nodes.Select(node => node.Id).Should().NotContain("agent");
+    }
+
     private static (string StartNodeId, HashSet<NodeShape> Nodes, HashSet<EdgeShape> Edges) Project(
         GraphDescriptor d) =>
     (
@@ -128,5 +223,34 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
         d.Nodes.Select(n => new NodeShape(n.Id, n.Label, n.Role, n.Kind, n.NodeType)).ToHashSet(),
         d.Edges.Select(e => new EdgeShape(e.From, e.To, e.Cardinality, e.Loopback)).ToHashSet()
     );
+
+    private static string WorkflowYaml(string agentId, string agentLabel) =>
+        $$"""
+        id: custom
+        name: Custom Workflow
+        version: "1"
+        start: {{agentId}}
+        nodes:
+          - id: {{agentId}}
+            type: prompt
+            label: {{agentLabel}}
+            role: agent
+            kind: live
+            prompt: Do the work.
+          - id: done
+            type: terminal
+            label: Done
+            role: plumbing
+            kind: terminal
+        edges:
+          - from: {{agentId}}
+            to: done
+        """;
+
+    private static string TestDigest(string content)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(content));
+        return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
+    }
 
 }
