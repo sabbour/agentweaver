@@ -122,12 +122,13 @@ public sealed class CoordinatorReconciler
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             candidates = await db.WorkPlans
                 .AsNoTracking()
-                .Where(w => w.Status == WorkPlanStatus.Dispatching
-                         || w.Status == WorkPlanStatus.AwaitingAssembly
-                         || w.Status == WorkPlanStatus.Assembling
-                         || w.Status == WorkPlanStatus.AssemblySteering
-                         || w.Status == WorkPlanStatus.InReview
-                         || w.Status == WorkPlanStatus.AssemblyBlocked)
+                .Where(w => w.ParentRunId == null
+                         && (w.Status == WorkPlanStatus.Dispatching
+                             || w.Status == WorkPlanStatus.AwaitingAssembly
+                             || w.Status == WorkPlanStatus.Assembling
+                             || w.Status == WorkPlanStatus.AssemblySteering
+                             || w.Status == WorkPlanStatus.InReview
+                             || w.Status == WorkPlanStatus.AssemblyBlocked))
                 .Select(w => new PlanCandidate(w.Id, w.CoordinatorRunId, w.Status, w.CoordinatorPodId, w.UpdatedAt))
                 .ToListAsync(ct).ConfigureAwait(false);
         }

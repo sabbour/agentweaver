@@ -8,16 +8,18 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
 using WorkflowMergeResult = Agentweaver.AgentRuntime.Workflow.MergeResult;
 
-namespace Agentweaver.Tests.Api;
+namespace Agentweaver.Tests;
 
 /// <summary>
 /// Unit tests for WorkflowRestartService.RecoverAsync, focusing on the no-checkpoint
@@ -513,6 +515,87 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
         leaseStore.ClaimedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
         leaseStore.ReleasedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
+    }
+
+    [Fact]
+    public async Task RecoverAsync_EmbeddedChildCoordinator_IsDeferredToChildWorkRecovery()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var parentId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "parent workflow",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.New(),
+        });
+        (await runStore.TerminalizeForTestAsync(parentId, RunStatus.Failed)).Should().BeTrue();
+
+        var childId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = childId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "embedded coordinator",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.New(),
+            AgentName = "Coordinator",
+            ParentRunId = parentId.ToString(),
+            SubtaskId = WorkflowChildWorkService.ChildCoordinatorSubtaskKey("fan"),
+        });
+
+        var service = BuildService(
+            runStore,
+            streamStore,
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null));
+        using (var scope = _memoryServiceProvider!.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project",
+                CoordinatorRunId = childId.ToString(),
+                Goal = "g",
+                DesiredOutcome = "o",
+                Scope = "s",
+                Assumptions = "a",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            db.WorkPlans.Add(new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "project",
+                CoordinatorRunId = childId.ToString(),
+                ParentRunId = parentId.ToString(),
+                ParentWorkflowId = "workflow-v1",
+                ParentWorkflowNodeId = "fan",
+                ParentResumeState = WorkflowChildWorkResumeStates.Waiting,
+                Status = WorkPlanStatus.Dispatching,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await service.RecoverAsync(CancellationToken.None);
+
+        (await runStore.GetAsync(childId))!.Status.Should().Be(RunStatus.InProgress);
+        streamStore.Get(childId.ToString()).Should().BeNull(
+            "generic restart recovery must not fail an embedded child coordinator as an abandoned child");
     }
 
     [Theory]

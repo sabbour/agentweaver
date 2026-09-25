@@ -236,6 +236,18 @@ public sealed class PreviewPublicationLeaseRunStore(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
 
+    public Task<bool> TryParkForChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.TryParkForChildWorkAsync(runId, lifecycleGeneration, ct);
+
+    public Task<bool> TryResumeFromChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.TryResumeFromChildWorkAsync(runId, lifecycleGeneration, ct);
+
     public Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
         Inner.TryReopenTerminalToInProgressAsync(runId, ct);
 
@@ -285,6 +297,9 @@ public sealed class PreviewPublicationLeaseRunStore(
 
     public Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) =>
         Inner.FindActiveChildAsync(parentRunId, subtaskId, ct);
+
+    public Task<Run?> FindChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) =>
+        Inner.FindChildAsync(parentRunId, subtaskId, ct);
 
     public Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default) =>
         Inner.GetRunsByParentAsync(parentRunId, ct);

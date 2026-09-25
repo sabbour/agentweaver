@@ -134,6 +134,45 @@ public sealed class EfRunStore : IRunStore
         return true;
     }
 
+    public async Task<bool> TryParkForChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var id = runId.ToString();
+        var rows = await db.Runs
+            .Where(r => r.RunId == id
+                && r.Status == RunStatus.InProgress.ToApiString()
+                && r.LifecycleGeneration == lifecycleGeneration)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(r => r.Status, RunStatus.AwaitingReview.ToApiString())
+                .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.ReviewReadyAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.ApprovalGeneration, r => r.ApprovalGeneration + 1), ct)
+            .ConfigureAwait(false);
+        return rows == 1;
+    }
+
+    public async Task<bool> TryResumeFromChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var id = runId.ToString();
+        var rows = await db.Runs
+            .Where(r => r.RunId == id
+                && r.Status == RunStatus.AwaitingReview.ToApiString()
+                && r.LifecycleGeneration == lifecycleGeneration)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(r => r.Status, RunStatus.InProgress.ToApiString())
+                .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.ReviewReadyAt, (DateTimeOffset?)null), ct)
+            .ConfigureAwait(false);
+        return rows == 1;
+    }
+
     public async Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default)
     {
         var terminalStatuses = new[]
@@ -589,6 +628,16 @@ public sealed class EfRunStore : IRunStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rec = await db.Runs.AsNoTracking()
             .Where(r => r.ParentRunId == parentRunId && r.SubtaskId == subtaskId && activeStatuses.Contains(r.Status))
+            .OrderByDescending(r => r.StartedAt)
+            .FirstOrDefaultAsync(ct);
+        return rec is null ? null : FromRecord(rec);
+    }
+
+    public async Task<Run?> FindChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rec = await db.Runs.AsNoTracking()
+            .Where(r => r.ParentRunId == parentRunId && r.SubtaskId == subtaskId)
             .OrderByDescending(r => r.StartedAt)
             .FirstOrDefaultAsync(ct);
         return rec is null ? null : FromRecord(rec);

@@ -161,12 +161,24 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<WorkPlan>().HasIndex(w => w.CoordinatorRunId);
         model.Entity<WorkPlan>()
+            .HasIndex(w => new { w.ParentRunId, w.ParentWorkflowNodeId })
+            .IsUnique()
+            .HasFilter("\"ParentRunId\" IS NOT NULL AND \"ParentWorkflowNodeId\" IS NOT NULL");
+        model.Entity<WorkPlan>()
             .HasOne<OutcomeSpec>()
             .WithMany()
             .HasForeignKey(w => w.OutcomeSpecId)
             .OnDelete(DeleteBehavior.Cascade);
 
         model.Entity<Subtask>().HasIndex(s => s.WorkPlanId);
+        model.Entity<Subtask>()
+            .HasIndex(s => new { s.WorkPlanId, s.WorkflowBranchNodeId })
+            .IsUnique()
+            .HasFilter("\"WorkflowBranchNodeId\" IS NOT NULL");
+        model.Entity<Subtask>()
+            .HasIndex(s => new { s.WorkPlanId, s.WorkflowBranchOrdinal })
+            .IsUnique()
+            .HasFilter("\"WorkflowBranchOrdinal\" IS NOT NULL");
         model.Entity<Subtask>()
             .HasOne<WorkPlan>()
             .WithMany()

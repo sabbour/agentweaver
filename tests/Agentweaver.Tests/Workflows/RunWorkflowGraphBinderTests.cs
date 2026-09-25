@@ -88,6 +88,76 @@ public sealed class RunWorkflowGraphBinderTests
             .Which.NodeId.Should().Be("spread");
     }
 
+    [Fact]
+    public void ValidStaticFanTopology_PassesTopologyValidation_ButRemainsRuntimeUnbindable()
+    {
+        var definition = StaticFanDefinition();
+
+        RunWorkflowGraphBinder.GetTopologyErrors(definition).Should().BeEmpty();
+        var bindability = RunWorkflowGraphBinder.GetBindabilityErrors(definition);
+        bindability.Should().Contain(error => error.Contains("fan_out", StringComparison.OrdinalIgnoreCase));
+        bindability.Should().Contain(error => error.Contains("fan_in", StringComparison.OrdinalIgnoreCase));
+        bindability.Should().NotContain(error => error.Contains("no executor wiring", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void StaticFanTopology_RejectsNestedPairs()
+    {
+        var definition = StaticFanDefinition() with
+        {
+            Nodes =
+            [
+                .. StaticFanDefinition().Nodes,
+                Node("nested-fan", WorkflowNodeType.FanOut),
+                Node("nested-join", WorkflowNodeType.FanIn),
+            ],
+        };
+
+        RunWorkflowGraphBinder.GetTopologyErrors(definition).Should().ContainSingle()
+            .Which.Should().Contain("exactly one fan_out node and exactly one fan_in node");
+    }
+
+    [Fact]
+    public void StaticFanTopology_RejectsDynamicAndPartialPolicies()
+    {
+        var baseline = StaticFanDefinition();
+        var definition = baseline with
+        {
+            Nodes = baseline.Nodes.Select(node =>
+                node.Id == "join" ? node with { Branches = ["first-success"] } : node).ToList(),
+            Edges = baseline.Edges.Select(edge =>
+                edge.From == "fan" && edge.To == "branch-a"
+                    ? edge with { When = "approved" }
+                    : edge).ToList(),
+        };
+
+        var errors = RunWorkflowGraphBinder.GetTopologyErrors(definition);
+        errors.Should().Contain(error => error.Contains("must all be unconditional"));
+        errors.Should().Contain(error => error.Contains("quorum, or partial"));
+    }
+
+    [Fact]
+    public void StaticFanTopology_RejectsAmbiguousBranchEdgesAndMismatchedJoin()
+    {
+        var baseline = StaticFanDefinition();
+        var definition = baseline with
+        {
+            Nodes = baseline.Nodes.Select(node =>
+                node.Id == "join" ? node with { Target = "different-fan" } : node).ToList(),
+            Edges =
+            [
+                .. baseline.Edges,
+                new WorkflowEdge { From = "entry", To = "branch-a" },
+                new WorkflowEdge { From = "branch-b", To = "done" },
+            ],
+        };
+
+        var errors = RunWorkflowGraphBinder.GetTopologyErrors(definition);
+        errors.Should().Contain(error => error.Contains("target must be null or match"));
+        errors.Should().Contain(error => error.Contains("branch node 'branch-a' must have exactly one"));
+        errors.Should().Contain(error => error.Contains("branch node 'branch-b' must have exactly one"));
+    }
+
     // ── Loader: fan_out / fan_in / peer_review are no longer rejected at load time. ───────────────────
     [Theory]
     [InlineData("fan_out")]
@@ -456,6 +526,31 @@ public sealed class RunWorkflowGraphBinderTests
         Type = type,
         Label = id,
         GateKind = gateKind,
+    };
+
+    private static WorkflowDefinition StaticFanDefinition() => new()
+    {
+        Id = "static-fan",
+        Name = "Static fan",
+        Start = "entry",
+        Nodes =
+        [
+            Node("entry", WorkflowNodeType.Prompt),
+            Node("fan", WorkflowNodeType.FanOut),
+            Node("branch-a", WorkflowNodeType.Prompt),
+            Node("branch-b", WorkflowNodeType.BuildTest),
+            Node("join", WorkflowNodeType.FanIn) with { Target = "fan" },
+            Node("done", WorkflowNodeType.Terminal),
+        ],
+        Edges =
+        [
+            new WorkflowEdge { From = "entry", To = "fan" },
+            new WorkflowEdge { From = "fan", To = "branch-a" },
+            new WorkflowEdge { From = "fan", To = "branch-b" },
+            new WorkflowEdge { From = "branch-a", To = "join" },
+            new WorkflowEdge { From = "branch-b", To = "join" },
+            new WorkflowEdge { From = "join", To = "done" },
+        ],
     };
 
     private static WorkflowDefinition RenamedDefaultDefinition() => new()

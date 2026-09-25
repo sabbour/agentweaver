@@ -2997,9 +2997,23 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<int>("WorkPlanId")
                         .HasColumnType("integer");
 
+                    b.Property<string>("WorkflowBranchNodeId")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("WorkflowBranchOrdinal")
+                        .HasColumnType("integer");
+
                     b.HasKey("Id");
 
                     b.HasIndex("WorkPlanId");
+
+                    b.HasIndex("WorkPlanId", "WorkflowBranchNodeId")
+                        .IsUnique()
+                        .HasFilter("\"WorkflowBranchNodeId\" IS NOT NULL");
+
+                    b.HasIndex("WorkPlanId", "WorkflowBranchOrdinal")
+                        .IsUnique()
+                        .HasFilter("\"WorkflowBranchOrdinal\" IS NOT NULL");
 
                     b.ToTable("Subtasks");
                 });
@@ -3232,6 +3246,36 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<int>("OutcomeSpecId")
                         .HasColumnType("integer");
 
+                    b.Property<string>("ParentJoinNodeId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ParentResumeClaimOwner")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ParentResumeClaimedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ParentResumeDeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ParentResumeRequestId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ParentResumeResultJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ParentResumeState")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ParentRunId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ParentWorkflowId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ParentWorkflowNodeId")
+                        .HasColumnType("text");
+
                     b.Property<string>("ProjectId")
                         .IsRequired()
                         .HasColumnType("text");
@@ -3254,6 +3298,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasIndex("CoordinatorRunId");
 
                     b.HasIndex("OutcomeSpecId");
+
+                    b.HasIndex("ParentRunId", "ParentWorkflowNodeId")
+                        .IsUnique()
+                        .HasFilter("\"ParentRunId\" IS NOT NULL AND \"ParentWorkflowNodeId\" IS NOT NULL");
 
                     b.ToTable("WorkPlans");
                 });

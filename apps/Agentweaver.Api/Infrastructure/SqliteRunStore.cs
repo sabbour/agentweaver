@@ -238,6 +238,47 @@ public sealed class SqliteRunStore : IRunStore
         return rows > 0;
     }
 
+    public async Task<bool> TryParkForChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE runs
+               SET status = 'awaiting_review', ended_at = NULL, review_ready_at = NULL,
+                   approval_generation = approval_generation + 1
+             WHERE run_id = $runId
+               AND status = 'in_progress'
+               AND lifecycle_generation = $lifecycleGeneration;
+            """;
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$lifecycleGeneration", lifecycleGeneration);
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 1;
+    }
+
+    public async Task<bool> TryResumeFromChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE runs
+               SET status = 'in_progress', ended_at = NULL, review_ready_at = NULL
+             WHERE run_id = $runId
+               AND status = 'awaiting_review'
+               AND lifecycle_generation = $lifecycleGeneration;
+            """;
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$lifecycleGeneration", lifecycleGeneration);
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 1;
+    }
+
     public async Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default)
     {
         var rows = await ExecuteNonQueryAsync(
@@ -867,6 +908,20 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText = SelectSql +
             " WHERE parent_run_id = $parentRunId AND subtask_id = $subtaskId" +
             " AND status IN ('in_progress', 'awaiting_review', 'assembling', 'in_review')" +
+            " ORDER BY started_at DESC LIMIT 1;";
+        command.Parameters.AddWithValue("$parentRunId", parentRunId);
+        command.Parameters.AddWithValue("$subtaskId", subtaskId);
+
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? Map(reader) : null;
+    }
+
+    public async Task<Run?> FindChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = SelectSql +
+            " WHERE parent_run_id = $parentRunId AND subtask_id = $subtaskId" +
             " ORDER BY started_at DESC LIMIT 1;";
         command.Parameters.AddWithValue("$parentRunId", parentRunId);
         command.Parameters.AddWithValue("$subtaskId", subtaskId);

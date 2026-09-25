@@ -162,6 +162,9 @@ builder.Services.AddScoped<DecisionLedgerSyncService>();
 // Workflow services
 builder.Services.AddSingleton<RunWorkflowRegistry>();
 builder.Services.AddSingleton<PendingRequestStore>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowChildWorkRuntime,
+    Agentweaver.Api.Workflows.WorkflowChildWorkRuntime>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowChildWorkService>();
 builder.Services.AddSingleton<IWorktreeOperations, WorktreeOperationsAdapter>();
 builder.Services.AddSingleton<IMergeCoordinator, MergeCoordinator>();
 builder.Services.AddSingleton<RunWorkflowFactory>();
