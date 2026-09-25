@@ -58,12 +58,16 @@ function parseYamlDocument(text) {
         continue;
       }
       if (pair.value === "") {
-        const [value, next] = parseBlock(index + 1, indent + 2);
+        const childIndent = lines[index + 1] === undefined ? indent + 2 : indentOf(lines[index + 1]);
+        const [value, next] = parseBlock(index + 1, childIndent);
         object[pair.key] = value ?? {};
         index = next;
       } else {
         object[pair.key] = scalar(pair.value);
         index += 1;
+        if ((pair.value === "|" || pair.value === ">") && index < lines.length) {
+          while (index < lines.length && indentOf(lines[index]) > currentIndent) index += 1;
+        }
       }
     }
     return [object, index];
@@ -87,7 +91,8 @@ function parseYamlDocument(text) {
       if (pair) {
         const item = {};
         if (pair.value === "") {
-          const [value, next] = parseBlock(index + 1, indent + 4);
+          const childIndent = lines[index + 1] === undefined ? indent + 2 : indentOf(lines[index + 1]);
+          const [value, next] = parseBlock(index + 1, childIndent);
           item[pair.key] = value ?? {};
           index = next;
         } else {
@@ -103,6 +108,9 @@ function parseYamlDocument(text) {
       } else {
         items.push(scalar(rest));
         index += 1;
+        if ((rest.trim() === "|" || rest.trim() === ">") && index < lines.length) {
+          while (index < lines.length && indentOf(lines[index]) > currentIndent) index += 1;
+        }
       }
     }
     return [items, index];
