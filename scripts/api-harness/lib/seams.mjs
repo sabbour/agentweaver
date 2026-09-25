@@ -254,12 +254,13 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     sessionStatus: null,
   };
   authConfig.responseBody = authMode ? { mode: authMode } : null;
+  const supportedAuthMode = authMode === 'Entra' || authMode === 'LocalTest';
   add(
     'Deployment exposes its authentication configuration (/api/auth/config)',
-    authConfig.ok && authMode === 'Entra',
+    authConfig.ok && supportedAuthMode,
     authMode ? `server auth mode ${authMode}` : `status ${authConfig.status}`,
   );
-  if (!authConfig.ok || authMode !== 'Entra') return finalize();
+  if (!authConfig.ok || !supportedAuthMode) return finalize();
 
   const auth = await client.get('/api/auth/session');
   const signedIn = auth.ok && auth.responseBody?.authenticated === true;
@@ -272,9 +273,9 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     auth_mode: authModeFromSession,
   };
   const authDetail = signedIn
-    ? 'authenticated Entra session'
-    : `status ${auth.status}; a valid Entra bearer token is required (GitHub CLI tokens are not accepted)`;
-  add('Authenticated Entra bearer token accepted (/api/auth/session)', signedIn, authDetail);
+    ? `authenticated ${authMode} session`
+    : `status ${auth.status}; a valid ${authMode} bearer token is required (GitHub CLI tokens are not accepted)`;
+  add(`Authenticated ${authMode} bearer token accepted (/api/auth/session)`, signedIn, authDetail);
   if (!signedIn) return finalize();
 
   // ── SEAM 1: blueprint generation ────────────────────────────────────────────
