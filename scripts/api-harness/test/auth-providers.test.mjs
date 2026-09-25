@@ -1,11 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { promisify } from 'node:util';
+import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { createRecorderSessionAuthProvider } from '../lib/auth-providers/recorder-session.mjs';
+import {
+  createRecorderSessionAuthProvider,
+  uiHarnessAuthPaths,
+} from '../lib/auth-providers/recorder-session.mjs';
 import { AgentweaverClient } from '../lib/client.mjs';
+
+const execFileAsync = promisify(execFile);
+const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 function cachedUiProvider(overrides = {}) {
   return createRecorderSessionAuthProvider({
@@ -17,9 +26,40 @@ function cachedUiProvider(overrides = {}) {
       origin: 'https://agentweaver.example.staging.example',
       entries: { 'agentweaver.sessionToken': 'test-only-memory-value' },
     }),
+    getSessionTokenFn: async () => 'test-only-memory-value',
     ...overrides,
   });
 }
+
+function syntheticJwt(exp) {
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode({ exp })}.signature`;
+}
+
+test('recorder-session default auth root is worktree-relative, not cwd-relative', async () => {
+  const separateWorktree = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-recorder-cwd-'));
+  try {
+    const moduleUrl = pathToFileURL(path.join(
+      REPOSITORY_ROOT,
+      'scripts',
+      'api-harness',
+      'lib',
+      'auth-providers',
+      'recorder-session.mjs',
+    )).href;
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--input-type=module', '--eval', `import { uiHarnessAuthPaths } from ${JSON.stringify(moduleUrl)}; console.log(uiHarnessAuthPaths().storageStatePath);`],
+      { cwd: separateWorktree },
+    );
+    assert.equal(
+      stdout.trim(),
+      path.join(REPOSITORY_ROOT, 'scripts', 'demo-recording', '.auth', 'recording.storageState.json'),
+    );
+  } finally {
+    await rm(separateWorktree, { recursive: true, force: true });
+  }
+});
 
 test('recorder-session provider hands cached UI authentication to API calls in memory', async () => {
   const provider = cachedUiProvider();
@@ -88,6 +128,23 @@ test('recorder-session provider uses the recorder layout for a protected endpoin
   const response = await client.get('/api/auth/session');
   assert.equal(response.status, 200);
   assert.deepEqual(response.responseBody, { authenticated: true });
+});
+
+test('recorder-session provider rejects an expired recorder JWT before an API call', async (t) => {
+  const authRoot = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-recorder-expired-'));
+  t.after(() => rm(authRoot, { recursive: true, force: true }));
+  const storageStatePath = path.join(authRoot, 'recording.storageState.json');
+  await writeFile(storageStatePath, JSON.stringify({ cookies: [], origins: [] }), 'utf8');
+  await writeFile(`${storageStatePath}.sessionStorage.json`, JSON.stringify({
+    origin: 'https://agentweaver.example.staging.example',
+    entries: { 'agentweaver.sessionToken': syntheticJwt(Math.floor(Date.now() / 1000) - 60) },
+  }), 'utf8');
+
+  const provider = createRecorderSessionAuthProvider({
+    authRoot,
+    baseUrl: 'https://agentweaver.example.staging.example',
+  });
+  await assert.rejects(provider.getAuthorization(), /expired/i);
 });
 
 test('recorder-session provider rejects a cached UI session for another target with refresh guidance', async () => {
