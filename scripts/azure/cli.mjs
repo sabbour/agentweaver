@@ -98,6 +98,7 @@ const SUBCOMMANDS = Object.freeze([
   "publish-release",
   "release",
   "verify",
+  "local-k3s-gate",
   "dev",
   "prune-registry",
 ]);
@@ -116,6 +117,7 @@ Commands:
   publish-release      Tag and publish a prepared exact-main release without deploying.
   release              Publish, then deploy, a prepared exact-main release.
   verify               Post-deploy health verification.
+  local-k3s-gate       Run the local WSL k3s release acceptance gate.
   dev                  Local dev orchestration.
   prune-registry       Delete unreferenced image manifests from the ACR (dry run by default).
 
@@ -174,6 +176,8 @@ export async function run(argv = [], opts = {}) {
         return importFn("./release.mjs");
       case "verify":
         return importFn("./steps/40-verify.mjs");
+      case "local-k3s-gate":
+        return importFn("./local-k3s-gate.mjs");
       case "dev":
         return importFn("./dev.mjs");
       case "prune-registry":

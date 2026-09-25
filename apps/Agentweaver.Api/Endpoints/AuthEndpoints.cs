@@ -12,10 +12,24 @@ namespace Agentweaver.Api.Endpoints;
 
 public static class AuthEndpoints
 {
+    private static bool IsLocalTestAuthMode(IConfiguration configuration, IHostEnvironment environment) =>
+        environment.IsDevelopment()
+        && configuration.GetValue<bool>("Testing:BypassGitHubTokenAuth")
+        && string.Equals(configuration["Auth:Mode"], "LocalTest", StringComparison.OrdinalIgnoreCase);
+
     public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/auth/config", (IConfiguration configuration) =>
+        app.MapGet("/api/auth/config", (IConfiguration configuration, IHostEnvironment environment) =>
         {
+            if (IsLocalTestAuthMode(configuration, environment))
+            {
+                return Results.Ok(new
+                {
+                    mode = "LocalTest",
+                    entra = (object?)null,
+                });
+            }
+
             var tenantId = configuration["Auth:Entra:TenantId"];
             var authority = configuration["Auth:Entra:Authority"];
             if (string.IsNullOrWhiteSpace(authority) && !string.IsNullOrWhiteSpace(tenantId))
@@ -34,12 +48,12 @@ public static class AuthEndpoints
             });
         }).OperationalAnonymous();
 
-        app.MapGet("/api/auth/context", (HttpContext httpContext) =>
+        app.MapGet("/api/auth/context", (HttpContext httpContext, IConfiguration configuration, IHostEnvironment environment) =>
         {
             var caller = httpContext.GetCaller();
             return Results.Ok(new
             {
-                mode = "Entra",
+                mode = IsLocalTestAuthMode(configuration, environment) ? "LocalTest" : "Entra",
                 user_id = caller.User,
                 github_login = caller.GitHubLogin,
                 entra_object_id = caller.EntraObjectId,
@@ -51,6 +65,8 @@ public static class AuthEndpoints
 
         app.MapGet("/api/auth/session", async (
             HttpContext httpContext,
+            IConfiguration configuration,
+            IHostEnvironment environment,
             EffectiveModelProviderResolver modelProviderResolver,
             CancellationToken ct) =>
         {
@@ -65,7 +81,7 @@ public static class AuthEndpoints
             return Results.Ok(new
             {
                 authenticated = true,
-                auth_mode = "entra",
+                auth_mode = IsLocalTestAuthMode(configuration, environment) ? "local-test" : "entra",
                 display_name = caller.DisplayName,
                 email = caller.Email,
                 login = caller.GitHubLogin,

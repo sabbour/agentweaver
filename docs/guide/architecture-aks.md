@@ -254,6 +254,35 @@ They use the API image and injected `ConnectionStrings__MemoryDb` /
 embedded in the image or manifest. Local design-time commands default to SQLite;
 use `--postgres-migrations` only with configured PostgreSQL credentials.
 
+### Local release gate
+
+Run the local production-path gate before promoting images or deploying a release:
+
+```bash
+npm run release:local-k3s-gate
+```
+
+The command targets `Ubuntu-24.04` WSL k3s and attempts to provision k3s with the
+documented installer when the binary or kubeconfig is absent. It renders the
+candidate Kubernetes manifests, fails before deployment if any AI execution
+producer/consumer does not use the same
+`AiExecution__ProviderKeySigningKey` `secretKeyRef`, waits for the local API, and
+runs the focused API harness smoke with `--auth-provider local-test`.
+
+The local identity is intentionally not Entra or GitHub. It is a deterministic
+Development-only bearer (`AGENTWEAVER_LOCAL_TEST_BEARER`) consumed in memory by
+the harness; the API reports `LocalTest` only when `ASPNETCORE_ENVIRONMENT` is
+`Development`, `Auth__Mode=LocalTest`, and `Testing__BypassGitHubTokenAuth=true`.
+Production mode refuses the underlying bypass flags at startup and the worker
+runs with `ASPNETCORE_ENVIRONMENT=Production`, so missing server-only
+configuration such as `AiExecution__ProviderKeySigningKey` fails closed instead
+of falling back to development defaults.
+
+Keep the staging identity smoke separate: use the default API harness
+recorder-session provider against staging to cover Microsoft Entra session
+creation, OAuth callbacks, and GitHub repository authorization. Do not add
+interactive identity to the local gate.
+
 ### Ephemeral storage for testing
 
 For throwaway SQLite testing, set `Database__Provider=Sqlite` and replace the shared

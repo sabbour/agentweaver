@@ -56,16 +56,30 @@ from its exact matching section; do not run another changelog generator.
    forward-port. Never bypass that guard: create a short-lived branch from
    current `dev`, run `npm run release:sync-dev -- <release-preparation-sha>`,
    merge that PR, and plan again.
-2. Create `release/vX.Y.Z` from that SHA and soak it.
-3. On the clean release branch run:
+2. Before image promotion or Azure deployment, run the local production-path gate:
+
+   ```bash
+   npm run release:local-k3s-gate
+   ```
+
+   The command targets the `Ubuntu-24.04` WSL k3s cluster, provisions k3s when it
+   is absent, validates that API and Worker manifests share
+   `AiExecution__ProviderKeySigningKey`, waits for the local target, and runs the
+   focused API smoke with the Development-only local test identity. Keep the
+   separate staging identity smoke (`node scripts/api-harness/run-persona.mjs`
+   against the staging URL with the default recorder-session auth provider) for
+   Entra/GitHub login, callbacks, and repository authorization; do not fold
+   interactive identity into this local gate.
+3. Create `release/vX.Y.Z` from that SHA and soak it.
+4. On the clean release branch run:
 
    ```bash
    npm run release:prepare -- --expected X.Y.Z
    ```
 
-4. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
+5. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
    fragments as `chore(release): prepare vX.Y.Z`.
-5. Push the release branch.
+6. Push the release branch.
 
    `release:prepare` fetches `origin/main` before it changes release files. If
    `origin/main` is not an ancestor, it runs:
@@ -82,9 +96,9 @@ from its exact matching section; do not run another changelog generator.
    fails and prints the same `git merge` command.
 
    CI enforces this rule on `release/*` pull requests into `main`.
-6. Promote the prepared branch to `main` through a green PR, merged with
+7. Promote the prepared branch to `main` through a green PR, merged with
    **"Squash and merge"**.
-7. Reconcile the milestones against what the release actually consumed. Merge order
+8. Reconcile the milestones against what the release actually consumed. Merge order
    decides the real contents, so a milestone set before the cut can name the wrong
    release. `release:prepare` consumes the changeset fragments it shipped. Map each
    consumed fragment back to the pull request that added it:
@@ -96,7 +110,7 @@ from its exact matching section; do not run another changelog generator.
    Put every pull request that appears in that list on this release's milestone. Move
    every pull request that does not appear to the next milestone.
 
-8. Create the next milestone (`vX.Y.Z+1`) and close the milestone for the release
+9. Create the next milestone (`vX.Y.Z+1`) and close the milestone for the release
    you just published. Move any unshipped work to the new milestone:
 
    ```bash
