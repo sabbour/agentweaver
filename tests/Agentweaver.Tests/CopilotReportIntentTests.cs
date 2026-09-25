@@ -51,6 +51,26 @@ public sealed class CopilotReportIntentTests : IDisposable
             "report_outcome must be registered so the agent can self-assess completion");
     }
 
+    [Fact]
+    public void BuildSessionConfigTools_CopilotOverrideMetadataMatchesAcrossRuntimePaths()
+    {
+        var runnerTools = GitHubCopilotAgentRunner.BuildSessionConfigTools(BuildMinimalContext());
+        var workflowTools = CopilotAIAgent.BuildSessionConfigTools(BuildMinimalContext());
+
+        foreach (var name in new[] { "report_intent", "report_outcome" })
+        {
+            var runnerTool = runnerTools.Single(t => t.Name == name);
+            var workflowTool = workflowTools.Single(t => t.Name == name);
+
+            workflowTool.Description.Should().Be(runnerTool.Description);
+            workflowTool.JsonSchema.GetRawText().Should().Be(runnerTool.JsonSchema.GetRawText());
+            workflowTool.AdditionalProperties.Should().ContainKey("overridesBuiltInTool")
+                .WhoseValue.Should().Be(true);
+            System.Text.Json.JsonSerializer.Serialize(workflowTool.AdditionalProperties)
+                .Should().Be(System.Text.Json.JsonSerializer.Serialize(runnerTool.AdditionalProperties));
+        }
+    }
+
     // =========================================================================
     // Test 2 (B2): SanitizeIntent — strips control characters except \t and \n.
     // =========================================================================

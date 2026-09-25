@@ -156,7 +156,7 @@ public sealed class RaiTurnExecutor : Executor<AgentTurnOutput, AgentTurnOutput>
                 """;
 
             agent = _agentFactory?.CreateRaiAgent()
-                ?? new RaiAIAgent(
+                ?? EphemeralCopilotAIAgent.CreateRai(
                     _copilotClientFactory,
                     _sandboxExecutor,
                     _sandboxPolicyStore,

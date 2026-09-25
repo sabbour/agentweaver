@@ -305,13 +305,14 @@ The runtime is careful about event timing. If a tool denial happens near the end
 Where this lives:
 
 - `packages/Agentweaver.AgentRuntime/CopilotAIAgent.cs`
+- `packages/Agentweaver.AgentRuntime/EphemeralCopilotAIAgent.cs`
 - `packages/Agentweaver.AgentRuntime/Workflow/WorkflowStepEvents.cs`
 - `apps/Agentweaver.Api/Runs/RunWatchLoopService.cs`
 - `apps/Agentweaver.Api/Runs/RunWorkflowFactory.cs`
 
 ## RAI and Scribe touchpoints
 
-RAI and Scribe are built-in agents that reuse the same Copilot-based turn machinery but serve narrow workflow roles.
+RAI and Scribe are built-in agents that reuse the same Copilot-based turn machinery but serve narrow workflow roles. Runtime construction uses one parameterized ephemeral agent implementation so both roles stay non-restorable while retaining distinct role names and prompts at their executors.
 
 ### RAI
 
@@ -332,8 +333,7 @@ Scribe uses the same loopback API tool model as other agents, but its charter na
 
 Where this lives:
 
-- `packages/Agentweaver.AgentRuntime/RaiAIAgent.cs`
-- `packages/Agentweaver.AgentRuntime/ScribeAIAgent.cs`
+- `packages/Agentweaver.AgentRuntime/EphemeralCopilotAIAgent.cs`
 - `packages/Agentweaver.AgentRuntime/Workflow/RaiTurnExecutor.cs`
 - `packages/Agentweaver.AgentRuntime/Workflow/ScribeTurnExecutor.cs`
 
