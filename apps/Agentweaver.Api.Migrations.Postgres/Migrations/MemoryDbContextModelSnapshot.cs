@@ -3344,6 +3344,26 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("DecisionIdentity")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("DeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeliveryClaimOwner")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("DeliveryClaimedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeliveryKind")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DeliveryState")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasDefaultValue("waiting");
+
                     b.Property<DateTimeOffset?>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -3351,8 +3371,14 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("RequestId")
+                        .HasColumnType("text");
+
                     b.Property<string>("RequestJson")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ResponseJson")
                         .HasColumnType("text");
 
                     b.Property<string>("RunId")
@@ -3365,6 +3391,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasIndex("RunId")
                         .IsUnique();
+
+                    b.HasIndex("DeliveryState", "DeliveryClaimedAt");
+
+                    b.HasIndex("RunId", "RequestId", "DecisionIdentity");
 
                     b.ToTable("PendingRequests");
                 });

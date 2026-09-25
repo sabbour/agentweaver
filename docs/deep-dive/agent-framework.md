@@ -54,7 +54,7 @@ This seam implements the following graph gates:
 - **The coordinator's OutcomeSpec confirmation gate** is `RequestPort.Create<CoordinatorOutcomeSpecRequest, CoordinatorOutcomeSpecDecision>`. The drafted spec suspends the coordinator run until a human confirms or revises.
 - **Per-node human-review gates** in catalog/generated workflows are minted the same way, one request port per `human-review` node.
 
-Because all of these are the same primitive, the suspend/resume plumbing is written once. When the watch loop sees a `RequestInfoEvent` it records the pending request, marks the run awaiting review, and closes the live stream at the gate. When the human responds, the decision is sent back into the suspended workflow and execution continues from exactly that port. The merge-blocked retry path even *re-enters* the same review gate, so a transient block keeps the workflow alive instead of failing it.
+Because all of these are the same primitive, the suspend/resume plumbing is written once. When the watch loop sees a `RequestInfoEvent` it records the pending request, marks the run awaiting review, and closes the live stream at the gate. When the human responds, the decision is persisted against the exact request id and decision identity, claimed for delivery, sent back into the suspended workflow, and marked delivered only after `SendResponseAsync` returns. A crash before send leaves the decision retryable; a delivered decision no-ops during recovery instead of advancing the gate twice. The merge-blocked retry path even *re-enters* the same review gate, so a transient block keeps the workflow alive instead of failing it.
 
 ## Checkpointing & durable resume
 
@@ -100,7 +100,9 @@ On process restart, the `WorkflowRestartService` reconciles interrupted runs. A 
 
 ### Ordinary response versus process restoration
 
-A live workflow receives the correlated decision through `SendResponseAsync`. A request arriving on another replica can persist a deferred decision for the owning watch loop. Process-loss recovery instead loads the selected checkpoint store, rebuilds the appropriate full/child graph, calls `ResumeStreamingAsync`, and restarts observation. Recovery revalidates durable state and worktree/tree identity; it is not unconditional success.
+A live workflow receives the correlated decision through `SendResponseAsync`. A request arriving on another replica persists a ready delivery record for the owning watch loop instead of deleting the pending gate first. The delivery record moves `waiting -> ready -> delivering -> delivered`; stale `delivering` claims are retried, while `delivered` records no-op. This is a durable resume-delivery fence for Agentweaver-controlled review/resume handoffs, not a claim of exactly-once external side effects. If arbitrary shell, network, or Git effects happened after a resume, those phases still need their own retry or probe-and-reconcile semantics.
+
+Process-loss recovery instead loads the selected checkpoint store, rebuilds the appropriate full/child graph, calls `ResumeStreamingAsync`, and restarts observation. Recovery revalidates durable state and worktree/tree identity; it is not unconditional success.
 
 Postgres checkpoints are shared rows. File checkpoints are the SQLite/dev provider choice, not an automatic fallback when production Postgres fails.
 
