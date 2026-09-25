@@ -1,13 +1,22 @@
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   loadSessionStorageSeed,
-  loadStorageState,
 } from '../../../ui-harness/lib/auth.mjs';
+import { getSessionToken } from '../../../demo-recording/lib/auth.mjs';
 
 export const RECORDER_SESSION_AUTH_PROVIDER = 'recorder-session';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_RECORDER_AUTH_ROOT = path.resolve(HERE, '../../../demo-recording/.auth');
+
+async function loadRecorderStorageState(storageStatePath) {
+  const parsed = JSON.parse(await readFile(storageStatePath, 'utf8'));
+  if (!Array.isArray(parsed.cookies) || !Array.isArray(parsed.origins)) {
+    throw new Error('stored recorder session has an invalid Playwright storageState shape');
+  }
+  return parsed;
+}
 
 export function uiHarnessAuthPaths(authRoot) {
   const storageStatePath = authRoot
@@ -23,10 +32,11 @@ export function createRecorderSessionAuthProvider({
   authRoot,
   baseUrl,
   uiHarnessAuthPathsFn = uiHarnessAuthPaths,
-  loadStorageStateFn = loadStorageState,
+  loadStorageStateFn = loadRecorderStorageState,
   loadSessionStorageSeedFn = loadSessionStorageSeed,
+  getSessionTokenFn = getSessionToken,
 } = {}) {
-  const { storageStatePath } = uiHarnessAuthPathsFn(authRoot);
+  const { storageStatePath, sessionStoragePath } = uiHarnessAuthPathsFn(authRoot);
   let authorization;
 
   return {
@@ -49,7 +59,7 @@ export function createRecorderSessionAuthProvider({
         if (seed?.origin !== expectedOrigin) {
           throw new Error('the cached UI-harness session belongs to a different target origin');
         }
-        const token = seed.entries?.['agentweaver.sessionToken'];
+        const token = await getSessionTokenFn(sessionStoragePath);
         if (typeof token !== 'string' || token.length === 0) {
           throw new Error('the cached UI-harness session does not contain an Agentweaver session token');
         }
