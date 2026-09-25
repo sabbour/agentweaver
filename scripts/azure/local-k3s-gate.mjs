@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import YAML from "yaml";
 import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
 import { parseManifestDocuments, assertSharedAiExecutionSigningSecret } from "./lib/ai-execution-signing-contract.mjs";
@@ -356,7 +355,7 @@ export function buildLocalK3sManifest(docs, { imageTag }) {
     api,
     worker,
   ];
-  return resources.map((resource) => YAML.stringify(resource)).join("---\n");
+  return JSON.stringify({ apiVersion: "v1", kind: "List", items: resources }, null, 2);
 }
 
 async function wsl(exec, distro, script, opts = {}) {

@@ -1,16 +1,136 @@
-import YAML from "yaml";
-
 export const AI_EXECUTION_SIGNING_ENV = "AiExecution__ProviderKeySigningKey";
 
-export function parseManifestDocuments(yamlText) {
-  return YAML.parseAllDocuments(yamlText)
-    .map((doc) => doc.toJSON())
+function indentOf(line) {
+  return line.match(/^\s*/)[0].length;
+}
+
+function scalar(value) {
+  const trimmed = value.trim();
+  if (trimmed === "") return "";
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed === "null") return null;
+  if (/^-?\d+$/.test(trimmed)) return Number(trimmed);
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+function parseKeyValue(text) {
+  const match = text.match(/^([^:]+):(.*)$/);
+  if (!match) return null;
+  return { key: match[1].trim(), value: match[2].trim() };
+}
+
+function parseYamlDocument(text) {
+  const lines = text
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && !line.trimStart().startsWith("#"));
+
+  function parseBlock(index, indent) {
+    const line = lines[index];
+    if (line === undefined || indentOf(line) < indent) return [null, index];
+    return line.slice(indent).startsWith("- ")
+      ? parseArray(index, indent)
+      : parseObject(index, indent);
+  }
+
+  function parseObject(index, indent) {
+    const object = {};
+    while (index < lines.length) {
+      const line = lines[index];
+      const currentIndent = indentOf(line);
+      if (currentIndent < indent) break;
+      if (currentIndent > indent) break;
+      const trimmed = line.slice(indent);
+      if (trimmed.startsWith("- ")) break;
+      const pair = parseKeyValue(trimmed);
+      if (!pair) {
+        index += 1;
+        continue;
+      }
+      if (pair.value === "") {
+        const [value, next] = parseBlock(index + 1, indent + 2);
+        object[pair.key] = value ?? {};
+        index = next;
+      } else {
+        object[pair.key] = scalar(pair.value);
+        index += 1;
+      }
+    }
+    return [object, index];
+  }
+
+  function parseArray(index, indent) {
+    const items = [];
+    while (index < lines.length) {
+      const line = lines[index];
+      const currentIndent = indentOf(line);
+      if (currentIndent < indent) break;
+      if (currentIndent !== indent || !line.slice(indent).startsWith("- ")) break;
+      const rest = line.slice(indent + 2);
+      if (rest.trim() === "") {
+        const [value, next] = parseBlock(index + 1, indent + 2);
+        items.push(value);
+        index = next;
+        continue;
+      }
+      const pair = parseKeyValue(rest);
+      if (pair) {
+        const item = {};
+        if (pair.value === "") {
+          const [value, next] = parseBlock(index + 1, indent + 4);
+          item[pair.key] = value ?? {};
+          index = next;
+        } else {
+          item[pair.key] = scalar(pair.value);
+          index += 1;
+        }
+        if (index < lines.length && indentOf(lines[index]) > indent) {
+          const [extra, next] = parseObject(index, indent + 2);
+          Object.assign(item, extra);
+          index = next;
+        }
+        items.push(item);
+      } else {
+        items.push(scalar(rest));
+        index += 1;
+      }
+    }
+    return [items, index];
+  }
+
+  return parseBlock(0, indentOf(lines[0] ?? ""))[0];
+}
+
+export function parseManifestDocuments(manifestText) {
+  const text = String(manifestText ?? "").trim();
+  if (!text) return [];
+  if (text.startsWith("{") || text.startsWith("[")) {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed?.kind === "List" && Array.isArray(parsed.items)) return parsed.items;
+    return [parsed];
+  }
+  return text
+    .split(/\r?\n---\r?\n/)
+    .map((doc) => doc.trim())
+    .filter(Boolean)
+    .map(parseYamlDocument)
     .filter(Boolean);
 }
 
 function containerEnv(deployment) {
   return deployment?.spec?.template?.spec?.containers?.flatMap((container) =>
-    (container.env ?? []).map((entry) => ({
+    (Array.isArray(container.env) ? container.env : []).map((entry) => ({
       container: container.name,
       name: entry.name,
       valueFrom: entry.valueFrom ?? null,
