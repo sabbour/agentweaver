@@ -22,6 +22,7 @@
 export default {
   id: 'generated-artifacts-seam',
   kind: 'generation-seam',
+  requireDurableJobs: true,
   personaFile: 'greenfield-aks-automatic-developer.md',
   personaScenario: 'Generated-artifact seam integrity',
   title: 'Generated-artifact seams — roster + workflow structural integrity',

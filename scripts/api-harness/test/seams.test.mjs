@@ -467,6 +467,76 @@ edges:
   await result.cleanup();
 });
 
+test('generation seams fail durable-required scenarios when generation is synchronous', async () => {
+  const validWorkflow = `id: generated-workflow
+name: Generated Workflow
+start: work
+nodes:
+  - id: work
+    type: prompt
+    role: backend-engineer
+  - id: done
+    type: terminal
+edges:
+  - { from: work, to: done }
+`;
+  const client = {
+    async get(path) {
+      if (path === '/api/version')
+        return { ok: true, status: 200, responseBody: { version: 'v0.34.0', gitSha: 'abc123', isRelease: false } };
+      if (path === '/api/auth/config')
+        return { ok: true, status: 200, responseBody: { mode: 'LocalTest' } };
+      assert.equal(path, '/api/auth/session');
+      return { ok: true, status: 200, responseBody: { authenticated: true, auth_mode: 'LocalTest' } };
+    },
+    async post(path, body) {
+      if (path === '/api/ai/execution-context') {
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            ai_required: true,
+            operation: body.operation,
+            phase: 'prepared',
+            execution_key: `${body.operation}-key-canary`,
+          },
+        };
+      }
+      if (path === '/api/blueprints/generate') {
+        return {
+          ok: true,
+          status: 200,
+          responseBody: { blueprint: { id: 'bp', name: 'BP', roster: ['backend-engineer', 'product-manager'], workflows: ['generated-workflow'] } },
+        };
+      }
+      if (path === '/api/projects') return { ok: true, status: 201, responseBody: { project_id: 'owned-project' } };
+      assert.equal(path, '/api/projects/owned-project/workflows/generate');
+      return { ok: true, status: 200, responseBody: { workflow_id: 'generated-workflow', yaml: validWorkflow } };
+    },
+    async put(_path, body) {
+      return body.yaml.includes('branches: [pass, fail]')
+        ? { ok: false, status: 400, responseBody: { error: 'invalid_workflow' } }
+        : { ok: true, status: 204, responseBody: null };
+    },
+    async del() {
+      return { ok: true, status: 204, responseBody: null };
+    },
+  };
+
+  const result = await runGenerationSeams(client, {
+    requireDurableJobs: true,
+    projectPrefix: 'seam',
+    baseBlueprintId: 'base-blueprint',
+    blueprintDescription: 'generate blueprint',
+    workflowDescription: 'generate workflow',
+  });
+
+  assert.equal(result.pass, false);
+  assert.equal(result.checks.find((check) => check.name === 'Blueprint generation uses the durable job contract (202)')?.pass, false);
+  assert.equal(result.checks.find((check) => check.name === 'Advanced workflow generation uses the durable job contract (202)')?.pass, false);
+  await result.cleanup();
+});
+
 test('owned project is deleted when a later seam step throws', async () => {
   const calls = [];
   const client = {

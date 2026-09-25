@@ -86,6 +86,14 @@ test("local k3s gate parses negative proof and target options", () => {
   );
 });
 
+test("local k3s gate rejects non-loopback --target values", () => {
+  assert.throws(
+    () => parseArgs(["--target", "https://agentweaver.example.aksapp.io"]),
+    /--target must be a loopback URL/,
+  );
+  assert.equal(parseArgs(["--target", "http://localhost:18080"]).target, "http://localhost:18080");
+});
+
 test("probeWslK3s reports unavailable when binary or kubeconfig is absent", async () => {
   const exec = {
     capture: async () => ({
