@@ -78,12 +78,14 @@ public sealed class PendingRequestStoreTests : IDisposable
         peek.Request.PortInfo.PortId.Should().Be("review-port");
 
         // Replica B consumes it atomically.
-        var consumed = await NewStoreOnSeparateReplica().TryRemoveAsync(runId);
+        var consumed = await NewStoreOnSeparateReplica()
+            .TryAbandonWaitingGateForHumanRevisionAsync(runId);
         consumed.Should().NotBeNull("the armed gate must be consumable cross-replica");
         consumed!.Request.RequestId.Should().Be("req-A");
 
         // Replica C tries to consume the same run again → already consumed (at-most-once).
-        var second = await NewStoreOnSeparateReplica().TryRemoveAsync(runId);
+        var second = await NewStoreOnSeparateReplica()
+            .TryAbandonWaitingGateForHumanRevisionAsync(runId);
         second.Should().BeNull("a gate can be consumed at most once across all replicas");
 
         // And a plain read now sees nothing.
@@ -97,7 +99,8 @@ public sealed class PendingRequestStoreTests : IDisposable
         await NewStoreOnSeparateReplica().SetAsync(runId, NewRequest("req-X"), "octocat");
 
         var tasks = Enumerable.Range(0, 16)
-            .Select(_ => Task.Run(() => NewStoreOnSeparateReplica().TryRemoveAsync(runId)))
+            .Select(_ => Task.Run(() => NewStoreOnSeparateReplica()
+                .TryAbandonWaitingGateForHumanRevisionAsync(runId)))
             .ToArray();
 
         var results = await Task.WhenAll(tasks);
@@ -171,6 +174,72 @@ public sealed class PendingRequestStoreTests : IDisposable
         retryClaim!.Request.RequestId.Should().Be("req-deferred");
         retryClaim.DecisionIdentity.Should().Be(firstClaim.DecisionIdentity);
         retryClaim.GetResponse<WorkflowReviewDecision>().Should().BeEquivalentTo(decision);
+    }
+
+    [Fact]
+    public async Task HumanRevisionAbandon_DoesNotDeleteQueuedDelivery()
+    {
+        const string runId = "run-human-revision-after-queue";
+        var decision = new WorkflowReviewDecision(
+            Approved: false,
+            RequestChanges: true,
+            Feedback: "revise",
+            ReviewedBy: "octocat");
+        var identity = PendingRequestStore.CreateDecisionIdentity("req-human-revision", decision);
+
+        var store = NewStoreOnSeparateReplica();
+        await store.SetAsync(runId, NewRequest("req-human-revision"), "octocat");
+        (await store.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            identity,
+            decision,
+            "octocat")).Should().BeTrue();
+
+        (await NewStoreOnSeparateReplica().TryAbandonWaitingGateForHumanRevisionAsync(runId))
+            .Should().BeNull("abandonment must not erase a decision already queued for delivery");
+
+        var claim = await NewStoreOnSeparateReplica().TryClaimDeliveryAsync(
+            runId,
+            "owner-after-abandon-race",
+            TimeSpan.Zero);
+        claim.Should().NotBeNull("the queued resume handoff must survive a racing human-revision cleanup");
+        claim!.DecisionIdentity.Should().Be(identity);
+    }
+
+    [Fact]
+    public async Task MatchingDelivery_RejectsConflictingDecision()
+    {
+        const string runId = "run-conflicting-decision";
+        var confirm = new WorkflowReviewDecision(
+            Approved: true,
+            RequestChanges: false,
+            Feedback: null,
+            ReviewedBy: "octocat");
+        var revise = confirm with
+        {
+            Approved = false,
+            RequestChanges = true,
+            Feedback = "revise",
+        };
+
+        var store = NewStoreOnSeparateReplica();
+        await store.SetAsync(runId, NewRequest("req-conflict"), "octocat");
+        (await store.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            PendingRequestStore.CreateDecisionIdentity("req-conflict", confirm),
+            confirm,
+            "octocat")).Should().BeTrue();
+
+        (await NewStoreOnSeparateReplica().MatchesUndeliveredDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            confirm)).Should().BeTrue();
+        (await NewStoreOnSeparateReplica().MatchesUndeliveredDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            revise)).Should().BeFalse("a conflicting human decision is not an idempotent retry");
     }
 
     [Fact]

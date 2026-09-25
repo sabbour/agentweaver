@@ -8,6 +8,7 @@ using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
@@ -178,6 +179,46 @@ public sealed class RequestChangesEndpointTests
             "review.changes_requested must follow review.requested in monotonic sequence");
         revisionStartedSeq.Should().BeGreaterThan(changesRequestedSeq,
             "revision.started must follow review.changes_requested in monotonic sequence");
+    }
+
+    [Fact]
+    public async Task QueuedReviewDecision_WinsRace_RequestChangesReturns409AndPreservesWorkflow()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync();
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var request = new ExternalRequest(
+            new RequestPortInfo(
+                new TypeId("Agentweaver.Api", "WorkflowReviewRequest"),
+                new TypeId("Agentweaver.Api", "WorkflowReviewDecision"),
+                "human-review"),
+            "request-changes-race",
+            new PortableValue("request-changes-race"));
+        await pendingStore.SetAsync(
+            run.Id.ToString(),
+            request,
+            RequestChangesWebApplicationFactory.OwnerUser);
+        var decision = new WorkflowReviewDecision(
+            Approved: true,
+            RequestChanges: false,
+            Feedback: null,
+            ReviewedBy: RequestChangesWebApplicationFactory.OwnerUser);
+        (await pendingStore.TryQueueDeliveryAsync(
+            run.Id.ToString(),
+            PendingRequestDeliveryKinds.WorkflowReview,
+            PendingRequestStore.CreateDecisionIdentity(request.RequestId, decision),
+            decision,
+            RequestChangesWebApplicationFactory.OwnerUser)).Should().BeTrue();
+
+        var response = await PostRequestChangesAsync(run, "Please revise this instead.");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "request-changes must not abandon a workflow after another review decision is queued");
+        (await _factory.Services.GetRequiredService<SqliteRunStore>().GetAsync(run.Id))!
+            .Status.Should().Be(RunStatus.AwaitingReview);
+        (await pendingStore.MatchesUndeliveredDeliveryAsync(
+            run.Id.ToString(),
+            PendingRequestDeliveryKinds.WorkflowReview,
+            decision)).Should().BeTrue("the winning queued decision must remain deliverable");
     }
 
     [Fact]

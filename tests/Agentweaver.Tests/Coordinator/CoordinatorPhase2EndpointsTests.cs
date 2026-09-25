@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Agents.AI.Workflows;
+using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
@@ -13,6 +15,8 @@ using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
+using Run = Agentweaver.Domain.Run;
+using RunStatus = Agentweaver.Domain.RunStatus;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -469,6 +473,108 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task DeferredOutcomeSpecDelivery_CrashBeforeSend_RemainsRetryable()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A queued confirm decision must survive a crash before send");
+        await WaitForGateAsync(runId);
+
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var pending = await pendingStore.GetAsync(runId);
+        pending.Should().NotBeNull("the coordinator run must be suspended at its confirmation gate");
+
+        var decision = new CoordinatorOutcomeSpecDecision(
+            Confirmed: true,
+            Revise: false,
+            ConfirmedBy: CoordinatorWebApplicationFactory.OwnerUser);
+        var decisionIdentity = PendingRequestStore.CreateDecisionIdentity(pending!.Request.RequestId, decision);
+        (await pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            decisionIdentity,
+            decision,
+            pending.OwnerUser)).Should().BeTrue("the decision must be durably queued before delivery is attempted");
+
+        // Simulate process death after the decision is queued but before SendResponseAsync runs.
+        // The owner-side poller must claim the queued decision and resume the suspended workflow.
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        (await coordinator.ApplyDeferredDecisionAsync(runId, CancellationToken.None))
+            .Should().BeTrue("queued coordinator decisions must remain retryable after a crash before send");
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+        spec.Should().NotBeNull("the queued confirm decision must eventually advance the spec");
+    }
+
+    [Fact]
+    public async Task DeferredOutcomeSpecDelivery_ConflictingRetry_DoesNotReplaceQueuedDecision()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A conflicting retry must not replace the queued decision");
+        await WaitForGateAsync(runId);
+
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var pending = await pendingStore.GetAsync(runId);
+        pending.Should().NotBeNull();
+
+        var confirm = new CoordinatorOutcomeSpecDecision(
+            Confirmed: true,
+            Revise: false,
+            ConfirmedBy: CoordinatorWebApplicationFactory.OwnerUser);
+        (await pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            PendingRequestStore.CreateDecisionIdentity(pending!.Request.RequestId, confirm),
+            confirm,
+            pending.OwnerUser)).Should().BeTrue();
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        var conflicting = await coordinator.ReviseOutcomeSpecAsync(
+            runId,
+            "replace the already queued confirmation",
+            CoordinatorWebApplicationFactory.OwnerUser,
+            CancellationToken.None);
+        conflicting.Should().Be(CoordinatorGateOutcome.NoPendingGate,
+            "a different decision is not an idempotent retry of the queued confirmation");
+
+        (await coordinator.ApplyDeferredDecisionAsync(runId, CancellationToken.None)).Should().BeTrue();
+        (await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed")).Should().NotBeNull(
+            "the originally queued confirmation must remain the decision that advances the gate");
+    }
+
+    [Fact]
+    public async Task ApplyingMigratedLegacyDecision_DeletesLegacyWakeupRecord()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A migrated decision must not replay against a later gate");
+        await WaitForGateAsync(runId);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
+            {
+                RunId = runId,
+                DecisionJson = JsonSerializer.Serialize(
+                    new CoordinatorOutcomeSpecDecision(
+                        Confirmed: true,
+                        Revise: false,
+                        ConfirmedBy: CoordinatorWebApplicationFactory.OwnerUser),
+                    JsonDefaults.Options),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        (await coordinator.ApplyDeferredDecisionAsync(runId, CancellationToken.None)).Should().BeTrue();
+
+        using var verificationScope = _factory.Services.CreateScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verificationDb.DeferredDecisions.AnyAsync(d => d.RunId == runId)).Should().BeFalse(
+            "the legacy wakeup row must be removed once its fenced delivery is sent");
+    }
+
+    [Fact]
     public async Task DrainOrphanedSpecDeferrals_StaleDecisionForNonGateRun_IsDiscarded()
     {
         // A coordinator run that is NOT parked at the confirmation gate (no outcome spec) with a
@@ -497,6 +603,34 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             (await db.DeferredDecisions.AnyAsync(d => d.RunId == runId))
                 .Should().BeFalse("the stale deferral must be discarded so it is not retried forever");
         }
+    }
+
+    [Fact]
+    public async Task DrainOrphanedSpecDeferrals_QueuedDeliveryForNonGateRun_IsDiscarded()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var request = new ExternalRequest(
+            new RequestPortInfo(
+                new TypeId("Agentweaver.Api", "CoordinatorOutcomeSpecRequest"),
+                new TypeId("Agentweaver.Api", "CoordinatorOutcomeSpecDecision"),
+                "outcome-spec"),
+            "stale-coordinator-request",
+            new PortableValue("stale-coordinator-request"));
+        var decision = new CoordinatorOutcomeSpecDecision(Confirmed: true);
+        await pendingStore.SetAsync(runId, request, CoordinatorWebApplicationFactory.OwnerUser);
+        (await pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            PendingRequestStore.CreateDecisionIdentity(request.RequestId, decision),
+            decision,
+            CoordinatorWebApplicationFactory.OwnerUser)).Should().BeTrue();
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        (await coordinator.DrainOrphanedSpecDeferralsAsync(CancellationToken.None)).Should().Be(1,
+            "queued coordinator deliveries must be visible to the orphan-recovery scan");
+        (await pendingStore.ExistsUndeliveredAsync(runId)).Should().BeFalse(
+            "a queued decision for a run that is no longer at the gate must be discarded");
     }
 
     [Fact]

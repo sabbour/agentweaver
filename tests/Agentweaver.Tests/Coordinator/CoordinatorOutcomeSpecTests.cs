@@ -796,7 +796,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // Drain the pending request directly, leaving the run live in the registry but with no
         // gate to consume. This is the precise condition the NoPendingGate branch guards.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        (await pendingStore.TryRemoveAsync(runId)).Should().NotBeNull("the gate must be pending before draining");
+        (await DrainPendingGateForTestAsync(pendingStore, runId)).Should().NotBeNull("the gate must be pending before draining");
 
         var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
@@ -828,7 +828,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // short delay (the watch loop would do this once the MAF runtime suspends). We re-arm with
         // the very same ExternalRequest so SendResponseAsync drives a real confirmation.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        var drained = await pendingStore.TryRemoveAsync(runId);
+        var drained = await DrainPendingGateForTestAsync(pendingStore, runId);
         drained.Should().NotBeNull("the gate must be pending before draining");
 
         const int reArmDelayMs = 350;
@@ -869,7 +869,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // Drain the gate (no re-arm) and advance the persisted spec out of awaiting_confirmation,
         // exactly as a completed confirm / dispatch hand-off would leave it.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        (await pendingStore.TryRemoveAsync(runId)).Should().NotBeNull("the gate must be pending before draining");
+        (await DrainPendingGateForTestAsync(pendingStore, runId)).Should().NotBeNull("the gate must be pending before draining");
 
         var scopeFactory = _factory.Services.GetRequiredService<IServiceScopeFactory>();
         using (var scope = scopeFactory.CreateScope())
@@ -1238,6 +1238,11 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var resp = await client.GetAsync($"/api/runs/{runId}");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         return await resp.Content.ReadFromJsonAsync<RunResponse>();
+    }
+
+    private static Task<PendingEntry?> DrainPendingGateForTestAsync(PendingRequestStore pendingStore, string runId)
+    {
+        return pendingStore.TryAbandonWaitingGateForHumanRevisionAsync(runId);
     }
 
     /// <summary>

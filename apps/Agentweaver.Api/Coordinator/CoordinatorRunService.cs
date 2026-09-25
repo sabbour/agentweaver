@@ -46,8 +46,8 @@ namespace Agentweaver.Api.Coordinator;
 /// The suspend/resume mechanism mirrors the existing review-gate exactly: a MAF
 /// <see cref="RequestPort"/> emits a <see cref="RequestInfoEvent"/> captured by the watch loop into
 /// <see cref="PendingRequestStore"/>; the resume seam looks the run up in
-/// <see cref="RunWorkflowRegistry"/>, atomically consumes the pending request, and calls
-/// <c>SendResponseAsync</c> — identical to the review endpoint in <c>Program.cs</c>.
+/// <see cref="RunWorkflowRegistry"/>, queues the decision durably, claims it for delivery, and calls
+/// <c>SendResponseAsync</c>. Workflow progress after the send marks the delivery complete.
 /// </summary>
 public sealed class CoordinatorRunService
 {
@@ -72,6 +72,7 @@ public sealed class CoordinatorRunService
     private readonly bool _autoDispatch;
     private readonly int _finalScribeMaxAttempts;
     private readonly CancellationToken _appStopping;
+    private readonly string _deliveryOwner = $"{Environment.MachineName}/coordinator/{Guid.NewGuid():N}";
 
     // #272 orphaned-deferral drain: throttle repeated recovery attempts for the same run so a
     // checkpoint whose restore keeps failing can't be resumed on every heartbeat tick.
@@ -904,6 +905,7 @@ public sealed class CoordinatorRunService
     // bounded interval before reporting NoPendingGate.
     private const int GateArmWaitTimeoutMs = 3000;
     private const int GateArmPollIntervalMs = 50;
+    private static readonly TimeSpan DeliveryClaimStaleAfter = TimeSpan.FromMinutes(2);
 
     private async Task<CoordinatorGateOutcome> SubmitDecisionAsync(
         string runId, CoordinatorOutcomeSpecDecision decision, CancellationToken ct)
@@ -949,25 +951,94 @@ public sealed class CoordinatorRunService
                 return CoordinatorGateOutcome.RunNotActive;
         }
 
-        // Atomic consume for replay/double-POST protection (mirrors the review endpoint).
-        var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
-        if (pending is null)
+        var delivery = await QueueAndClaimCoordinatorDecisionAsync(runId, decision, ct).ConfigureAwait(false);
+        if (delivery is null)
         {
-            // The gate may simply not be armed YET (the ordering race described above). Wait for it
-            // to arm — but ONLY while the persisted spec is still awaiting_confirmation. If the spec
-            // is already confirmed/declined (a genuine double-submit, or a drained gate after the
-            // dispatch hand-off), there is no gate coming, so we return NoPendingGate immediately and
-            // preserve replay/double-POST protection.
+            if (await _pendingStore.ExistsUndeliveredAsync(runId, ct).ConfigureAwait(false))
+                return CoordinatorGateOutcome.NoPendingGate;
+
+            var recovery = await TryRecoverMissingConfirmationGateAsync(runId, ct).ConfigureAwait(false);
+            if (recovery.StreamingRun is not null)
+                streamingRun = recovery.StreamingRun;
+            if (recovery.Pending is not null)
+                delivery = await QueueAndClaimCoordinatorDecisionAsync(runId, decision, ct).ConfigureAwait(false);
+        }
+
+        if (delivery is null)
+            return CoordinatorGateOutcome.NoPendingGate;
+
+        var queuedDecision = delivery.GetResponse<CoordinatorOutcomeSpecDecision>();
+        return await SendCoordinatorDecisionAsync(runId, streamingRun, delivery, queuedDecision, ct)
+            .ConfigureAwait(false)
+            ? CoordinatorGateOutcome.Accepted
+            : CoordinatorGateOutcome.RunNotActive;
+    }
+
+    private async Task<PendingDelivery?> QueueAndClaimCoordinatorDecisionAsync(
+        string runId,
+        CoordinatorOutcomeSpecDecision decision,
+        CancellationToken ct)
+    {
+        var existingDelivery = await _pendingStore.TryClaimDeliveryAsync(
+            runId,
+            _deliveryOwner,
+            staleAfter: DeliveryClaimStaleAfter,
+            ct).ConfigureAwait(false);
+        if (existingDelivery is not null)
+        {
+            var expectedIdentity = PendingRequestStore.CreateDecisionIdentity(
+                existingDelivery.Request.RequestId,
+                decision);
+            if (string.Equals(existingDelivery.DeliveryKind, PendingRequestDeliveryKinds.CoordinatorOutcomeSpec, StringComparison.Ordinal)
+                && string.Equals(existingDelivery.DecisionIdentity, expectedIdentity, StringComparison.Ordinal))
+                return existingDelivery;
+
+            await _pendingStore.ReleaseDeliveryAsync(
+                runId,
+                existingDelivery.DecisionIdentity,
+                existingDelivery.ClaimOwner,
+                existingDelivery.ClaimedAt,
+                CancellationToken.None).ConfigureAwait(false);
+            return null;
+        }
+
+        var pending = await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (pending is null)
             pending = await WaitForGateToArmAsync(runId, ct).ConfigureAwait(false);
-            if (pending is null)
-            {
-                var recovery = await TryRecoverMissingConfirmationGateAsync(runId, ct).ConfigureAwait(false);
-                if (recovery.StreamingRun is not null)
-                    streamingRun = recovery.StreamingRun;
-                pending = recovery.Pending;
-                if (pending is null)
-                    return CoordinatorGateOutcome.NoPendingGate;
-            }
+        if (pending is null)
+            return null;
+
+        var decisionIdentity = PendingRequestStore.CreateDecisionIdentity(pending.Request.RequestId, decision);
+        var queued = await _pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            decisionIdentity,
+            decision,
+            pending.OwnerUser,
+            ct).ConfigureAwait(false);
+        if (!queued)
+            return null;
+
+        return await _pendingStore.TryClaimDeliveryAsync(
+            runId,
+            _deliveryOwner,
+            staleAfter: DeliveryClaimStaleAfter,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> SendCoordinatorDecisionAsync(
+        string runId,
+        StreamingRun streamingRun,
+        PendingDelivery delivery,
+        CoordinatorOutcomeSpecDecision decision,
+        CancellationToken ct)
+    {
+        if (!string.Equals(delivery.DeliveryKind, PendingRequestDeliveryKinds.CoordinatorOutcomeSpec, StringComparison.Ordinal))
+        {
+            await _pendingStore.ReleaseDeliveryAsync(
+                runId, delivery.DecisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
+                .ConfigureAwait(false);
+            return false;
         }
 
         if (decision.Revise)
@@ -978,18 +1049,26 @@ public sealed class CoordinatorRunService
             entry?.RecordNext(EventTypes.RevisionStarted, new { });
         }
 
-        var response = pending.Request.CreateResponse(decision);
         try
         {
-            await streamingRun.SendResponseAsync(response).ConfigureAwait(false);
+            await streamingRun.SendResponseAsync(delivery.Request.CreateResponse(decision)).ConfigureAwait(false);
+            await _pendingStore.MarkDeliveredAsync(
+                runId,
+                delivery.DecisionIdentity,
+                delivery.ClaimOwner,
+                delivery.ClaimedAt,
+                CancellationToken.None).ConfigureAwait(false);
+            await DeleteLegacyDeferredDecisionAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            return true;
         }
         catch (Exception ex)
         {
+            await _pendingStore.ReleaseDeliveryAsync(
+                runId, delivery.DecisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
+                .ConfigureAwait(false);
             _logger.LogError(ex, "Coordinator SendResponseAsync failed for run {RunId}", runId);
-            return CoordinatorGateOutcome.RunNotActive;
+            return false;
         }
-
-        return CoordinatorGateOutcome.Accepted;
     }
 
     private async Task<(StreamingRun? StreamingRun, PendingEntry? Pending)> TryRecoverMissingConfirmationGateAsync(
@@ -1071,35 +1150,25 @@ public sealed class CoordinatorRunService
         // Confirm the gate is still armed — don't accept a decision for a run that isn't waiting.
         var pending = await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false);
         if (pending is null)
+            return await _pendingStore.MatchesUndeliveredDeliveryAsync(
+                runId,
+                PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+                decision,
+                ct).ConfigureAwait(false);
+
+        var decisionIdentity = PendingRequestStore.CreateDecisionIdentity(pending.Request.RequestId, decision);
+        var queued = await _pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            decisionIdentity,
+            decision,
+            pending.OwnerUser,
+            ct).ConfigureAwait(false);
+        if (!queued)
             return false;
 
-        var json = JsonSerializer.Serialize(decision, JsonDefaults.Options);
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-        var existing = await db.DeferredDecisions
-            .FirstOrDefaultAsync(d => d.RunId == runId, ct)
-            .ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
-            {
-                RunId = runId,
-                DecisionJson = json,
-                CreatedAt = DateTimeOffset.UtcNow,
-            });
-        }
-        else
-        {
-            existing.DecisionJson = json;
-            existing.CreatedAt = DateTimeOffset.UtcNow;
-        }
-
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
-
         _logger.LogInformation(
-            "Coordinator decision for run {RunId} deferred to DB for primary replica pickup", runId);
+            "Coordinator decision for run {RunId} queued for fenced delivery by the owner replica", runId);
         return true;
     }
 
@@ -1132,15 +1201,18 @@ public sealed class CoordinatorRunService
     }
 
     /// <summary>
-    /// Applies one deferred outcome-spec decision for a locally resident coordinator run.
-    /// The database row is atomically claimed before the pending gate is consumed, so concurrent
-    /// poller and watchdog attempts can apply the decision at most once.
+    /// Applies one queued or legacy-deferred outcome-spec decision for a locally resident coordinator
+    /// run. Legacy deferred rows are first copied into the fenced pending-delivery state machine, so a
+    /// crash after dequeueing cannot lose the resume handoff.
     /// </summary>
     internal async Task<bool> ApplyDeferredDecisionAsync(string runId, CancellationToken ct)
     {
         var streamingRun = _registry.Get(runId);
         if (streamingRun is null)
             return false;
+
+        if (await ApplyQueuedCoordinatorDecisionAsync(runId, streamingRun, ct).ConfigureAwait(false))
+            return true;
 
         CoordinatorOutcomeSpecDecision? decision;
         try
@@ -1158,12 +1230,7 @@ public sealed class CoordinatorRunService
             decision = JsonSerializer.Deserialize<CoordinatorOutcomeSpecDecision>(
                 row.DecisionJson, JsonDefaults.Options);
 
-            var deleted = await db.DeferredDecisions
-                .Where(d => d.RunId == runId)
-                .ExecuteDeleteAsync(ct)
-                .ConfigureAwait(false);
-
-            if (deleted == 0 || decision is null)
+            if (decision is null)
                 return false;
         }
         catch (OperationCanceledException)
@@ -1176,35 +1243,81 @@ public sealed class CoordinatorRunService
             return false;
         }
 
-        var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
+        var pending = await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false);
         if (pending is null)
         {
             _logger.LogWarning(
-                "Deferred decision for run {RunId}: pending gate already consumed; skipping", runId);
+                "Deferred decision for run {RunId}: pending gate is no longer waiting; skipping legacy row",
+                runId);
             return false;
         }
 
-        if (decision.Revise)
+        var decisionIdentity = PendingRequestStore.CreateDecisionIdentity(pending.Request.RequestId, decision);
+        var queued = await _pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            decisionIdentity,
+            decision,
+            pending.OwnerUser,
+            ct).ConfigureAwait(false);
+        if (!queued)
+            return false;
+
+        using (var scope = _scopeFactory.CreateScope())
         {
-            var entry = _streamStore.Get(runId);
-            entry?.ClearAwaitingReview();
-            entry?.RecordNext(EventTypes.RevisionStarted, new { });
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.DeferredDecisions
+                .Where(d => d.RunId == runId)
+                .ExecuteDeleteAsync(ct)
+                .ConfigureAwait(false);
         }
 
+        return await ApplyQueuedCoordinatorDecisionAsync(runId, streamingRun, ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> ApplyQueuedCoordinatorDecisionAsync(
+        string runId, StreamingRun streamingRun, CancellationToken ct)
+    {
+        PendingDelivery? delivery;
+        CoordinatorOutcomeSpecDecision decision;
         try
         {
-            var response = pending.Request.CreateResponse(decision);
-            await streamingRun.SendResponseAsync(response).ConfigureAwait(false);
-            _logger.LogInformation(
-                "Coordinator deferred decision for run {RunId} applied on primary replica", runId);
-            return true;
+            delivery = await _pendingStore.TryClaimDeliveryAsync(
+                runId,
+                _deliveryOwner,
+                staleAfter: DeliveryClaimStaleAfter,
+                ct).ConfigureAwait(false);
+            if (delivery is null)
+                return false;
+
+            if (!string.Equals(delivery.DeliveryKind, PendingRequestDeliveryKinds.CoordinatorOutcomeSpec, StringComparison.Ordinal))
+            {
+                await _pendingStore.ReleaseDeliveryAsync(
+                    runId, delivery.DecisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return false;
+            }
+
+            decision = delivery.GetResponse<CoordinatorOutcomeSpecDecision>();
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "Coordinator deferred SendResponseAsync failed for run {RunId}", runId);
+            _logger.LogWarning(ex, "Error claiming queued coordinator decision for run {RunId}", runId);
             return false;
         }
+
+        if (await SendCoordinatorDecisionAsync(runId, streamingRun, delivery, decision, ct).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "Coordinator queued decision for run {RunId} applied on owner replica", runId);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1237,7 +1350,7 @@ public sealed class CoordinatorRunService
                 return null;
             }
 
-            var pending = await _pendingStore.TryRemoveAsync(runId, ct).ConfigureAwait(false);
+            var pending = await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false);
             if (pending is not null)
                 return pending;
         }
@@ -1504,6 +1617,12 @@ public sealed class CoordinatorRunService
                 .Select(d => d.RunId)
                 .ToListAsync(ct).ConfigureAwait(false);
         }
+        deferredRunIds = deferredRunIds
+            .Concat(await _pendingStore.ListUndeliveredRunIdsAsync(
+                PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+                ct).ConfigureAwait(false))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
 
         if (deferredRunIds.Count == 0)
             return 0;
@@ -1551,6 +1670,10 @@ public sealed class CoordinatorRunService
             if (!eligible)
             {
                 await DiscardDeferredSpecDecisionAsync(runId, ct).ConfigureAwait(false);
+                await _pendingStore.DiscardUndeliverableDeliveryAsync(
+                    runId,
+                    PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+                    ct).ConfigureAwait(false);
                 _specDeferralRecoveryAttempts.TryRemove(runId, out _);
                 acted++;
                 continue;
@@ -1569,9 +1692,9 @@ public sealed class CoordinatorRunService
             _specDeferralRecoveryAttempts[runId] = DateTimeOffset.UtcNow;
             try
             {
-                // Re-establish the resident workflow + poller, which drains the deferred decision and
-                // drives the run forward. Idempotent: RehydrateConfirmationGateAsync reuses the armed
-                // gate, and PollDeferredDecisionsAsync consumes the row at-most-once.
+                // Re-establish the resident workflow + poller, which queues or claims the deferred
+                // decision and drives the run forward. Idempotent: RehydrateConfirmationGateAsync
+                // reuses the armed gate, and the pending-delivery state machine fences retries.
                 await RecoverSpecPhaseAsync(run!, ct).ConfigureAwait(false);
                 acted++;
                 _logger.LogInformation(
@@ -1607,6 +1730,16 @@ public sealed class CoordinatorRunService
         {
             _logger.LogWarning(ex, "Orphaned-deferral drain: failed to discard stale deferral for run {RunId}", runId);
         }
+    }
+
+    private async Task DeleteLegacyDeferredDecisionAsync(string runId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        await db.DeferredDecisions
+            .Where(d => d.RunId == runId)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
     }
 
     private async Task RecoverOneAsync(Run run, CancellationToken ct)
@@ -2393,7 +2526,7 @@ public enum CoordinatorGateOutcome
     /// <summary>No live workflow is registered for this run (terminated, never started, or post-restart).</summary>
     RunNotActive,
 
-    /// <summary>The run is not currently suspended at a confirmation gate (already consumed or not yet suspended).</summary>
+    /// <summary>The run has no waiting or retryable confirmation-gate delivery to accept.</summary>
     NoPendingGate,
 }
 

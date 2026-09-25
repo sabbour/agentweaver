@@ -71,4 +71,5 @@ public static class PendingRequestDeliveryStates
 public static class PendingRequestDeliveryKinds
 {
     public const string WorkflowReview = "workflow_review";
+    public const string CoordinatorOutcomeSpec = "coordinator_outcome_spec";
 }
