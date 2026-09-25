@@ -306,6 +306,167 @@ edges:
   await result.cleanup();
 });
 
+test('generation seams cover durable job lifecycle and cancellation retry smoke', async () => {
+  const calls = [];
+  const validWorkflow = `id: advanced-workflow
+name: Advanced Workflow
+start: work
+nodes:
+  - id: work
+    type: prompt
+    role: backend-engineer
+  - id: done
+    type: terminal
+edges:
+  - { from: work, to: done }
+`;
+  const jobResponse = (jobId, baseUrl, status = 'Queued', artifact = null) => ({
+    ok: true,
+    status: 202,
+    responseBody: {
+      job_id: jobId,
+      status,
+      artifact,
+      status_url: baseUrl,
+      result_url: `${baseUrl}/result`,
+      cancel_url: `${baseUrl}/cancel`,
+      retry_url: `${baseUrl}/retry`,
+    },
+  });
+  const completedResponse = (jobId, baseUrl, artifact) => ({
+    ok: true,
+    status: 200,
+    responseBody: {
+      job_id: jobId,
+      status: 'Completed',
+      artifact,
+      status_url: baseUrl,
+      result_url: `${baseUrl}/result`,
+      cancel_url: `${baseUrl}/cancel`,
+      retry_url: `${baseUrl}/retry`,
+    },
+  });
+  const client = {
+    async get(path) {
+      calls.push(['GET', path]);
+      if (path === '/api/version')
+        return { ok: true, status: 200, responseBody: { version: 'v0.34.0', gitSha: 'abc123', isRelease: false } };
+      if (path === '/api/auth/config')
+        return { ok: true, status: 200, responseBody: { mode: 'LocalTest' } };
+      if (path === '/api/auth/session')
+        return { ok: true, status: 200, responseBody: { authenticated: true, auth_mode: 'LocalTest' } };
+      if (path === '/api/blueprints/generation-jobs/bp-job')
+        return completedResponse('bp-job', path, { artifact_id: 'bp-artifact', logical_id: 'bp', version: 1 });
+      if (path === '/api/blueprints/generation-jobs/bp-job/result')
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            job_id: 'bp-job',
+            artifact_id: 'bp-artifact',
+            logical_id: 'bp',
+            version: 1,
+            blueprint: { id: 'bp', name: 'BP', roster: ['backend-engineer', 'product-manager'], workflows: ['advanced-workflow'] },
+            generated_workflow_yaml: null,
+          },
+        };
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-job')
+        return completedResponse('wf-job', path, { artifact_id: 'wf-artifact', workflow_id: 'advanced-workflow', version: 1 });
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-job/result')
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            job_id: 'wf-job',
+            artifact_id: 'wf-artifact',
+            workflow_id: 'advanced-workflow',
+            version: 1,
+            yaml: validWorkflow,
+            was_corrected: false,
+          },
+        };
+      throw new Error(`unexpected GET ${path}`);
+    },
+    async post(path, body, options) {
+      calls.push(['POST', path, options?.headers?.['Idempotency-Key'] ?? null]);
+      if (path === '/api/ai/execution-context') {
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            ai_required: true,
+            operation: body.operation,
+            phase: 'prepared',
+            execution_key: `${body.operation}-key-canary`,
+          },
+        };
+      }
+      if (path === '/api/blueprints/generate') {
+        return jobResponse('bp-job', '/api/blueprints/generation-jobs/bp-job');
+      }
+      if (path === '/api/projects') {
+        return { ok: true, status: 201, responseBody: { project_id: 'owned-project' } };
+      }
+      if (path === '/api/projects/owned-project/workflows/generate') {
+        return body.description.includes('Cancellation/retry probe.')
+          ? jobResponse('wf-cancel-job', '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job')
+          : jobResponse('wf-job', '/api/projects/owned-project/workflows/generation-jobs/wf-job');
+      }
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job/cancel') {
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            job_id: 'wf-cancel-job',
+            status: 'Cancelled',
+            retry_url: '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job/retry',
+          },
+        };
+      }
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job/retry') {
+        return { ok: true, status: 202, responseBody: { job_id: 'wf-cancel-job', status: 'Queued' } };
+      }
+      throw new Error(`unexpected POST ${path}`);
+    },
+    async put(_path, body) {
+      return body.yaml.includes('branches: [pass, fail]')
+        ? { ok: false, status: 400, responseBody: { error: 'invalid_workflow' } }
+        : { ok: true, status: 204, responseBody: null };
+    },
+    async del() {
+      return { ok: true, status: 204, responseBody: null };
+    },
+  };
+
+  const result = await runGenerationSeams(client, {
+    projectPrefix: 'seam',
+    baseBlueprintId: 'base-blueprint',
+    blueprintDescription: 'generate blueprint',
+    workflowDescription: 'generate advanced workflow',
+  });
+
+  assert.equal(result.pass, true);
+  for (const name of [
+    'Blueprint generation job is accepted durably (202)',
+    'Blueprint generation idempotency reuses the same job',
+    'Blueprint generation reaches terminal completed status through the hosted worker',
+    'Blueprint generation exposes a result artifact',
+    'Advanced workflow generation job is accepted durably (202)',
+    'Advanced workflow generation idempotency reuses the same job',
+    'Advanced workflow generation reaches terminal completed status through the hosted worker',
+    'Advanced workflow generation exposes a result artifact',
+    'Advanced workflow generation cancellation is accepted',
+    'Advanced workflow generation retry is accepted after cancellation',
+  ]) {
+    assert.equal(result.checks.find((check) => check.name === name)?.pass, true, name);
+  }
+  assert.equal(result.evidence.aiExecutionContexts.blueprintGeneration.job.terminalStatus, 'completed');
+  assert.equal(result.evidence.aiExecutionContexts.workflowGeneration.cancelRetry.cancelledJobStatus, 'cancelled');
+  assert.doesNotMatch(JSON.stringify(result.evidence), /key-canary/);
+  assert.ok(calls.some(([method, path]) => method === 'GET' && path.endsWith('/result')));
+  await result.cleanup();
+});
+
 test('owned project is deleted when a later seam step throws', async () => {
   const calls = [];
   const client = {
