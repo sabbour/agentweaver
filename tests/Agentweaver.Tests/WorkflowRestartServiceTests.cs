@@ -482,6 +482,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
+        var leaseStore = new RecordingRunLeaseStore(claimed: true, fencingToken: 17);
         var runId = RunId.New();
         await runStore.InsertAsync(new Run
         {
@@ -500,7 +501,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         await BuildService(
                 runStore,
                 streamStore,
-                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null))
+                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+                leaseStore: leaseStore)
             .RecoverAsync(CancellationToken.None);
 
         (await runStore.GetAsync(runId))!.Status.Should().Be(RunStatus.Failed);
@@ -509,6 +511,49 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         var payload = System.Text.Json.JsonSerializer.SerializeToElement(failure.Payload);
         payload.GetProperty("reason").GetString().Should().Be("a2a_transport_interrupted");
         payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+        leaseStore.ClaimedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
+        leaseStore.ReleasedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
+    }
+
+    [Theory]
+    [InlineData(RunStatus.InProgress)]
+    [InlineData(RunStatus.Committing)]
+    [InlineData(RunStatus.Merging)]
+    [InlineData(RunStatus.AwaitingReview)]
+    public async Task RecoverAsync_LivePeerOwnedRun_IsLeftUntouched(RunStatus status)
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var leaseStore = new RecordingRunLeaseStore(claimed: false, fencingToken: 41);
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "peer-owned implementation",
+            SubmittingUser = "test-user",
+            Status = status,
+            StartedAt = DateTimeOffset.UtcNow,
+            ParentRunId = status == RunStatus.InProgress ? RunId.New().ToString() : null,
+            SubtaskId = "peer-owned",
+        });
+
+        await BuildService(
+                runStore,
+                streamStore,
+                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+                leaseStore: leaseStore)
+            .RecoverAsync(CancellationToken.None);
+
+        (await runStore.GetAsync(runId))!.Status.Should().Be(status,
+            "startup recovery must not classify a live peer-owned execution as abandoned");
+        streamStore.Get(runId.ToString()).Should().BeNull(
+            "a losing startup replica must not publish failure events for the peer-owned run");
+        leaseStore.ClaimedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
+        leaseStore.ReleasedRunIds.Should().BeEmpty(
+            "a replica that never owned the lease must not release the peer's lease");
     }
 
     [Fact]
@@ -567,7 +612,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         SqliteRunStore runStore,
         RunStreamStore streamStore,
         IWorktreeOperations worktreeOps,
-        RecordingEventStream? eventStream = null)
+        RecordingEventStream? eventStream = null,
+        IRunLeaseStore? leaseStore = null)
     {
         var loggerFactory = NullLoggerFactory.Instance;
         var config = new ConfigurationBuilder()
@@ -619,6 +665,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             agentFactory,
             config);
 
+        leaseStore ??= new NoOpRunLeaseStore();
         var watchLoop = new RunWatchLoopService(
             runStore,
             streamStore,
@@ -629,7 +676,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             new TestHostApplicationLifetime(),
             config,
             scopeFactory,
-            new NoOpRunLeaseStore(),
+            leaseStore,
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
         eventStream ??= new RecordingEventStream();
@@ -644,9 +691,51 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             worktreeOps,
             watchLoop,
             scopeFactory,
+            leaseStore,
             loggerFactory.CreateLogger<WorkflowRestartService>(),
             eventStream,
             projector);
+    }
+
+    private sealed class RecordingRunLeaseStore(bool claimed, long fencingToken) : IRunLeaseStore
+    {
+        public List<string> ClaimedRunIds { get; } = [];
+        public List<string> ReleasedRunIds { get; } = [];
+
+        public Task<(bool Claimed, long FencingToken)> TryClaimAsync(
+            string runId,
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default)
+        {
+            ClaimedRunIds.Add(runId);
+            return Task.FromResult((claimed, fencingToken));
+        }
+
+        public Task<bool> TryRenewAsync(
+            string runId,
+            string ownerId,
+            long token,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default) =>
+            Task.FromResult(claimed);
+
+        public Task ReleaseAsync(
+            string runId,
+            string ownerId,
+            long token,
+            CancellationToken ct = default)
+        {
+            ReleasedRunIds.Add(runId);
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> IsLeaseOwnerAsync(
+            string runId,
+            string ownerId,
+            long token,
+            CancellationToken ct = default) =>
+            Task.FromResult(claimed);
     }
 
     private sealed class RecordingEventStream : IRunEventStream

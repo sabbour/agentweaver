@@ -1,5 +1,7 @@
 namespace Agentweaver.Api.Infrastructure;
 
+public sealed record RunLeaseClaim(string OwnerId, long FencingToken);
+
 /// <summary>
 /// Durable, multi-replica-safe run lease store.
 /// A worker that successfully claims a run is the ONLY process that may drive it
