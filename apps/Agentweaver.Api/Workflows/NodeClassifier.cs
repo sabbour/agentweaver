@@ -40,9 +40,6 @@ internal enum NodeKind
     /// <summary>Parallel join (<see cref="WorkflowNodeType.FanIn"/>).</summary>
     FanIn,
 
-    /// <summary>An ordered sequence of child steps (<see cref="WorkflowNodeType.Serial"/>).</summary>
-    Serial,
-
     /// <summary>A peer-review-style node that emits a verdict (<see cref="WorkflowNodeType.PeerReview"/> / BuildTest).</summary>
     PeerReview,
 
@@ -71,7 +68,6 @@ internal static class NodeClassifier
         WorkflowNodeType.Terminal            => NodeKind.Terminal,
         WorkflowNodeType.FanOut              => NodeKind.FanOut,
         WorkflowNodeType.FanIn               => NodeKind.FanIn,
-        WorkflowNodeType.Serial              => NodeKind.Serial,
         WorkflowNodeType.PeerReview          => NodeKind.PeerReview,
         WorkflowNodeType.BuildTest           => NodeKind.PeerReview,
         WorkflowNodeType.OpenPullRequest     => NodeKind.OpenPullRequest,

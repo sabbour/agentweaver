@@ -56,7 +56,7 @@ public sealed record WorkflowTransitionIssue(
 /// Binds a <see cref="WorkflowDefinition"/> onto the live MAF graph (Feature 010 wf-maf-binding,
 /// generalized in Feature 015 US1). The full run pipeline is assembled by ITERATING the definition's
 /// nodes/edges and resolving each node's executor from its <c>type</c> (via
-/// <see cref="INodeExecutorFactory"/>) and each <c>(from, to, when)</c> transition from the node TYPES
+/// <see cref="NodeExecutorRegistry"/>) and each <c>(from, to, when)</c> transition from the node TYPES
 /// (via <see cref="NodeClassifier"/>) — NOT from hardcoded node ids or literal edge keys. Any authored
 /// workflow whose node ids differ from the original five (agent/rai/review/merge/scribe) wires
 /// identically when the node TYPES match.
@@ -74,7 +74,7 @@ public sealed record WorkflowTransitionIssue(
 /// </summary>
 internal static class RunWorkflowGraphBinder
 {
-    private static readonly INodeExecutorFactory Factory = new NodeExecutorRegistry();
+    private static readonly NodeExecutorRegistry Factory = new();
 
     /// <summary>
     /// Mutable per-build wiring state threaded through the edge expansion. Accumulates the scribe-output
@@ -144,7 +144,7 @@ internal static class RunWorkflowGraphBinder
     /// Binder DRY-RUN (no executors required): validates that every node in <paramref name="definition"/>
     /// maps to a node kind the binder can wire to a runtime executor, and that every edge references a
     /// declared node. Throws <see cref="WorkflowBindException"/> for the first node/edge that would fail
-    /// closed at BUILD time (e.g. fan_out / fan_in / serial / coordinator_composed, which the loader accepts
+    /// closed at BUILD time (e.g. fan_out / fan_in / coordinator_composed, which the loader accepts
     /// but have no runtime executor; or a dangling edge reference). <c>peer_review</c> is accepted when
     /// reached from a producer, but cannot be the entry node because its runtime executor consumes
     /// <c>AgentTurnOutput</c>. Lets callers (save, set-default, generator) reject loader-valid-but-bind-
@@ -805,13 +805,11 @@ internal static class RunWorkflowGraphBinder
         {
             case NodeKind.FanOut:
             case NodeKind.FanIn:
-            case NodeKind.Serial:
             case NodeKind.CoordinatorComposed:
                 throw new WorkflowBindException(
                     $"Cannot bind node '{node.Id}' (type='{node.Type}'): node type '{node.Type}' is accepted by " +
                     "the loader but not yet wired to a runtime executor. fan_out/fan_in map onto the coordinator " +
-                    "SubtaskFrontier/AssemblyPlanning seams; serial onto the sequential seam — runtime support is " +
-                    "pending.", node.Id);
+                    "SubtaskFrontier/AssemblyPlanning seams — runtime support is pending.", node.Id);
         }
     }
 

@@ -5,7 +5,7 @@ onto the live Microsoft Agent Framework (MAF) run graph (Feature 015, US1).
 
 Before US1 the binder switched on five hardcoded node ids (`agent`, `rai`, `review`, `merge`, `scribe`)
 and literal edge keys (`"agent->rai:"`). Any other node id hit a `default → throw`, and the loader
-rejected `fan_out` / `fan_in` / `serial` / `peer_review` outright. The generalized binder instead resolves
+rejected `fan_out` / `fan_in` / `peer_review` outright. The generalized binder instead resolves
 each node's executor from its **type** and wires edges from `(from, to, when)` triples — so an authored
 workflow whose node ids differ can bind without relying on fixed stage names.
 The original five-stage parity guarantee was historical; the current default is six-stage.
@@ -21,7 +21,7 @@ recording; the inspected collective path does not establish automatic PR publica
 | File | Responsibility |
 | --- | --- |
 | [`NodeClassifier`](../apps/Agentweaver.Api/Workflows/NodeClassifier.cs) | Maps a `WorkflowNode` to a `NodeKind` from its `type` (+ gate kind), **never** its id. |
-| [`INodeExecutorFactory` / `NodeExecutorRegistry`](../apps/Agentweaver.Api/Workflows/NodeExecutorRegistry.cs) | Resolves a node's *primary* executor (its entry point) from its kind. |
+| [`NodeExecutorRegistry`](../apps/Agentweaver.Api/Workflows/NodeExecutorRegistry.cs) | Resolves a node's *primary* executor (its entry point) from its kind. |
 | [`RunWorkflowGraphBinder`](../apps/Agentweaver.Api/Workflows/RunWorkflowGraphBinder.cs) | Iterates nodes/edges, expands each transition into raw executor wiring, declares terminal outputs. |
 | [`WorkflowBindException`](../apps/Agentweaver.Api/Workflows/WorkflowBindException.cs) | Node-scoped, fail-closed error when a node/edge cannot be bound. |
 
@@ -42,7 +42,7 @@ canonical `gate_kind`):
 | `peer_review` | — | `PeerReview` (verdict-routed) **or** `Agent` (plain turn) | per-node peer-review or producing executor — **wired** (see §2a) |
 | `build_test` | — | `PeerReview` | platform-owned build/test/preview instruction through the per-node review executor |
 | `open_pull_request` | — | `OpenPullRequest` | `Wiring.ResolveOpenPullRequestNode`; deterministic, not an agent turn |
-| `fan_out` / `fan_in` / `serial` / `coordinator_composed` | — | the matching kind | **load-accepted, runtime pending** (see §5) |
+| `fan_out` / `fan_in` / `coordinator_composed` | — | the matching kind | **load-accepted, runtime pending** (see §5) |
 
 `NodeExecutorRegistry.ResolveExecutor(node, bindings)` returns the executor a node is *entered* at. It draws
 from the real, pre-built executors in `RunWorkflowBindings` (Principle VII: bind to real executors, never
@@ -173,26 +173,30 @@ Verified by [`RunWorkflowGraphBinderTests`](../tests/Agentweaver.Tests/Workflows
   (types unchanged) collapses to the **same** graph, proving resolution is by type, not id.
 - **`UnwiredNodeType_FailsClosed_WithNodeScopedError`** — an unbindable node throws a node-scoped
   `WorkflowBindException`.
-- **`Loader_Accepts_PreviouslyRejectedNodeTypes`** — `fan_out` / `fan_in` / `serial` / `peer_review` load.
+- **`Loader_Accepts_PreviouslyRejectedNodeTypes`** — `fan_out` / `fan_in` / `peer_review` load.
+- **`Loader_RejectsSerialNodeType_WithSequentialEdgesGuidance`** — legacy `serial` YAML fails with
+  explicit guidance to use ordinary workflow edges for sequential execution.
 
 The reflection-based **drift guard**
 ([`RunWorkflowDefinitionBindingTests`](../tests/Agentweaver.Tests/Graph/RunWorkflowDefinitionBindingTests.cs),
 `CoordinatorWorkflowGraphDriftGuardTests`) continues to assert the built MAF graph matches the descriptor.
 
-## 5. Status of `fan_out` / `fan_in` / `serial` / `coordinator_composed`
+## 5. Status of `fan_out` / `fan_in` / `coordinator_composed`
 
 `peer_review` is **fully wired** (see §2a) — both as a verdict gate and as a plain producing turn.
 
-`fan_out`, `fan_in`, `serial`, and `coordinator_composed` are **accepted by the loader** (the
+`fan_out`, `fan_in`, and `coordinator_composed` are **accepted by the loader** (the
 bindable-type gate was removed) and modeled by the schema, but are **not yet wired to a runtime
 executor**. They map onto existing seams —
 `fan_out` → the coordinator's [`SubtaskFrontier`](../apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs),
-`fan_in` → [`AssemblyPlanning`](../apps/Agentweaver.Api/Coordinator/AssemblyPlanning.cs), `serial` → a
-sequential chain — which require dispatch infrastructure beyond the
+`fan_in` → [`AssemblyPlanning`](../apps/Agentweaver.Api/Coordinator/AssemblyPlanning.cs) — which require dispatch infrastructure beyond the
 per-run graph. Until that lands, a workflow that actually *wires* one of these nodes fails closed at **build
 time** (`RejectUnwiredKind`) with a clear `WorkflowBindException`, rather than being rejected at load time.
 This is the deliberate
 "load-accepted, runtime-pending" boundary for US1.
+
+`serial` is no longer a workflow node type. Use ordinary directed edges between nodes to express sequential
+execution, for example `plan -> implement -> review`.
 
 <details id="diagram-context-canonical-default-workflow">
 <summary>Diagram details and constraints</summary>
