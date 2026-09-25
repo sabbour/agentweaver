@@ -94,7 +94,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
     /// parsed definition (null when invalid), and a validation error (null when valid). Validation is
     /// two-stage: the schema/structural <see cref="WorkflowDefinitionLoader"/> AND a
     /// <see cref="RunWorkflowGraphBinder.ValidateBindable"/> dry-run, so a draft that loads but would fail
-    /// to bind at runtime (e.g. uses fan_out/fan_in/serial/coordinator_composed) is rejected here and
+    /// to bind at runtime (e.g. uses fan_out/fan_in/coordinator_composed) is rejected here and
     /// triggers the correction pass rather than producing an unrunnable workflow.</summary>
     private static (string Yaml, WorkflowDefinition? Definition, string? Error) ParseCandidate(
         string raw, WorkflowGenerationRequest request)
@@ -311,8 +311,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - edges: list. Each edge: { from, to, when? }. `from`/`to` MUST reference existing node ids.
               `when` guards the edge on a verdict (e.g. approved, request-changes, declined, pass, revise).
 
-            NODE TYPES — use only the following supported types. Do NOT use fan_out, fan_in, serial, or
-            coordinator_composed: the schema loader accepts them, but they have no runtime executor.
+            NODE TYPES — use only the following supported types. Do NOT use serial; ordinary edges between
+            nodes express sequential execution. Do NOT use fan_out, fan_in, or coordinator_composed: the
+            schema loader accepts them, but they have no runtime executor.
 
             - prompt: an agent turn. The unit of work. Required: `role` (from the roles list below),
               `prompt` (the task instruction for the agent).
@@ -426,8 +427,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               safe change and reflect the conflict in the `description`; do NOT silently rewrite the
               workflow into a different process.
             - {{builtInRule}}
-            - Keep the output valid and runnable. Do NOT use fan_out, fan_in, serial, or
-              coordinator_composed because those node types are not currently bindable at runtime.
+            - Keep the output valid and runnable. Do NOT use serial; ordinary edges between nodes express
+              sequential execution. Do NOT use fan_out, fan_in, or coordinator_composed because those node
+              types are not currently bindable at runtime.
             - Do NOT add merge or scribe nodes to generated/custom workflows; the coordinator appends
               its hardcoded tail after authored gates.
             - publish is unsupported. Never replace a requested publication with a prompt or another node.

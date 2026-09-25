@@ -88,11 +88,10 @@ public sealed class RunWorkflowGraphBinderTests
             .Which.NodeId.Should().Be("spread");
     }
 
-    // ── Loader: fan_out / fan_in / serial / peer_review are no longer rejected at load time. ──────────
+    // ── Loader: fan_out / fan_in / peer_review are no longer rejected at load time. ───────────────────
     [Theory]
     [InlineData("fan_out")]
     [InlineData("fan_in")]
-    [InlineData("serial")]
     [InlineData("peer_review")]
     public void Loader_Accepts_PreviouslyRejectedNodeTypes(string nodeType)
     {
@@ -116,6 +115,33 @@ public sealed class RunWorkflowGraphBinderTests
         result.IsValid.Should().BeTrue(
             because: $"node type '{nodeType}' must load after US1 removed the bindable-type gate; error was: {result.Error}");
         result.Definition!.Nodes.Should().Contain(n => n.Id == "b");
+    }
+
+    [Fact]
+    public void Loader_RejectsSerialNodeType_WithSequentialEdgesGuidance()
+    {
+        var yaml = """
+            id: serial-workflow
+            name: Serial workflow
+            start: a
+            nodes:
+              - id: a
+                type: prompt
+                prompt: do work
+              - id: b
+                type: serial
+                steps:
+                  - a
+            edges:
+              - from: a
+                to: b
+            """;
+
+        var result = WorkflowDefinitionLoader.Load(yaml, "serial-workflow.yaml", isBuiltIn: false);
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("unsupported node type 'serial'");
+        result.Error.Should().Contain("ordinary workflow edges");
     }
 
     [Theory]

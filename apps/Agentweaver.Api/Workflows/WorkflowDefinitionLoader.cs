@@ -100,6 +100,11 @@ public static class WorkflowDefinitionLoader
                 return Fail(source, $"node '{n.Id}' is missing its required 'type'.", out error);
             if (Normalize(n.Type) == "publish")
                 return Fail(source, $"node '{n.Id}' requests unsupported capability 'publish'. Publication targets are not supported.", out error);
+            if (Normalize(n.Type) == "serial")
+                return Fail(
+                    source,
+                    $"node '{n.Id}' uses unsupported node type 'serial'. Use ordinary workflow edges between nodes to express sequential execution.",
+                    out error);
             if (!WorkflowGrammarContract.TryParseNodeType(n.Type, out var nodeType))
                 return Fail(source, $"node '{n.Id}' has unknown type '{n.Type}'.", out error);
             if (n.Prompt?.Length > WorkflowGrammarContract.MaxPromptCharacters)
@@ -197,12 +202,6 @@ public static class WorkflowDefinitionLoader
                     }
                     break;
 
-                case WorkflowNodeType.Serial:
-                    foreach (var step in node.Steps)
-                        if (!nodeIds.Contains(step))
-                            return Fail(source, $"serial node '{node.Id}' references unknown step '{step}'.", out error);
-                    break;
-
                 case WorkflowNodeType.PeerReview:
                 case WorkflowNodeType.BuildTest:
                     if (!string.IsNullOrWhiteSpace(node.Target))
@@ -217,7 +216,7 @@ public static class WorkflowDefinitionLoader
         }
 
         // Feature 015 US1: the generalized RunWorkflowGraphBinder resolves a node's executor from its
-        // TYPE (not a fixed id vocabulary), so fan_out/fan_in/serial/peer_review/coordinator_composed are
+        // TYPE (not a fixed id vocabulary), so fan_out/fan_in/peer_review/coordinator_composed are
         // no longer rejected at load time. A node whose type cannot be wired to a runtime executor fails
         // closed at BUILD time with a node-scoped WorkflowBindException (the binder is the single guard),
         // rather than the loader pre-rejecting an entire authored workflow.

@@ -13,7 +13,7 @@
 //   - roster excludes reserved system roles (Scribe/Work Monitor/Rai/Coordinator) — the
 //     class of bug a human had to catch manually in issue #311;
 //   - the generated workflow passes WorkflowDefinitionLoader.Load validation (no dangling
-//     edges, every check-node verdict routed, serial steps resolve, known node types);
+//     edges, every check-node verdict routed, no unsupported node types);
 //   - neither artifact assigns work to a reserved orchestration role.
 //
 // Driven by lib/seams.mjs (kind: 'generation-seam'), NOT the persona runner. Bounded:

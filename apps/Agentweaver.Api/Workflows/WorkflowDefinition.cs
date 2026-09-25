@@ -2,7 +2,7 @@ namespace Agentweaver.Api.Workflows;
 
 /// <summary>
 /// The typed building blocks a workflow node can be (Feature 010, FR-012..FR-017). The runtime does
-/// not yet execute every type; this foundation models and round-trips all of them so authored YAML is
+/// not yet execute every type; this foundation models and round-trips supported authored YAML so it is
 /// faithfully parsed and validated.
 /// </summary>
 public enum WorkflowNodeType
@@ -33,9 +33,6 @@ public enum WorkflowNodeType
 
     /// <summary>A stage the coordinator decomposes into subtasks at runtime — FR-017.</summary>
     CoordinatorComposed,
-
-    /// <summary>An ordered sequence whose child steps run strictly in declared order — FR-013.</summary>
-    Serial,
 
     /// <summary>Applies a produced change (an irreversible action gated by review) — the merge stage.</summary>
     Merge,
@@ -89,7 +86,7 @@ public sealed record WorkflowNode
     /// node: the id of the node whose output is reviewed/joined.</summary>
     public string? Target { get; init; }
 
-    /// <summary>For a <see cref="WorkflowNodeType.Serial"/> node: the ordered child node ids.</summary>
+    /// <summary>Ordered child node ids for node types that compose sub-steps.</summary>
     public IReadOnlyList<string> Steps { get; init; } = [];
 
     /// <summary>For a <see cref="WorkflowNodeType.Check"/> node: the set of verdicts it routes on. Each

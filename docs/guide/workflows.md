@@ -89,6 +89,11 @@ allowed gate kinds, edge conditions and transitions, and trigger vocabulary. The
 catalog drives YAML parsing, serialization, binding, and the published OpenAPI response, so a client
 does not need hidden workflow grammar knowledge.
 
+Use directed `edges` to express sequence: if step B should run after step A, add an edge from A to B.
+The former `serial` node type is no longer supported or advertised because it had no runtime executor;
+older YAML that still declares `type: serial` is rejected with guidance to replace it with ordinary
+edges.
+
 Every newly generated or saved `check` node must declare an explicit canonical `gate_kind`
 (`rai`, `human-review`, or `rubberduck`). Historical persisted workflows whose check ids are `rai`,
 `review`, or `rubberduck` still load and execute through the grammar's documented

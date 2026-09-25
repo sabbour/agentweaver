@@ -79,7 +79,6 @@ const KNOWN_NODE_TYPES = new Set([
   'fan_out',
   'fan_in',
   'coordinator_composed',
-  'serial',
   'merge',
   'scribe',
   'terminal',
@@ -108,7 +107,6 @@ function normalizeToken(raw) {
  *   - every edge from/to references an existing node (no dangling edges)
  *   - check node: has ≥1 outgoing edge, declares ≥1 branch, every branch has a
  *     matching outgoing edge `when`
- *   - serial node: every step references an existing node
  *   - fan_in / peer_review / build_test: target (if present) references an existing node
  *   - stages (if present): every stage has required id + label
  *
@@ -163,6 +161,10 @@ export function validateWorkflowYaml(yamlText) {
       continue;
     }
     const type = normalizeType(n.type);
+    if (type === 'serial') {
+      errors.push(`node '${n.id}' uses unsupported node type 'serial'. Use ordinary workflow edges between nodes to express sequential execution.`);
+      continue;
+    }
     if (!KNOWN_NODE_TYPES.has(type)) {
       errors.push(`node '${n.id}' has unknown type '${n.type}'.`);
       continue;
@@ -209,12 +211,6 @@ export function validateWorkflowYaml(yamlText) {
       for (const verdict of node.branches) {
         if (!outgoing.some((x) => x.when === verdict)) {
           errors.push(`check node '${node.id}' declares verdict '${verdict}' but has no outgoing edge for it.`);
-        }
-      }
-    } else if (node.type === 'serial') {
-      for (const step of node.steps) {
-        if (!nodeIds.has(step)) {
-          errors.push(`serial node '${node.id}' references unknown step '${step}'.`);
         }
       }
     } else if (node.type === 'fan_in' || node.type === 'peer_review' || node.type === 'build_test') {

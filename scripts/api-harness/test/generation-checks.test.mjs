@@ -3,7 +3,7 @@
 // These are the automated guards for the class of bug a human had to catch by hand:
 //   • issue #311 — a generated roster leaking a reserved system role;
 //   • structurally-broken generated workflows (dangling edges, unrouted check
-//     branches, unknown node types, serial steps that reference nothing).
+//     branches, unsupported node types, unknown node types).
 //
 // Every positive fixture asserts a KNOWN-GOOD artifact passes; every negative fixture
 // asserts a KNOWN-BAD artifact fails — so the checks would meaningfully catch a
@@ -119,7 +119,7 @@ test('validateWorkflowYaml rejects a check node with an unrouted verdict', () =>
   );
 });
 
-test('validateWorkflowYaml rejects a serial node referencing a nonexistent step', () => {
+test('validateWorkflowYaml rejects serial nodes with sequential-edge guidance', () => {
   const bad = `
 id: s
 name: S
@@ -127,14 +127,15 @@ start: seq
 nodes:
   - id: seq
     type: serial
-    steps: [a, ghost]
+    steps: [a]
   - id: a
     type: prompt
 edges: []
 `;
   const v = validateWorkflowYaml(bad);
   assert.equal(v.valid, false);
-  assert.ok(v.errors.some((e) => e.includes("unknown step 'ghost'")), v.errors.join('; '));
+  assert.ok(v.errors.some((e) => e.includes("unsupported node type 'serial'")), v.errors.join('; '));
+  assert.ok(v.errors.some((e) => e.includes('ordinary workflow edges')), v.errors.join('; '));
 });
 
 test('validateWorkflowYaml rejects an unknown node type and a missing start reference', () => {

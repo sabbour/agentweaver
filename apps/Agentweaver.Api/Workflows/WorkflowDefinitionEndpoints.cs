@@ -531,7 +531,7 @@ public static class WorkflowDefinitionEndpoints
 
             // Step 4: Binder dry-run — run the real RunWorkflowGraphBinder governance check, which
             // classifies every node and fails closed for any type not yet wired to a runtime executor
-            // (fan_out / fan_in / serial / coordinator_composed) and for dangling edges. peer_review is
+            // (fan_out / fan_in / coordinator_composed) and for dangling edges. peer_review is
             // accepted: the binder now supports it. This rejects bind-invalid workflows BEFORE the file is
             // written, consistent with the binder's governance guarantee, with a 422 (loader-valid but
             // runtime-unbindable).
