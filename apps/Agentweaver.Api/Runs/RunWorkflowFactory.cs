@@ -575,7 +575,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             });
 
         // Two separate ScribeTurnExecutor instances to avoid single-node-multiple-inputs
-        // ambiguity in MAF's graph builder. Each creates its own ephemeral ScribeAIAgent.
+        // ambiguity in MAF's graph builder. Each creates its own ephemeral Scribe role agent.
         var scribeMergeExec = new ScribeTurnExecutor(
             _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge",
@@ -593,7 +593,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
 
         // Rai RAI gate: runs after the agent turn, before the content-safety/no-op/review
         // fork. A RED verdict flips ContentSafetyFlagged so the workflow routes to the
-        // safety terminal. Ephemeral RaiAIAgent per execution.
+        // safety terminal. Ephemeral Rai role agent per execution.
         var raiTurnExec = new RaiTurnExecutor(
             _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "rai-turn",

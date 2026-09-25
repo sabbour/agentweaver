@@ -6,9 +6,9 @@ using Agentweaver.SandboxExec;
 namespace Agentweaver.AgentRuntime.Workflow;
 
 /// <summary>
-/// Production <see cref="IWorkflowAgentFactory"/>. Builds real <see cref="CopilotAIAgent"/>,
-/// <see cref="RaiAIAgent"/>, and <see cref="ScribeAIAgent"/> instances from DI-resolved
-/// dependencies — identical to the previous inline <c>new CopilotAIAgent(...)</c> construction.
+/// Production <see cref="IWorkflowAgentFactory"/>. Builds real <see cref="CopilotAIAgent"/> and
+/// ephemeral built-in role agents from DI-resolved dependencies — identical to the previous inline
+/// <c>new CopilotAIAgent(...)</c> construction.
 /// </summary>
 public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
 {
@@ -52,7 +52,7 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(), _questionGate, _runOptions,
         byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);
 
-    public IWorkflowTurnAgent CreateRaiAgent() => new RaiAIAgent(
+    public IWorkflowTurnAgent CreateRaiAgent() => EphemeralCopilotAIAgent.CreateRai(
         _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(),
         byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);
@@ -67,7 +67,7 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(),
         byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);
 
-    public IWorkflowTurnAgent CreateScribeAgent() => new ScribeAIAgent(
+    public IWorkflowTurnAgent CreateScribeAgent() => EphemeralCopilotAIAgent.CreateScribe(
         _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(),
         byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);

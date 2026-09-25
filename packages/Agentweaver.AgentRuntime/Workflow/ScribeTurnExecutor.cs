@@ -165,7 +165,7 @@ public sealed class ScribeTurnExecutor : Executor<ScribeTurnInput, ScribeTurnInp
                           + MemoryToolsRuntimeNote;
 
             agent = _agentFactory?.CreateScribeAgent()
-                ?? new ScribeAIAgent(
+                ?? EphemeralCopilotAIAgent.CreateScribe(
                     _copilotClientFactory,
                     _sandboxExecutor,
                     _sandboxPolicyStore,

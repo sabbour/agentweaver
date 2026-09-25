@@ -2284,30 +2284,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     }
 
     /// <summary>
-    /// Wraps an <see cref="AIFunction"/> and injects
-    /// <see cref="CopilotTool.OverridesBuiltInToolKey"/> into <see cref="AITool.AdditionalProperties"/>
-    /// so the Copilot SDK accepts tools whose names match a native built-in.
-    /// </summary>
-    private sealed class CopilotOverrideAIFunction(AIFunction inner) : AIFunction
-    {
-        private const string OverridesBuiltInToolKey = "overridesBuiltInTool";
-
-        private readonly IReadOnlyDictionary<string, object?> _additionalProperties =
-            new Dictionary<string, object?>(inner.AdditionalProperties)
-            {
-                [OverridesBuiltInToolKey] = true,
-            };
-
-        public override string Name => inner.Name;
-        public override string Description => inner.Description;
-        public override IReadOnlyDictionary<string, object?> AdditionalProperties => _additionalProperties;
-
-        protected override ValueTask<object?> InvokeCoreAsync(
-            AIFunctionArguments arguments, CancellationToken cancellationToken) =>
-            inner.InvokeAsync(arguments, cancellationToken);
-    }
-
-    /// <summary>
     /// Wraps a custom <see cref="AIFunction"/> so its <c>tool.call</c> / <c>tool.result</c> /
     /// <c>tool.error</c> RunEvents and its <c>execute_tool</c> OTel span are recorded directly
     /// around the real invocation, instead of relying on the SDK's external-tool lifecycle
