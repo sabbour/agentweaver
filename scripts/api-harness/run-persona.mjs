@@ -197,7 +197,7 @@ async function main() {
   let primaryError = null;
   try {
     try {
-      result = await runGenerationSeams(client, scenario, { keep: args.keep });
+      result = await runGenerationSeams(client, scenario, { keep: args.keep, timeoutMs: args.timeoutMs });
     } catch (err) {
       primaryError = err;
       console.error(`error: scenario driver threw: ${redact(String(err?.stack ?? err?.message ?? err))}`);

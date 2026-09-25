@@ -262,8 +262,11 @@ Run the local production-path gate before promoting images or deploying a releas
 npm run release:local-k3s-gate
 ```
 
-The command targets `Ubuntu-24.04` WSL k3s and attempts to provision k3s with the
-documented installer when the binary or kubeconfig is absent. It renders the
+The command targets `Ubuntu-24.04` WSL k3s and attempts to provision or start k3s
+with the documented installer/service when the binary, process, or kubeconfig is
+absent. Every local `kubectl` operation is forced through
+`/etc/rancher/k3s/k3s.yaml`, so an existing AKS current context cannot receive
+the local manifests. It renders the
 candidate Kubernetes manifests, fails before deployment if any AI execution
 producer/consumer does not use the same
 `AiExecution__ProviderKeySigningKey` `secretKeyRef`, waits for the local API, and
@@ -277,6 +280,12 @@ Production mode refuses the underlying bypass flags at startup and the worker
 runs with `ASPNETCORE_ENVIRONMENT=Production`, so missing server-only
 configuration such as `AiExecution__ProviderKeySigningKey` fails closed instead
 of falling back to development defaults.
+
+The local API and worker remain separate deployments. They share only a local
+file-backed secret store mounted at `/var/agentweaver/local-secrets` so provider
+configuration written through the API is visible to the hosted worker process.
+That file store is for local multi-process validation only; Azure deployments
+continue to use Key Vault.
 
 Keep the staging identity smoke separate: use the default API harness
 recorder-session provider against staging to cover Microsoft Entra session

@@ -111,7 +111,7 @@ test("ensureWslK3s attempts reproducible install when probe is absent", async ()
         assert.match(args.at(-1), /https:\/\/get\.k3s\.io/);
         return { code: 0, stdout: "", stderr: "" };
       }
-      return { code: 0, stdout: "k3s_binary=present\nk3s_kubeconfig=present\n", stderr: "" };
+      return { code: 0, stdout: "k3s_binary=present\nk3s_process=present\nk3s_kubeconfig=present\n", stderr: "" };
     },
   };
   const log = { warn() {}, info() {} };
@@ -133,5 +133,13 @@ test("local k3s manifest keeps API LocalTest development auth separate from Prod
   assert.equal(env("agentweaver-api").Testing__BypassGitHubTokenAuth, "true");
   assert.equal(env("agentweaver-worker").ASPNETCORE_ENVIRONMENT, "Production");
   assert.equal(env("agentweaver-worker").Auth__Mode, "Entra");
+  assert.equal(env("agentweaver-api").Auth__FileSecretStore__Path, "/var/agentweaver/local-secrets");
+  assert.equal(env("agentweaver-worker").Auth__FileSecretStore__Path, "/var/agentweaver/local-secrets");
+  assert.equal(env("agentweaver-worker").Auth__FileSecretStore__AllowOutsideDevelopment, "true");
   assert.equal(env("agentweaver-worker").Testing__BypassGitHubTokenAuth, undefined);
+  const workerVolumes = deployment("agentweaver-worker").spec.template.spec.volumes;
+  assert.equal(
+    workerVolumes.find((volume) => volume.name === "local-secret-store")?.hostPath?.path,
+    "/var/lib/rancher/k3s/agentweaver-local-secrets",
+  );
 });

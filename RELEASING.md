@@ -62,10 +62,14 @@ from its exact matching section; do not run another changelog generator.
    npm run release:local-k3s-gate
    ```
 
-   The command targets the `Ubuntu-24.04` WSL k3s cluster, provisions k3s when it
-   is absent, validates that API and Worker manifests share
-   `AiExecution__ProviderKeySigningKey`, waits for the local target, and runs the
-   focused API smoke with the Development-only local test identity. Keep the
+   The command targets the `Ubuntu-24.04` WSL k3s cluster, starts or provisions
+   k3s when it is absent, forces local `kubectl` through the k3s kubeconfig
+   instead of the active AKS context, validates that API and Worker manifests
+   share `AiExecution__ProviderKeySigningKey`, waits for the local target, and
+   runs the focused API smoke with the Development-only local test identity. The
+   local API and Production-mode worker are separate deployments that share a
+   local file-backed secret store so configured provider state is visible to the
+   hosted worker. Keep the
    separate staging identity smoke (`node scripts/api-harness/run-persona.mjs`
    against the staging URL with the default recorder-session auth provider) for
    Entra/GitHub login, callbacks, and repository authorization; do not fold

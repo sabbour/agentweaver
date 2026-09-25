@@ -246,6 +246,7 @@ if (!isWorker)
 // errors that look like transient auth bugs. Log loudly if that happens outside Development.
 SecretClient? keyVaultSecretClient = null;
 var kvUri = builder.Configuration["Auth:KeyVault:Uri"];
+var fileSecretStorePath = builder.Configuration["Auth:FileSecretStore:Path"];
 if (!string.IsNullOrWhiteSpace(kvUri))
 {
     var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
@@ -253,6 +254,14 @@ if (!string.IsNullOrWhiteSpace(kvUri))
     var kvSecretStore = new KeyVaultSecretStore(secretClient);
     builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
     builder.Services.AddSingleton(secretClient);
+}
+else if (!string.IsNullOrWhiteSpace(fileSecretStorePath))
+{
+    var allowOutsideDevelopment = builder.Configuration.GetValue<bool>("Auth:FileSecretStore:AllowOutsideDevelopment");
+    if (!builder.Environment.IsDevelopment() && !allowOutsideDevelopment)
+        throw new InvalidOperationException(
+            "Auth:FileSecretStore:Path is Development-only unless Auth:FileSecretStore:AllowOutsideDevelopment is explicitly true.");
+    builder.Services.AddSingleton<ISecretStore>(_ => new FileSecretStore(fileSecretStorePath));
 }
 else
 {

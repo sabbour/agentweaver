@@ -622,16 +622,16 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
         `result status=${workflowRequest.result?.status ?? '(not fetched)'}`,
       );
     }
-    if (cancelRetry?.accepted?.status === 202 || cancelRetry?.cancel || cancelRetry?.retry) {
+    if (cancelRetryContext?.ready) {
       add(
         'Advanced workflow generation cancellation is accepted',
-        cancelRetry.cancel?.status === 200 && jobStatus(cancelRetry.cancel) === 'cancelled',
-        `cancel status=${cancelRetry.cancel?.status ?? '(missing)'}; job status=${jobStatus(cancelRetry.cancel) ?? '(missing)'}`,
+        cancelRetry?.accepted?.status === 202 && cancelRetry.cancel?.status === 200 && jobStatus(cancelRetry.cancel) === 'cancelled',
+        `accept status=${cancelRetry?.accepted?.status ?? '(missing)'}; cancel status=${cancelRetry?.cancel?.status ?? '(missing)'}; job status=${jobStatus(cancelRetry?.cancel) ?? '(missing)'}`,
       );
       add(
         'Advanced workflow generation retry is accepted after cancellation',
-        cancelRetry.retry?.status === 202,
-        `retry status=${cancelRetry.retry?.status ?? '(missing)'}; job status=${jobStatus(cancelRetry.retry) ?? '(missing)'}`,
+        cancelRetry?.retry?.status === 202,
+        `retry status=${cancelRetry?.retry?.status ?? '(missing)'}; job status=${jobStatus(cancelRetry?.retry) ?? '(missing)'}`,
       );
     }
     if (workflowResult.replacement?.retried) {
