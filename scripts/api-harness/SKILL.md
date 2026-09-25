@@ -14,7 +14,7 @@ process arguments or borrows
 ### Browser-managed authentication for staging (Entra Conditional Access)
 
 Agentweaver staging uses Entra Conditional Access. Before an authenticated API run,
-run the documented UI-harness Chrome Default-profile login once for that target. The
+run the documented demo-recording session setup once for that target. The
 `recorder-session` provider reads its cached UI storage/session sidecar, verifies it
 belongs to the requested origin, and returns the complete `Authorization` value only in
 memory. Pass that value to the header unchanged; do not add another scheme. It never
@@ -27,15 +27,16 @@ node scripts/api-harness/run-persona.mjs `
   --target https://<host>.staging.<domain>
 ```
 
-The provider uses `scripts/ui-harness/.auth/` by default; use
-`--recorder-auth-root` only for an existing protected UI-harness auth root.
+The provider uses `scripts/demo-recording/.auth/recording.storageState.json` and
+its `.sessionStorage.json` sidecar by default; use `--recorder-auth-root` only
+for an existing protected recorder auth root.
 `--auth-provider recorder-session` remains accepted for clarity but is the default.
-If the cached UI session is absent, expired, or belongs to another origin, it fails
-with the exact `login-chrome-default.mjs --base-url <origin>` remediation. Microsoft
+If the cached recorder session is absent, expired, or belongs to another origin, it fails
+with the exact `npm run demo:record -- open --base-url <origin>` remediation. Microsoft
 Entra account selection, credentials, MFA, and consent remain human-only.
 Do not fall back to generic Playwright, direct CDP/DevTools, ad-hoc profile
 launch/copy, or manual browser automation; surface the provider's recovery error and
-use the UI-harness login/cached-session flow. That flow requires the installed literal
+use the demo-recording login/cached-session flow. That flow requires the installed literal
 Google Chrome `chrome.exe` on Playwright's `chrome` channel, never bundled Chromium.
 
 Before the seam mutations, the runner sends that bearer to the protected

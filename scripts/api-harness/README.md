@@ -25,7 +25,7 @@ The JSON and YAML variants describe the same live route surface. Prefer the YAML
 
 `PersonaActor` is dispatched after Harness resolves the target. It drives one real
 call at a time. Its recorder-session provider reuses the target-matched cached session
-created by `scripts/ui-harness/login-chrome-default.mjs`; it does not start another
+created by `scripts/demo-recording`; it does not start another
 Chrome sign-in. The provider returns the complete `Authorization` value, which callers
 pass to the header unchanged. Raw tokens never enter prompts, argv, or transcripts. Missing,
 expired, or wrong-origin UI state fails with the login command needed to refresh it.
@@ -46,6 +46,10 @@ console.log(await response.text());
 '@ | node --input-type=module -
 # ...append the real request+response to the transcript path, then repeat...
 ```
+
+The default provider reads `scripts/demo-recording/.auth/recording.storageState.json`
+and its `recording.storageState.json.sessionStorage.json` sidecar. Use
+`--recorder-auth-root` for an alternate protected recorder auth root.
 
 See `.github/agents/persona-actor.agent.md` for the full turn-by-turn contract
 (pushback grounding, never-blind-approve, stop-at-gate, transcript format).

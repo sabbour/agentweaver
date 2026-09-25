@@ -1,16 +1,18 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  DEFAULT_STORAGE_STATE,
   loadSessionStorageSeed,
   loadStorageState,
 } from '../../../ui-harness/lib/auth.mjs';
 
 export const RECORDER_SESSION_AUTH_PROVIDER = 'recorder-session';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_RECORDER_AUTH_ROOT = path.resolve(HERE, '../../../demo-recording/.auth');
 
 export function uiHarnessAuthPaths(authRoot) {
   const storageStatePath = authRoot
-    ? path.join(path.resolve(authRoot), 'staging.storageState.json')
-    : DEFAULT_STORAGE_STATE;
+    ? path.join(path.resolve(authRoot), 'recording.storageState.json')
+    : path.join(DEFAULT_RECORDER_AUTH_ROOT, 'recording.storageState.json');
   return {
     storageStatePath,
     sessionStoragePath: `${storageStatePath}.sessionStorage.json`,
@@ -56,7 +58,7 @@ export function createRecorderSessionAuthProvider({
       } catch (error) {
         throw new Error(
           `Cached UI-harness authentication is unavailable or expired (${error.message}). `
-          + `Close Chrome and run node scripts/ui-harness/login-chrome-default.mjs --base-url ${expectedOrigin}, then retry.`,
+          +           `Refresh the recorder session with npm run demo:record -- open --base-url ${expectedOrigin}, then retry.`,
         );
       }
     },
