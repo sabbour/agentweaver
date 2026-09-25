@@ -1589,8 +1589,27 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     // Won the CAS. Perform all post-transition steps unconditionally (use CancellationToken.None
     // for cleanup so process shutdown does not leave the run in a partially-cleaned state).
 
-    // a. Remove the pending request.
-    await pendingStore.TryRemoveAsync(id, CancellationToken.None);
+    // a. Remove the still-waiting pending request. This endpoint is intentionally human-recoverable:
+    // request-changes has already won the AwaitingReview -> InProgress CAS and abandons the old
+    // paused workflow before starting a fresh revision, so no automated resume depends on this gate.
+    // The abandonment API is narrowed to waiting rows and will not delete queued/delivering decisions.
+    var abandonedGate = await pendingStore.TryAbandonWaitingGateForHumanRevisionAsync(
+        id,
+        CancellationToken.None);
+    if (abandonedGate is null
+        && await pendingStore.ExistsUndeliveredAsync(id, CancellationToken.None).ConfigureAwait(false))
+    {
+        await runStore.UpdateStatusAsync(
+            runId,
+            RunStatus.AwaitingReview,
+            endedAt: null,
+            ct: CancellationToken.None).ConfigureAwait(false);
+        return Results.Conflict(new
+        {
+            error = "review_decision_already_submitted",
+            message = "A review decision is already queued; request-changes did not abandon the workflow.",
+        });
+    }
 
     // b. Abandon the old paused workflow: unregister and delete checkpoints.
     workflowRegistry.Abandon(id);

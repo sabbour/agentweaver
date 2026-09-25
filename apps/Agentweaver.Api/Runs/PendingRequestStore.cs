@@ -113,6 +113,40 @@ public sealed class PendingRequestStore
             .ConfigureAwait(false);
     }
 
+    public async Task<bool> MatchesUndeliveredDeliveryAsync<TResponse>(
+        string runId,
+        string deliveryKind,
+        TResponse response,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.RunId == runId
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered, ct)
+            .ConfigureAwait(false);
+        if (row is null || !string.Equals(row.DeliveryKind, deliveryKind, StringComparison.Ordinal))
+            return false;
+
+        var request = DeserializeRequest(row.RequestJson);
+        var expectedIdentity = CreateDecisionIdentity(request.RequestId, response);
+        return string.Equals(row.DecisionIdentity, expectedIdentity, StringComparison.Ordinal);
+    }
+
+    public async Task<IReadOnlyList<string>> ListUndeliveredRunIdsAsync(
+        string deliveryKind,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.PendingRequests.AsNoTracking()
+            .Where(p => p.DeliveryKind == deliveryKind
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered)
+            .Select(p => p.RunId)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+    }
+
     public async Task<bool> TryQueueDeliveryAsync<TResponse>(
         string runId,
         string deliveryKind,
@@ -321,12 +355,14 @@ public sealed class PendingRequestStore
     }
 
     /// <summary>
-    /// Atomically removes and returns the pending gate, guaranteeing at-most-once delivery across
-    /// replicas. Reads the row, then conditionally deletes it by run id: the caller whose
-    /// <c>ExecuteDeleteAsync</c> affected the row wins; zero rows affected (already consumed on this or
-    /// another pod, or never armed) yields <c>null</c>.
+    /// Destructively removes a still-waiting gate because a human request-changes action has already
+    /// committed to abandoning the paused workflow and starting a fresh revision. Do not use for
+    /// automated resume, fan-in joins, or any path where losing the request before
+    /// <c>SendResponseAsync</c> can strand parent work.
     /// </summary>
-    public async Task<PendingEntry?> TryRemoveAsync(string runId, CancellationToken ct = default)
+    public async Task<PendingEntry?> TryAbandonWaitingGateForHumanRevisionAsync(
+        string runId,
+        CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -347,6 +383,27 @@ public sealed class PendingRequestStore
             return null;
 
         return new PendingEntry(DeserializeRequest(row.RequestJson), row.OwnerUser);
+    }
+
+    /// <summary>
+    /// Removes a queued delivery only after its owning workflow has been proven unable to consume it.
+    /// This is recovery cleanup, not a resume-delivery operation.
+    /// </summary>
+    public async Task<bool> DiscardUndeliverableDeliveryAsync(
+        string runId,
+        string deliveryKind,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var deleted = await db.PendingRequests
+            .Where(p => p.RunId == runId
+                && p.DeliveryKind == deliveryKind
+                && p.DeliveryState != PendingRequestDeliveryStates.Waiting
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+        return deleted == 1;
     }
 
     // ── Serialization ──────────────────────────────────────────────────────────
