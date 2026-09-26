@@ -129,6 +129,7 @@ internal sealed class WorkflowChildWorkRuntime(
     IWorktreeOperations worktreeOperations,
     IServiceProvider services,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
+    TerminalOutcomeProjector terminalOutcomeProjector,
     ILogger<WorkflowChildWorkRuntime> logger) : IWorkflowChildWorkRuntime
 {
     private CoordinatorDispatchService Dispatch =>
@@ -196,7 +197,11 @@ internal sealed class WorkflowChildWorkRuntime(
             logger,
             ct,
             services.GetService<IAgentHostPodLifecycle>(),
-            sandboxRuntime.Value);
+            sandboxRuntime.Value,
+            services.GetService<IRunEventStream>(),
+            terminalOutcomeProjector,
+            reason: "parent_cancelled",
+            requestedByRunId: run.ParentRunId);
 }
 
 /// <summary>
@@ -687,6 +692,12 @@ internal sealed class WorkflowChildWorkService
             return false;
         }
 
+        var cancellationSnapshot = await LoadPlanSnapshotAsync(
+            workPlanId, CancellationToken.None).ConfigureAwait(false);
+        if (cancellationSnapshot?.Plan.ParentResumeState == WorkflowChildWorkResumeStates.Suppressed
+            || cancellationSnapshot?.Plan.Status == WorkPlanStatus.Cancelled)
+            return false;
+
         var result = delivery.GetResponse<WorkflowChildWorkResult>();
         var delivered = false;
         try
@@ -743,8 +754,7 @@ internal sealed class WorkflowChildWorkService
             planIds = await db.WorkPlans.AsNoTracking()
                 .Where(plan => plan.ParentRunId != null
                     && plan.ParentWorkflowNodeId != null
-                    && plan.ParentResumeState != WorkflowChildWorkResumeStates.Delivered
-                    && plan.ParentResumeState != WorkflowChildWorkResumeStates.Suppressed)
+                    && plan.ParentResumeState != WorkflowChildWorkResumeStates.Delivered)
                 .Select(plan => plan.Id)
                 .ToListAsync(ct).ConfigureAwait(false);
         }
@@ -754,6 +764,14 @@ internal sealed class WorkflowChildWorkService
             var snapshot = await LoadPlanSnapshotAsync(planId, ct).ConfigureAwait(false);
             if (snapshot?.Plan.ParentRunId is null)
                 continue;
+
+            if (snapshot.Plan.ParentResumeState == WorkflowChildWorkResumeStates.Suppressed
+                || snapshot.Plan.Status == WorkPlanStatus.Cancelled)
+            {
+                await SuppressAndCancelAsync(snapshot.Plan, ct, forceDeliverySuppression: true)
+                    .ConfigureAwait(false);
+                continue;
+            }
 
             if (snapshot.Plan.ParentResumeState == WorkflowChildWorkResumeStates.Committed
                 && snapshot.Plan.ParentResumeRequestId is not null
@@ -775,6 +793,25 @@ internal sealed class WorkflowChildWorkService
                     parent.LifecycleGeneration,
                     ct).ConfigureAwait(false);
         }
+    }
+
+    public async Task<int> CancelForParentAsync(string parentRunId, CancellationToken ct = default)
+    {
+        List<WorkPlan> plans;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            plans = await db.WorkPlans.AsNoTracking()
+                .Where(plan => plan.ParentRunId == parentRunId
+                    && plan.ParentWorkflowNodeId != null
+                    && plan.ParentResumeState != WorkflowChildWorkResumeStates.Delivered)
+                .ToListAsync(ct).ConfigureAwait(false);
+        }
+
+        foreach (var plan in plans)
+            await SuppressAndCancelAsync(plan, ct, forceDeliverySuppression: true).ConfigureAwait(false);
+
+        return plans.Count;
     }
 
     public async Task<bool> IsCorrelatedRunAsync(string runId, CancellationToken ct = default)
@@ -948,7 +985,10 @@ internal sealed class WorkflowChildWorkService
             JsonDefaults.Options);
     }
 
-    private async Task SuppressAndCancelAsync(WorkPlan plan, CancellationToken ct)
+    private async Task SuppressAndCancelAsync(
+        WorkPlan plan,
+        CancellationToken ct,
+        bool forceDeliverySuppression = false)
     {
         var now = DateTimeOffset.UtcNow;
         var staleBefore = now - DeliveryClaimStaleAfter;
@@ -960,7 +1000,9 @@ internal sealed class WorkflowChildWorkService
                 .Where(candidate => candidate.Id == plan.Id
                     && (candidate.ParentResumeState == WorkflowChildWorkResumeStates.Committed
                         || candidate.ParentResumeState == WorkflowChildWorkResumeStates.Waiting
-                        || candidate.ParentResumeState == WorkflowChildWorkResumeStates.Ready))
+                        || candidate.ParentResumeState == WorkflowChildWorkResumeStates.Ready
+                        || (forceDeliverySuppression
+                            && candidate.ParentResumeState == WorkflowChildWorkResumeStates.Delivering)))
                 .ExecuteUpdateAsync(updates => updates
                     .SetProperty(candidate => candidate.Status, WorkPlanStatus.Cancelled)
                     .SetProperty(candidate => candidate.ParentResumeState, WorkflowChildWorkResumeStates.Suppressed)
@@ -970,9 +1012,12 @@ internal sealed class WorkflowChildWorkService
                     .SetProperty(candidate => candidate.UpdatedAt, now), ct)
                 .ConfigureAwait(false);
 
-            if (suppressed == 0
+            if (!forceDeliverySuppression
+                && suppressed == 0
                 && plan.ParentResumeState == WorkflowChildWorkResumeStates.Delivering
-                && (plan.ParentResumeClaimedAt is null || plan.ParentResumeClaimedAt < staleBefore))
+                && (forceDeliverySuppression
+                    || plan.ParentResumeClaimedAt is null
+                    || plan.ParentResumeClaimedAt < staleBefore))
             {
                 var staleClaim = db.WorkPlans.Where(candidate => candidate.Id == plan.Id
                     && candidate.ParentResumeState == WorkflowChildWorkResumeStates.Delivering
@@ -1006,6 +1051,21 @@ internal sealed class WorkflowChildWorkService
             && await _runStore.GetAsync(childCoordinatorId, ct).ConfigureAwait(false) is { } coordinator)
             runs.Add(coordinator);
         runs.AddRange(await _runStore.GetRunsByParentAsync(plan.CoordinatorRunId, ct).ConfigureAwait(false));
+
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var reservedChildRunIds = await db.Subtasks.AsNoTracking()
+                .Where(subtask => subtask.WorkPlanId == plan.Id && subtask.ChildRunId != null)
+                .Select(subtask => subtask.ChildRunId!)
+                .ToListAsync(ct).ConfigureAwait(false);
+            foreach (var reservedChildRunId in reservedChildRunIds)
+            {
+                if (RunId.TryParse(reservedChildRunId, out var childRunId)
+                    && await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false) is { } child)
+                    runs.Add(child);
+            }
+        }
 
         foreach (var run in runs
             .Where(run => !TerminalRunOutcome.IsTerminal(run.Status))

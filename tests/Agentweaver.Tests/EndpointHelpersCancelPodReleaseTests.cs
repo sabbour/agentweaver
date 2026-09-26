@@ -62,9 +62,12 @@ public sealed class EndpointHelpersCancelPodReleaseTests
 
         lifecycle.ReleasedRunIds.Should().Contain(runId.ToString(),
             "cancelling a run (via DELETE or /cancel) must reliably tear down the remote AgentHost pod, not just the local token");
+        streamStore.Get(runId.ToString())!.GetSnapshotSince(0).Events.Should().ContainSingle(evt =>
+            evt.Type == EventTypes.RunCancelled
+            && evt.Payload.ToString()!.Contains("abandoned", StringComparison.Ordinal));
         runStore.TerminalOutcome.Should().Match<TerminalRunOutcome>(outcome =>
             outcome.Status == RunStatus.Failed
-            && outcome.EventType == EventTypes.RunFailed
+            && outcome.EventType == EventTypes.RunCancelled
             && outcome.Payload.GetProperty("reason").GetString() == "abandoned");
     }
 
