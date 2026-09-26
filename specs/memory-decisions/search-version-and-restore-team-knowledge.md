@@ -1,6 +1,6 @@
 # Search, version, and restore team knowledge
 
-**Issue:** [#1400](https://github.com/sabbour/agentweaver/issues/1400)  
+**Issue:** [#1400](https://github.com/sabbour/agentweaver/issues/1400)
 **Area:** Memory & decisions
 
 ## User story
