@@ -228,7 +228,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
     [PostgresFact]
     public async Task Lease_Takeover_FencesStaleTerminalAndEventWrites()
     {
-        var runId = "run-fenced-write-" + Guid.NewGuid().ToString("N")[..8];
+        var runId = RunId.New().ToString();
         await using var db = await pg.CreateDbContextAsync();
         db.Runs.Add(new Agentweaver.Api.Memory.RunRecord
         {
