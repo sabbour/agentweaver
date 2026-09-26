@@ -29,7 +29,9 @@ internal static class EffectivePermissionClassifier
     {
         "list_inbox",
         "list_decisions",
+        "get_decision_history",
         "get_memory",
+        "get_memory_history",
         "project_get",
         "project_list_runs",
         "backlog_get_board",
