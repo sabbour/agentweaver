@@ -24,6 +24,20 @@ public interface IRunEventStream
     ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
 
     /// <summary>
+    /// Appends one logical successful child-work ready event exactly once while the correlated work
+    /// plan is still complete and ready. The eligibility claim and event append are one transaction,
+    /// so cancellation and readiness have a durable order across retries and replicas.
+    /// </summary>
+    Task<RunEvent?> AppendWorkflowChildWorkReadyAsync(
+        int workPlanId,
+        string runId,
+        string eventIdentity,
+        RunEvent evt,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            $"{GetType().Name} does not support conditional workflow child-work ready events.");
+
+    /// <summary>
     /// Appends a terminal-outcome winner exactly once for its lifecycle generation. Production
     /// streams persist the uniqueness claim with the event; the default keeps simple test streams
     /// compatible while production callers never fall back to a read-then-append sequence.

@@ -192,6 +192,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
         model.Entity<RunEventRecord>().HasIndex(e => e.RunId);
         model.Entity<RunEventRecord>().HasIndex(e => new { e.RunId, e.Sequence }).IsUnique();
+        model.Entity<RunEventRecord>()
+            .HasIndex(e => new { e.RunId, e.EventIdentity })
+            .IsUnique()
+            .HasFilter("\"EventIdentity\" IS NOT NULL");
         model.Entity<TerminalRunOutcomeProjectionRecord>(entity =>
         {
             entity.ToTable("terminal_run_outcome_projections");

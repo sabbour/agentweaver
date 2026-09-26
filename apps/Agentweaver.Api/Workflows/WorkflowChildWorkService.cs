@@ -113,6 +113,12 @@ internal interface IWorkflowChildWorkRuntime
         WorkflowChildWorkResult result,
         CancellationToken ct);
     void RecordParentStep(string parentRunId, object payload);
+    Task<bool> RecordParentReadyStepAsync(
+        int workPlanId,
+        string parentRunId,
+        string eventIdentity,
+        object payload,
+        CancellationToken ct);
     void EnsureRunStream(string runId, string ownerUser);
     Task PublishParentGraphAsync(
         string parentRunId,
@@ -126,6 +132,7 @@ internal sealed class WorkflowChildWorkRuntime(
     RunWorkflowRegistry workflowRegistry,
     IRunStore runStore,
     RunStreamStore streamStore,
+    IRunEventStream eventStream,
     IWorktreeOperations worktreeOperations,
     IServiceProvider services,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
@@ -159,6 +166,25 @@ internal sealed class WorkflowChildWorkRuntime(
 
     public void RecordParentStep(string parentRunId, object payload) =>
         streamStore.Get(parentRunId)?.RecordNext(EventTypes.WorkflowStep, payload);
+
+    public async Task<bool> RecordParentReadyStepAsync(
+        int workPlanId,
+        string parentRunId,
+        string eventIdentity,
+        object payload,
+        CancellationToken ct)
+    {
+        var persisted = await eventStream.AppendWorkflowChildWorkReadyAsync(
+            workPlanId,
+            parentRunId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.WorkflowStep, payload),
+            ct).ConfigureAwait(false);
+        if (persisted is null)
+            return false;
+        streamStore.Get(parentRunId)?.RecordDurable(persisted);
+        return true;
+    }
 
     public void EnsureRunStream(string runId, string ownerUser) =>
         _ = streamStore.Get(runId) ?? streamStore.Create(runId, ownerUser);
@@ -558,7 +584,7 @@ internal sealed class WorkflowChildWorkService
 
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var prepared = await db.WorkPlans
+            await db.WorkPlans
                 .Where(plan => plan.Id == workPlanId
                     && plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting
                     && plan.ParentResumeResultJson == null)
@@ -567,24 +593,6 @@ internal sealed class WorkflowChildWorkService
                     .SetProperty(plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Ready)
                     .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), ct)
                 .ConfigureAwait(false);
-            if (prepared == 1)
-            {
-                _runtime.RecordParentStep(snapshot.Plan.ParentRunId, new
-                {
-                    step = snapshot.Plan.ParentJoinNodeId ?? snapshot.Plan.ParentWorkflowNodeId,
-                    status = "child_work_ready",
-                    label = "Join parallel branches",
-                    workPlanId,
-                    childCoordinatorRunId = snapshot.Plan.CoordinatorRunId,
-                    parentWorkflowId = snapshot.Plan.ParentWorkflowId,
-                    parentWorkflowNodeId = snapshot.Plan.ParentWorkflowNodeId,
-                    parentJoinNodeId = snapshot.Plan.ParentJoinNodeId,
-                    succeeded,
-                    branchCount = branches.Count,
-                    joinedOutput,
-                    timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
-                });
-            }
         }
 
         snapshot = await LoadPlanSnapshotAsync(workPlanId, ct).ConfigureAwait(false);
@@ -598,6 +606,33 @@ internal sealed class WorkflowChildWorkService
         var identity = PendingRequestStore.CreateDecisionIdentity(
             snapshot.Plan.ParentResumeRequestId!,
             result);
+        if (result.Succeeded)
+        {
+            var eventIdentity = $"workflow-child-work-ready:{identity}";
+            if (!await _runtime.RecordParentReadyStepAsync(
+                    workPlanId,
+                snapshot.Plan.ParentRunId!,
+                eventIdentity,
+                new
+                {
+                    eventId = eventIdentity,
+                    parentRunId = snapshot.Plan.ParentRunId,
+                    step = result.ParentJoinNodeId ?? result.ParentWorkflowNodeId,
+                    status = "child_work_ready",
+                    label = "Join parallel branches",
+                    workPlanId = result.WorkPlanId,
+                    childCoordinatorRunId = result.ChildCoordinatorRunId,
+                    parentWorkflowId = result.ParentWorkflowId,
+                    parentWorkflowNodeId = result.ParentWorkflowNodeId,
+                    parentJoinNodeId = result.ParentJoinNodeId,
+                    succeeded = true,
+                    branchCount = result.Branches.Count,
+                    joinedOutput = result.JoinedOutput,
+                    timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+                },
+                    ct).ConfigureAwait(false))
+                return false;
+        }
         return await _pendingRequests.TryQueueDeliveryAsync(
             snapshot.Plan.ParentRunId!,
             PendingRequestDeliveryKinds.WorkflowChildWork,

@@ -6,6 +6,7 @@ public sealed class RunEventRecord
     /// <summary>Run ID — may be "{guid}" for the main stream or "{guid}-rai"/"{guid}-scribe" for sub-streams.</summary>
     public string RunId { get; set; } = "";
     public int Sequence { get; set; }
+    public string? EventIdentity { get; set; }
     public string EventType { get; set; } = "";
     public string PayloadJson { get; set; } = "";
     public DateTime CreatedAt { get; set; }

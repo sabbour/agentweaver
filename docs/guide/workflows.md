@@ -158,7 +158,10 @@ request as `workflow_child_work`; this automated wait cannot be approved through
 plan from the parent workflow run as well as from its internal coordinator run. These projections
 include the parent workflow/node/join ids, each branch node id and declaration ordinal, and the
 ordered `joinedOutput` once the join is ready. The corresponding `workflow.step` events carry the
-same parent correlation and publish `joinedOutput` on `child_work_ready`.
+same parent correlation and publish `joinedOutput` on `child_work_ready`. That ready event is
+durable and emitted exactly once even when a hosted worker prepares the continuation on a different
+replica from the parent run; retries and restarts reuse the continuation's stable event identity.
+Failed or cancelled fan work does not emit `child_work_ready`.
 Nested fans, dynamic branches, quorum/first-success joins, and `coordinator_composed` remain
 unsupported.
 

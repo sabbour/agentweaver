@@ -314,6 +314,7 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         waitingEvent.Should().BeTrue();
         events.Should().Contain("waiting_child_work");
         events.Should().NotContain("coordinator.outcome_spec");
+        factory.Services.GetRequiredService<RunStreamStore>().Remove(runId);
 
         var persistedRun = await factory.Services.GetRequiredService<IRunStore>()
             .GetAsync(RunId.Parse(runId));
@@ -328,7 +329,34 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         var storedPlan = await db.WorkPlans.SingleAsync(row => row.ParentRunId == runId);
         storedPlan.IntegrationBranch.Should().BeNull();
         storedPlan.AssemblyStage.Should().BeNull();
-        (await db.Subtasks.Where(row => row.WorkPlanId == storedPlan.Id).CountAsync()).Should().Be(2);
+        var storedBranches = await db.Subtasks
+            .Where(row => row.WorkPlanId == storedPlan.Id)
+            .OrderBy(row => row.WorkflowBranchOrdinal)
+            .ToListAsync();
+        storedBranches.Should().HaveCount(2);
+        storedPlan.Status = WorkPlanStatus.Complete;
+        foreach (var branch in storedBranches)
+            branch.Status = SubtaskStatus.Completed;
+        await db.SaveChangesAsync();
+
+        var childWork = factory.Services.GetRequiredService<WorkflowChildWorkService>();
+        await childWork.TryPrepareResumeAsync(storedPlan.Id);
+        await childWork.TryPrepareResumeAsync(storedPlan.Id);
+
+        using var durableEvents = JsonDocument.Parse(await owner.GetStringAsync($"/api/runs/{runId}/events"));
+        var readyEvents = durableEvents.RootElement.EnumerateArray()
+            .Where(evt => evt.GetProperty("type").GetString() == EventTypes.WorkflowStep)
+            .Where(evt => evt.GetProperty("payload").GetProperty("status").GetString() == "child_work_ready")
+            .ToList();
+        readyEvents.Should().ContainSingle(
+            "hosted-worker preparation must durably publish one logical ready event without a parent-process stream");
+        var readyPayload = readyEvents[0].GetProperty("payload");
+        readyPayload.GetProperty("parentWorkflowId").GetString().Should().Be("run-now-fan");
+        readyPayload.GetProperty("parentWorkflowNodeId").GetString().Should().Be("fan");
+        readyPayload.GetProperty("parentJoinNodeId").GetString().Should().Be("join");
+        readyPayload.GetProperty("workPlanId").GetInt32().Should().Be(storedPlan.Id);
+        readyPayload.GetProperty("childCoordinatorRunId").GetString()
+            .Should().Be(storedPlan.CoordinatorRunId);
     }
 
     [Fact]
