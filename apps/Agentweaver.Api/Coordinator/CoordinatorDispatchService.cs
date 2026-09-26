@@ -295,7 +295,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
         var seq = new SeqCounter();
         var stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(
-                context.CoordinatorRunId, workPlanId.Value, context.StaticWorkflowChild, ct)
+                context.CoordinatorRunId, workPlanId.Value, ct)
             .ConfigureAwait(false);
         var coordinatorStopped = stoppedWorkPlanStatus is not null;
         if (coordinatorStopped && !HasActiveSubtasks(subtasks))
@@ -375,7 +375,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         {
             if (coordinatorStopped
                 || (stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(
-                        context.CoordinatorRunId, workPlanId.Value, context.StaticWorkflowChild, ct)
+                        context.CoordinatorRunId, workPlanId.Value, ct)
                     .ConfigureAwait(false)) is not null)
             {
                 coordinatorStopped = true;
@@ -397,7 +397,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             {
                 if (coordinatorStopped
                     || (stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(
-                            context.CoordinatorRunId, workPlanId.Value, context.StaticWorkflowChild, ct)
+                            context.CoordinatorRunId, workPlanId.Value, ct)
                         .ConfigureAwait(false)) is not null)
                 {
                     coordinatorStopped = true;
@@ -422,7 +422,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     continue;
 
                 if ((stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(
-                        context.CoordinatorRunId, workPlanId.Value, context.StaticWorkflowChild, ct)
+                        context.CoordinatorRunId, workPlanId.Value, ct)
                     .ConfigureAwait(false)) is not null)
                 {
                     coordinatorStopped = true;
@@ -748,7 +748,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     {
         var status = stoppedWorkPlanStatus
             ?? await GetStoppedCoordinatorWorkPlanStatusAsync(
-                coordinatorRunId, workPlanId, staticWorkflowChild: true, ct).ConfigureAwait(false)
+                coordinatorRunId, workPlanId, ct).ConfigureAwait(false)
             ?? WorkPlanStatus.AssemblyFailed;
         await SetWorkPlanStatusAsync(workPlanId, status, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
     }
@@ -756,12 +756,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private async Task<string?> GetStoppedCoordinatorWorkPlanStatusAsync(
         string coordinatorRunId,
         int workPlanId,
-        bool staticWorkflowChild,
         CancellationToken ct)
     {
-        if (staticWorkflowChild)
+        using (var scope = _scopeFactory.CreateScope())
         {
-            using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             var plan = await db.WorkPlans.AsNoTracking()
                 .Where(candidate => candidate.Id == workPlanId)
@@ -1162,10 +1160,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             return null;
         }
 
-        if (context.StaticWorkflowChild
-            && await GetStoppedCoordinatorWorkPlanStatusAsync(
-                context.CoordinatorRunId, workPlanId, staticWorkflowChild: true, ct).ConfigureAwait(false)
-                is not null)
+        if (await GetStoppedCoordinatorWorkPlanStatusAsync(
+                context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false) is not null)
         {
             try
             {
@@ -1188,7 +1184,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             statusById[subtaskId] = SubtaskStatus.Cancelled;
             if (cancelled is not null)
                 EmitSubtask(context, workPlanId, cancelled, EventTypes.SubtaskFailed, seq.Next());
-            return childRun.Id.ToString();
+            return null;
         }
 
         // Only publish the childRunId after StartChildRunAsync has inserted the child Run row and

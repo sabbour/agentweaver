@@ -444,12 +444,6 @@ internal static async Task CancelRunWorkAsync(
         logger.LogWarning(ex, "Best-effort preview publication lease release failed for cancelled run {RunId}", id);
     }
 
-    if (run.WorktreePath is not null && worktreeOps.WorktreeExists(run.WorktreePath))
-    {
-        try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch ?? string.Empty); }
-        catch (Exception ex) { logger.LogWarning(ex, "Best-effort worktree cleanup failed for cancelled run {RunId}", id); }
-    }
-
     var terminalized = await runStore.TrySetTerminalOutcomeAsync(
         run.Id,
         TerminalRunOutcome.Create(
@@ -462,11 +456,20 @@ internal static async Task CancelRunWorkAsync(
         CancellationToken.None);
     try
     {
-        if (terminalized && terminalOutcomeProjector is not null)
+        if (!terminalized)
+            return;
+
+        if (run.WorktreePath is not null && worktreeOps.WorktreeExists(run.WorktreePath))
+        {
+            try { worktreeOps.RemoveWorktree(run.RepositoryPath, run.WorktreePath, run.WorktreeBranch ?? string.Empty); }
+            catch (Exception ex) { logger.LogWarning(ex, "Best-effort worktree cleanup failed for cancelled run {RunId}", id); }
+        }
+
+        if (terminalOutcomeProjector is not null)
         {
             await terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None, streamStore).ConfigureAwait(false);
         }
-        else if (terminalized)
+        else
         {
             var cancellationEvent = new RunEvent(0, EventTypes.RunCancelled, cancellationPayload);
             if (eventStream is not null)
