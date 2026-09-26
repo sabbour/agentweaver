@@ -54,7 +54,14 @@ The chosen directory must be empty or not yet exist. Agentweaver will not overwr
 6. Optionally choose a **Blueprint**.
 7. Select **Create project**.
 
-Agentweaver clones the repository into the chosen directory and records the project with its GitHub origin. Its card then carries a GitHub mark in the gallery.
+Agentweaver clones the repository into the chosen directory, records the project with its GitHub
+origin, and binds the exact Repo App installation and repository grant that authorized the
+selection. The binding stores capability identity only; no user token is copied into the project.
+Retrying creation with the same unexpired selection code returns the same project and binding. If
+preparation and binding completed before the service restarted, that retry safely finishes project
+activation without cloning, duplicating, or replacing the grant.
+If the authorization expires, is revoked, or the repository is removed before creation completes,
+creation fails closed. The project card carries a GitHub mark in the gallery.
 
 The repository picker shows only repositories available to both your GitHub account and
 the Agentweaver GitHub App installation. When the App is configured for selected

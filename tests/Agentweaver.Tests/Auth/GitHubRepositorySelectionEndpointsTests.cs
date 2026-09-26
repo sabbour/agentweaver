@@ -9,6 +9,7 @@ using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -121,6 +122,45 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         created.StatusCode.Should().Be(HttpStatusCode.Created);
         var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>();
         createdBody.GetProperty("source_repository").GetString().Should().Be("octo/secure-repo");
+        var projectId = createdBody.GetProperty("project_id").GetString();
+        var readiness = await client.GetAsync(
+            $"/api/projects/{projectId}/github/unattended-readiness");
+        readiness.StatusCode.Should().Be(HttpStatusCode.OK);
+        var readinessBody = await readiness.Content.ReadFromJsonAsync<JsonElement>();
+        readinessBody.GetProperty("repository_ready").GetBoolean().Should().BeTrue();
+        readinessBody.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeTrue();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.GitHubInstallations.SingleAsync()).Should().BeEquivalentTo(new
+            {
+                InstallationId = 72L,
+                ProjectId = (string?)null,
+                RevokedAt = (DateTimeOffset?)null,
+            });
+            (await db.GitHubRepositoryGrants.SingleAsync()).Should().BeEquivalentTo(new
+            {
+                InstallationId = 72L,
+                RepositoryId = 42L,
+                ProjectId = projectId,
+                FullNameDisplay = "octo/secure-repo",
+                RevokedAt = (DateTimeOffset?)null,
+            });
+        }
+
+        // Simulate process termination after clone/scaffolding and durable authorization binding,
+        // but before the operational project row was activated.
+        using (var scope = factory.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+            await store.UpdateCreationStateAsync(
+                ProjectId.Parse(projectId!),
+                ProjectState.Creating,
+                "main",
+                DateTimeOffset.UtcNow,
+                CancellationToken.None);
+        }
 
         var reused = await client.PostAsJsonAsync("/api/projects", new
         {
@@ -132,8 +172,38 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         reused.StatusCode.Should().Be(HttpStatusCode.OK);
         var reusedBody = await reused.Content.ReadFromJsonAsync<JsonElement>();
         reusedBody.GetProperty("project_id").GetString()
-            .Should().Be(createdBody.GetProperty("project_id").GetString());
+            .Should().Be(projectId);
+        reusedBody.GetProperty("state").GetString().Should().Be("active");
         reusedBody.GetProperty("source_repository").GetString().Should().Be("octo/secure-repo");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.GitHubInstallations.CountAsync()).Should().Be(1);
+            (await db.GitHubRepositoryGrants.CountAsync()).Should().Be(1);
+            var grant = await db.GitHubRepositoryGrants.SingleAsync();
+            grant.RevokedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        var retryAfterRevocation = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Retry after revocation",
+            origin = "github",
+            working_directory = factory.NewWorkingDirectory(),
+            repository_selection_code = code,
+        });
+        retryAfterRevocation.StatusCode.Should().Be(HttpStatusCode.OK);
+        var retryAfterRevocationBody =
+            await retryAfterRevocation.Content.ReadFromJsonAsync<JsonElement>();
+        retryAfterRevocationBody.GetProperty("project_id").GetString().Should().Be(projectId);
+
+        var revokedReadiness = await client.GetAsync(
+            $"/api/projects/{projectId}/github/unattended-readiness");
+        revokedReadiness.StatusCode.Should().Be(HttpStatusCode.OK);
+        var revokedReadinessBody = await revokedReadiness.Content.ReadFromJsonAsync<JsonElement>();
+        revokedReadinessBody.GetProperty("repository_ready").GetBoolean().Should().BeFalse();
+        revokedReadinessBody.GetProperty("repository").GetProperty("reason_code").GetString()
+            .Should().Be("repo_app_repository_grant_required");
     }
 
     [Fact]
@@ -311,6 +381,9 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                     {
                         "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repository_selection":"selected","html_url":"https://github.com/settings/installations/72","permissions":{"administration":"write"}}]}""",
                         "/user/installations/72/repositories" => """{"repositories":[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+                        "/repositories/42/installation" => """{"id":72,"repository_selection":"selected","account":{"login":"octo"},"permissions":{"contents":"write","pull_requests":"write"}}""",
+                        "/app/installations/72/access_tokens" => """{"token":"ghs_metadata_token","expires_at":"2030-01-01T00:00:00Z"}""",
+                        "/repositories/42" => """{"id":42,"full_name":"octo/secure-repo"}""",
                         "/user/repos" when request.Method == HttpMethod.Post => """{"full_name":"octo/new-repo","clone_url":"https://github.com/octo/new-repo.git","html_url":"https://github.com/octo/new-repo"}""",
                         _ => "{}",
                     },

@@ -12,7 +12,7 @@ using Microsoft.IdentityModel.Tokens;
 namespace Agentweaver.Api.Webhooks;
 
 public enum RepoAppInstallationOutcome { Success, InstallationUnavailable, ConfigurationUnavailable, ProviderUnavailable }
-internal enum RepoAppInstallationBindingOutcome { Bound, PermissionChanged, Conflict }
+internal enum RepoAppInstallationBindingOutcome { Bound, AuthorizationUnavailable, PermissionChanged, Conflict }
 
 internal sealed record RepoAppInstallationAuthority(
     long InstallationId,
@@ -57,18 +57,22 @@ public sealed class RepoAppInstallationTokenService(
             .AnyAsync(x => x.InstallationId == installationId &&
                            x.AppKind == GitHubAppKind.Repo &&
                            x.RevokedAt == null, ct).ConfigureAwait(false);
-        var grant = await db.GitHubRepositoryGrants.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.InstallationId == installationId &&
-                                       x.RepositoryId == repositoryId &&
-                                       x.RevokedAt == null, ct).ConfigureAwait(false);
-        if (!installationActive || grant is null)
+        var grantDigests = await db.GitHubRepositoryGrants.AsNoTracking()
+            .Where(x => x.InstallationId == installationId &&
+                        x.RepositoryId == repositoryId &&
+                        x.RevokedAt == null)
+            .Select(x => x.PermissionDigest)
+            .Distinct()
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        if (!installationActive || grantDigests.Count != 1)
             return RepoAppInstallationOutcome.InstallationUnavailable;
 
         var authority = await GetRepositoryAuthorityAsync(installationId, repositoryId, ct).ConfigureAwait(false);
         if (authority is null)
             return RepoAppInstallationOutcome.ProviderUnavailable;
         if (!CryptographicOperations.FixedTimeEquals(
-                Encoding.UTF8.GetBytes(grant.PermissionDigest),
+                Encoding.UTF8.GetBytes(grantDigests[0]),
                 Encoding.UTF8.GetBytes(CreatePermissionDigest(authority.Permissions))))
         {
             await new RepoAppInstallationLifecycleService(db)
@@ -545,40 +549,88 @@ public sealed class RepoAppInstallationLifecycleService(MemoryDbContext db)
         string projectId,
         RepoAppInstallationAuthority authority,
         CancellationToken ct = default)
+        => await BindCoreAsync(
+            projectId, authority, null, null, allowRevival: true, ct).ConfigureAwait(false);
+
+    internal async Task<RepoAppInstallationBindingOutcome> BindSelectedRepositoryAsync(
+        string projectId,
+        string entraObjectId,
+        string repoAppAuthorizationId,
+        RepoAppInstallationAuthority authority,
+        CancellationToken ct = default)
+        => await BindCoreAsync(
+            projectId, authority, entraObjectId, repoAppAuthorizationId, allowRevival: false, ct)
+            .ConfigureAwait(false);
+
+    private async Task<RepoAppInstallationBindingOutcome> BindCoreAsync(
+        string projectId,
+        RepoAppInstallationAuthority authority,
+        string? entraObjectId,
+        string? repoAppAuthorizationId,
+        bool allowRevival,
+        CancellationToken ct)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(
             System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        if (repoAppAuthorizationId is not null &&
+            !await db.GitHubAppAuthorizations.AsNoTracking().AnyAsync(
+                authorization =>
+                    authorization.Id == repoAppAuthorizationId &&
+                    authorization.EntraObjectId == entraObjectId &&
+                    authorization.AppKind == GitHubAppKind.Repo &&
+                    authorization.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                    authorization.RevokedAt == null,
+                ct).ConfigureAwait(false))
+            return RepoAppInstallationBindingOutcome.AuthorizationUnavailable;
+
         var now = DateTimeOffset.UtcNow;
+        var permissionDigest = RepoAppInstallationTokenService.CreatePermissionDigest(authority.Permissions);
         var installation = await db.GitHubInstallations.FindAsync([authority.InstallationId], ct).ConfigureAwait(false);
-        if (installation is not null && installation.ProjectId is not null &&
-            !string.Equals(installation.ProjectId, projectId, StringComparison.Ordinal))
-            return RepoAppInstallationBindingOutcome.Conflict;
         if (installation is null)
             db.GitHubInstallations.Add(new GitHubInstallationRecord
             {
-                InstallationId = authority.InstallationId, AppKind = GitHubAppKind.Repo, ProjectId = projectId, CreatedAt = now,
+                InstallationId = authority.InstallationId, AppKind = GitHubAppKind.Repo, CreatedAt = now,
             });
         else
         {
-            installation.ProjectId = projectId;
-            installation.RevokedAt = null;
+            if (installation.AppKind != GitHubAppKind.Repo ||
+                (!allowRevival && installation.RevokedAt is not null))
+                return RepoAppInstallationBindingOutcome.Conflict;
+            if (allowRevival)
+                installation.RevokedAt = null;
+            installation.ProjectId = null;
+        }
+
+        var conflictingPermissionDigest = await db.GitHubRepositoryGrants
+            .AsNoTracking()
+            .Where(existing =>
+                existing.InstallationId == authority.InstallationId &&
+                existing.RepositoryId == authority.RepositoryId &&
+                existing.RevokedAt == null &&
+                existing.PermissionDigest != permissionDigest)
+            .AnyAsync(ct)
+            .ConfigureAwait(false);
+        if (conflictingPermissionDigest)
+        {
+            await InvalidateForPermissionChangeAsync(authority.InstallationId, authority.RepositoryId, ct)
+                .ConfigureAwait(false);
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return RepoAppInstallationBindingOutcome.PermissionChanged;
         }
 
         var grant = await db.GitHubRepositoryGrants.FindAsync(
-            [authority.InstallationId, authority.RepositoryId], ct).ConfigureAwait(false);
-        if (grant is not null && !string.Equals(grant.ProjectId, projectId, StringComparison.Ordinal))
-            return RepoAppInstallationBindingOutcome.Conflict;
+            [authority.InstallationId, authority.RepositoryId, projectId], ct).ConfigureAwait(false);
         if (grant is null)
             db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
             {
                 InstallationId = authority.InstallationId, RepositoryId = authority.RepositoryId, ProjectId = projectId,
                 FullNameDisplay = authority.FullNameDisplay,
-                PermissionDigest = RepoAppInstallationTokenService.CreatePermissionDigest(authority.Permissions),
+                PermissionDigest = permissionDigest,
                 GrantedAt = now,
             });
         else
         {
-            var permissionDigest = RepoAppInstallationTokenService.CreatePermissionDigest(authority.Permissions);
             if (!CryptographicOperations.FixedTimeEquals(
                     Encoding.UTF8.GetBytes(grant.PermissionDigest), Encoding.UTF8.GetBytes(permissionDigest)))
             {
@@ -590,8 +642,11 @@ public sealed class RepoAppInstallationLifecycleService(MemoryDbContext db)
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
                 return RepoAppInstallationBindingOutcome.PermissionChanged;
             }
+            if (!allowRevival && grant.RevokedAt is not null)
+                return RepoAppInstallationBindingOutcome.Conflict;
             grant.FullNameDisplay = authority.FullNameDisplay;
-            grant.RevokedAt = null;
+            if (allowRevival)
+                grant.RevokedAt = null;
         }
         try
         {
@@ -637,6 +692,39 @@ public sealed class RepoAppInstallationLifecycleService(MemoryDbContext db)
             if (transaction is not null)
                 await transaction.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    internal async Task RevokeProjectBindingAsync(
+        string projectId,
+        long installationId,
+        long repositoryId,
+        CancellationToken ct = default)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var now = DateTimeOffset.UtcNow;
+        await db.GitHubRepositoryGrants
+            .Where(grant =>
+                grant.ProjectId == projectId &&
+                grant.InstallationId == installationId &&
+                grant.RepositoryId == repositoryId &&
+                grant.RevokedAt == null)
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(grant => grant.RevokedAt, now),
+                ct)
+            .ConfigureAwait(false);
+        await db.AutomationActivations
+            .Where(activation =>
+                activation.ProjectId == projectId &&
+                activation.InstallationId == installationId &&
+                activation.RepositoryId == repositoryId &&
+                activation.Status == AutomationActivationStatus.Active)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(activation => activation.Status, AutomationActivationStatus.Invalidated)
+                    .SetProperty(activation => activation.InvalidatedAt, now),
+                ct)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(ct).ConfigureAwait(false);
     }
 
     private async Task ApplyLifecycleAsync(long installationId, GitHubWebhookPayload payload, CancellationToken ct)

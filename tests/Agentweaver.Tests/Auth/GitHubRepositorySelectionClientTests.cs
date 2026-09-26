@@ -26,6 +26,7 @@ public sealed class GitHubRepositorySelectionClientTests
         var repositories = await client.ListAsync("user-oauth-token", CancellationToken.None);
 
         repositories.Should().ContainSingle().Which.Should().BeEquivalentTo(new GitHubRepositorySelectionCandidate(
+            72,
             42,
             "octo/secure-repo",
             "octo",

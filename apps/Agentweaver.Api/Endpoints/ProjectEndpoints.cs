@@ -426,11 +426,8 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
     var repositoryRequired = project.Origin.Kind == ProjectOriginKind.FromGitHub;
     var projectKey = projectId.ToString();
     var activeInstallations = db.GitHubInstallations.AsNoTracking()
-        .Where(x => x.ProjectId == projectKey &&
-                    x.AppKind == GitHubAppKind.Repo &&
+        .Where(x => x.AppKind == GitHubAppKind.Repo &&
                     x.RevokedAt == null);
-    var hasInstallation = repositoryRequired && await activeInstallations
-        .AnyAsync(ct).ConfigureAwait(false);
     var liveRepositoryGrantCount = repositoryRequired
         ? await db.GitHubRepositoryGrants.AsNoTracking()
             .CountAsync(grant => grant.ProjectId == projectKey &&
@@ -439,6 +436,11 @@ app.MapGet("/api/projects/{id}/github/unattended-readiness", async (
                                      installation.InstallationId == grant.InstallationId),
                 ct).ConfigureAwait(false)
         : 0;
+    var hasInstallation = repositoryRequired && await db.GitHubRepositoryGrants.AsNoTracking()
+        .AnyAsync(grant => grant.ProjectId == projectKey &&
+                           activeInstallations.Any(installation =>
+                               installation.InstallationId == grant.InstallationId),
+            ct).ConfigureAwait(false);
     var unattendedProviderPurpose = effectiveProvider switch
     {
         EffectiveModelProviderResult.Byok byok =>
@@ -1239,6 +1241,17 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                     resolvedRepository.ProjectId, CancellationToken.None).ConfigureAwait(false);
                 if (existing is not null)
                 {
+                    if (existing.State == ProjectState.Creating &&
+                        await repositorySelections.RevalidateExistingProjectAuthorizationAsync(
+                            existing,
+                            resolvedRepository,
+                            CancellationToken.None).ConfigureAwait(false))
+                    {
+                        existing = await projectService.ResumePreparedGitHubCreationAsync(
+                            existing,
+                            CancellationToken.None).ConfigureAwait(false);
+                    }
+
                     var response = MapProject(
                         existing,
                         existing.State == ProjectState.Active && workspaceProvider.IsAvailable(existing.WorkingDirectory),
@@ -1294,6 +1307,18 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                             caller.EntraObjectId!,
                             caller.EntraObjectId,
                             token),
+                    async (prepared, token) =>
+                    {
+                        if (!await repositorySelections.BindProjectAuthorizationAsync(
+                                prepared,
+                                resolvedRepository,
+                                token).ConfigureAwait(false))
+                            throw new InvalidOperationException(
+                                "The selected Repo App installation could not be bound to the project.");
+                    },
+                    (_, token) => repositorySelections.RevokeProjectAuthorizationAsync(
+                        resolvedRepository,
+                        token),
                     ct);
             }
 

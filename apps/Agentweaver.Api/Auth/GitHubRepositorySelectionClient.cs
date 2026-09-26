@@ -69,6 +69,7 @@ internal sealed class GitHubRepositorySelectionClient(
                 foreach (var repository in batch.Where(IsSafe))
                 {
                     repositoriesByInstallation[installationIndex].Add(new GitHubRepositorySelectionCandidate(
+                        installation.Id,
                         repository.Id!.Value,
                         repository.FullName!,
                         repository.Owner!.Login!,

@@ -599,7 +599,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasDatabaseName("UX_automation_activations_active_project")
                         .HasFilter("status = 0");
 
-                    b.HasIndex("InstallationId", "RepositoryId");
+                    b.HasIndex("InstallationId", "RepositoryId", "ProjectId");
 
                     b.ToTable("automation_activations", null, t =>
                         {
@@ -1741,8 +1741,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasKey("InstallationId");
 
-                    b.HasIndex("ProjectId");
-
                     b.ToTable("github_installations", (string)null);
                 });
 
@@ -1784,6 +1782,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("repository_id");
 
+                    b.Property<string>("ProjectId")
+                        .HasColumnType("text")
+                        .HasColumnName("project_id");
+
                     b.Property<string>("FullNameDisplay")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1798,20 +1800,15 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("permission_digest");
 
-                    b.Property<string>("ProjectId")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("project_id");
-
                     b.Property<DateTimeOffset?>("RevokedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("revoked_at");
 
-                    b.HasKey("InstallationId", "RepositoryId");
+                    b.HasKey("InstallationId", "RepositoryId", "ProjectId");
 
                     b.HasIndex("ProjectId");
 
-                    b.HasIndex("InstallationId", "RepositoryId")
+                    b.HasIndex("InstallationId", "RepositoryId", "ProjectId")
                         .IsUnique();
 
                     b.ToTable("github_repository_grants", (string)null);
@@ -1839,6 +1836,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<long>("ExpiresAtUnixMilliseconds")
                         .HasColumnType("bigint")
                         .HasColumnName("expires_at_unix_ms");
+
+                    b.Property<long>("InstallationId")
+                        .HasColumnType("bigint")
+                        .HasColumnName("installation_id");
 
                     b.Property<string>("RepoAppAuthorizationId")
                         .IsRequired()
@@ -3986,7 +3987,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.HasOne("Agentweaver.Api.Memory.GitHubRepositoryGrantRecord", null)
                         .WithMany()
-                        .HasForeignKey("InstallationId", "RepositoryId")
+                        .HasForeignKey("InstallationId", "RepositoryId", "ProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
                 });
@@ -4049,15 +4050,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasForeignKey("ProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .HasConstraintName("FK_github_authorizations_projects_project_id");
-                });
-
-            modelBuilder.Entity("Agentweaver.Api.Memory.GitHubInstallationRecord", b =>
-                {
-                    b.HasOne("Agentweaver.Api.Memory.ProjectRecord", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .HasConstraintName("FK_github_installations_projects_project_id");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubRepositoryGrantRecord", b =>
