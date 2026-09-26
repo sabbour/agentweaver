@@ -2135,6 +2135,57 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunAssembly_ConcurrentRecovererCompletion_DoesNotOverwriteCompleteAndApplyWinnerRunsScribe()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(workPlanId, coordinatorRunId);
+        _pipeline.AfterAuthorize = async () =>
+        {
+            var effectId = $"{coordinatorRunId}:g1:collective-merge";
+            (await _assemblyStore.SetMergeObservationAsync(
+                workPlanId,
+                Environment.MachineName,
+                effectId,
+                1,
+                MergeEffectState.Prepared,
+                MergeEffectState.Applied,
+                """{"outcome":"RecoveredApplied"}""",
+                "finalize_without_replaying_merge_or_scribe",
+                unknownReason: null,
+                default)).Should().BeTrue();
+            await _assemblyStore.SetStatusAndStageAsync(
+                workPlanId,
+                WorkPlanStatus.Complete,
+                AssemblyStage.Done,
+                default);
+
+            var runId = RunId.Parse(coordinatorRunId);
+            var run = (await _runStore.GetAsync(runId))!;
+            (await _runStore.TrySetTerminalOutcomeAsync(
+                runId,
+                TerminalRunOutcome.Create(
+                    RunStatus.Completed,
+                    EventTypes.RunCompleted,
+                    new { result = "assembly_complete" },
+                    DateTimeOffset.UtcNow,
+                    run.LifecycleGeneration),
+                "assembly_complete")).Should().BeTrue();
+        };
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Scribes.Should().Be(1, "the unique CAS winner still owns the non-replayable post-merge effect");
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.Complete);
+        state.MergeEffectState.Should().Be(MergeEffectState.Applied);
+    }
+
+    [Fact]
     public async Task RunAssembly_CancellationBeforeCas_LeavesPreparedEffectWithoutScribe()
     {
         var coordinatorRunId = RunId.New().ToString();

@@ -1964,13 +1964,29 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         });
 
         run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (run?.LifecycleGeneration == intent.LifecycleGeneration
+            && run.Status == RunStatus.Completed)
+        {
+            if (merge.Outcome == CollectiveMergeOutcome.AppliedNow)
+            {
+                await RunCoordinatorScribeAsync(
+                    context,
+                    workPlanId,
+                    terminalStatus: RunStatus.Completed.ToApiString(),
+                    mergeResult: merge.CommitHash,
+                    ct).ConfigureAwait(false);
+            }
+            return;
+        }
+
         if (run is null
             || run.LifecycleGeneration != intent.LifecycleGeneration
             || run.Status != RunStatus.InProgress)
         {
-            await _assemblyStore.SetTerminalStatusAsync(
+            await _assemblyStore.TrySetCancelledAfterAppliedMergeAsync(
                 workPlanId,
-                WorkPlanStatus.Cancelled,
+                intent.EffectId,
+                intent.LifecycleGeneration,
                 "merge_applied_but_lifecycle_authorization_ended",
                 ct).ConfigureAwait(false);
             return;
