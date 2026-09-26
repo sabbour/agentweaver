@@ -535,6 +535,10 @@ export interface DecisionDto {
   content: string;
   rationale?: string;
   tags?: string;
+  revision: number;
+  current_revision_id: string;
+  superseded_by_id?: number | null;
+  trust_state?: string;
   created_at: string;
   updated_at: string;
 }
@@ -559,8 +563,54 @@ export interface AgentMemoryDto {
   importance: string;
   content: string;
   tags?: string;
+  status: 'active' | 'superseded' | 'archived';
+  replaced_by_id?: number | null;
+  revision: number;
+  current_revision_id: string;
+  trust_state?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentMemoryRevisionDto {
+  revision_id: string;
+  memory_id: number;
+  revision: number;
+  previous_revision_id?: string | null;
+  actor: string;
+  source_run_id?: string | null;
+  reason: string;
+  agent_name: string;
+  type: string;
+  importance: string;
+  content: string;
+  tags?: string | null;
+  status: 'active' | 'superseded' | 'archived';
+  replaced_by_id?: number | null;
+  trust_state: string;
+  approved_at?: string | null;
+  created_at: string;
+}
+
+export interface DecisionRevisionDto {
+  revision_id: string;
+  decision_id: number;
+  revision: number;
+  previous_revision_id?: string | null;
+  actor: string;
+  source_run_id?: string | null;
+  reason: string;
+  agent_name: string;
+  type: string;
+  status: 'active' | 'superseded' | 'archived';
+  title: string;
+  content: string;
+  rationale?: string | null;
+  tags?: string | null;
+  superseded_by_id?: number | null;
+  trust_state: string;
+  approved_at?: string | null;
+  created_at: string;
 }
 
 export interface SessionHistoryDto {

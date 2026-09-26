@@ -899,6 +899,32 @@ export class AgentweaverApiClient {
     );
   }
 
+  getDecisionRevisions(
+    projectId: string,
+    decisionId: string,
+    options?: PagedRequestOptions,
+  ): Promise<PagedResult<import('./types').DecisionRevisionDto>> {
+    return this.request<PagedResult<import('./types').DecisionRevisionDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(decisionId)}/revisions${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
+  }
+
+  restoreDecision(
+    projectId: string,
+    decisionId: string,
+    expectedRevision: number,
+    revision: number,
+  ): Promise<import('./types').DecisionDto> {
+    return this.request(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(decisionId)}/restore`,
+      { expected_revision: expectedRevision, revision },
+    );
+  }
+
   mergeDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/merge`, {});
   }
@@ -920,10 +946,21 @@ export class AgentweaverApiClient {
     );
   }
 
-  getProjectMemory(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').AgentMemoryDto>> {
+  getProjectMemory(
+    projectId: string,
+    options?: PagedRequestOptions & { query?: string; type?: string; tags?: string; status?: string },
+  ): Promise<PagedResult<import('./types').AgentMemoryDto>> {
+    const query = new URLSearchParams();
+    if (options?.page != null) query.set('page', String(options.page));
+    if (options?.pageSize != null) query.set('page_size', String(options.pageSize));
+    if (options?.query) query.set('q', options.query);
+    if (options?.type) query.set('type', options.type);
+    if (options?.tags) query.set('tags', options.tags);
+    if (options?.status) query.set('status', options.status);
+    const qs = query.toString();
     return this.request<PagedResult<import('./types').AgentMemoryDto>>(
       'GET',
-      `/projects/${encodeURIComponent(projectId)}/memory${pagingQuery(options)}`,
+      `/projects/${encodeURIComponent(projectId)}/memory${qs ? `?${qs}` : ''}`,
       undefined,
       options?.signal,
     );
@@ -950,9 +987,60 @@ export class AgentweaverApiClient {
     projectId: string,
     agentName: string,
     memoryId: string,
-    body: { type?: string; content?: string; importance?: string; tags?: string },
+    body: {
+      expected_revision: number;
+      type?: string;
+      content?: string;
+      importance?: string;
+      tags?: string;
+      status?: 'active' | 'superseded' | 'archived';
+      replaced_by_id?: number;
+      reason?: string;
+    },
   ): Promise<import('./types').AgentMemoryDto> {
     return this.request<import('./types').AgentMemoryDto>('PUT', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}`, body);
+  }
+
+  getAgentMemoryRevisions(
+    projectId: string,
+    agentName: string,
+    memoryId: string,
+    options?: PagedRequestOptions,
+  ): Promise<PagedResult<import('./types').AgentMemoryRevisionDto>> {
+    return this.request<PagedResult<import('./types').AgentMemoryRevisionDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}/revisions${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
+  }
+
+  compareAgentMemoryRevisions(
+    projectId: string,
+    agentName: string,
+    memoryId: string,
+    fromRevision: number,
+    toRevision: number,
+  ): Promise<{ from: import('./types').AgentMemoryRevisionDto; to: import('./types').AgentMemoryRevisionDto }> {
+    const query = new URLSearchParams({
+      from_revision: String(fromRevision),
+      to_revision: String(toRevision),
+    });
+    return this.request('GET', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}/compare?${query}`);
+  }
+
+  restoreAgentMemory(
+    projectId: string,
+    agentName: string,
+    memoryId: string,
+    expectedRevision: number,
+    revision: number,
+  ): Promise<import('./types').AgentMemoryDto> {
+    return this.request(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}/restore`,
+      { expected_revision: expectedRevision, revision },
+    );
   }
 
   // Skills (issues #51/#56) — per-project catalog + agent assignments.

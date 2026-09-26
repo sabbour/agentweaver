@@ -1235,6 +1235,7 @@ using (var scope = app.Services.CreateScope())
     // EF that AddRunEvents is already applied, so only the subsequent migrations are executed.
     // On a fresh install or an already-migrated DB this is the normal migration path.
     await memoryDb.Database.MigrateAsync();
+    await KnowledgeRevisionBackfill.EnsureLegacyFingerprintsAsync(memoryDb);
 }
 
 // --migrate-data: run SQLite → Postgres data migration then exit.

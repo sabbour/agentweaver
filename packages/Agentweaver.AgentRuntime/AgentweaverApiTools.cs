@@ -23,7 +23,9 @@ internal static class AgentweaverApiTools
         "submit_inbox_entry",
         "list_inbox",
         "list_decisions",
+        "get_decision_history",
         "get_memory",
+        "get_memory_history",
         "merge_inbox_entry",
         "export_memory",
         "project_get",
@@ -208,11 +210,15 @@ internal static class AgentweaverApiTools
             async (
                 [Description("Filter by decision type: architectural | scope | process | pattern | technical (optional — omit for all types)")] string? type = null,
                 [Description("Filter by status: active | superseded | archived (optional — defaults to active)")] string? status = null,
+                [Description("1-based page")] int page = 1,
+                [Description("Page size, maximum 100")] int pageSize = 25,
                 CancellationToken ct = default) =>
             {
                 var qs = new List<string>();
                 qs.Add($"status={Uri.EscapeDataString(!string.IsNullOrWhiteSpace(status) ? status : "active")}");
                 if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
+                qs.Add($"page={page}");
+                qs.Add($"page_size={pageSize}");
                 return await GetJsonAsync(http,
                     $"api/projects/{projectId}/decisions?{string.Join("&", qs)}", ct).ConfigureAwait(false);
             },
@@ -223,35 +229,59 @@ internal static class AgentweaverApiTools
 
         yield return AIFunctionFactory.Create(
             async (
+                [Description("Decision record ID")] int decisionId,
+                [Description("1-based page")] int page = 1,
+                [Description("Page size, maximum 100")] int pageSize = 25,
+                CancellationToken ct = default) =>
+            {
+                return await GetJsonAsync(http,
+                    $"api/projects/{projectId}/decisions/{decisionId}/revisions?page={page}&page_size={pageSize}",
+                    ct).ConfigureAwait(false);
+            },
+            "get_decision_history",
+            "Inspect immutable revisions of a decision, including provenance, approval, lifecycle, and predecessor metadata. Returns paginated JSON.");
+
+        yield return AIFunctionFactory.Create(
+            async (
                 [Description("Restrict to a specific agent's memory (optional — omit for all agents)")] string? agent = null,
                 [Description("Comma-separated tag filter (optional — omit for all tags)")] string? tags = null,
                 [Description("Filter by memory type: learning | pattern | core_context | update (optional)")] string? type = null,
+                [Description("Text to find in content, tags, or agent name (optional)")] string? query = null,
+                [Description("Lifecycle state: active | superseded | archived | all (optional — defaults to active)")] string? status = null,
+                [Description("1-based page")] int page = 1,
+                [Description("Page size, maximum 100")] int pageSize = 25,
                 CancellationToken ct = default) =>
             {
-                string path;
-                if (!string.IsNullOrWhiteSpace(agent))
-                {
-                    var qs = new List<string>();
-                    if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
-                    path = $"api/projects/{projectId}/agents/{Uri.EscapeDataString(agent)}/memory"
-                        + (qs.Count > 0 ? "?" + string.Join("&", qs) : string.Empty);
-                }
-
-                else
-                {
-                    var qs = new List<string>();
-                    if (!string.IsNullOrWhiteSpace(tags)) qs.Add($"tags={Uri.EscapeDataString(tags)}");
-                    if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
-                    path = $"api/projects/{projectId}/memory"
-                        + (qs.Count > 0 ? "?" + string.Join("&", qs) : string.Empty);
-                }
+                var qs = new List<string>();
+                if (!string.IsNullOrWhiteSpace(tags)) qs.Add($"tags={Uri.EscapeDataString(tags)}");
+                if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
+                if (!string.IsNullOrWhiteSpace(query)) qs.Add($"q={Uri.EscapeDataString(query)}");
+                if (!string.IsNullOrWhiteSpace(status)) qs.Add($"status={Uri.EscapeDataString(status)}");
+                if (!string.IsNullOrWhiteSpace(agent)) qs.Add($"agent={Uri.EscapeDataString(agent)}");
+                qs.Add($"page={page}");
+                qs.Add($"page_size={pageSize}");
+                var path = $"api/projects/{projectId}/memory?{string.Join("&", qs)}";
                 return await GetJsonAsync(http, path, ct).ConfigureAwait(false);
             },
             "get_memory",
-            "Read agent memory for this project. Omit 'agent' to search across all agents (supports tag filter); " +
-            "supply 'agent' to fetch one agent's memory specifically. " +
+            "Search active agent memory for this project with agent, text, tag, type, lifecycle, and pagination filters. " +
             "Before making a notable implementation choice, call get_memory " +
             "(and list_decisions + list_inbox) to surface patterns, learnings, and gotchas peers have already recorded.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Agent that owns the memory record")] string agent,
+                [Description("Memory record ID")] int memoryId,
+                [Description("1-based page")] int page = 1,
+                [Description("Page size, maximum 100")] int pageSize = 25,
+                CancellationToken ct = default) =>
+            {
+                return await GetJsonAsync(http,
+                    $"api/projects/{projectId}/agents/{Uri.EscapeDataString(agent)}/memory/{memoryId}/revisions?page={page}&page_size={pageSize}",
+                    ct).ConfigureAwait(false);
+            },
+            "get_memory_history",
+            "Inspect immutable revisions of a memory record, including provenance, approval, lifecycle, and predecessor metadata. Returns paginated JSON.");
 
         // NOTE (issue #334): `start_preview` used to be registered here, gated on both projectId AND
         // agentName being non-empty. Sandboxed subtask runs (e.g. dynamically-cast build/validation

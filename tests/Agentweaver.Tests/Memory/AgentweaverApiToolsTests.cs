@@ -232,6 +232,35 @@ public sealed class AgentweaverApiToolsTests
     }
 
     [Fact]
+    public async Task ListDecisions_ForwardsLaterPage()
+    {
+        var handler = new FakeHttpHandler(HttpStatusCode.OK, """{"items":[]}""");
+        var tool = GetTool("list_decisions", handler);
+
+        await InvokeAsync(tool, new() { ["page"] = 3, ["pageSize"] = 10 });
+
+        handler.LastRequest!.RequestUri!.Query.Should().Contain("page=3");
+        handler.LastRequest.RequestUri.Query.Should().Contain("page_size=10");
+    }
+
+    [Fact]
+    public async Task GetDecisionHistory_ForwardsLaterPage()
+    {
+        var handler = new FakeHttpHandler(HttpStatusCode.OK, """{"items":[]}""");
+        var tool = GetTool("get_decision_history", handler);
+
+        await InvokeAsync(tool, new()
+        {
+            ["decisionId"] = 42,
+            ["page"] = 2,
+            ["pageSize"] = 5,
+        });
+
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should()
+            .Be($"/api/projects/{ProjectId}/decisions/42/revisions?page=2&page_size=5");
+    }
+
+    [Fact]
     public async Task ListDecisions_OnNon2xx_ReturnsErrorStringWithoutThrowing()
     {
         var handler = new FakeHttpHandler(HttpStatusCode.ServiceUnavailable, """{"error":"DB locked"}""");
@@ -268,6 +297,47 @@ public sealed class AgentweaverApiToolsTests
         var result = await InvokeAsync(tool, new());
 
         result.Should().Contain("statx", because: "2xx should return the raw JSON body");
+    }
+
+    [Fact]
+    public async Task GetMemory_ForwardsSearchLifecycleAndLaterPage()
+    {
+        var handler = new FakeHttpHandler(HttpStatusCode.OK, """{"items":[]}""");
+        var tool = GetTool("get_memory", handler);
+
+        await InvokeAsync(tool, new()
+        {
+            ["agent"] = "smith",
+            ["query"] = "deployment retry",
+            ["status"] = "archived",
+            ["page"] = 4,
+            ["pageSize"] = 10,
+        });
+
+        var query = handler.LastRequest!.RequestUri!.Query;
+        query.Should().Contain("agent=smith");
+        query.Should().Contain("q=deployment%20retry");
+        query.Should().Contain("status=archived");
+        query.Should().Contain("page=4");
+        query.Should().Contain("page_size=10");
+    }
+
+    [Fact]
+    public async Task GetMemoryHistory_ForwardsLaterPage()
+    {
+        var handler = new FakeHttpHandler(HttpStatusCode.OK, """{"items":[]}""");
+        var tool = GetTool("get_memory_history", handler);
+
+        await InvokeAsync(tool, new()
+        {
+            ["agent"] = "smith",
+            ["memoryId"] = 17,
+            ["page"] = 2,
+            ["pageSize"] = 5,
+        });
+
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should()
+            .Be($"/api/projects/{ProjectId}/agents/smith/memory/17/revisions?page=2&page_size=5");
     }
 
     [Fact]

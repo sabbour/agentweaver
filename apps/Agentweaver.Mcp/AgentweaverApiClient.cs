@@ -56,7 +56,13 @@ public sealed class McpApiException : McpException
     private static string SerializePayload(McpErrorPayload payload) =>
         IsMemoryError(payload.ErrorCode)
             ? JsonSerializer.Serialize(
-                new { error = payload.ErrorCode, message = payload.Error, hint = payload.Hint },
+                new
+                {
+                    error = payload.ErrorCode,
+                    message = payload.Error,
+                    details = payload.Details,
+                    hint = payload.Hint,
+                },
                 ErrorJsonOptions)
             : string.Equals(
                 payload.ErrorCode,
@@ -106,7 +112,8 @@ public sealed class McpApiException : McpException
                 explicitHint ?? DefaultHintForPath(normalizedPath),
                 normalizedMessage,
                 normalizedPath,
-                errorCode);
+                errorCode,
+                details);
         }
 
         if (string.Equals(errorCode, "preview_registration_timeout", StringComparison.Ordinal))
@@ -338,7 +345,8 @@ public sealed class McpApiException : McpException
                 .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static bool IsMemoryError(string? errorCode) =>
-        errorCode?.StartsWith("memory_", StringComparison.Ordinal) == true;
+        errorCode?.StartsWith("memory_", StringComparison.Ordinal) == true
+        || string.Equals(errorCode, "stale_revision", StringComparison.Ordinal);
 
     private static string? ExtractQuotedValue(string message)
     {
@@ -685,6 +693,7 @@ public sealed class AgentweaverApiClient
             string? errorCode = null;
             string? message = null;
             string? hint = null;
+            JsonElement? details = null;
             try
             {
                 var doc = JsonDocument.Parse(body);
@@ -698,6 +707,12 @@ public sealed class AgentweaverApiClient
                     message = detail.GetString();
                 if (doc.RootElement.TryGetProperty("hint", out var hintProp))
                     hint = hintProp.GetString();
+                if (doc.RootElement.TryGetProperty("current_revision", out var currentRevision)
+                    && currentRevision.TryGetInt32(out var currentRevisionNumber))
+                    details = JsonSerializer.SerializeToElement(new
+                    {
+                        current_revision = currentRevisionNumber,
+                    });
             }
             catch (JsonException) { }
 
@@ -706,7 +721,8 @@ public sealed class AgentweaverApiClient
                 message ?? error ?? body,
                 path,
                 errorCode ?? error,
-                hint);
+                hint,
+                details);
         }
     }
 }

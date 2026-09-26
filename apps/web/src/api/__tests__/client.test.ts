@@ -288,13 +288,13 @@ describe('AgentweaverApiClient agent-memory update contract', () => {
       'project/1',
       'Smith Agent',
       '42',
-      { type: 'pattern', content: 'Updated memory' },
+      { expected_revision: 7, type: 'pattern', content: 'Updated memory' },
     )).resolves.toEqual(response);
 
     expect(fetchMock.mock.calls[0][0])
       .toBe('https://api.example.test/api/projects/project%2F1/agents/Smith%20Agent/memory/42');
     expect(fetchMock.mock.calls[0][1].method).toBe('PUT');
-    expect(fetchMock.mock.calls[0][1].body).toBe('{"type":"pattern","content":"Updated memory"}');
+    expect(fetchMock.mock.calls[0][1].body).toBe('{"expected_revision":7,"type":"pattern","content":"Updated memory"}');
   });
 });
 

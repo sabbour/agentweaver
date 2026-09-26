@@ -106,4 +106,55 @@ public sealed class McpMemoryToolsTests : IClassFixture<ProjectsWebApplicationFa
         error.Which.Message.Should().Contain("\"error\"");
         error.Which.Message.Should().Contain("\"hint\"");
     }
+
+    [Fact]
+    public async Task MemoryRevisionTools_SearchUpdateCompareRestore_KeepConcurrencyExplicit()
+    {
+        var projectId = await CreateProjectAsync();
+        using var httpClient = _factory.CreateAuthenticatedClient();
+        var create = await httpClient.PostAsJsonAsync($"/api/projects/{projectId}/agents/morpheus/memory", new
+        {
+            type = "learning",
+            importance = "high",
+            content = "Original searchable guidance",
+            tags = ",release,",
+        });
+        create.EnsureSuccessStatusCode();
+        var created = await create.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+        var memoryId = created.GetProperty("id").GetInt32().ToString();
+        var tools = CreateTools();
+
+        var updated = await tools.MemoryUpdateAsync(
+            projectId, "morpheus", memoryId, expected_revision: 1,
+            content: "Updated searchable guidance", reason: "verified correction");
+        updated.Should().Contain("\"revision\": 2");
+
+        var stale = () => tools.MemoryUpdateAsync(
+            projectId, "morpheus", memoryId, expected_revision: 1,
+            content: "stale overwrite");
+        var staleError = await stale.Should().ThrowAsync<McpApiException>();
+        staleError.Which.StatusCode.Should().Be(409);
+        staleError.Which.Message.Should().Contain("current_revision");
+
+        var search = await tools.MemorySearchAsync(
+            projectId, query: "Updated", status: "active", page: 1, page_size: 1);
+        search.Should().Contain("Updated searchable guidance");
+        search.Should().Contain("\"page_size\": 1");
+
+        var history = await tools.MemoryHistoryAsync(
+            projectId, "morpheus", memoryId, page: 1, page_size: 1);
+        history.Should().Contain("\"total_count\": 2");
+        history.Should().Contain("\"revision\": 2");
+
+        var comparison = await tools.MemoryCompareAsync(
+            projectId, "morpheus", memoryId, from_revision: 1, to_revision: 2);
+        comparison.Should().Contain("Original searchable guidance");
+        comparison.Should().Contain("Updated searchable guidance");
+
+        var restored = await tools.MemoryRestoreAsync(
+            projectId, "morpheus", memoryId, expected_revision: 2, revision: 1,
+            reason: "restore known-good guidance");
+        restored.Should().Contain("\"revision\": 3");
+        restored.Should().Contain("Original searchable guidance");
+    }
 }

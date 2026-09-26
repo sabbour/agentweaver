@@ -365,6 +365,11 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("CurrentRevisionId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<string>("IdentityKey")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
@@ -376,6 +381,15 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("ProjectId")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<int?>("ReplacedById")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Revision")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
 
                     b.Property<string>("SessionId")
                         .HasColumnType("text");
@@ -391,6 +405,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.Property<string>("SourceRunId")
                         .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("active");
 
                     b.Property<string>("Tags")
                         .HasColumnType("text");
@@ -413,11 +433,107 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasIndex("IdentityKey")
                         .IsUnique();
 
+                    b.HasIndex("ReplacedById");
+
                     b.HasIndex("ProjectId", "AgentName");
 
                     b.HasIndex("ProjectId", "Type");
 
                     b.ToTable("AgentMemory");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.AgentMemoryRevision", b =>
+                {
+                    b.Property<string>("RevisionId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("AgentName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ApprovedByFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Importance")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("MemoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PreviousRevisionId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int?>("ReplacedById")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SessionId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceIdentityFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceRunId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceRunReference")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Tags")
+                        .HasColumnType("text");
+
+                    b.Property<string>("TrustState")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("RevisionId");
+
+                    b.HasIndex("MemoryId", "Revision")
+                        .IsUnique();
+
+                    b.HasIndex("ProjectId", "MemoryId", "Revision");
+
+                    b.ToTable("agent_memory_revisions", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationActivationRecord", b =>
@@ -1145,6 +1261,11 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("CurrentRevisionId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<string>("IdentityKey")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
@@ -1155,6 +1276,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
 
                     b.Property<string>("Rationale")
                         .HasColumnType("text");
+
+                    b.Property<int>("Revision")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
 
                     b.Property<string>("SourceIdentity")
                         .HasColumnType("text");
@@ -1282,6 +1409,100 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasIndex("ProjectId", "Status");
 
                     b.ToTable("DecisionInbox");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.DecisionRevision", b =>
+                {
+                    b.Property<string>("RevisionId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("AgentName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ApprovedByFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DecisionId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PreviousRevisionId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Rationale")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SourceIdentityFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceRunId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SourceRunReference")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int?>("SupersededById")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Tags")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TrustState")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("RevisionId");
+
+                    b.HasIndex("DecisionId", "Revision")
+                        .IsUnique();
+
+                    b.HasIndex("ProjectId", "DecisionId", "Revision");
+
+                    b.ToTable("decision_revisions", (string)null);
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.DismissedNotification", b =>
@@ -3732,6 +3953,24 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.ToTable("OpenIddictTokens", (string)null);
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.AgentMemory", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.AgentMemory", null)
+                        .WithMany()
+                        .HasForeignKey("ReplacedById");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.AgentMemoryRevision", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.AgentMemory", "Memory")
+                        .WithMany()
+                        .HasForeignKey("MemoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Memory");
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationActivationRecord", b =>
                 {
                     b.HasOne("Agentweaver.Api.Memory.ProjectRecord", null)
@@ -3786,6 +4025,17 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasOne("Agentweaver.Api.Memory.Decision", null)
                         .WithMany()
                         .HasForeignKey("DecisionId");
+                });
+
+            modelBuilder.Entity("Agentweaver.Api.Memory.DecisionRevision", b =>
+                {
+                    b.HasOne("Agentweaver.Api.Memory.Decision", "Decision")
+                        .WithMany()
+                        .HasForeignKey("DecisionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Decision");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.GitHubAuthorizationRecord", b =>

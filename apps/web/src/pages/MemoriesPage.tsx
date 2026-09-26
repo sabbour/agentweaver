@@ -25,7 +25,7 @@ import {
 import { Pager } from '../copilot-fluent-system';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
+import type { AgentMemoryDto, AgentMemoryRevisionDto, DecisionDto, DecisionInboxEntryDto, DecisionRevisionDto, PagedResult, SessionHistoryDto } from '../api/types';
 
 const useStyles = makeStyles({
   breadcrumbLink: {
@@ -155,6 +155,11 @@ export function MemoriesPage() {
   const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
   const [editType, setEditType] = useState('');
   const [editContent, setEditContent] = useState('');
+  const [memoryQuery, setMemoryQuery] = useState('');
+  const [appliedMemoryQuery, setAppliedMemoryQuery] = useState('');
+  const [memoryStatus, setMemoryStatus] = useState('active');
+  const [memoryHistory, setMemoryHistory] = useState<Record<string, PagedResult<AgentMemoryRevisionDto>>>({});
+  const [decisionHistory, setDecisionHistory] = useState<Record<string, PagedResult<DecisionRevisionDto>>>({});
 
   const loadDecisionsPage = useCallback(async () => {
     if (!projectId) return;
@@ -202,7 +207,12 @@ export function MemoriesPage() {
       if (selectedTab === 'memory') {
         if (memory !== null) { setLoading(false); return; }
         try {
-          const m = await apiClient.getProjectMemory(projectId, { page: memoryPage, pageSize: memoryPageSize });
+          const m = await apiClient.getProjectMemory(projectId, {
+            page: memoryPage,
+            pageSize: memoryPageSize,
+            query: appliedMemoryQuery,
+            status: memoryStatus,
+          });
           setMemory(m.items);
           setMemoryTotalCount(m.total_count);
         } catch (err: unknown) {
@@ -228,7 +238,7 @@ export function MemoriesPage() {
       }
     };
     void loadTabData();
-  }, [projectId, selectedTab, decisions, inbox, memory, sessions, reloadKey, loadDecisionsPage, memoryPage, memoryPageSize, sessionsPage, sessionsPageSize]);
+  }, [projectId, selectedTab, decisions, inbox, memory, sessions, reloadKey, loadDecisionsPage, memoryPage, memoryPageSize, sessionsPage, sessionsPageSize, appliedMemoryQuery, memoryStatus]);
 
   const retryLoad = () => {
     if (selectedTab === 'decisions') {
@@ -296,9 +306,107 @@ export function MemoriesPage() {
     setBusyAction(`update-memory:${entry.id}`);
     setMutationError(null);
     try {
-      await apiClient.updateAgentMemory(projectId, entry.agent_name, entry.id, { type: editType.trim(), content: editContent.trim() });
+      await apiClient.updateAgentMemory(projectId, entry.agent_name, entry.id, {
+        expected_revision: entry.revision,
+        type: editType.trim(),
+        content: editContent.trim(),
+        reason: 'Updated from the Memories page',
+      });
       setEditingMemoryId(null);
       refreshMemory();
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const loadMemoryHistory = async (entry: AgentMemoryDto, page = 1) => {
+    if (!projectId || busyAction) return;
+    if (page === 1 && memoryHistory[entry.id]) {
+      setMemoryHistory((current) => {
+        const next = { ...current };
+        delete next[entry.id];
+        return next;
+      });
+      return;
+    }
+    setBusyAction(`history:${entry.id}`);
+    setMutationError(null);
+    try {
+      const result = await apiClient.getAgentMemoryRevisions(
+        projectId, entry.agent_name, entry.id, { page, pageSize: 25 });
+      setMemoryHistory((current) => ({
+        ...current,
+        [entry.id]: page === 1
+          ? result
+          : { ...result, items: [...(current[entry.id]?.items ?? []), ...result.items] },
+      }));
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const restoreMemory = async (entry: AgentMemoryDto, revision: number) => {
+    if (!projectId || busyAction) return;
+    setBusyAction(`restore:${entry.id}:${revision}`);
+    setMutationError(null);
+    try {
+      await apiClient.restoreAgentMemory(projectId, entry.agent_name, entry.id, entry.revision, revision);
+      setMemoryHistory((current) => {
+        const next = { ...current };
+        delete next[entry.id];
+        return next;
+      });
+      refreshMemory();
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const loadDecisionHistory = async (entry: DecisionDto, page = 1) => {
+    if (!projectId || busyAction) return;
+    if (page === 1 && decisionHistory[entry.id]) {
+      setDecisionHistory((current) => {
+        const next = { ...current };
+        delete next[entry.id];
+        return next;
+      });
+      return;
+    }
+    setBusyAction(`decision-history:${entry.id}`);
+    setMutationError(null);
+    try {
+      const result = await apiClient.getDecisionRevisions(projectId, entry.id, { page, pageSize: 25 });
+      setDecisionHistory((current) => ({
+        ...current,
+        [entry.id]: page === 1
+          ? result
+          : { ...result, items: [...(current[entry.id]?.items ?? []), ...result.items] },
+      }));
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const restoreDecision = async (entry: DecisionDto, revision: number) => {
+    if (!projectId || busyAction) return;
+    setBusyAction(`decision-restore:${entry.id}:${revision}`);
+    setMutationError(null);
+    try {
+      await apiClient.restoreDecision(projectId, entry.id, entry.revision, revision);
+      setDecisionHistory((current) => {
+        const next = { ...current };
+        delete next[entry.id];
+        return next;
+      });
+      refreshDecisions();
     } catch (err) {
       setMutationError(formatApiError(err));
     } finally {
@@ -376,11 +484,50 @@ export function MemoriesPage() {
                             <span className={styles.itemTitle}>{d.title}</span>
                             <Badge appearance="tint" color="subtle">{d.type}</Badge>
                             <Badge appearance="outline">{d.agent_name}</Badge>
+                            <span className={styles.itemMeta}>Revision {d.revision}</span>
                             <span className={styles.itemMeta}>{new Date(d.created_at).toLocaleString()}</span>
                           </div>
                           <span className={styles.itemContent}>{d.content}</span>
                           {d.rationale && (
                             <span className={styles.itemRationale}>Rationale: {d.rationale}</span>
+                          )}
+                          <div className={styles.actions}>
+                            <Button size="small" disabled={busy} onClick={() => void loadDecisionHistory(d)}>
+                              {decisionHistory[d.id] ? 'Hide history' : 'History'}
+                            </Button>
+                          </div>
+                          {decisionHistory[d.id] && (
+                            <div className={styles.itemList}>
+                              {decisionHistory[d.id].items.map((revision, index, revisions) => (
+                                <div key={revision.revision_id} className={styles.proposedItem}>
+                                  <div className={styles.itemHeader}>
+                                    <strong>Revision {revision.revision}</strong>
+                                    <Badge appearance="outline">{revision.status}</Badge>
+                                    <span className={styles.itemMeta}>
+                                      {revision.reason} by {revision.actor} · {new Date(revision.created_at).toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <span className={styles.itemContent}>{revision.content}</span>
+                                  {index < revisions.length - 1 && revision.content !== revisions[index + 1].content && (
+                                    <span className={styles.itemRationale}>Previous: {revisions[index + 1].content}</span>
+                                  )}
+                                  {revision.revision !== d.revision && (
+                                    <Button size="small" disabled={busy} onClick={() => void restoreDecision(d, revision.revision)}>
+                                      Restore as new revision
+                                    </Button>
+                                  )}
+                                </div>
+                              ))}
+                              {decisionHistory[d.id].page < decisionHistory[d.id].total_pages && (
+                                <Button
+                                  size="small"
+                                  disabled={busy}
+                                  onClick={() => void loadDecisionHistory(d, decisionHistory[d.id].page + 1)}
+                                >
+                                  Load older revisions
+                                </Button>
+                              )}
+                            </div>
                           )}
                         </div>
                       ))}
@@ -465,6 +612,32 @@ export function MemoriesPage() {
                 </Button>
               </div>
             </PageSection>
+            <PageSection title="Search team knowledge" description="Search current or historical memory with bounded, deterministic pages.">
+              <div className={styles.form}>
+                <div className={styles.inlineFields}>
+                  <Field label="Text">
+                    <Input value={memoryQuery} onChange={(_, data) => setMemoryQuery(data.value)} />
+                  </Field>
+                  <Field label="Lifecycle state">
+                    <Input
+                      value={memoryStatus}
+                      onChange={(_, data) => setMemoryStatus(data.value.trim().toLowerCase() || 'active')}
+                      placeholder="active, superseded, archived, or all"
+                    />
+                  </Field>
+                </div>
+                <Button
+                  appearance="primary"
+                  onClick={() => {
+                    setAppliedMemoryQuery(memoryQuery.trim());
+                    setMemoryPage(1);
+                    setMemory(null);
+                  }}
+                >
+                  Search
+                </Button>
+              </div>
+            </PageSection>
             {memory === null || memory.length === 0
               ? (
                 <EmptyState
@@ -483,6 +656,8 @@ export function MemoriesPage() {
                           m.importance === 'medium' ? 'warning' : 'subtle'
                         }>{m.importance}</Badge>
                         <Badge appearance="outline">{m.type}</Badge>
+                        <Badge appearance="outline">{m.status}</Badge>
+                        <span className={styles.itemMeta}>Revision {m.revision}</span>
                         <span className={styles.itemMeta}>{new Date(m.created_at).toLocaleString()}</span>
                       </div>
                       {editingMemoryId === m.id ? (
@@ -503,7 +678,45 @@ export function MemoriesPage() {
                           <span className={styles.itemContent}>{m.content}</span>
                           <div className={styles.actions}>
                             <Button size="small" disabled={busy} onClick={() => beginEditMemory(m)}>Update</Button>
+                            <Button size="small" disabled={busy} onClick={() => void loadMemoryHistory(m)}>
+                              {memoryHistory[m.id] ? 'Hide history' : 'History'}
+                            </Button>
                           </div>
+                          {memoryHistory[m.id] && (
+                            <div className={styles.itemList}>
+                              {memoryHistory[m.id].items.map((revision, index, revisions) => (
+                                <div key={revision.revision_id} className={styles.proposedItem}>
+                                  <div className={styles.itemHeader}>
+                                    <strong>Revision {revision.revision}</strong>
+                                    <Badge appearance="outline">{revision.status}</Badge>
+                                    <span className={styles.itemMeta}>
+                                      {revision.reason} by {revision.actor} · {new Date(revision.created_at).toLocaleString()}
+                                    </span>
+                                  </div>
+                                  <span className={styles.itemContent}>{revision.content}</span>
+                                  {index < revisions.length - 1 && revision.content !== revisions[index + 1].content && (
+                                    <span className={styles.itemRationale}>
+                                      Previous: {revisions[index + 1].content}
+                                    </span>
+                                  )}
+                                  {revision.revision !== m.revision && (
+                                    <Button size="small" disabled={busy} onClick={() => void restoreMemory(m, revision.revision)}>
+                                      Restore as new revision
+                                    </Button>
+                                  )}
+                                </div>
+                              ))}
+                              {memoryHistory[m.id].page < memoryHistory[m.id].total_pages && (
+                                <Button
+                                  size="small"
+                                  disabled={busy}
+                                  onClick={() => void loadMemoryHistory(m, memoryHistory[m.id].page + 1)}
+                                >
+                                  Load older revisions
+                                </Button>
+                              )}
+                            </div>
+                          )}
                         </>
                       )}
                     </div>

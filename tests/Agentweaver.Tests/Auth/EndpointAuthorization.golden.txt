@@ -44,6 +44,9 @@ GET /api/projects/{id} | PlatformOrMcp
 GET /api/projects/{id}/access | PlatformOrMcp
 GET /api/projects/{id}/agents/{name}/memory | PlatformOrMcp
 GET /api/projects/{id}/agents/{name}/memory/{memId} | PlatformOrMcp
+GET /api/projects/{id}/agents/{name}/memory/{memId}/compare | PlatformOrMcp
+GET /api/projects/{id}/agents/{name}/memory/{memId}/revisions | PlatformOrMcp
+GET /api/projects/{id}/agents/{name}/memory/{memId}/revisions/{revision} | PlatformOrMcp
 GET /api/projects/{id}/automation/status | PlatformOrMcp
 GET /api/projects/{id}/casting/proposals | PlatformOrMcp
 GET /api/projects/{id}/casting/proposals/{proposalId} | PlatformOrMcp
@@ -52,6 +55,9 @@ GET /api/projects/{id}/dashboard | PlatformOrMcp
 GET /api/projects/{id}/decisions | PlatformOrMcp
 GET /api/projects/{id}/decisions/inbox | PlatformOrMcp
 GET /api/projects/{id}/decisions/{decisionId} | PlatformOrMcp
+GET /api/projects/{id}/decisions/{decisionId}/compare | PlatformOrMcp
+GET /api/projects/{id}/decisions/{decisionId}/revisions | PlatformOrMcp
+GET /api/projects/{id}/decisions/{decisionId}/revisions/{revision} | PlatformOrMcp
 GET /api/projects/{id}/diagnostics | PlatformOrMcp
 GET /api/projects/{id}/github/copilot/authorizations/{transactionId} | PlatformOrMcp
 GET /api/projects/{id}/github/copilot/connection | PlatformOrMcp
@@ -160,6 +166,7 @@ POST /api/notifications/{notificationId}/dismiss | PlatformOrMcp
 POST /api/projects | PlatformOrMcp
 POST /api/projects/{id}/agents/{name}/memory | PlatformOrMcp
 POST /api/projects/{id}/agents/{name}/memory/{memId}/promote | PlatformOrMcp
+POST /api/projects/{id}/agents/{name}/memory/{memId}/restore | PlatformOrMcp
 POST /api/projects/{id}/automation/activate | PlatformOrMcp
 POST /api/projects/{id}/automation/deactivate | PlatformOrMcp
 POST /api/projects/{id}/backlog/decompose | PlatformOrMcp
@@ -171,6 +178,7 @@ POST /api/projects/{id}/decisions/inbox/{entryId}/merge | PlatformOrMcp
 POST /api/projects/{id}/decisions/inbox/{entryId}/promote | PlatformOrMcp
 POST /api/projects/{id}/decisions/inbox/{entryId}/reject | PlatformOrMcp
 POST /api/projects/{id}/decisions/{decisionId}/approve | PlatformOrMcp
+POST /api/projects/{id}/decisions/{decisionId}/restore | PlatformOrMcp
 POST /api/projects/{id}/github/copilot/authorizations | PlatformOrMcp
 POST /api/projects/{id}/github/copilot/authorizations/handoff | PlatformOrMcp
 POST /api/projects/{id}/github/repo-app-installation/authorizations | PlatformOrMcp

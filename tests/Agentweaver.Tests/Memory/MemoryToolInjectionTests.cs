@@ -31,7 +31,9 @@ public sealed class MemoryToolInjectionTests : IDisposable
         "get_memory",
         "submit_decision",
         "list_decisions",
+        "get_decision_history",
         "list_inbox",
+        "get_memory_history",
         "update_session",
         "submit_inbox_entry",
     ];

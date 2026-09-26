@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **111 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **118 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -102,19 +102,26 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
+| `decision_compare` | Retrieve two immutable decision revisions for comparison. |
 | `decision_create` | Create a team decision directly (coordinator path). |
+| `decision_history` | List immutable revisions for a decision. |
 | `decision_inbox_list` | List inbox entries for a project. |
 | `decision_inbox_merge` | Merge a pending inbox entry into team decisions. |
 | `decision_inbox_reject` | Reject a pending inbox entry. |
 | `decision_inbox_submit` | Submit a decision or learning to the agent inbox. |
 | `decision_list` | List team decisions for a project. |
+| `decision_restore` | Restore a prior decision snapshot as a new pending revision. |
 | `decision_update` | Update a decision's status, content, or rationale. |
+| `memory_compare` | Retrieve two immutable memory revisions for comparison. |
 | `memory_export` | Export project memory to .squad/ and .agentweaver/context/ files and report the paths written. |
 | `memory_get` | Get a single memory entry. |
+| `memory_history` | List immutable revisions for a memory entry. |
 | `memory_import` | Import .squad/decisions/inbox/*.md files into the project memory DB. |
 | `memory_list` | List memory entries for a specific agent. |
 | `memory_record` | Add a memory entry for an agent. |
+| `memory_restore` | Restore a prior memory snapshot as a new pending revision. |
 | `memory_search` | Cross-agent memory search across the whole project. |
+| `memory_update` | Update memory with optimistic concurrency; approved content becomes pending. |
 | `session_current` | Get the current open session for a project. |
 | `session_start` | Start a new work session for a project. |
 | `session_update` | Update the current session's focus, summary, or end it. |

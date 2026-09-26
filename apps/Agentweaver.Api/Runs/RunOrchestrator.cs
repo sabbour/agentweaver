@@ -1342,6 +1342,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             omittedMemoryCount = compilation?.OmittedMemoryCount ?? 0,
             omittedSessionCount = compilation?.OmittedSessionCount ?? 0,
             omissionCauses = compilation?.OmissionCauses ?? [],
+            revisionReferences = compilation?.RevisionReferences ?? [],
         });
     }
 
