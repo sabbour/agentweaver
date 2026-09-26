@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain.BlueprintPackages;
 using Microsoft.Data.Sqlite;
@@ -69,15 +71,21 @@ public sealed class SqliteToPostgresMigrator
             .Options;
         await using var source = new MemoryDbContext(sourceOptions);
         await PrepareGitHubConnectionsSourceSchemaAsync(source, ct).ConfigureAwait(false);
+        var revisionSchema = await PrepareKnowledgeRevisionSourceSchemaAsync(source, ct)
+            .ConfigureAwait(false);
 
         List<AgentMemory> memories;
         List<Decision> decisions;
+        List<AgentMemoryRevision> memoryRevisions;
+        List<DecisionRevision> decisionRevisions;
         List<DecisionInboxEntry> inbox;
         List<SessionContext> sessions;
         try
         {
             memories = await source.AgentMemory.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             decisions = await source.Decisions.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            memoryRevisions = await source.AgentMemoryRevisions.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            decisionRevisions = await source.DecisionRevisions.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             inbox = await source.DecisionInbox.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             sessions = await source.SessionContexts.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
         }
@@ -88,7 +96,78 @@ public sealed class SqliteToPostgresMigrator
             return;
         }
 
-        if (memories.Count + decisions.Count + inbox.Count + sessions.Count == 0)
+        if (!revisionSchema.MemoryRevisionsPresent)
+        {
+            memoryRevisions = memories.Select(memory =>
+            {
+                var revisionId = LegacyRevisionId("memory", memory.Id);
+                memory.Revision = 1;
+                memory.CurrentRevisionId = revisionId;
+                return new AgentMemoryRevision
+                {
+                    RevisionId = revisionId,
+                    MemoryId = memory.Id,
+                    ProjectId = memory.ProjectId,
+                    Revision = 1,
+                    Actor = memory.AgentName,
+                    SourceRunId = memory.SourceRunId,
+                    Reason = "legacy import",
+                    AgentName = memory.AgentName,
+                    SessionId = memory.SessionId,
+                    Type = memory.Type,
+                    Importance = memory.Importance,
+                    Content = memory.Content,
+                    Tags = memory.Tags,
+                    Status = memory.Status,
+                    ReplacedById = memory.ReplacedById,
+                    SourceKind = memory.SourceKind,
+                    SourceIdentityFingerprint = Fingerprint(memory.SourceIdentity),
+                    SourceRunReference = memory.SourceRunId,
+                    TrustState = memory.TrustState,
+                    ApprovedByFingerprint = Fingerprint(memory.ApprovedBy),
+                    ApprovedAt = memory.ApprovedAt,
+                    CreatedAt = memory.UpdatedAt,
+                };
+            }).ToList();
+        }
+
+        if (!revisionSchema.DecisionRevisionsPresent)
+        {
+            decisionRevisions = decisions.Select(decision =>
+            {
+                var revisionId = LegacyRevisionId("decision", decision.Id);
+                decision.Revision = 1;
+                decision.CurrentRevisionId = revisionId;
+                return new DecisionRevision
+                {
+                    RevisionId = revisionId,
+                    DecisionId = decision.Id,
+                    ProjectId = decision.ProjectId,
+                    Revision = 1,
+                    Actor = decision.AgentName,
+                    SourceRunId = decision.SourceRunId,
+                    Reason = "legacy import",
+                    AgentName = decision.AgentName,
+                    Type = decision.Type,
+                    Status = decision.Status,
+                    Title = decision.Title,
+                    Content = decision.Content,
+                    Rationale = decision.Rationale,
+                    Tags = decision.Tags,
+                    SupersededById = decision.SupersededById,
+                    SourceKind = decision.SourceKind,
+                    SourceIdentityFingerprint = Fingerprint(decision.SourceIdentity),
+                    SourceRunReference = decision.SourceRunId,
+                    TrustState = decision.TrustState,
+                    ApprovedByFingerprint = Fingerprint(decision.ApprovedBy),
+                    ApprovedAt = decision.ApprovedAt,
+                    CreatedAt = decision.UpdatedAt,
+                };
+            }).ToList();
+        }
+
+        if (memories.Count + decisions.Count + memoryRevisions.Count + decisionRevisions.Count
+            + inbox.Count + sessions.Count == 0)
             return;
 
         var projectIds = memories.Select(x => x.ProjectId)
@@ -111,6 +190,7 @@ public sealed class SqliteToPostgresMigrator
         var migratedInbox = 0;
         var migratedSessions = 0;
         await using var transaction = await destination.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        destination.SuppressKnowledgeRevisionCapture = true;
         try
         {
             foreach (var memory in memories)
@@ -157,6 +237,28 @@ public sealed class SqliteToPostgresMigrator
                     .SingleAsync(x => x.Id == decisionId, ct)
                     .ConfigureAwait(false);
                 decision.SupersededById = supersededById;
+            }
+            await destination.SaveChangesAsync(ct).ConfigureAwait(false);
+
+            foreach (var revision in memoryRevisions)
+            {
+                if (!await destination.AgentMemoryRevisions.AsNoTracking()
+                        .AnyAsync(x => x.RevisionId == revision.RevisionId, ct)
+                        .ConfigureAwait(false))
+                {
+                    revision.Memory = null;
+                    destination.AgentMemoryRevisions.Add(revision);
+                }
+            }
+            foreach (var revision in decisionRevisions)
+            {
+                if (!await destination.DecisionRevisions.AsNoTracking()
+                        .AnyAsync(x => x.RevisionId == revision.RevisionId, ct)
+                        .ConfigureAwait(false))
+                {
+                    revision.Decision = null;
+                    destination.DecisionRevisions.Add(revision);
+                }
             }
             await destination.SaveChangesAsync(ct).ConfigureAwait(false);
 
@@ -208,6 +310,10 @@ public sealed class SqliteToPostgresMigrator
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+        finally
+        {
+            destination.SuppressKnowledgeRevisionCapture = false;
+        }
 
         _logger.LogInformation(
             "  Memory state migrated: {Memories} memories, {Decisions} decisions, {Inbox} inbox entries, {Sessions} sessions.",
@@ -241,6 +347,8 @@ public sealed class SqliteToPostgresMigrator
         source.Importance == destination.Importance &&
         source.Content == destination.Content &&
         source.Tags == destination.Tags &&
+        source.Status == destination.Status &&
+        source.ReplacedById == destination.ReplacedById &&
         source.SourceKind == destination.SourceKind &&
         source.SourceIdentity == destination.SourceIdentity &&
         source.SourceRunId == destination.SourceRunId &&
@@ -248,6 +356,8 @@ public sealed class SqliteToPostgresMigrator
         source.ApprovedBy == destination.ApprovedBy &&
         NormalizeTimestamp(source.ApprovedAt) == NormalizeTimestamp(destination.ApprovedAt) &&
         source.IdentityKey == destination.IdentityKey &&
+        source.Revision == destination.Revision &&
+        source.CurrentRevisionId == destination.CurrentRevisionId &&
         NormalizeTimestamp(source.CreatedAt) == NormalizeTimestamp(destination.CreatedAt) &&
         NormalizeTimestamp(source.UpdatedAt) == NormalizeTimestamp(destination.UpdatedAt);
 
@@ -268,6 +378,8 @@ public sealed class SqliteToPostgresMigrator
         source.ApprovedBy == destination.ApprovedBy &&
         NormalizeTimestamp(source.ApprovedAt) == NormalizeTimestamp(destination.ApprovedAt) &&
         source.IdentityKey == destination.IdentityKey &&
+        source.Revision == destination.Revision &&
+        source.CurrentRevisionId == destination.CurrentRevisionId &&
         NormalizeTimestamp(source.CreatedAt) == NormalizeTimestamp(destination.CreatedAt) &&
         NormalizeTimestamp(source.UpdatedAt) == NormalizeTimestamp(destination.UpdatedAt);
 
@@ -559,6 +671,75 @@ public sealed class SqliteToPostgresMigrator
             );
             """, ct).ConfigureAwait(false);
     }
+
+    internal static async Task<(bool MemoryRevisionsPresent, bool DecisionRevisionsPresent)>
+        PrepareKnowledgeRevisionSourceSchemaAsync(
+        MemoryDbContext source,
+        CancellationToken ct)
+    {
+        if (!await HasTableAsync(source, "AgentMemory", ct).ConfigureAwait(false))
+            return (true, true);
+
+        var memoryRevisionsPresent = await HasTableAsync(source, "agent_memory_revisions", ct)
+            .ConfigureAwait(false);
+        var decisionRevisionsPresent = await HasTableAsync(source, "decision_revisions", ct)
+            .ConfigureAwait(false);
+
+        if (!await HasColumnAsync(source, "AgentMemory", "CurrentRevisionId", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "AgentMemory" ADD COLUMN "CurrentRevisionId" TEXT NOT NULL DEFAULT '';""", ct);
+        if (!await HasColumnAsync(source, "AgentMemory", "Revision", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "AgentMemory" ADD COLUMN "Revision" INTEGER NOT NULL DEFAULT 1;""", ct);
+        if (!await HasColumnAsync(source, "AgentMemory", "Status", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "AgentMemory" ADD COLUMN "Status" TEXT NOT NULL DEFAULT 'active';""", ct);
+        if (!await HasColumnAsync(source, "AgentMemory", "ReplacedById", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "AgentMemory" ADD COLUMN "ReplacedById" INTEGER NULL;""", ct);
+        if (!await HasColumnAsync(source, "Decisions", "CurrentRevisionId", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "Decisions" ADD COLUMN "CurrentRevisionId" TEXT NOT NULL DEFAULT '';""", ct);
+        if (!await HasColumnAsync(source, "Decisions", "Revision", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "Decisions" ADD COLUMN "Revision" INTEGER NOT NULL DEFAULT 1;""", ct);
+
+        await source.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "agent_memory_revisions" (
+                "RevisionId" TEXT NOT NULL PRIMARY KEY, "MemoryId" INTEGER NOT NULL,
+                "ProjectId" TEXT NOT NULL, "Revision" INTEGER NOT NULL,
+                "PreviousRevisionId" TEXT NULL, "Actor" TEXT NOT NULL,
+                "SourceRunId" TEXT NULL, "Reason" TEXT NOT NULL, "AgentName" TEXT NOT NULL,
+                "SessionId" TEXT NULL, "Type" TEXT NOT NULL, "Importance" TEXT NOT NULL,
+                "Content" TEXT NOT NULL, "Tags" TEXT NULL, "Status" TEXT NOT NULL,
+                "ReplacedById" INTEGER NULL, "SourceKind" TEXT NOT NULL,
+                "SourceIdentityFingerprint" TEXT NULL, "SourceRunReference" TEXT NULL,
+                "TrustState" TEXT NOT NULL, "ApprovedByFingerprint" TEXT NULL,
+                "ApprovedAt" TEXT NULL, "CreatedAt" TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS "decision_revisions" (
+                "RevisionId" TEXT NOT NULL PRIMARY KEY, "DecisionId" INTEGER NOT NULL,
+                "ProjectId" TEXT NOT NULL, "Revision" INTEGER NOT NULL,
+                "PreviousRevisionId" TEXT NULL, "Actor" TEXT NOT NULL,
+                "SourceRunId" TEXT NULL, "Reason" TEXT NOT NULL, "AgentName" TEXT NOT NULL,
+                "Type" TEXT NOT NULL, "Status" TEXT NOT NULL, "Title" TEXT NOT NULL,
+                "Content" TEXT NOT NULL, "Rationale" TEXT NULL, "Tags" TEXT NULL,
+                "SupersededById" INTEGER NULL, "SourceKind" TEXT NOT NULL,
+                "SourceIdentityFingerprint" TEXT NULL, "SourceRunReference" TEXT NULL,
+                "TrustState" TEXT NOT NULL, "ApprovedByFingerprint" TEXT NULL,
+                "ApprovedAt" TEXT NULL, "CreatedAt" TEXT NOT NULL);
+            """, ct);
+
+        return (memoryRevisionsPresent, decisionRevisionsPresent);
+    }
+
+    private static string LegacyRevisionId(string kind, int id) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{kind}:{id}")))[..32]
+            .ToLowerInvariant();
+
+    private static string? Fingerprint(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     private static async Task<bool> HasMigrationHistoryAsync(MemoryDbContext source, CancellationToken ct) =>
         await HasTableAsync(source, "__EFMigrationsHistory", ct).ConfigureAwait(false);

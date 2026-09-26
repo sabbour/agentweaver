@@ -183,7 +183,10 @@ public static class OperatorToolApprovalPolicy
         "decision_create",
         "decision_inbox_list",
         "decision_inbox_submit",
+        "decision_compare",
+        "decision_history",
         "decision_list",
+        "decision_restore",
         "decision_update",
 
         // Diagnostics / health.
@@ -204,10 +207,14 @@ public static class OperatorToolApprovalPolicy
 
         // Memory: reads + record/export (import is gated).
         "memory_export",
+        "memory_compare",
         "memory_get",
+        "memory_history",
         "memory_list",
         "memory_record",
+        "memory_restore",
         "memory_search",
+        "memory_update",
 
         // Projects: reads + create/rename/configure (delete is gated).
         "project_configure",

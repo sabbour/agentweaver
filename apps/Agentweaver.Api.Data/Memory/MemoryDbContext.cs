@@ -4,14 +4,19 @@ using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Agentweaver.Api.Memory;
 
 public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) : DbContext(options)
 {
+    public bool SuppressKnowledgeRevisionCapture { get; set; }
     public DbSet<Decision> Decisions => Set<Decision>();
     public DbSet<DecisionInboxEntry> DecisionInbox => Set<DecisionInboxEntry>();
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
+    public DbSet<AgentMemoryRevision> AgentMemoryRevisions => Set<AgentMemoryRevision>();
+    public DbSet<DecisionRevision> DecisionRevisions => Set<DecisionRevision>();
     public DbSet<RunAuthorshipCapability> RunAuthorshipCapabilities => Set<RunAuthorshipCapability>();
     public DbSet<ScribeOperationAttempt> ScribeOperationAttempts => Set<ScribeOperationAttempt>();
     public DbSet<SessionContext> SessionContexts => Set<SessionContext>();
@@ -92,6 +97,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<Decision>().HasIndex(d => d.IdentityKey).IsUnique();
         model.Entity<Decision>().Property(d => d.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<Decision>().Property(d => d.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
+        model.Entity<Decision>().Property(d => d.Revision).HasDefaultValue(1).IsConcurrencyToken();
+        model.Entity<Decision>().Property(d => d.CurrentRevisionId).HasMaxLength(32);
         model.Entity<Decision>()
             .HasOne<Decision>()
             .WithMany()
@@ -111,6 +118,42 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<AgentMemory>().HasIndex(m => m.IdentityKey).IsUnique();
         model.Entity<AgentMemory>().Property(m => m.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<AgentMemory>().Property(m => m.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
+        model.Entity<AgentMemory>().Property(m => m.Status).HasDefaultValue(KnowledgeLifecycleStates.Active);
+        model.Entity<AgentMemory>().Property(m => m.Revision).HasDefaultValue(1).IsConcurrencyToken();
+        model.Entity<AgentMemory>().Property(m => m.CurrentRevisionId).HasMaxLength(32);
+        model.Entity<AgentMemory>()
+            .HasOne<AgentMemory>()
+            .WithMany()
+            .HasForeignKey(m => m.ReplacedById)
+            .IsRequired(false);
+        model.Entity<AgentMemoryRevision>(revision =>
+        {
+            revision.ToTable("agent_memory_revisions");
+            revision.HasKey(r => r.RevisionId);
+            revision.Property(r => r.RevisionId).HasMaxLength(32);
+            revision.Property(r => r.SourceIdentityFingerprint).HasMaxLength(64);
+            revision.Property(r => r.ApprovedByFingerprint).HasMaxLength(64);
+            revision.HasIndex(r => new { r.MemoryId, r.Revision }).IsUnique();
+            revision.HasIndex(r => new { r.ProjectId, r.MemoryId, r.Revision });
+            revision.HasOne(r => r.Memory)
+                .WithMany()
+                .HasForeignKey(r => r.MemoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+        model.Entity<DecisionRevision>(revision =>
+        {
+            revision.ToTable("decision_revisions");
+            revision.HasKey(r => r.RevisionId);
+            revision.Property(r => r.RevisionId).HasMaxLength(32);
+            revision.Property(r => r.SourceIdentityFingerprint).HasMaxLength(64);
+            revision.Property(r => r.ApprovedByFingerprint).HasMaxLength(64);
+            revision.HasIndex(r => new { r.DecisionId, r.Revision }).IsUnique();
+            revision.HasIndex(r => new { r.ProjectId, r.DecisionId, r.Revision });
+            revision.HasOne(r => r.Decision)
+                .WithMany()
+                .HasForeignKey(r => r.DecisionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
         model.Entity<RunAuthorshipCapability>().ToTable("run_authorship_capabilities");
         model.Entity<RunAuthorshipCapability>().HasKey(capability => capability.RunId);
         model.Entity<RunAuthorshipCapability>().Property(capability => capability.RunId)
@@ -1023,6 +1066,134 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(x => x.OccurredAt);
         });
     }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        CaptureKnowledgeRevisions();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken = default)
+    {
+        CaptureKnowledgeRevisions();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void CaptureKnowledgeRevisions()
+    {
+        if (SuppressKnowledgeRevisionCapture)
+            return;
+
+        if (ChangeTracker.Entries<AgentMemoryRevision>().Any(e =>
+                e.State is EntityState.Modified or EntityState.Deleted)
+            || ChangeTracker.Entries<DecisionRevision>().Any(e =>
+                e.State is EntityState.Modified or EntityState.Deleted))
+        {
+            throw new InvalidOperationException("Knowledge revisions are immutable.");
+        }
+
+        foreach (var entry in ChangeTracker.Entries<AgentMemory>()
+                     .Where(e => e.State is EntityState.Added or EntityState.Modified)
+                     .ToList())
+        {
+            if (entry.State == EntityState.Modified && !HasMeaningfulMemoryChange(entry))
+                continue;
+
+            var memory = entry.Entity;
+            var previousRevisionId = entry.State == EntityState.Added ? null : memory.CurrentRevisionId;
+            if (entry.State == EntityState.Added)
+                memory.Revision = Math.Max(1, memory.Revision);
+            else
+                memory.Revision = entry.OriginalValues.GetValue<int>(
+                    nameof(global::Agentweaver.Api.Memory.AgentMemory.Revision)) + 1;
+            memory.CurrentRevisionId = Guid.NewGuid().ToString("N");
+            AgentMemoryRevisions.Add(new AgentMemoryRevision
+            {
+                RevisionId = memory.CurrentRevisionId,
+                MemoryId = memory.Id,
+                Memory = memory,
+                ProjectId = memory.ProjectId,
+                Revision = memory.Revision,
+                PreviousRevisionId = previousRevisionId,
+                Actor = memory.RevisionActor ?? memory.AgentName,
+                SourceRunId = memory.SourceRunId,
+                Reason = memory.RevisionReason ?? (entry.State == EntityState.Added ? "created" : "updated"),
+                AgentName = memory.AgentName,
+                SessionId = memory.SessionId,
+                Type = memory.Type,
+                Importance = memory.Importance,
+                Content = memory.Content,
+                Tags = memory.Tags,
+                Status = memory.Status,
+                ReplacedById = memory.ReplacedById,
+                SourceKind = memory.SourceKind,
+                SourceIdentityFingerprint = Fingerprint(memory.SourceIdentity),
+                SourceRunReference = memory.SourceRunId,
+                TrustState = memory.TrustState,
+                ApprovedByFingerprint = Fingerprint(memory.ApprovedBy),
+                ApprovedAt = memory.ApprovedAt,
+                CreatedAt = memory.UpdatedAt,
+            });
+        }
+
+        foreach (var entry in ChangeTracker.Entries<Decision>()
+                     .Where(e => e.State is EntityState.Added or EntityState.Modified)
+                     .ToList())
+        {
+            if (entry.State == EntityState.Modified && !HasMeaningfulDecisionChange(entry))
+                continue;
+
+            var decision = entry.Entity;
+            var previousRevisionId = entry.State == EntityState.Added ? null : decision.CurrentRevisionId;
+            if (entry.State == EntityState.Added)
+                decision.Revision = Math.Max(1, decision.Revision);
+            else
+                decision.Revision = entry.OriginalValues.GetValue<int>(nameof(Decision.Revision)) + 1;
+            decision.CurrentRevisionId = Guid.NewGuid().ToString("N");
+            DecisionRevisions.Add(new DecisionRevision
+            {
+                RevisionId = decision.CurrentRevisionId,
+                DecisionId = decision.Id,
+                Decision = decision,
+                ProjectId = decision.ProjectId,
+                Revision = decision.Revision,
+                PreviousRevisionId = previousRevisionId,
+                Actor = decision.RevisionActor ?? decision.AgentName,
+                SourceRunId = decision.SourceRunId,
+                Reason = decision.RevisionReason ?? (entry.State == EntityState.Added ? "created" : "updated"),
+                AgentName = decision.AgentName,
+                Type = decision.Type,
+                Status = decision.Status,
+                Title = decision.Title,
+                Content = decision.Content,
+                Rationale = decision.Rationale,
+                Tags = decision.Tags,
+                SupersededById = decision.SupersededById,
+                SourceKind = decision.SourceKind,
+                SourceIdentityFingerprint = Fingerprint(decision.SourceIdentity),
+                SourceRunReference = decision.SourceRunId,
+                TrustState = decision.TrustState,
+                ApprovedByFingerprint = Fingerprint(decision.ApprovedBy),
+                ApprovedAt = decision.ApprovedAt,
+                CreatedAt = decision.UpdatedAt,
+            });
+        }
+    }
+
+    private static bool HasMeaningfulMemoryChange(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<AgentMemory> entry) =>
+        entry.Properties.Any(property =>
+            property.IsModified && property.Metadata.Name is not nameof(global::Agentweaver.Api.Memory.AgentMemory.IdentityKey));
+
+    private static bool HasMeaningfulDecisionChange(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<Decision> entry) =>
+        entry.Properties.Any(property =>
+            property.IsModified && property.Metadata.Name is not nameof(Decision.IdentityKey));
+
+    private static string? Fingerprint(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     private void ConfigureProjectForeignKey<TEntity>(
         EntityTypeBuilder<TEntity> entity,

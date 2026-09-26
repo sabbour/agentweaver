@@ -213,12 +213,13 @@ public sealed class ProjectRoleAssignmentTests : IClassFixture<EntraWebApplicati
 
         (await owner.PostAsJsonAsync(
             $"/api/projects/{projectId}/agents/smith/memory/{memoryId}/promote",
-            new { })).StatusCode.Should().Be(HttpStatusCode.OK);
+            new { expected_revision = 1 })).StatusCode.Should().Be(HttpStatusCode.OK);
 
         var update = await contributor.PutAsJsonAsync(
             $"/api/projects/{projectId}/agents/smith/memory/{memoryId}",
             new
             {
+                expected_revision = 2,
                 type = "pattern",
                 importance = "low",
                 content = "After update",

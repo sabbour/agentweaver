@@ -99,6 +99,45 @@ public sealed class DataMigratorTests : IDisposable
         packageAcquisitions.Should().Be(1);
     }
 
+    [PostgresFact]
+    public async Task Migrator_LegacySourceWithoutRevisionTables_PreservesKnowledgeAndSeedsHistory()
+    {
+        await using (var connection = new SqliteConnection($"Data Source={_memoryDbPath}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                DROP TABLE "agent_memory_revisions";
+                DROP TABLE "decision_revisions";
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await BuildMigrator().RunAsync();
+
+        await using var db = await _pg.CreateDbContextAsync();
+        var memories = await db.AgentMemory
+            .Where(memory => memory.ProjectId == _seededProjectId)
+            .ToListAsync();
+        var decisions = await db.Decisions
+            .Where(decision => decision.ProjectId == _seededProjectId)
+            .ToListAsync();
+        memories.Should().NotBeEmpty();
+        decisions.Should().NotBeEmpty();
+        (await db.AgentMemoryRevisions
+                .Where(revision => revision.ProjectId == _seededProjectId)
+                .ToListAsync())
+            .Should().OnlyContain(revision =>
+                revision.Revision == 1
+                && !string.IsNullOrWhiteSpace(revision.SourceIdentityFingerprint));
+        (await db.DecisionRevisions
+                .Where(revision => revision.ProjectId == _seededProjectId)
+                .ToListAsync())
+            .Should().OnlyContain(revision =>
+                revision.Revision == 1
+                && !string.IsNullOrWhiteSpace(revision.SourceIdentityFingerprint));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 3b. Idempotency: second run is a no-op (no duplicate rows, no exception)
     // ─────────────────────────────────────────────────────────────────────────

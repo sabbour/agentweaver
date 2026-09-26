@@ -1037,10 +1037,12 @@ public sealed record CreateDecisionRequest
 
 public sealed record UpdateDecisionRequest
 {
+    [JsonPropertyName("expected_revision")] public int? ExpectedRevision { get; init; }
     [JsonPropertyName("status")] public string? Status { get; init; }
     [JsonPropertyName("content")] public string? Content { get; init; }
     [JsonPropertyName("rationale")] public string? Rationale { get; init; }
     [JsonPropertyName("superseded_by_id")] public int? SupersededById { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
 }
 
 /// <summary>Request body for recording one agent memory against a project.</summary>
@@ -1056,10 +1058,27 @@ public sealed record RecordMemoryRequest
 /// <summary>Request body for updating editable agent-memory fields.</summary>
 public sealed record UpdateMemoryRequest
 {
+    [JsonPropertyName("expected_revision")] public int? ExpectedRevision { get; init; }
     [JsonPropertyName("type")] public string? Type { get; init; }
     [JsonPropertyName("importance")] public string? Importance { get; init; }
     [JsonPropertyName("content")] public string? Content { get; init; }
     [JsonPropertyName("tags")] public string? Tags { get; init; }
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("replaced_by_id")] public int? ReplacedById { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
+}
+
+public sealed record ExpectedRevisionRequest
+{
+    [JsonPropertyName("expected_revision")] public int? ExpectedRevision { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
+}
+
+public sealed record RestoreKnowledgeRequest
+{
+    [JsonPropertyName("expected_revision")] public int? ExpectedRevision { get; init; }
+    [JsonPropertyName("revision")] public int? Revision { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
 }
 
 /// <summary>Request body for starting or rehydrating the current cross-agent working session for a project.</summary>

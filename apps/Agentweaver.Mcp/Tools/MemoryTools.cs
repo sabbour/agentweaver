@@ -193,6 +193,7 @@ public sealed class MemoryTools(AgentweaverApiClient api)
     public async Task<string> DecisionUpdateAsync(
         [Description("Project ID")] string project_id,
         [Description("Decision ID")] string decision_id,
+        [Description("Current revision number; stale values are rejected")] int expected_revision,
         [Description("New status: active | superseded | archived")] string? status = null,
         [Description("New content")] string? content = null,
         [Description("New rationale")] string? rationale = null,
@@ -203,9 +204,53 @@ public sealed class MemoryTools(AgentweaverApiClient api)
             "decision_update",
             token => api.PutAsync<object>(
                 $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/{Uri.EscapeDataString(decision_id)}",
-                new { status, content, rationale, superseded_by_id }, token),
+                new { expected_revision, status, content, rationale, superseded_by_id }, token),
             ct);
     }
+
+    [McpServerTool(Name = "decision_history"), Description("List immutable revisions for a decision.")]
+    public async Task<string> DecisionHistoryAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Decision ID")] string decision_id,
+        [Description("1-based page")] int page = 1,
+        [Description("Page size, maximum 100")] int page_size = 25,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync(
+            "decision_history",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/{Uri.EscapeDataString(decision_id)}/revisions{BuildQs(("page", page.ToString()), ("page_size", page_size.ToString()))}",
+                token),
+            ct);
+
+    [McpServerTool(Name = "decision_compare"), Description("Retrieve two immutable decision revisions for comparison.")]
+    public async Task<string> DecisionCompareAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Decision ID")] string decision_id,
+        [Description("Older revision number")] int from_revision,
+        [Description("Newer revision number")] int to_revision,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync(
+            "decision_compare",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/{Uri.EscapeDataString(decision_id)}/compare{BuildQs(("from_revision", from_revision.ToString()), ("to_revision", to_revision.ToString()))}",
+                token),
+            ct);
+
+    [McpServerTool(Name = "decision_restore"), Description("Restore a prior decision snapshot as a new pending revision.")]
+    public async Task<string> DecisionRestoreAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Decision ID")] string decision_id,
+        [Description("Current revision number")] int expected_revision,
+        [Description("Historical revision number to restore")] int revision,
+        [Description("Reason for restoring")] string? reason = null,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync(
+            "decision_restore",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/decisions/{Uri.EscapeDataString(decision_id)}/restore",
+                new { expected_revision, revision, reason },
+                token),
+            ct);
 
     // ── Agent Memory ─────────────────────────────────────────────────────────
 
@@ -234,12 +279,15 @@ public sealed class MemoryTools(AgentweaverApiClient api)
         [Description("Agent name")] string agent_name,
         [Description("Filter by type")] string? type = null,
         [Description("Filter by importance")] string? importance = null,
+        [Description("Lifecycle state: active | superseded | archived | all")] string? status = null,
+        [Description("1-based page")] int page = 1,
+        [Description("Page size, maximum 100")] int page_size = 25,
         CancellationToken ct = default)
     {
         return await ExecuteJsonAsync(
             "memory_list",
             token => api.GetAsync<object>(
-                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory{BuildQs(("type", type), ("importance", importance))}", token),
+                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory{BuildQs(("type", type), ("importance", importance), ("status", status), ("page", page.ToString()), ("page_size", page_size.ToString()))}", token),
             ct);
     }
 
@@ -260,16 +308,89 @@ public sealed class MemoryTools(AgentweaverApiClient api)
     [McpServerTool(Name = "memory_search"), Description("Cross-agent memory search across the whole project.")]
     public async Task<string> MemorySearchAsync(
         [Description("Project ID")] string project_id,
+        [Description("Text to find in memory content, tags, or agent name")] string? query = null,
         [Description("Filter by type")] string? type = null,
         [Description("Comma-separated tags to filter by (OR semantics)")] string? tags = null,
+        [Description("Lifecycle state: active | superseded | archived | all")] string? status = null,
+        [Description("1-based page")] int page = 1,
+        [Description("Page size, maximum 100")] int page_size = 25,
         CancellationToken ct = default)
     {
         return await ExecuteJsonAsync(
             "memory_search",
             token => api.GetAsync<object>(
-                $"api/projects/{Uri.EscapeDataString(project_id)}/memory{BuildQs(("type", type), ("tags", tags))}", token),
+                $"api/projects/{Uri.EscapeDataString(project_id)}/memory{BuildQs(("q", query), ("type", type), ("tags", tags), ("status", status), ("page", page.ToString()), ("page_size", page_size.ToString()))}", token),
             ct);
     }
+
+    [McpServerTool(Name = "memory_update"), Description("Update memory with optimistic concurrency; approved content becomes pending.")]
+    public async Task<string> MemoryUpdateAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Agent name")] string agent_name,
+        [Description("Memory entry ID")] string memory_id,
+        [Description("Current revision number; stale values are rejected")] int expected_revision,
+        [Description("New type")] string? type = null,
+        [Description("New content")] string? content = null,
+        [Description("New importance")] string? importance = null,
+        [Description("New comma-separated tags")] string? tags = null,
+        [Description("Lifecycle state: active | superseded | archived")] string? status = null,
+        [Description("Replacement memory ID when superseding")] int? replaced_by_id = null,
+        [Description("Reason for the change")] string? reason = null,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync(
+            "memory_update",
+            token => api.PutAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory/{Uri.EscapeDataString(memory_id)}",
+                new { expected_revision, type, content, importance, tags, status, replaced_by_id, reason },
+                token),
+            ct);
+
+    [McpServerTool(Name = "memory_history"), Description("List immutable revisions for a memory entry.")]
+    public async Task<string> MemoryHistoryAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Agent name")] string agent_name,
+        [Description("Memory entry ID")] string memory_id,
+        [Description("1-based page")] int page = 1,
+        [Description("Page size, maximum 100")] int page_size = 25,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync(
+            "memory_history",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory/{Uri.EscapeDataString(memory_id)}/revisions{BuildQs(("page", page.ToString()), ("page_size", page_size.ToString()))}",
+                token),
+            ct);
+
+    [McpServerTool(Name = "memory_compare"), Description("Retrieve two immutable memory revisions for comparison.")]
+    public async Task<string> MemoryCompareAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Agent name")] string agent_name,
+        [Description("Memory entry ID")] string memory_id,
+        [Description("Older revision number")] int from_revision,
+        [Description("Newer revision number")] int to_revision,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync(
+            "memory_compare",
+            token => api.GetAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory/{Uri.EscapeDataString(memory_id)}/compare{BuildQs(("from_revision", from_revision.ToString()), ("to_revision", to_revision.ToString()))}",
+                token),
+            ct);
+
+    [McpServerTool(Name = "memory_restore"), Description("Restore a prior memory snapshot as a new pending revision.")]
+    public async Task<string> MemoryRestoreAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Agent name")] string agent_name,
+        [Description("Memory entry ID")] string memory_id,
+        [Description("Current revision number")] int expected_revision,
+        [Description("Historical revision number to restore")] int revision,
+        [Description("Reason for restoring")] string? reason = null,
+        CancellationToken ct = default) =>
+        await ExecuteJsonAsync(
+            "memory_restore",
+            token => api.PostAsync<object>(
+                $"api/projects/{Uri.EscapeDataString(project_id)}/agents/{Uri.EscapeDataString(agent_name)}/memory/{Uri.EscapeDataString(memory_id)}/restore",
+                new { expected_revision, revision, reason },
+                token),
+            ct);
 
     // ── Sessions ─────────────────────────────────────────────────────────────
 

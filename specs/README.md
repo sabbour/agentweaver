@@ -70,6 +70,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Curate the decision inbox](./memory-decisions/curate-decision-inbox.md) — [#22](https://github.com/sabbour/agentweaver/issues/22)
 - [Manage agent memory and session context](./memory-decisions/manage-agent-memory-and-sessions.md) — [#23](https://github.com/sabbour/agentweaver/issues/23)
 - [Sync memory and team ledgers with the repository](./memory-decisions/sync-memory-ledgers.md) — [#25](https://github.com/sabbour/agentweaver/issues/25)
+- [Search, version, and restore team knowledge](./memory-decisions/search-version-and-restore-team-knowledge.md) — [#1400](https://github.com/sabbour/agentweaver/issues/1400)
 
 ## Observability & operations
 

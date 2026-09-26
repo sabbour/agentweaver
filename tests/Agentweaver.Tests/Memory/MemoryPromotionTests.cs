@@ -73,7 +73,7 @@ public sealed class MemoryPromotionTests
     }
 
     [Fact]
-    public async Task UpdateLoadedBeforePromotion_AtomicallyRevokesConcurrentApproval()
+    public async Task UpdateLoadedBeforePromotion_IsRejectedAsStale()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -125,14 +125,14 @@ public sealed class MemoryPromotionTests
                 "Edited after review",
                 loadedForUpdate.Tags,
                 originalUpdatedAt.AddSeconds(2),
-                CancellationToken.None)).Should().BeTrue();
+                CancellationToken.None)).Should().BeFalse();
         }
 
         await using var verification = new MemoryDbContext(options);
         var current = await verification.AgentMemory.AsNoTracking().SingleAsync();
-        current.Content.Should().Be("Edited after review");
-        current.TrustState.Should().Be(MemoryTrustStates.Pending);
-        current.ApprovedBy.Should().BeNull();
-        current.ApprovedAt.Should().BeNull();
+        current.Content.Should().Be("Reviewed content");
+        current.TrustState.Should().Be(MemoryTrustStates.Approved);
+        current.ApprovedBy.Should().Be("reviewer-1");
+        current.ApprovedAt.Should().NotBeNull();
     }
 }
