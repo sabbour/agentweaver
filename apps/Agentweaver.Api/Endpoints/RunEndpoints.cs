@@ -51,6 +51,7 @@ app.MapGet("/api/runs/{id}", async (
     IRunStore runStore,
     RunStreamStore streamStore,
     CoordinatorStatusReader coordinator,
+    PendingRequestStore pendingStore,
     IRunOptionsStore runOptions,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -154,10 +155,15 @@ app.MapGet("/api/runs/{id}", async (
     // Coordinator runs surface their work-plan orchestration status so the UI can show
     // "Awaiting assembly" / "Assembling" / "Failed: <result>" rather than the bare run status.
     string? coordinatorStatus = null;
-    var isCoordinatorRun = run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
-    if (isCoordinatorRun)
+    var coordinatorCandidate = string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
+    if (coordinatorCandidate)
         coordinatorStatus = (await coordinator.GetCoordinatorStatusesAsync(new[] { run.Id.ToString() }, ct))
             .GetValueOrDefault(run.Id.ToString());
+    var isCoordinatorRun = coordinatorCandidate
+        && (run.ParentRunId is null || coordinatorStatus is not null);
+    var pendingRequestKind = run.Status == RunStatus.AwaitingReview
+        ? await pendingStore.GetRequestKindAsync(id, ct).ConfigureAwait(false)
+        : null;
     var stepCount = run.StepCount;
     if (stepCount <= 0 && streamEvents is not null)
         stepCount = streamEvents.Count(e => e.Type == EventTypes.ToolCall);
@@ -222,6 +228,8 @@ app.MapGet("/api/runs/{id}", async (
         WorkflowSelectionReason = run.WorkflowSelectionReason,
         ParentRunId = run.ParentRunId,
         SubtaskId = run.SubtaskId,
+        IsCoordinatorPlan = isCoordinatorRun,
+        PendingRequestKind = pendingRequestKind,
         RetriedFrom = run.RetriedFrom,
         CoordinatorStatus = coordinatorStatus,
         CoordinatorStatusReason = isCoordinatorRun ? EndpointHelpers.CoordinatorStatusReasonForProjection(run, coordinatorStatus) : null,
@@ -805,24 +813,27 @@ app.MapGet("/api/runs/{id}/graph", async (
     if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
         return denied;
 
-    // Coordinator runs (ParentRunId == null, driven by the built-in Coordinator agent) return the
-    // unified coordinator-variant descriptor built from the work plan, so the same generic renderer
-    // draws the coordinator + fan-out children + the planned collective-assembly stage. A coordinator
-    // run without a persisted work plan yet (pre-confirmation / pre-decomposition) returns the empty
-    // coordinator variant — the Coordinator node + planned assembly stage — NOT the misleading
-    // single-agent per-run pipeline.
-    if (run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+    // Coordinator plans return the unified coordinator descriptor built from their work plan.
+    // Ordinary coordinators include their assembly stages; correlated static-fan coordinators
+    // contain only fan-out, branch, and fan-in nodes. A coordinator without a persisted plan yet
+    // returns the empty coordinator variant rather than the misleading single-agent pipeline.
+    if (string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
     {
         var plan = await coordinator.GetWorkPlanAsync(id, ct);
         if (plan is null)
-            return Results.Ok(CoordinatorGraphDescriptor.BuildEmpty(id, run.ModelId));
-
-        // #386: resolve the actual assembly gates (incl. the platform Build & Test gate, when the task
-        // produces code) so the run tree shows them as `planned` up front — not only once assembly
-        // execution reaches them.
-        var assemblyGates = await coordinator.GetAssemblyGatesAsync(id, ct);
-        return Results.Ok(CoordinatorGraphDescriptor.Build(
-            plan, podRegistry, assemblyGates: assemblyGates, coordinatorModel: run.ModelId));
+        {
+            if (run.ParentRunId is null)
+                return Results.Ok(CoordinatorGraphDescriptor.BuildEmpty(id, run.ModelId));
+        }
+        else
+        {
+            // #386: resolve the actual assembly gates (incl. the platform Build & Test gate, when the task
+            // produces code) so the run tree shows them as `planned` up front — not only once assembly
+            // execution reaches them.
+            var assemblyGates = await coordinator.GetAssemblyGatesAsync(id, ct);
+            return Results.Ok(CoordinatorGraphDescriptor.Build(
+                plan, podRegistry, assemblyGates: assemblyGates, coordinatorModel: run.ModelId));
+        }
     }
 
     try
@@ -980,6 +991,30 @@ app.MapPost("/api/runs/{id}/review", async (
 
     var streamingRunForReview = workflowRegistry.Get(id);
     var pendingForReview = await pendingStore.GetAsync(id, ct);
+    var pendingRequestKind = await pendingStore.GetRequestKindAsync(id, ct).ConfigureAwait(false);
+    if (string.Equals(
+        pendingRequestKind,
+        PendingRequestDeliveryKinds.WorkflowChildWork,
+        StringComparison.Ordinal))
+    {
+        return Results.Conflict(new
+        {
+            error = "Run is waiting for automated workflow child work and cannot be reviewed.",
+            pending_request_kind = pendingRequestKind,
+        });
+    }
+    if (pendingRequestKind is not null
+        && !string.Equals(
+            pendingRequestKind,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            StringComparison.Ordinal))
+    {
+        return Results.Conflict(new
+        {
+            error = $"Run has pending request kind '{pendingRequestKind}' and cannot be reviewed.",
+            pending_request_kind = pendingRequestKind,
+        });
+    }
     if (streamingRunForReview is not null && pendingForReview is null)
     {
         if (await pendingStore.ExistsUndeliveredAsync(id, ct).ConfigureAwait(false))

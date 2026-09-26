@@ -77,7 +77,7 @@ public sealed class RunWorkflowGraphBinderTests
             Nodes =
             [
                 Node("agent", WorkflowNodeType.Prompt),
-                Node("spread", WorkflowNodeType.FanOut),
+                Node("spread", WorkflowNodeType.CoordinatorComposed),
             ],
             Edges = [ new WorkflowEdge { From = "agent", To = "spread" } ],
         };
@@ -89,15 +89,21 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Fact]
-    public void ValidStaticFanTopology_PassesTopologyValidation_ButRemainsRuntimeUnbindable()
+    public void ValidStaticFanTopology_IsRuntimeBindable()
     {
         var definition = StaticFanDefinition();
 
         RunWorkflowGraphBinder.GetTopologyErrors(definition).Should().BeEmpty();
-        var bindability = RunWorkflowGraphBinder.GetBindabilityErrors(definition);
-        bindability.Should().Contain(error => error.Contains("fan_out", StringComparison.OrdinalIgnoreCase));
-        bindability.Should().Contain(error => error.Contains("fan_in", StringComparison.OrdinalIgnoreCase));
-        bindability.Should().NotContain(error => error.Contains("no executor wiring", StringComparison.Ordinal));
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().BeEmpty();
+        RunWorkflowGraphBinder.GetTransitionIssues(definition).Should().BeEmpty();
+
+        var bindings = FakeBindings.Create();
+        var builder = new GraphDescriptorBuilder(bindings.AgentInputStorer);
+        RunWorkflowGraphBinder.WireFull(builder, definition, bindings);
+        var descriptor = builder.BuildDescriptor("static-fan", "full");
+
+        descriptor.Nodes.Select(node => node.Id).Should().Contain(["fan-out", "fan-in"]);
+        descriptor.Nodes.Select(node => node.Id).Should().NotContain(["branch-a", "branch-b"]);
     }
 
     [Fact]
@@ -156,6 +162,24 @@ public sealed class RunWorkflowGraphBinderTests
         errors.Should().Contain(error => error.Contains("target must be null or match"));
         errors.Should().Contain(error => error.Contains("branch node 'branch-a' must have exactly one"));
         errors.Should().Contain(error => error.Contains("branch node 'branch-b' must have exactly one"));
+    }
+
+    [Theory]
+    [InlineData(WorkflowNodeType.PeerReview)]
+    [InlineData(WorkflowNodeType.BuildTest)]
+    public void StaticFanTopology_RejectsBranchTypesWithoutStaticDispatcherSemantics(
+        WorkflowNodeType branchType)
+    {
+        var baseline = StaticFanDefinition();
+        var definition = baseline with
+        {
+            Nodes = baseline.Nodes.Select(node =>
+                node.Id == "branch-b" ? node with { Type = branchType } : node).ToList(),
+        };
+
+        RunWorkflowGraphBinder.GetTopologyErrors(definition).Should().ContainSingle(error =>
+            error.Contains("Static fan branch 'branch-b'", StringComparison.Ordinal)
+            && error.Contains("must be a prompt node", StringComparison.Ordinal));
     }
 
     // ── Loader: fan_out / fan_in / peer_review are no longer rejected at load time. ───────────────────
@@ -538,7 +562,7 @@ public sealed class RunWorkflowGraphBinderTests
             Node("entry", WorkflowNodeType.Prompt),
             Node("fan", WorkflowNodeType.FanOut),
             Node("branch-a", WorkflowNodeType.Prompt),
-            Node("branch-b", WorkflowNodeType.BuildTest),
+            Node("branch-b", WorkflowNodeType.Prompt),
             Node("join", WorkflowNodeType.FanIn) with { Target = "fan" },
             Node("done", WorkflowNodeType.Terminal),
         ],
@@ -733,6 +757,10 @@ internal static class FakeBindings
             BlockedAdapter: blockedAdapter,
             ReviewChangesAdapter: reviewChangesAdapter,
             TerminalDeclined: terminalDeclined,
+            FanOutBinding: Exec("fan-out", "fan-out", "assembly", "fan-out", hidden: false),
+            FanPauseBinding: Exec("fan-pause", "fan-pause", "plumbing", "action", hidden: true),
+            FanInBinding: Exec("fan-in", "fan-in", "assembly", "fan-in", hidden: false),
+            FanFailureBinding: Exec("fan-failure", "fan-failure", "plumbing", "terminal", hidden: true),
             MaxIterations: 3,
             Wiring: new FakeWiring(agent, openPr, mergeToOutputAdapter, new ScribeSubPath(scribeInputMerge, scribeMerge, scribeOutputMerge)));
     }
@@ -771,6 +799,8 @@ internal sealed class FakeWiring(
     public ExecutorBinding AgentToMergeAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ExecutorBinding MergeToAgentOutputAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding FanInToAgentAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding FanInToTerminalAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ScribeSubPath AgentScribePath(WorkflowEdge edge) => openPrScribePath;
     public ScribeSubPath OpenPullRequestScribePath(WorkflowEdge edge) => openPrScribePath;
     public ScribeSubPath ReviewScribePath(WorkflowEdge edge) => openPrScribePath;

@@ -241,6 +241,33 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
             .Should().Contain(e => e.Type == EventTypes.CoordinatorChildrenComplete);
     }
 
+    [Fact]
+    public async Task FinalizeDispatch_StaticWorkflowChild_CompletesWithoutAssemblyOrIntegrationBranch()
+    {
+        const string coordinatorRunId = "workflow-child-final";
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var statusById = subtaskIds.ToDictionary(id => id, _ => SubtaskStatus.AssembleReady);
+        var context = new CoordinatorDispatchContext(
+            coordinatorRunId,
+            "repo",
+            "main",
+            "alice",
+            null,
+            StaticWorkflowChild: true);
+
+        await _sut.FinalizeDispatchAsync(
+            context, workPlanId, statusById, edges: [], new CoordinatorDispatchService.SeqCounter(), default);
+
+        await using var scope = _provider.CreateAsyncScope();
+        var plan = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+            .WorkPlans.AsNoTracking().SingleAsync(row => row.Id == workPlanId);
+        plan.Status.Should().Be(WorkPlanStatus.Complete);
+        plan.IntegrationBranch.Should().BeNull();
+        _assembly.Started.Should().BeEmpty(
+            "static workflow child work returns an ordered join and never enters collective Git assembly");
+    }
+
     private sealed class RecordingAssembly : ICoordinatorAssembly
     {
         public List<CoordinatorDispatchContext> Started { get; } = [];

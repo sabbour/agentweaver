@@ -57,15 +57,19 @@ internal sealed class NodeExecutorRegistry
                 return bindings.ScribeBindingMerge;
 
             case NodeKind.FanOut:
+                return bindings.FanOutBinding
+                    ?? throw new WorkflowBindException(
+                        $"Cannot bind fan_out node '{node.Id}': the static fan runtime was not built.", node.Id);
+
             case NodeKind.FanIn:
+                return bindings.FanInBinding
+                    ?? throw new WorkflowBindException(
+                        $"Cannot bind fan_in node '{node.Id}': the static fan runtime was not built.", node.Id);
+
             case NodeKind.CoordinatorComposed:
-                // Accepted at load time (US1) and modeled by the schema, but not yet wired to a runtime
-                // executor in this binder — fan-out/fan-in map onto the coordinator's SubtaskFrontier /
-                // AssemblyPlanning seams and require dispatch infrastructure beyond the per-run graph.
                 throw new WorkflowBindException(
                     $"Cannot bind node '{node.Id}' (type='{node.Type}'): node type '{node.Type}' is accepted by " +
-                    "the loader but not yet wired to a runtime executor. Use prompt/peer_review/check/merge/scribe/" +
-                    "terminal nodes, or wait for fan_out/fan_in runtime support.", node.Id);
+                    "the loader but not yet wired to a runtime executor.", node.Id);
 
             case NodeKind.Terminal:
                 throw new WorkflowBindException(

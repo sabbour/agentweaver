@@ -5,8 +5,10 @@ using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Workflows;
 
 namespace Agentweaver.Api.Runs;
 
@@ -111,6 +113,29 @@ public sealed class PendingRequestStore
             .AnyAsync(p => p.RunId == runId
                 && p.DeliveryState != PendingRequestDeliveryStates.Delivered, ct)
             .ConfigureAwait(false);
+    }
+
+    public async Task<string?> GetRequestKindAsync(string runId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .Where(p => p.RunId == runId
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered)
+            .Select(p => new { p.RequestJson, p.DeliveryKind })
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (row is null)
+            return null;
+        if (!string.IsNullOrWhiteSpace(row.DeliveryKind))
+            return row.DeliveryKind;
+
+        var request = DeserializeRequest(row.RequestJson);
+        if (request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out _))
+            return PendingRequestDeliveryKinds.WorkflowChildWork;
+        if (request.TryGetDataAs<WorkflowReviewRequest>(out _))
+            return PendingRequestDeliveryKinds.WorkflowReview;
+        return null;
     }
 
     public async Task<PendingDeliveryState?> GetDeliveryStateAsync(

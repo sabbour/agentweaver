@@ -13,6 +13,7 @@ public static class SubtaskStatus
     public const string AssembleReady = "assemble_ready";
     public const string Completed = "completed";
     public const string Failed = "failed";
+    public const string Cancelled = "cancelled";
 
     /// <summary>
     /// A subtask whose AgentHost pod could not be admitted because the namespace had no CPU
@@ -43,7 +44,7 @@ public static class SubtaskStatus
 
     /// <summary>True once a subtask can make no further progress on its own.</summary>
     public static bool IsTerminal(string status) =>
-        status is AssembleReady or Completed or RaiFlagged or Failed or Blocked;
+        status is AssembleReady or Completed or RaiFlagged or Failed or Blocked or Cancelled;
 }
 
 /// <summary>

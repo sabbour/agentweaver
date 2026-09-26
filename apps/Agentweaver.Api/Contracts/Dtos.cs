@@ -204,6 +204,12 @@ public sealed record RunResponse
     [JsonPropertyName("subtask_id")]
     public string? SubtaskId { get; init; }
 
+    [JsonPropertyName("is_coordinator_plan")]
+    public bool IsCoordinatorPlan { get; init; }
+
+    [JsonPropertyName("pending_request_kind")]
+    public string? PendingRequestKind { get; init; }
+
     /// <summary>
     /// The run_id of the FAILED run this run was retriggered from (POST /api/runs/{id}/retry).
     /// Null for runs not produced by a retry. Lets the UI/MCP surface retry provenance.
@@ -1257,6 +1263,24 @@ public sealed record WorkPlanResponse
     [JsonPropertyName("coordinatorRunId")] public required string CoordinatorRunId { get; init; }
     [JsonPropertyName("outcomeSpecId")] public required int OutcomeSpecId { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("parentRunId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentRunId { get; init; }
+    [JsonPropertyName("parentWorkflowId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentWorkflowId { get; init; }
+    [JsonPropertyName("parentWorkflowNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentWorkflowNodeId { get; init; }
+    [JsonPropertyName("parentJoinNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentJoinNodeId { get; init; }
+    [JsonPropertyName("parentResumeRequestId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentResumeRequestId { get; init; }
+    [JsonPropertyName("parentResumeState")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentResumeState { get; init; }
 
     /// <summary>
     /// Current/last assembly stage (null until a collective gate/action starts). This remains useful
@@ -1306,6 +1330,12 @@ public sealed record WorkPlanSubtaskResponse
     [JsonPropertyName("childRunId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ChildRunId { get; init; }
+    [JsonPropertyName("workflowBranchNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkflowBranchNodeId { get; init; }
+    [JsonPropertyName("workflowBranchOrdinal")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? WorkflowBranchOrdinal { get; init; }
 }
 
 /// <summary>A dependency edge in <see cref="WorkPlanResponse"/>: subtaskId depends on dependsOnSubtaskId.</summary>
@@ -1337,6 +1367,12 @@ public sealed record CoordinatorChildResponse
     public string? TreeHash { get; init; }
 
     [JsonPropertyName("stepCount")] public required int StepCount { get; init; }
+    [JsonPropertyName("workflowBranchNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkflowBranchNodeId { get; init; }
+    [JsonPropertyName("workflowBranchOrdinal")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? WorkflowBranchOrdinal { get; init; }
 }
 
 /// <summary>Request body for POST /api/runs/{coordinatorRunId}/steer.</summary>

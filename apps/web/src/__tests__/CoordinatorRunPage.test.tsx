@@ -1623,6 +1623,49 @@ describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () =>
 });
 
 describe('CoordinatorRunPage — child run (non-coordinator) skips coordinator artifacts', () => {
+  it('treats an embedded fan coordinator as a coordinator and never offers human review', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'embedded-coordinator-1',
+      status: 'awaiting_review',
+      parent_run_id: 'parent-workflow-1',
+      is_coordinator_plan: true,
+      pending_request_kind: 'workflow_child_work',
+      coordinator_status: 'dispatching',
+    } as never);
+    vi.mocked(apiClient.getWorkPlan).mockResolvedValue({
+      work_plan_id: 42,
+      coordinator_run_id: 'embedded-coordinator-1',
+      status: 'dispatching',
+      subtasks: [],
+      dependencies: [],
+      parent_run_id: 'parent-workflow-1',
+      parent_workflow_node_id: 'fan',
+      parent_join_node_id: 'join',
+    } as never);
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      graph_id: 'coordinator:embedded-coordinator-1',
+      variant: 'coordinator',
+      start_node_id: 'coordinator',
+      nodes: [
+        { id: 'coordinator', label: 'fan', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'workflow:fan-in', label: 'join', role: 'join', kind: 'live', node_type: 'action' },
+      ],
+      edges: [{ from: 'coordinator', to: 'workflow:fan-in', cardinality: 'direct', loopback: false }],
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(vi.mocked(apiClient.getWorkPlan)).toHaveBeenCalledWith('coord-run-1'),
+      { timeout: 2000 },
+    );
+    const inspector = await openTopologyInspector();
+    await waitFor(() => expect(inspector.textContent).toContain('join'), { timeout: 4000 });
+    expect(inspector.textContent).not.toContain('Human Review');
+    expect(screen.queryByRole('button', { name: 'Approve & merge' })).toBeNull();
+    expect(screen.queryByLabelText('Approvals and gates')).toBeNull();
+  });
+
   it('does not call getWorkPlan for a child run (parent_run_id is set)', async () => {
     // A child run has parent_run_id set. The work-plan and outcome-plan endpoints do not exist
     // for child runs; calling them produces expected 404s that add noise without value.

@@ -18,6 +18,8 @@ public sealed class WorkPlan
     public DateTimeOffset? ParentResumeClaimedAt { get; set; }
     public DateTimeOffset? ParentResumeDeliveredAt { get; set; }
     public string? ParentResumeResultJson { get; set; }
+    public string? ParentTurnInputJson { get; set; }
+    public string? ExecutionBaseTreeHash { get; set; }
     public string? IsolationSummary { get; set; }
     public string? IntegrationBranch { get; set; }
 

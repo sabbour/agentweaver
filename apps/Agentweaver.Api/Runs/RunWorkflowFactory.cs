@@ -744,6 +744,97 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         ExecutorBinding mergeBinding = mergeExecutor;
         ExecutorBinding reviewBinding = reviewPort;
         var fullDefinition = effectiveDefinition ?? Workflows.BuiltInWorkflows.Default.Definition!;
+        var fanOutNode = fullDefinition.Nodes.SingleOrDefault(node => node.Type == WorkflowNodeType.FanOut);
+        var fanInNode = fullDefinition.Nodes.SingleOrDefault(node => node.Type == WorkflowNodeType.FanIn);
+        ExecutorBinding? fanOutBinding = null;
+        ExecutorBinding? fanPauseBinding = null;
+        ExecutorBinding? fanInBinding = null;
+        ExecutorBinding? fanFailureBinding = null;
+        if (fanOutNode is not null && fanInNode is not null)
+        {
+            var branchNodes = fullDefinition.Edges
+                .Where(edge => string.Equals(edge.From, fanOutNode.Id, StringComparison.Ordinal))
+                .Select(edge => fullDefinition.Nodes.Single(node =>
+                    string.Equals(node.Id, edge.To, StringComparison.Ordinal)))
+                .ToArray();
+            var fanPort = RequestPort.Create<WorkflowChildWorkPauseRequest, WorkflowChildWorkResult>(
+                $"workflow-child-work-{fanOutNode.Id}");
+
+            fanOutBinding = new VisualFunctionExecutor<AgentTurnInput, WorkflowChildWorkPauseRequest>(
+                $"fan-out-{fanOutNode.Id}",
+                fanOutNode.Id,
+                fanOutNode.Label,
+                fanOutNode.Role ?? "assembly",
+                "fan-out",
+                false,
+                async (input, ctx, ct) =>
+                {
+                    if (!RunId.TryParse(input.RunId, out var parsedRunId))
+                        throw new InvalidOperationException($"Invalid parent workflow run id '{input.RunId}'.");
+                    var parentRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException($"Parent workflow run '{input.RunId}' was not found.");
+                    var branches = branchNodes.Select(node => new StaticWorkflowBranch(
+                        NodeId: node.Id,
+                        Title: node.Label,
+                        Scope: string.IsNullOrWhiteSpace(node.Prompt) ? node.Label : node.Prompt!,
+                        AssignedAgent: node.Agent ?? input.AgentName ?? "agent",
+                        SelectedModelId: input.ModelId ?? parentRun.ModelId ?? string.Empty,
+                        AgentCharter: node.Charter)).ToArray();
+
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var attachment = await scope.ServiceProvider
+                        .GetRequiredService<WorkflowChildWorkService>()
+                        .PrepareStaticAsync(
+                            new WorkflowChildWorkRequest(
+                                parentRun,
+                                fullDefinition.Id,
+                                fanOutNode.Id,
+                                fanInNode.Id,
+                                branches,
+                                input,
+                                _worktreeOps.GetTreeHash(input.WorktreePath)),
+                            ct)
+                        .ConfigureAwait(false);
+
+                    return new WorkflowChildWorkPauseRequest(
+                        attachment.WorkPlanId,
+                        input.RunId,
+                        fanOutNode.Id,
+                        fanInNode.Id,
+                        attachment.ChildCoordinatorRunId);
+                });
+            fanPauseBinding = fanPort;
+            fanInBinding = new VisualFunctionExecutor<WorkflowChildWorkResult, WorkflowFanInOutput>(
+                $"fan-in-{fanInNode.Id}",
+                fanInNode.Id,
+                fanInNode.Label,
+                fanInNode.Role ?? "assembly",
+                "fan-in",
+                false,
+                (result, ctx, ct) => new ValueTask<WorkflowFanInOutput>(new WorkflowFanInOutput(
+                    result.WorkPlanId,
+                    result.ChildCoordinatorRunId,
+                    result.Succeeded,
+                    result.FailureReason,
+                    result.Branches,
+                    result.JoinedOutput)));
+            fanFailureBinding = new VisualFunctionExecutor<WorkflowFanInOutput, AgentTurnFailedOutput>(
+                $"fan-failed-{fanInNode.Id}",
+                fanInNode.Id,
+                fanInNode.Label,
+                "plumbing",
+                "terminal",
+                true,
+                async (result, ctx, ct) =>
+                {
+                    var parentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    return new AgentTurnFailedOutput(
+                        parentInput?.RunId ?? string.Empty,
+                        result.FailureReason ?? "workflow_child_work_failed",
+                        Evidence: JsonSerializer.Serialize(result.Branches));
+                });
+        }
         var policyGateBindings = BuildPolicyGateBindings(fullDefinition);
 
         // Rai REVISE adapter: reads stored agent-input, appends Rai feedback to Task,
@@ -886,6 +977,10 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 BlockedAdapter: blockedAdapter,
                 ReviewChangesAdapter: reviewChangesAdapter,
                 TerminalDeclined: terminalDeclined,
+                FanOutBinding: fanOutBinding,
+                FanPauseBinding: fanPauseBinding,
+                FanInBinding: fanInBinding,
+                FanFailureBinding: fanFailureBinding,
                 MaxIterations: MaxIterations,
                 Wiring: wiringSupport));
 
@@ -1234,6 +1329,44 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     var next = ReviseTurn(prev, feedback: null);
                     await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
                     return next;
+                });
+        }
+
+        public ExecutorBinding FanInToAgentAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("fan-in-to-agent", edge);
+            return new VisualFunctionExecutor<WorkflowFanInOutput, AgentTurnInput>(
+                id, id, "Joined branches", "plumbing", "action", true,
+                async (output, ctx, ct) =>
+                {
+                    var previous = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    var basis = previous ?? EmptyTurn(string.Empty);
+                    var next = basis with
+                    {
+                        Task = $"{basis.Task}\n\n[Ordered parallel branch results]\n{output.JoinedOutput}",
+                        IsRevision = false,
+                    };
+                    await ctx.QueueStateUpdateAsync(
+                        "agent-input", next, "run-context", ct).ConfigureAwait(false);
+                    return next;
+                });
+        }
+
+        public ExecutorBinding FanInToTerminalAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("fan-in-to-terminal", edge);
+            return new VisualFunctionExecutor<WorkflowFanInOutput, WorkflowFanCompletedOutput>(
+                id, id, "Joined result", "plumbing", "terminal", true,
+                async (output, ctx, ct) =>
+                {
+                    var parentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    return new WorkflowFanCompletedOutput(
+                        parentInput?.RunId ?? string.Empty,
+                        output.JoinedOutput,
+                        output.WorkPlanId,
+                        output.ChildCoordinatorRunId);
                 });
         }
 

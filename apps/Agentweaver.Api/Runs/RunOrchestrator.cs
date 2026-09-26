@@ -597,6 +597,40 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     }
 
     /// <summary>
+    /// Restarts an interrupted coordinator child turn under its existing durable run identity.
+    /// The original child worktree/branch and persisted task are reused; no replacement Run row is
+    /// created. This is the recovery path for active static fan branches after process loss.
+    /// </summary>
+    public async Task RestartInterruptedChildRunAsync(Run run, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(run.ParentRunId))
+            throw new InvalidOperationException($"Run {run.Id} is not a coordinator child.");
+        if (_registry.Get(run.Id.ToString()) is not null)
+            return;
+
+        var worktree = _worktreeManager.EnsureWorktree(
+            run.RepositoryPath,
+            run.OriginatingBranch,
+            run.Id);
+        if (!string.Equals(run.WorktreePath, worktree.WorktreePath, StringComparison.Ordinal)
+            || !string.Equals(run.WorktreeBranch, worktree.BranchName, StringComparison.Ordinal))
+        {
+            await _runStore.UpdateWorktreeAsync(
+                run.Id,
+                worktree.WorktreePath,
+                worktree.BranchName,
+                ct).ConfigureAwait(false);
+            run = run with
+            {
+                WorktreePath = worktree.WorktreePath,
+                WorktreeBranch = worktree.BranchName,
+            };
+        }
+
+        await StartRevisionAsync(run, run.Task, ct, isChild: true).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Fix-A(3a) Path-2: conscious hand-off of a REJECTED subtask to a DIFFERENT (non-locked-out)
     /// agent under the Reviewer Rejection Lockout Protocol. Unlike <see cref="StartRevisionAsync"/>
     /// (same-agent; RESUMES the prior SDK session so the author keeps its conversation), this MINTS
@@ -1507,10 +1541,14 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     {
         try
         {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            if (await scope.ServiceProvider.GetRequiredService<WorkflowChildWorkService>()
+                .IsCorrelatedRunAsync(runId, CancellationToken.None).ConfigureAwait(false))
+                return;
+
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
             if (run is null) return;
 
-            await using var scope = _scopeFactory.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
             await service.RunAsync(run).ConfigureAwait(false);
         }

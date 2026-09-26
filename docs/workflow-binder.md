@@ -42,7 +42,8 @@ canonical `gate_kind`):
 | `peer_review` | — | `PeerReview` (verdict-routed) **or** `Agent` (plain turn) | per-node peer-review or producing executor — **wired** (see §2a) |
 | `build_test` | — | `PeerReview` | platform-owned build/test/preview instruction through the per-node review executor |
 | `open_pull_request` | — | `OpenPullRequest` | `Wiring.ResolveOpenPullRequestNode`; deterministic, not an agent turn |
-| `fan_out` / `fan_in` / `coordinator_composed` | — | the matching kind | **load-accepted, runtime pending** (see §5) |
+| `fan_out` / `fan_in` | — | the matching kind | **runtime-bound for one static wait-all region** (see §5) |
+| `coordinator_composed` | — | `CoordinatorComposed` | **load-accepted, runtime pending** (see §5) |
 
 `NodeExecutorRegistry.ResolveExecutor(node, bindings)` returns the executor a node is *entered* at. It draws
 from the real, pre-built executors in `RunWorkflowBindings` (Principle VII: bind to real executors, never
@@ -185,15 +186,37 @@ The reflection-based **drift guard**
 
 `peer_review` is **fully wired** (see §2a) — both as a verdict gate and as a plain producing turn.
 
-`fan_out`, `fan_in`, and `coordinator_composed` are **accepted by the loader** (the
-bindable-type gate was removed) and modeled by the schema, but are **not yet wired to a runtime
-executor**. They map onto existing seams —
-`fan_out` → the coordinator's [`SubtaskFrontier`](../apps/Agentweaver.Api/Coordinator/SubtaskFrontier.cs),
-`fan_in` → [`AssemblyPlanning`](../apps/Agentweaver.Api/Coordinator/AssemblyPlanning.cs) — which require dispatch infrastructure beyond the
-per-run graph. Until that lands, a workflow that actually *wires* one of these nodes fails closed at **build
-time** (`RejectUnwiredKind`) with a clear `WorkflowBindException`, rather than being rejected at load time.
-This is the deliberate
-"load-accepted, runtime-pending" boundary for US1.
+`fan_out` and `fan_in` are runtime-bound for one validated static region. The binder collapses the
+declared branch nodes into a durable child-work request port:
+
+1. `fan_out` creates or reattaches one correlated child coordinator work plan and one ordered
+   subtask per declared branch.
+2. The MAF request port checkpoints the parent. The watch loop persists that exact continuation
+   before enabling child dispatch.
+3. Existing child-run orchestration executes independent branches concurrently with durable
+   observation and recovery fencing.
+4. `fan_in` waits for every branch and returns one joined result in persisted branch-ordinal order.
+
+This path deliberately bypasses coordinator integration-branch construction and collective
+assembly: it performs no final Git merge, review, publication, or Scribe work. Failed, blocked,
+cancelled, or RAI-flagged branches fail the join. The first release supports one non-nested fan
+region, at least two unconditional one-node branches of type `prompt`, and a prompt or terminal
+successor. `peer_review` and `build_test` remain valid outside a static fan, but are rejected as fan
+branches until a specialized static executor preserves their semantics.
+
+At first attachment, the child-work plan persists the incoming `AgentTurnInput` and current
+worktree tree hash. Branch tasks are composed from that submitted/predecessor context plus the
+branch prompt, and reattachment uses the persisted context rather than current workflow YAML.
+Each branch reserves its child run id before launch and uses `(coordinatorRunId, subtaskId)` as the
+durable idempotency key. Restart recovery re-observes terminal branches and restarts interrupted
+active branches under their original Run ids.
+
+The embedded coordinator is projected as a coordinator plan with only fan-out, branch, and fan-in
+nodes. Its child graph references use `run:{childRunId}`. The parent suspension is classified as
+`workflow_child_work`, not human review, so `/review`, MCP, and the web UI do not expose a review
+action for that wait.
+
+`coordinator_composed` remains load-accepted but runtime-pending and fails bindability validation.
 
 `serial` is no longer a workflow node type. Use ordinary directed edges between nodes to express sequential
 execution, for example `plan -> implement -> review`.

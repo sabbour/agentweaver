@@ -41,6 +41,10 @@ internal sealed record RunWorkflowBindings(
     ExecutorBinding BlockedAdapter,
     ExecutorBinding ReviewChangesAdapter,
     ExecutorBinding TerminalDeclined,
+    ExecutorBinding? FanOutBinding,
+    ExecutorBinding? FanPauseBinding,
+    ExecutorBinding? FanInBinding,
+    ExecutorBinding? FanFailureBinding,
     int MaxIterations,
     IRunWorkflowWiringSupport Wiring);
 
@@ -54,6 +58,8 @@ public sealed record WorkflowTransitionIssue(
 
 internal sealed record StaticFanRegionValidation(
     IReadOnlyList<string> Errors,
+    string? FanOutNodeId,
+    string? FanInNodeId,
     IReadOnlySet<string> BranchNodeIds,
     IReadOnlySet<(string From, string To)> DeclaredEdges)
 {
@@ -116,6 +122,7 @@ internal static class RunWorkflowGraphBinder
         ArgumentNullException.ThrowIfNull(bindings);
 
         var ctx = new WireContext { G = builder, Definition = definition, B = bindings };
+        var fanRegion = ValidateSingleFanRegion(definition);
 
         // Entry plumbing: the hidden input storer feeds the start node's executor (unconditional). The
         // start node is resolved by its declared id and its TYPE — not a hardcoded "agent". A start that
@@ -127,7 +134,11 @@ internal static class RunWorkflowGraphBinder
 
         // Every root/full-pipeline AgentTurnExecutor can return a structured terminal failure.
         // Route it directly to one typed graph output before any normal successor consumes it.
-        foreach (var node in definition.Nodes.Where(n => EffectiveKind(definition, n) == NodeKind.Agent))
+        var executableAgentNodes = definition.Nodes.Where(n =>
+                EffectiveKind(definition, n) == NodeKind.Agent
+                && !fanRegion.BranchNodeIds.Contains(n.Id))
+            .ToList();
+        foreach (var node in executableAgentNodes)
         {
             builder.AddEdge<AgentTurnOutput>(
                 bindings.Wiring.ResolveAgentNode(node),
@@ -136,8 +147,15 @@ internal static class RunWorkflowGraphBinder
         }
 
         // Each logical edge expands to its raw executor wiring + predicate.
+        if (fanRegion.IsValid)
+            WireStaticFanRegion(ctx, fanRegion);
+
         foreach (var edge in definition.Edges)
+        {
+            if (fanRegion.IsValid && fanRegion.DeclaredEdges.Contains((edge.From, edge.To)))
+                continue;
             WireEdge(ctx, edge);
+        }
 
         // Terminal nodes declare which executors are graph outputs (WithOutputFrom).
         foreach (var node in definition.Nodes)
@@ -145,7 +163,8 @@ internal static class RunWorkflowGraphBinder
             if (node.Type == WorkflowNodeType.Terminal)
                 WireOutputs(ctx, node);
         }
-        builder.WithOutputFrom(bindings.TerminalTurnFailed);
+        if (executableAgentNodes.Count > 0)
+            builder.WithOutputFrom(bindings.TerminalTurnFailed);
     }
 
     /// <summary>
@@ -265,14 +284,16 @@ internal static class RunWorkflowGraphBinder
             .Where(node => node.Type == WorkflowNodeType.FanIn)
             .ToList();
         if (fanOutNodes.Count == 0 && fanInNodes.Count == 0)
-            return new StaticFanRegionValidation([], new HashSet<string>(), new HashSet<(string, string)>());
+            return new StaticFanRegionValidation(
+                [], null, null, new HashSet<string>(), new HashSet<(string, string)>());
 
         var errors = new List<string>();
         if (fanOutNodes.Count != 1 || fanInNodes.Count != 1)
         {
             errors.Add(
                 "Static fan topology requires exactly one fan_out node and exactly one fan_in node when either is present.");
-            return new StaticFanRegionValidation(errors, new HashSet<string>(), new HashSet<(string, string)>());
+            return new StaticFanRegionValidation(
+                errors, null, null, new HashSet<string>(), new HashSet<(string, string)>());
         }
 
         var fanOut = fanOutNodes[0];
@@ -307,17 +328,39 @@ internal static class RunWorkflowGraphBinder
         if (joinOutgoing.Count != 1 || joinOutgoing.Any(edge => !string.IsNullOrWhiteSpace(edge.When)))
             errors.Add($"fan_in node '{fanIn.Id}' must have exactly one unconditional outgoing edge.");
 
+        var incomingToFanOut = definition.Edges
+            .Where(edge => string.Equals(edge.To, fanOut.Id, StringComparison.Ordinal))
+            .ToList();
+        if (!string.Equals(definition.Start, fanOut.Id, StringComparison.Ordinal))
+        {
+            if (incomingToFanOut.Count != 1
+                || !string.IsNullOrWhiteSpace(incomingToFanOut[0].When)
+                || !definition.Nodes.Any(node =>
+                    string.Equals(node.Id, incomingToFanOut[0].From, StringComparison.Ordinal)
+                    && node.Type == WorkflowNodeType.Prompt))
+            {
+                errors.Add(
+                    $"fan_out node '{fanOut.Id}' must be the workflow start or have exactly one unconditional inbound edge from a prompt node.");
+            }
+        }
+        else if (incomingToFanOut.Count > 0)
+        {
+            errors.Add($"fan_out start node '{fanOut.Id}' cannot also have inbound edges.");
+        }
+
+        if (joinOutgoing.Count == 1
+            && definition.Nodes.FirstOrDefault(node =>
+                string.Equals(node.Id, joinOutgoing[0].To, StringComparison.Ordinal)) is { } successor
+            && successor.Type is not (WorkflowNodeType.Prompt or WorkflowNodeType.Terminal))
+        {
+            errors.Add(
+                $"fan_in node '{fanIn.Id}' must continue to a prompt or terminal node in the first release; got '{successor.Type}'.");
+        }
+
         var branchIds = outgoing
             .Select(edge => edge.To)
             .ToHashSet(StringComparer.Ordinal);
         var nodeById = definition.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
-        var agentBackedTypes = new HashSet<WorkflowNodeType>
-        {
-            WorkflowNodeType.Prompt,
-            WorkflowNodeType.PeerReview,
-            WorkflowNodeType.BuildTest,
-        };
-
         foreach (var branchId in branchIds)
         {
             if (!nodeById.TryGetValue(branchId, out var branch))
@@ -326,11 +369,12 @@ internal static class RunWorkflowGraphBinder
                 continue;
             }
 
-            if (!agentBackedTypes.Contains(branch.Type))
+            if (branch.Type != WorkflowNodeType.Prompt)
             {
                 errors.Add(
-                    $"Static fan branch '{branchId}' must contain exactly one agent-backed node " +
-                    $"(prompt, peer_review, or build_test) before fan_in '{fanIn.Id}'; got '{branch.Type}'.");
+                    $"Static fan branch '{branchId}' must be a prompt node before fan_in " +
+                    $"'{fanIn.Id}'; specialized peer_review and build_test branch semantics are not supported; " +
+                    $"got '{branch.Type}'.");
             }
 
             var branchIncoming = definition.Edges
@@ -378,21 +422,41 @@ internal static class RunWorkflowGraphBinder
                 $"fan_in node '{fanIn.Id}' must continue outside the fan region; cycles and nested fan topology are not supported.");
         }
 
-        var declaredEdges = new HashSet<(string From, string To)>();
-        foreach (var edge in definition.Edges)
+        var declaredEdges = definition.Edges
+            .Where(edge =>
+                (string.Equals(edge.From, fanOut.Id, StringComparison.Ordinal)
+                    && branchIds.Contains(edge.To))
+                || (branchIds.Contains(edge.From)
+                    && string.Equals(edge.To, fanIn.Id, StringComparison.Ordinal)))
+            .Select(edge => (edge.From, edge.To))
+            .ToHashSet();
+
+        return new StaticFanRegionValidation(errors, fanOut.Id, fanIn.Id, branchIds, declaredEdges);
+    }
+
+    private static void WireStaticFanRegion(
+        WireContext ctx,
+        StaticFanRegionValidation fanRegion)
+    {
+        var b = ctx.B;
+        if (b.FanOutBinding is null
+            || b.FanPauseBinding is null
+            || b.FanInBinding is null
+            || b.FanFailureBinding is null)
         {
-            if (string.Equals(edge.From, fanOut.Id, StringComparison.Ordinal)
-                || string.Equals(edge.To, fanOut.Id, StringComparison.Ordinal)
-                || string.Equals(edge.From, fanIn.Id, StringComparison.Ordinal)
-                || string.Equals(edge.To, fanIn.Id, StringComparison.Ordinal)
-                || branchIds.Contains(edge.From)
-                || branchIds.Contains(edge.To))
-            {
-                declaredEdges.Add((edge.From, edge.To));
-            }
+            throw new WorkflowBindException(
+                $"Cannot bind fan region '{fanRegion.FanOutNodeId}' -> '{fanRegion.FanInNodeId}': " +
+                "the runtime fan executors were not built.",
+                fanRegion.FanOutNodeId);
         }
 
-        return new StaticFanRegionValidation(errors, branchIds, declaredEdges);
+        ctx.G.AddEdge(b.FanOutBinding, b.FanPauseBinding)
+            .AddEdge(b.FanPauseBinding, b.FanInBinding)
+            .AddEdge<WorkflowFanInOutput>(
+                b.FanInBinding,
+                b.FanFailureBinding,
+                output => output is not null && !output.Succeeded);
+        ctx.G.WithOutputFrom(b.FanFailureBinding);
     }
 
     public static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(WorkflowDefinition definition)
@@ -400,6 +464,7 @@ internal static class RunWorkflowGraphBinder
         ArgumentNullException.ThrowIfNull(definition);
 
         var issues = new List<WorkflowTransitionIssue>();
+        var fanRegion = ValidateSingleFanRegion(definition);
         foreach (var edge in definition.Edges)
         {
             var fromNode = definition.Nodes.FirstOrDefault(
@@ -411,7 +476,8 @@ internal static class RunWorkflowGraphBinder
 
             var fromKind = EffectiveKind(definition, fromNode);
             var toKind = EffectiveKind(definition, toNode);
-            if (WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
+            if ((fanRegion.IsValid && fanRegion.DeclaredEdges.Contains((edge.From, edge.To)))
+                || CanBindTransition(definition, edge, fromNode, toNode))
                 continue;
 
             issues.Add(new WorkflowTransitionIssue(
@@ -520,13 +586,18 @@ internal static class RunWorkflowGraphBinder
         WireContext ctx, WorkflowEdge edge, WorkflowNode fromNode, WorkflowNode toNode,
         NodeKind fromKind, NodeKind toKind)
     {
-        if (!WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
+        var isFanRuntimeTransition = string.IsNullOrWhiteSpace(edge.When)
+            && ((fromKind == NodeKind.Agent && toKind == NodeKind.FanOut)
+                || (fromKind == NodeKind.FanIn
+                    && toKind is NodeKind.Agent or NodeKind.Terminal));
+        if (!isFanRuntimeTransition
+            && !WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
             return false;
 
         var g = ctx.G;
         var b = ctx.B;
         var s = ctx.S;
-        var when = edge.When;
+        var when = string.IsNullOrWhiteSpace(edge.When) ? null : edge.When;
 
         switch (fromKind, toKind, when)
         {
@@ -618,6 +689,50 @@ internal static class RunWorkflowGraphBinder
                 g.AddEdge<MergeOutput>(b.MergeBinding, adapter,
                     output => output is not null && output.Status != "blocked")
                  .AddEdge(adapter, s.ResolveOpenPullRequestNode(toNode));
+                return true;
+            }
+
+            // A prompt can hand its produced context to a static fan region. The branch workers use
+            // the same parent run input plus their authored branch prompt.
+            case (NodeKind.Agent, NodeKind.FanOut, null):
+            {
+                if (b.FanOutBinding is null)
+                    return false;
+                var adapter = s.SequentialAgentAdapter(edge);
+                g.AddEdge<AgentTurnOutput>(
+                        s.ResolveAgentNode(fromNode),
+                        adapter,
+                        IsSuccessfulAgentTurn)
+                    .AddEdge(adapter, b.FanOutBinding);
+                return true;
+            }
+
+            // Successful fan-in -> next prompt with the deterministic ordered join appended.
+            case (NodeKind.FanIn, NodeKind.Agent, null):
+            {
+                if (b.FanInBinding is null)
+                    return false;
+                var adapter = s.FanInToAgentAdapter(edge);
+                g.AddEdge<WorkflowFanInOutput>(
+                        b.FanInBinding,
+                        adapter,
+                        output => output is not null && output.Succeeded)
+                    .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
+            // A workflow may end at the joined result without invoking review, merge, publication,
+            // or Scribe.
+            case (NodeKind.FanIn, NodeKind.Terminal, null):
+            {
+                if (b.FanInBinding is null)
+                    return false;
+                var terminal = s.FanInToTerminalAdapter(edge);
+                g.AddEdge<WorkflowFanInOutput>(
+                    b.FanInBinding,
+                    terminal,
+                    output => output is not null && output.Succeeded);
+                ctx.DirectTerminalOutputs.Add(terminal);
                 return true;
             }
 
@@ -960,13 +1075,10 @@ internal static class RunWorkflowGraphBinder
     {
         switch (kind)
         {
-            case NodeKind.FanOut:
-            case NodeKind.FanIn:
             case NodeKind.CoordinatorComposed:
                 throw new WorkflowBindException(
                     $"Cannot bind node '{node.Id}' (type='{node.Type}'): node type '{node.Type}' is accepted by " +
-                    "the loader but not yet wired to a runtime executor. fan_out/fan_in map onto the coordinator " +
-                    "SubtaskFrontier/AssemblyPlanning seams — runtime support is pending.", node.Id);
+                    "the loader but not yet wired to a runtime executor.", node.Id);
         }
     }
 
@@ -995,6 +1107,12 @@ internal static class RunWorkflowGraphBinder
         var fromKind = EffectiveKind(definition, fromNode);
         var toKind = EffectiveKind(definition, toNode);
         var when = edge.When;
+
+        if (when is null
+            && ((fromKind == NodeKind.Agent && toKind == NodeKind.FanOut)
+                || (fromKind == NodeKind.FanIn
+                    && toKind is NodeKind.Agent or NodeKind.Terminal)))
+            return true;
 
         return WorkflowGrammarContract.SupportsTransition(fromKind, toKind, when);
     }

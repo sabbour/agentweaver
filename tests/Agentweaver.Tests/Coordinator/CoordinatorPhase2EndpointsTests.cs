@@ -12,6 +12,7 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
@@ -167,6 +168,119 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var children = await resp.Content.ReadFromJsonAsync<List<CoordinatorChildResponse>>();
         children.Should().NotBeNull();
         children!.Should().BeEmpty("auto-dispatch is off, so no child runs exist");
+    }
+
+    [Fact]
+    public async Task WorkPlanAndChildren_StaticWorkflowChild_ProjectCorrelationAndDeclaredOrder()
+    {
+        var coordinatorRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser);
+        var secondChildRunId = await SeedAssembleReadyChildRunAsync("second");
+        var firstChildRunId = await SeedAssembleReadyChildRunAsync("first");
+        await SeedFanWorkPlanAsync(
+            coordinatorRunId,
+            [
+                ("branch-b", 1, secondChildRunId),
+                ("branch-a", 0, firstChildRunId),
+            ]);
+
+        var workPlan = await _owner.GetFromJsonAsync<WorkPlanResponse>(
+            $"/api/runs/{coordinatorRunId}/work-plan");
+        var children = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
+            $"/api/runs/{coordinatorRunId}/children");
+
+        workPlan.Should().NotBeNull();
+        workPlan!.ParentRunId.Should().Be("11111111-1111-1111-1111-111111111111");
+        workPlan.ParentWorkflowId.Should().Be("fan-workflow");
+        workPlan.ParentWorkflowNodeId.Should().Be("fan");
+        workPlan.ParentJoinNodeId.Should().Be("join");
+        workPlan.ParentResumeRequestId.Should().Be("resume-request");
+        workPlan.ParentResumeState.Should().Be("ready");
+        workPlan.Subtasks.Select(branch => branch.WorkflowBranchOrdinal).Should().Equal(0, 1);
+        workPlan.Subtasks.Select(branch => branch.WorkflowBranchNodeId).Should().Equal("branch-a", "branch-b");
+
+        children.Should().NotBeNull();
+        children!.Select(branch => branch.WorkflowBranchOrdinal).Should().Equal(0, 1);
+        children.Select(branch => branch.WorkflowBranchNodeId).Should().Equal("branch-a", "branch-b");
+    }
+
+    [Fact]
+    public async Task EmbeddedStaticCoordinator_RunAndGraph_ProjectCoordinatorPlanWithoutAssemblyStages()
+    {
+        var parentRunId = RunId.New().ToString();
+        var coordinatorRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            parentRunId: parentRunId,
+            subtaskId: WorkflowChildWorkService.ChildCoordinatorSubtaskKey("fan"));
+        var firstChildRunId = await SeedAssembleReadyChildRunAsync("first");
+        var secondChildRunId = await SeedAssembleReadyChildRunAsync("second");
+        await SeedFanWorkPlanAsync(
+            coordinatorRunId,
+            [
+                ("branch-a", 0, firstChildRunId),
+                ("branch-b", 1, secondChildRunId),
+            ]);
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{coordinatorRunId}");
+        var graph = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{coordinatorRunId}/graph");
+
+        detail.GetProperty("parent_run_id").GetString().Should().Be(parentRunId);
+        detail.GetProperty("is_coordinator_plan").GetBoolean().Should().BeTrue();
+        graph.GetProperty("variant").GetString().Should().Be(CoordinatorGraphDescriptor.Variant);
+        var nodes = graph.GetProperty("nodes").EnumerateArray().ToList();
+        var nodeIds = nodes.Select(node => node.GetProperty("id").GetString()).ToList();
+        nodeIds.Should().Contain("workflow:fan-in");
+        nodeIds.Should().NotContain(CoordinatorGraphDescriptor.AssemblyRaiNodeId);
+        nodeIds.Should().NotContain(CoordinatorGraphDescriptor.AssemblyReviewNodeId);
+        nodeIds.Should().NotContain(CoordinatorGraphDescriptor.AssemblyMergeNodeId);
+        nodeIds.Should().NotContain(CoordinatorGraphDescriptor.AssemblyScribeNodeId);
+        nodes.Where(node => node.TryGetProperty("child_graph_ref", out _))
+            .Select(node => node.GetProperty("child_graph_ref").GetString())
+            .Should().Contain([$"run:{firstChildRunId}", $"run:{secondChildRunId}"]);
+    }
+
+    [Fact]
+    public async Task Review_WorkflowChildWorkWait_Returns409WithoutConsumingGate()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            status: RunStatus.AwaitingReview);
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var requestId = $"workflow-child-work:{runId}:fan:42";
+        var port = new RequestPortInfo(
+            new TypeId("Agentweaver.Api", nameof(WorkflowChildWorkPauseRequest)),
+            new TypeId("Agentweaver.Api", nameof(WorkflowChildWorkResult)),
+            "workflow-child-work");
+        await pendingStore.SetAsync(
+            runId,
+            new ExternalRequest(
+                port,
+                requestId,
+                new PortableValue(new WorkflowChildWorkPauseRequest(
+                    42,
+                    runId,
+                    "fan",
+                    "join",
+                    RunId.New().ToString()))),
+            CoordinatorWebApplicationFactory.OwnerUser);
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var pending = await db.PendingRequests.SingleAsync(row => row.RunId == runId);
+            pending.DeliveryKind = PendingRequestDeliveryKinds.WorkflowChildWork;
+            await db.SaveChangesAsync();
+        }
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/runs/{runId}/review",
+            new { approved = true });
+
+        detail.GetProperty("pending_request_kind").GetString().Should().Be("workflow_child_work");
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("pending_request_kind").GetString().Should().Be("workflow_child_work");
+        (await pendingStore.GetAsync(runId)).Should().NotBeNull();
     }
 
     [Fact]
@@ -1131,6 +1245,68 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         await db.SaveChangesAsync();
     }
 
+    private async Task SeedFanWorkPlanAsync(
+        string coordinatorRunId,
+        IReadOnlyList<(string NodeId, int Ordinal, string ChildRunId)> branches)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "proj-fan",
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "run branches",
+            DesiredOutcome = "join outputs",
+            Scope = "static workflow",
+            Assumptions = "none",
+            Status = "confirmed",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+
+        var plan = new WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = "proj-fan",
+            CoordinatorRunId = coordinatorRunId,
+            Status = WorkPlanStatus.Dispatching,
+            ParentRunId = "11111111-1111-1111-1111-111111111111",
+            ParentWorkflowId = "fan-workflow",
+            ParentWorkflowNodeId = "fan",
+            ParentJoinNodeId = "join",
+            ParentResumeRequestId = "resume-request",
+            ParentResumeState = "ready",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        foreach (var branch in branches)
+        {
+            db.Subtasks.Add(new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = branch.NodeId,
+                Scope = branch.NodeId,
+                AssignedAgent = "morpheus",
+                SelectedModelId = "gpt",
+                Phase = "execution",
+                IsolationStrategy = "worktree",
+                Status = SubtaskStatus.Completed,
+                ChildRunId = branch.ChildRunId,
+                WorkflowBranchNodeId = branch.NodeId,
+                WorkflowBranchOrdinal = branch.Ordinal,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
+        await db.SaveChangesAsync();
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -1216,7 +1392,9 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     private async Task<string> InsertInactiveCoordinatorRunAsync(
         string ownerUser,
         RunStatus status = RunStatus.InProgress,
-        string? result = null)
+        string? result = null,
+        string? parentRunId = null,
+        string? subtaskId = null)
     {
         var projectId = await CreateProjectAsync();
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
@@ -1234,8 +1412,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
             ProjectId = ProjectId.Parse(projectId),
-            ParentRunId = null,
-            SubtaskId = null,
+            ParentRunId = parentRunId,
+            SubtaskId = subtaskId,
         };
         await runStore.InsertAsync(run, CancellationToken.None);
         await _factory.PrepareAiExecutionAsync(

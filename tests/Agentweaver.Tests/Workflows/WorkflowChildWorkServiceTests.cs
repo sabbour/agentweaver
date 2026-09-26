@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
@@ -109,7 +110,6 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         _runtime.AlwaysReportDispatchInactive = true;
         var peer = BuildService("pod-b", _runtime);
 
-        (await _service.TryStartDispatchAsync(attached.WorkPlanId)).Should().BeTrue();
         (await peer.TryStartDispatchAsync(attached.WorkPlanId)).Should().BeFalse();
 
         _runtime.Started.Should().ContainSingle();
@@ -121,7 +121,6 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     {
         var attached = await CreateAsync(Request());
         _runtime.AlwaysReportDispatchInactive = true;
-        (await _service.TryStartDispatchAsync(attached.WorkPlanId)).Should().BeTrue();
         await SetDispatchLeaseAsync(attached.WorkPlanId, "pod-a", DateTimeOffset.UtcNow.AddMinutes(-10));
 
         var restarted = BuildService("pod-b", _runtime, staleSeconds: 10);
@@ -172,6 +171,66 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         _runtime.Deliveries.Should().ContainSingle();
         (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
             .Should().Be(WorkflowChildWorkResumeStates.Delivered);
+    }
+
+    [Fact]
+    public async Task SuccessfulJoin_UsesPersistedBranchOrdinal_NotChildCompletionOrRunIdOrder()
+    {
+        var attached = await CreateAsync(Request());
+        var first = NewRun(RunId.New(), DomainRunStatus.AssembleReady) with
+        {
+            ParentRunId = attached.ChildCoordinatorRunId,
+            SubtaskId = attached.Branches[0].SubtaskId.ToString(),
+            Result = "first-output",
+        };
+        var second = NewRun(RunId.New(), DomainRunStatus.AssembleReady) with
+        {
+            ParentRunId = attached.ChildCoordinatorRunId,
+            SubtaskId = attached.Branches[1].SubtaskId.ToString(),
+            Result = "second-output",
+        };
+        await _runStore.InsertAsync(second);
+        await _runStore.InsertAsync(first);
+        await SetBranchRunsAsync(
+            attached.WorkPlanId,
+            WorkPlanStatus.Complete,
+            [
+                (attached.Branches[0].SubtaskId, first.Id.ToString(), SubtaskStatus.Completed),
+                (attached.Branches[1].SubtaskId, second.Id.ToString(), SubtaskStatus.Completed),
+            ]);
+        _runtime.DeliverResult = true;
+
+        await _service.SweepAsync();
+
+        var result = _runtime.Deliveries.Should().ContainSingle().Subject;
+        result.Succeeded.Should().BeTrue();
+        result.Branches.Select(branch => branch.NodeId).Should().Equal("research-a", "research-b");
+        result.JoinedOutput.Should().Be(
+            "[1. research-a]\nfirst-output\n\n[2. research-b]\nsecond-output");
+    }
+
+    [Theory]
+    [InlineData(SubtaskStatus.Failed)]
+    [InlineData(SubtaskStatus.Blocked)]
+    [InlineData(SubtaskStatus.Cancelled)]
+    [InlineData(SubtaskStatus.RaiFlagged)]
+    public async Task NonSuccessfulBranch_CannotProduceSuccessfulJoin(string branchStatus)
+    {
+        var attached = await CreateAsync(Request());
+        await SetBranchRunsAsync(
+            attached.WorkPlanId,
+            WorkPlanStatus.Complete,
+            [
+                (attached.Branches[0].SubtaskId, null, SubtaskStatus.Completed),
+                (attached.Branches[1].SubtaskId, null, branchStatus),
+            ]);
+        _runtime.DeliverResult = true;
+
+        await _service.SweepAsync();
+
+        var result = _runtime.Deliveries.Should().ContainSingle().Subject;
+        result.Succeeded.Should().BeFalse();
+        result.Branches.Should().Contain(branch => branch.Status == branchStatus);
     }
 
     [Fact]
@@ -247,10 +306,14 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     [Fact]
     public async Task CancellationBetweenCheckAndDispatch_WinsPlanCasAndPreventsStart()
     {
-        var attached = await CreateAsync(Request());
+        var attached = await _service.PrepareStaticAsync(Request());
         _runtime.BeforeDispatchEnabled = () => CancelParentAndSweepAsync().GetAwaiter().GetResult();
 
-        (await _service.TryStartDispatchAsync(attached.WorkPlanId)).Should().BeFalse();
+        await _service.ArmContinuationAsync(
+            attached.WorkPlanId,
+            NewRequest(WorkflowChildWorkService.ResumeRequestId(
+                _parent.Id.ToString(), "fan", attached.WorkPlanId)),
+            _parent.SubmittingUser);
 
         _runtime.Started.Should().BeEmpty();
         (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
@@ -324,6 +387,52 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         reattached.Branches.Select(branch => branch.NodeId).Should().Equal("research-a", "research-b");
     }
 
+    [Fact]
+    public async Task StartFan_AndReattach_PreserveIncomingTaskAndExecutionBase_AndEnsureCoordinatorStream()
+    {
+        var originalInput = new AgentTurnInput(
+            _parent.Id.ToString(),
+            "submitted context\n\npredecessor output",
+            "C:\\repo\\.agentweaver\\worktrees\\parent",
+            "agentweaver/run-parent",
+            "C:\\repo",
+            "dev",
+            ModelSource.GitHubCopilot.ToApiString(),
+            "test-model",
+            _parent.SubmittingUser,
+            ProjectId: _parent.ProjectId!.ToString());
+        var original = await CreateAsync(Request() with
+        {
+            IncomingInput = originalInput,
+            ExecutionBaseTreeHash = "tree-at-fan",
+        });
+
+        _runtime.AlwaysReportDispatchInactive = true;
+        await CreateAsync(Request() with
+        {
+            IncomingInput = originalInput with
+            {
+                Task = "edited context",
+                WorktreeBranch = "agentweaver/edited",
+            },
+            ExecutionBaseTreeHash = "edited-tree",
+        });
+
+        var plan = await GetPlanAsync(original.WorkPlanId);
+        var persistedInput = JsonSerializer.Deserialize<AgentTurnInput>(
+            plan.ParentTurnInputJson!,
+            JsonDefaults.Options);
+        persistedInput.Should().BeEquivalentTo(originalInput);
+        plan.ExecutionBaseTreeHash.Should().Be("tree-at-fan");
+        _runtime.Started.Should().HaveCount(2);
+        _runtime.Started.Should().OnlyContain(context =>
+            context.OriginatingBranch == originalInput.WorktreeBranch
+            && context.StaticParentTask == originalInput.Task);
+        _runtime.EnsuredStreams.Should().OnlyContain(entry =>
+            entry.RunId == original.ChildCoordinatorRunId
+            && entry.OwnerUser == _parent.SubmittingUser);
+    }
+
     private WorkflowChildWorkRequest Request() => new(
         _parent,
         "workflow-v1",
@@ -379,6 +488,24 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         plan.Status = planStatus;
         foreach (var branch in await db.Subtasks.Where(row => row.WorkPlanId == planId).ToListAsync())
             branch.Status = branchStatus;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SetBranchRunsAsync(
+        int planId,
+        string planStatus,
+        IReadOnlyList<(int SubtaskId, string? ChildRunId, string Status)> branches)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId);
+        plan.Status = planStatus;
+        foreach (var branch in branches)
+        {
+            var subtask = await db.Subtasks.SingleAsync(row => row.Id == branch.SubtaskId);
+            subtask.ChildRunId = branch.ChildRunId;
+            subtask.Status = branch.Status;
+        }
         await db.SaveChangesAsync();
     }
 
@@ -453,6 +580,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         public List<CoordinatorDispatchContext> Started { get; } = [];
         public List<DomainRun> Cancelled { get; } = [];
         public List<WorkflowChildWorkResult> Deliveries { get; } = [];
+        public List<(string RunId, string OwnerUser)> EnsuredStreams { get; } = [];
         public bool DeliverResult { get; set; }
 
         public bool DispatchEnabled
@@ -479,6 +607,21 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         }
 
         public void StartDispatch(CoordinatorDispatchContext context) => Started.Add(context);
+
+        public void RecordParentStep(string parentRunId, object payload)
+        {
+        }
+
+        public void EnsureRunStream(string runId, string ownerUser)
+        {
+            EnsuredStreams.Add((runId, ownerUser));
+        }
+
+        public Task PublishParentGraphAsync(
+            string parentRunId,
+            string parentWorkflowNodeId,
+            string childCoordinatorRunId,
+            CancellationToken ct) => Task.CompletedTask;
 
         public Task<bool> TryDeliverParentResumeAsync(
             string parentRunId,

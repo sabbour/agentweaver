@@ -54,6 +54,12 @@ public sealed record RunEmbedded
     [JsonPropertyName("coordinator_status")]
     public string? CoordinatorStatus { get; init; }
 
+    [JsonPropertyName("is_coordinator_plan")]
+    public bool IsCoordinatorPlan { get; init; }
+
+    [JsonPropertyName("pending_request_kind")]
+    public string? PendingRequestKind { get; init; }
+
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? Extra { get; init; }
 }
@@ -475,8 +481,10 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
     {
         var status = GetString(run, "status");
         var coordinatorStatus = GetString(run, "coordinator_status");
+        var pendingRequestKind = GetString(run, "pending_request_kind");
 
-        if (string.Equals(status, "awaiting_review", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(status, "awaiting_review", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(pendingRequestKind, "workflow_child_work", StringComparison.Ordinal))
         {
             response = new RunTaskResult
             {

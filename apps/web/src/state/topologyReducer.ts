@@ -84,6 +84,10 @@ function readNodeFields(raw: Record<string, unknown>): Partial<TopologyNodeState
     assignedAgent: str(raw['assignedAgent']) ?? str(raw['agent']),
     selectedModelId: str(raw['selectedModelId']) ?? str(raw['model']),
     childRunId: str(raw['childRunId']),
+    workflowBranchNodeId: str(raw['workflowBranchNodeId']),
+    workflowBranchOrdinal: typeof raw['workflowBranchOrdinal'] === 'number'
+      ? raw['workflowBranchOrdinal']
+      : undefined,
     // Defensive read: null today (single-pod), non-null after spec-018 distributed phases.
     executionPodName: raw['executionPodName'] !== undefined
       ? (raw['executionPodName'] === null ? null : str(raw['executionPodName']) ?? null)
@@ -108,6 +112,12 @@ function mergeNode(
     assignedAgent: patch.assignedAgent ?? prev?.assignedAgent ?? defaults.assignedAgent,
     selectedModelId: patch.selectedModelId ?? prev?.selectedModelId ?? defaults.selectedModelId,
     childRunId: patch.childRunId ?? prev?.childRunId ?? defaults.childRunId,
+    workflowBranchNodeId: patch.workflowBranchNodeId
+      ?? prev?.workflowBranchNodeId
+      ?? defaults.workflowBranchNodeId,
+    workflowBranchOrdinal: patch.workflowBranchOrdinal
+      ?? prev?.workflowBranchOrdinal
+      ?? defaults.workflowBranchOrdinal,
     steering: patch.steering ?? prev?.steering,
     // Per-node pod name: use patch value if explicitly provided (even null); otherwise preserve prior.
     executionPodName: patch.executionPodName !== undefined
@@ -187,6 +197,8 @@ export function topologyReducer(
             assignedAgent: parsed.node.assignedAgent,
             selectedModelId: parsed.node.selectedModelId,
             childRunId: parsed.node.childRunId,
+            workflowBranchNodeId: parsed.node.workflowBranchNodeId,
+            workflowBranchOrdinal: parsed.node.workflowBranchOrdinal,
             executionPodName: parsed.node.executionPodName,
           };
           nodeOrder.push(parsed.id);
@@ -237,6 +249,10 @@ export function topologyReducer(
           childRunId,
           assignedAgent: str(p['assignedAgent']),
           selectedModelId: str(p['selectedModelId']),
+          workflowBranchNodeId: str(p['workflowBranchNodeId']),
+          workflowBranchOrdinal: typeof p['workflowBranchOrdinal'] === 'number'
+            ? p['workflowBranchOrdinal']
+            : undefined,
           // Read executionPodName defensively from subtask.* events (spec-018).
           executionPodName: p['executionPodName'] !== undefined
             ? (p['executionPodName'] === null ? null : str(p['executionPodName']) ?? null)
@@ -324,6 +340,8 @@ export function seedTopologyFromWorkPlan(
       assignedAgent: s.assignedAgent || undefined,
       selectedModelId: s.selectedModelId || undefined,
       childRunId: s.childRunId || undefined,
+      workflowBranchNodeId: s.workflowBranchNodeId || undefined,
+      workflowBranchOrdinal: s.workflowBranchOrdinal,
     };
     nodeOrder.push(id);
   }
@@ -340,6 +358,8 @@ export function seedTopologyFromWorkPlan(
       childRunId: c.childRunId ?? prev.childRunId,
       assignedAgent: c.assignedAgent || prev.assignedAgent,
       selectedModelId: c.selectedModelId || prev.selectedModelId,
+      workflowBranchNodeId: c.workflowBranchNodeId || prev.workflowBranchNodeId,
+      workflowBranchOrdinal: c.workflowBranchOrdinal ?? prev.workflowBranchOrdinal,
     };
   }
 

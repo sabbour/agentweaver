@@ -22,6 +22,8 @@ namespace Agentweaver.Api.Runs;
 /// </summary>
 public sealed class WorkflowRestartService
 {
+    internal Func<DomainRun, CancellationToken, Task>? RestartChildRunOverride { get; set; }
+
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
@@ -79,8 +81,63 @@ public sealed class WorkflowRestartService
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         foreach (var run in inProgress)
         {
-            if (await IsWorkflowChildWorkRunAsync(run.Id.ToString(), ct).ConfigureAwait(false))
+            var childWorkCorrelation = await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false);
+            if (childWorkCorrelation != WorkflowChildWorkCorrelation.None)
             {
+                if (childWorkCorrelation == WorkflowChildWorkCorrelation.Branch)
+                {
+                    await using var childRecoveryLease = await TryAcquireRecoveryLeaseAsync(
+                        run.Id.ToString(), ct).ConfigureAwait(false);
+                    if (childRecoveryLease is null)
+                    {
+                        _logger.LogInformation(
+                            "Leaving workflow child branch {RunId} untouched because a peer owns its recovery lease",
+                            run.Id);
+                        continue;
+                    }
+
+                    try
+                    {
+                        var restart = RestartChildRunOverride;
+                        if (restart is null)
+                        {
+                            using var restartScope = _scopeFactory.CreateScope();
+                            var orchestrator = restartScope.ServiceProvider.GetService<RunOrchestrator>();
+                            if (orchestrator is not null)
+                                restart = (childRun, token) =>
+                                    orchestrator.RestartInterruptedChildRunAsync(childRun, token);
+                        }
+
+                        if (restart is not null)
+                        {
+                            await restart(run, ct).ConfigureAwait(false);
+                            _logger.LogInformation(
+                                "Restarted workflow child branch {RunId} under its original durable identity",
+                                run.Id);
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "Preserving workflow child branch {RunId}; no restart launcher is registered",
+                                run.Id);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(
+                            ex,
+                            "Failed to restart workflow child branch {RunId} under its original identity",
+                            run.Id);
+                        await FailRecoveredRunAsync(
+                            run,
+                            "workflow_child_restart_failed",
+                            entry: null,
+                            cleanupWorktree: false,
+                            retryable: true,
+                            ct: CancellationToken.None).ConfigureAwait(false);
+                    }
+                }
+
                 _logger.LogInformation(
                     "Deferring correlated workflow child-work run {RunId} to child-work restart recovery",
                     run.Id);
@@ -391,13 +448,40 @@ public sealed class WorkflowRestartService
             await childWork.SweepAsync(ct).ConfigureAwait(false);
     }
 
-    private async Task<bool> IsWorkflowChildWorkRunAsync(string runId, CancellationToken ct)
+    private async Task<WorkflowChildWorkCorrelation> GetWorkflowChildWorkCorrelationAsync(
+        DomainRun run,
+        CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        return await db.WorkPlans.AsNoTracking()
+        var runId = run.Id.ToString();
+        if (await db.WorkPlans.AsNoTracking()
             .AnyAsync(plan => plan.ParentRunId == runId || plan.CoordinatorRunId == runId, ct)
-            .ConfigureAwait(false);
+            .ConfigureAwait(false))
+            return WorkflowChildWorkCorrelation.ParentOrCoordinator;
+
+        if (string.IsNullOrWhiteSpace(run.ParentRunId))
+            return WorkflowChildWorkCorrelation.None;
+
+        var hasSubtaskId = int.TryParse(run.SubtaskId, out var subtaskId);
+        return await (
+                from plan in db.WorkPlans.AsNoTracking()
+                join subtask in db.Subtasks.AsNoTracking() on plan.Id equals subtask.WorkPlanId
+                where plan.CoordinatorRunId == run.ParentRunId
+                    && (subtask.ChildRunId == runId
+                        || (hasSubtaskId && subtask.Id == subtaskId))
+                select subtask.Id)
+            .AnyAsync(ct)
+            .ConfigureAwait(false)
+                ? WorkflowChildWorkCorrelation.Branch
+                : WorkflowChildWorkCorrelation.None;
+    }
+
+    private enum WorkflowChildWorkCorrelation
+    {
+        None,
+        ParentOrCoordinator,
+        Branch,
     }
 
     private async Task<RecoveryLeaseHandle?> TryAcquireRecoveryLeaseAsync(string runId, CancellationToken ct)
@@ -557,10 +641,14 @@ public sealed class WorkflowRestartService
     {
         try
         {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            if (await scope.ServiceProvider.GetRequiredService<WorkflowChildWorkService>()
+                .IsCorrelatedRunAsync(runId, CancellationToken.None).ConfigureAwait(false))
+                return;
+
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
             if (run is null) return;
 
-            await using var scope = _scopeFactory.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
             await service.RunAsync(run).ConfigureAwait(false);
         }
