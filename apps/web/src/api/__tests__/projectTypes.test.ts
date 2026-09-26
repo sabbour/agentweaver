@@ -50,10 +50,14 @@ describe('Project type shapes', () => {
     expect(github).toBe('github');
   });
 
-  it('ProjectState type accepts active and deleting', () => {
+  it('ProjectState type accepts creation lifecycle states', () => {
+    const creating: ProjectState = 'creating';
     const active: ProjectState = 'active';
+    const failed: ProjectState = 'failed';
     const deleting: ProjectState = 'deleting';
+    expect(creating).toBe('creating');
     expect(active).toBe('active');
+    expect(failed).toBe('failed');
     expect(deleting).toBe('deleting');
   });
 

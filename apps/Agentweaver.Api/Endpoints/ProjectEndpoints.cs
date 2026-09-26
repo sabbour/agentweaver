@@ -1228,10 +1228,35 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         ResolvedGitHubRepositorySelection? resolvedRepository = null;
         if (request.Origin == "github")
         {
-            resolvedRepository = await repositorySelections.TryConsumeAndResolveAsync(
+            resolvedRepository = await repositorySelections.TryClaimForProjectCreationAndResolveAsync(
                 request.RepositorySelectionCode!, caller, ct).ConfigureAwait(false);
             if (resolvedRepository is null)
                 return Results.Conflict(new { error = "github_repository_selection_unavailable" });
+
+            if (resolvedRepository.IsRetry)
+            {
+                var existing = await projectStore.GetAsync(
+                    resolvedRepository.ProjectId, CancellationToken.None).ConfigureAwait(false);
+                if (existing is not null)
+                {
+                    var response = MapProject(
+                        existing,
+                        existing.State == ProjectState.Active && workspaceProvider.IsAvailable(existing.WorkingDirectory),
+                        ProjectRole.Owner);
+                    return existing.State switch
+                    {
+                        ProjectState.Active => Results.Ok(response),
+                        ProjectState.Creating => Results.Accepted($"/api/projects/{existing.Id}", response),
+                        ProjectState.Failed => Results.Conflict(new
+                        {
+                            error = "project_creation_failed",
+                            project_id = existing.Id.ToString(),
+                            state = "failed",
+                        }),
+                        _ => Results.Conflict(new { error = "project_unavailable", project_id = existing.Id.ToString() }),
+                    };
+                }
+            }
         }
 
         try
@@ -1253,15 +1278,32 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             else
             {
                 project = await projectService.CreateFromGitHubAsync(
+                    resolvedRepository!.ProjectId,
                     request.Name!,
                     resolvedRepository!.FullName,
                     resolvedRepository.CloneUrl,
                     requestedWorkingDirectory,
                     request.DefaultProvider, request.DefaultModelGitHubCopilot,
-                    request.DefaultModelMicrosoftFoundry, caller.User, resolvedRepository.AccessToken, ct);
+                    request.DefaultModelMicrosoftFoundry,
+                    caller.User,
+                    resolvedRepository.AccessToken,
+                    string.IsNullOrWhiteSpace(caller.EntraObjectId)
+                        ? null
+                        : (reserved, token) => roleAssignments.SeedOwnerAsync(
+                            reserved.Id,
+                            caller.EntraObjectId!,
+                            caller.EntraObjectId,
+                            token),
+                    ct);
             }
 
-            if (!string.IsNullOrWhiteSpace(caller.EntraObjectId))
+            var completionToken = request.Origin == "github" ? CancellationToken.None : ct;
+            if (project.State == ProjectState.Creating)
+                return Results.Accepted(
+                    $"/api/projects/{project.Id}",
+                    MapProject(project, available: false, ProjectRole.Owner));
+
+            if (request.Origin == "blank" && !string.IsNullOrWhiteSpace(caller.EntraObjectId))
             {
                 try
                 {
@@ -1269,7 +1311,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                         project.Id,
                         caller.EntraObjectId!,
                         caller.EntraObjectId,
-                        ct);
+                        completionToken);
                 }
                 catch (Exception roleAssignmentEx)
                 {
@@ -1289,7 +1331,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                         project.Id.ToString(), blueprintToApply,
                         request.GeneratedWorkflowYaml,
                         applySkillDefaults: !string.IsNullOrWhiteSpace(request.BlueprintId),
-                        ct: ct);
+                        ct: completionToken);
                     if (!applyResult.Valid)
                     {
                         await projectService.RollbackCreationAsync(project.Id, runStore, workflowRegistry, ct);
@@ -1298,7 +1340,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
 
                     var pid = ProjectId.Parse(project.Id.ToString());
                     await projectStore.UpdateSourceBlueprintAsync(
-                        pid, blueprintSourceId, blueprintSourceType, DateTimeOffset.UtcNow, ct);
+                        pid, blueprintSourceId, blueprintSourceType, DateTimeOffset.UtcNow, completionToken);
                 }
                 catch (Exception blueprintEx)
                 {
@@ -1321,10 +1363,12 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
                 if (view is not null)
                     return Results.Created(
                         $"/api/projects/{project.Id}",
-                        await MapProjectAsync(httpContext, view.Project, view.Available, ct));
+                        await MapProjectAsync(httpContext, view.Project, view.Available, completionToken));
             }
 
-            return Results.Created($"/api/projects/{project.Id}", await MapProjectAsync(httpContext, project, available: true, ct));
+            return Results.Created(
+                $"/api/projects/{project.Id}",
+                await MapProjectAsync(httpContext, project, available: project.State == ProjectState.Active, completionToken));
         }
         catch (ArgumentException ex)
         {
@@ -1339,6 +1383,42 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             return Results.Json(
                 new { error = "workspace_unavailable", message = ex.Message },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (ProjectService.ProjectCreationFailedException ex)
+            when (ex.InnerException is WorkspaceUnavailableException workspaceEx)
+        {
+            logger.LogError(
+                ex,
+                "Failed to create project {ProjectId} during phase {Phase}",
+                ex.ProjectId,
+                ex.Phase);
+            return Results.Json(
+                new
+                {
+                    error = "workspace_unavailable",
+                    message = workspaceEx.Message,
+                    project_id = ex.ProjectId.ToString(),
+                    state = "failed",
+                    phase = ex.Phase,
+                },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (ProjectService.ProjectCreationFailedException ex)
+        {
+            logger.LogError(
+                ex,
+                "Failed to create project {ProjectId} during phase {Phase}",
+                ex.ProjectId,
+                ex.Phase);
+            return Results.Json(
+                new
+                {
+                    error = "project_creation_failed",
+                    project_id = ex.ProjectId.ToString(),
+                    state = "failed",
+                    phase = ex.Phase,
+                },
+                statusCode: StatusCodes.Status500InternalServerError);
         }
         catch (Exception ex)
         {
@@ -1453,8 +1533,13 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         if (!IsAllowedModelId(request.ModelId))
             return Results.BadRequest(new { error = "model_id is not allowed." });
 
-        if (project.State == ProjectState.Deleting)
-            return Results.Conflict(new { error = "project_deleting", message = "The project is being deleted and cannot accept new runs." });
+        if (project.State != ProjectState.Active)
+            return Results.Conflict(new
+            {
+                error = "project_not_active",
+                state = ProjectStateToApiString(project.State),
+                message = "The project is not active and cannot accept new runs."
+            });
 
         if (!workspaceProvider.IsAvailable(project.WorkingDirectory))
             return Results.Conflict(new { error = "workspace_unavailable", message = "The project workspace is not available." });
@@ -1569,13 +1654,22 @@ static ProjectResponse MapProject(Project p, bool available, ProjectRole? effect
     PreviewLifetimeMinutes = p.PreviewLifetimeMinutes,
     PreviewDnsConvergenceTimeoutSeconds = p.PreviewDnsConvergenceTimeoutSeconds,
     Available = available,
-    State = p.State == ProjectState.Active ? "active" : "deleting",
+    State = ProjectStateToApiString(p.State),
     CreatedAt = p.CreatedAt,
     UpdatedAt = p.UpdatedAt,
     SourceBlueprintId = p.SourceBlueprintId,
     SourceBlueprintType = p.SourceBlueprintType,
     AllowedWorkflowIds = p.AllowedWorkflowIds,
     EffectiveRole = effectiveRole?.ToApiString(),
+};
+
+static string ProjectStateToApiString(ProjectState state) => state switch
+{
+    ProjectState.Creating => "creating",
+    ProjectState.Active => "active",
+    ProjectState.Failed => "failed",
+    ProjectState.Deleting => "deleting",
+    _ => throw new ArgumentOutOfRangeException(nameof(state)),
 };
 
 private static readonly Regex AgentNameSlugRegex = new("^[a-z0-9-]+$", RegexOptions.Compiled);

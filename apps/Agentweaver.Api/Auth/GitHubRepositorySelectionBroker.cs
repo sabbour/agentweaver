@@ -52,6 +52,8 @@ internal sealed record GitHubRepositoryCredentialUseResult<T>(
 /// cross an HTTP or MCP response boundary.
 /// </summary>
 internal sealed record ResolvedGitHubRepositorySelection(
+    ProjectId ProjectId,
+    bool IsRetry,
     string FullName,
     string SourceRepository,
     string CloneUrl,
@@ -222,11 +224,51 @@ internal sealed class GitHubRepositorySelectionBroker(
         CancellationToken ct)
     {
         var callerSubject = GetCallerSubject(caller);
-        var consumed = !IsCodeWellFormed(code)
+        var codeHash = IsCodeWellFormed(code) ? HashCode(code) : null;
+        var consumed = codeHash is null
             ? null
             : await persistence.TryConsumeRepositorySelectionCodeAsync(
-                HashCode(code), callerSubject, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+                codeHash, callerSubject, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+        return await ResolveAsync(codeHash, callerSubject, consumed, isRetry: false, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Claims a selection code for project creation. Replays of that same unexpired, caller-bound
+    /// code resolve to the same deterministic project id and cannot authorize another workspace.
+    /// </summary>
+    internal async Task<ResolvedGitHubRepositorySelection?> TryClaimForProjectCreationAndResolveAsync(
+        string code,
+        CallerContext caller,
+        CancellationToken ct)
+    {
+        var callerSubject = GetCallerSubject(caller);
+        var codeHash = IsCodeWellFormed(code) ? HashCode(code) : null;
+        var consumed = codeHash is null
+            ? null
+            : await persistence.TryClaimRepositorySelectionCodeAsync(
+                codeHash, callerSubject, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         if (consumed is null)
+            return null;
+
+        return await ResolveAsync(
+            codeHash!,
+            callerSubject,
+            new ConsumedGitHubRepositorySelection(
+                consumed.EntraObjectId,
+                consumed.RepositoryId,
+                consumed.RepoAppAuthorizationId),
+            consumed.AlreadyConsumed,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<ResolvedGitHubRepositorySelection?> ResolveAsync(
+        string? codeHash,
+        string callerSubject,
+        ConsumedGitHubRepositorySelection? consumed,
+        bool isRetry,
+        CancellationToken ct)
+    {
+        if (consumed is null || codeHash is null)
             return null;
 
         var credential = await persistence.GetLiveRepoAppCredentialAsync(
@@ -264,6 +306,8 @@ internal sealed class GitHubRepositorySelectionBroker(
             return null;
 
         return new ResolvedGitHubRepositorySelection(
+            ProjectIdFromCodeHash(codeHash),
+            isRetry,
             repository.FullName,
             repository.SourceUrl,
             repository.CloneUrl,
@@ -368,4 +412,10 @@ internal sealed class GitHubRepositorySelectionBroker(
 
     private static string HashCode(string code) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))).ToLowerInvariant();
+
+    private static ProjectId ProjectIdFromCodeHash(string codeHash)
+    {
+        var hashBytes = Convert.FromHexString(codeHash);
+        return new ProjectId(new Guid(hashBytes.AsSpan(0, 16)));
+    }
 }

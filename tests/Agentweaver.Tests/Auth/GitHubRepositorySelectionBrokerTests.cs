@@ -59,6 +59,43 @@ public sealed class GitHubRepositorySelectionBrokerTests
     }
 
     [Fact]
+    public async Task ProjectCreationClaim_AllowsOnlySameCallerRetryWithinExpiry()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var broker = CreateBroker(options, secrets, Repositories(42));
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+
+        var first = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None);
+        var retry = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None);
+        var wrongCaller = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-two", EntraObjectId = "entra-two" },
+            CancellationToken.None);
+
+        first.Should().NotBeNull();
+        first!.IsRetry.Should().BeFalse();
+        retry.Should().NotBeNull();
+        retry!.IsRetry.Should().BeTrue();
+        retry.ProjectId.Should().Be(first.ProjectId);
+        retry.FullName.Should().Be(first.FullName);
+        wrongCaller.Should().BeNull();
+        (await broker.TryConsumeAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None)).Should().BeNull(
+            "repository attachment must retain strict single-use selection semantics");
+    }
+
+    [Fact]
     public async Task Issue_OnlyMintsForTheCallerAuthorizedBrowseResultAndFailsClosed()
     {
         await using var connection = await OpenDatabaseAsync();

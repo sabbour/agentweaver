@@ -206,7 +206,8 @@ If a tool returns `-32001 Request timed out`:
 1. Call `diagnostics_get` (or `heartbeat_status`).
 2. If the server looks healthy, retry **once** with brief backoff.
 3. Safe-to-retry tools are read-only calls such as `run_status`, `coordinator_work_plan_get`, `coordinator_children_get`, `run_show_artifacts`, and `run_get_file`.
-4. Do **not** blindly retry non-idempotent calls such as `coordinator_start`, `run_task`, `run_review`, `project_create`, or `project_delete` until you verify whether the first attempt already took effect.
+4. Do **not** blindly retry non-idempotent calls such as `coordinator_start`, `run_task`, `run_review`, or `project_delete` until you verify whether the first attempt already took effect.
+5. A timed-out GitHub-origin `project_create` may be retried with the same unexpired `repository_selection_code`. The server returns the same reserved project and its `creating`, `active`, or `failed` state rather than creating a duplicate workspace. Blank-project creation is not covered by this retry guarantee.
 
 ## Run and project consistency
 

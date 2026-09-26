@@ -85,7 +85,7 @@ public sealed class GitHubRepositorySelectionEndpointsTests
     }
 
     [Fact]
-    public async Task CreateGitHubProject_RejectsDirectRepositoryInputAndConsumesOnlyTheCallerBoundCode()
+    public async Task CreateGitHubProject_RejectsDirectRepositoryInputAndRetryReturnsTheSameProject()
     {
         const string subject = "selection-subject";
         using var factory = new RepositorySelectionWebApplicationFactory();
@@ -129,10 +129,11 @@ public sealed class GitHubRepositorySelectionEndpointsTests
             working_directory = factory.NewWorkingDirectory(),
             repository_selection_code = code,
         });
-        reused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        reused.StatusCode.Should().Be(HttpStatusCode.OK);
         var reusedBody = await reused.Content.ReadFromJsonAsync<JsonElement>();
-        reusedBody.GetProperty("error").GetString().Should().Be("github_repository_selection_unavailable");
-        reusedBody.GetRawText().Should().NotContain("repository_id");
+        reusedBody.GetProperty("project_id").GetString()
+            .Should().Be(createdBody.GetProperty("project_id").GetString());
+        reusedBody.GetProperty("source_repository").GetString().Should().Be("octo/secure-repo");
     }
 
     [Fact]

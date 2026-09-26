@@ -110,6 +110,12 @@ internal sealed record ConsumedGitHubRepositorySelection(
     long RepositoryId,
     string RepoAppAuthorizationId);
 
+internal sealed record ClaimedGitHubRepositorySelection(
+    string EntraObjectId,
+    long RepositoryId,
+    string RepoAppAuthorizationId,
+    bool AlreadyConsumed);
+
 public sealed record CapabilitySnapshotBackfillResult(int Migrated, int Unavailable);
 internal sealed record RepoAppAuthorizationTransaction(
     string State,
@@ -313,6 +319,72 @@ public sealed class GitHubConnectionsPersistenceStore(
                 .SingleAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return selection;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Claims a repository selection for project creation, or returns the same still-valid scope
+    /// when that exact caller retries the same opaque code. The code remains bound to one caller,
+    /// repository, authorization, expiry window, and deterministic project id.
+    /// </summary>
+    internal async Task<ClaimedGitHubRepositorySelection?> TryClaimRepositorySelectionCodeAsync(
+        string codeHash,
+        string entraObjectId,
+        DateTimeOffset now,
+        CancellationToken ct = default)
+    {
+        await using var transaction = await db.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false);
+        try
+        {
+            var changed = await db.GitHubRepositorySelectionCodes
+                .Where(x => x.CodeHash == codeHash &&
+                            x.EntraObjectId == entraObjectId &&
+                            x.ConsumedAtUnixMilliseconds == null &&
+                            x.ExpiresAtUnixMilliseconds > now.ToUnixTimeMilliseconds() &&
+                            db.GitHubAppAuthorizations.Any(authorization =>
+                                authorization.Id == x.RepoAppAuthorizationId &&
+                                authorization.EntraObjectId == entraObjectId &&
+                                authorization.AppKind == GitHubAppKind.Repo &&
+                                authorization.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                                authorization.RevokedAt == null))
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(
+                        selection => selection.ConsumedAtUnixMilliseconds,
+                        now.ToUnixTimeMilliseconds()),
+                    ct)
+                .ConfigureAwait(false);
+
+            var selection = await db.GitHubRepositorySelectionCodes.AsNoTracking()
+                .Where(x => x.CodeHash == codeHash &&
+                            x.EntraObjectId == entraObjectId &&
+                            x.ConsumedAtUnixMilliseconds != null &&
+                            x.ExpiresAtUnixMilliseconds > now.ToUnixTimeMilliseconds() &&
+                            db.GitHubAppAuthorizations.Any(authorization =>
+                                authorization.Id == x.RepoAppAuthorizationId &&
+                                authorization.EntraObjectId == entraObjectId &&
+                                authorization.AppKind == GitHubAppKind.Repo &&
+                                authorization.Purpose == GitHubAuthorizationPurpose.InteractiveRepository &&
+                                authorization.RevokedAt == null))
+                .SingleOrDefaultAsync(ct)
+                .ConfigureAwait(false);
+            if (selection is null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                return null;
+            }
+
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
+            return new ClaimedGitHubRepositorySelection(
+                selection.EntraObjectId,
+                selection.RepositoryId,
+                selection.RepoAppAuthorizationId,
+                AlreadyConsumed: changed == 0);
         }
         catch
         {
