@@ -1,6 +1,6 @@
 # Enforce effective agent permissions in every backend
 
-**Issue:** [#1397](https://github.com/sabbour/agentweaver/issues/1397)  
+**Issue:** [#1397](https://github.com/sabbour/agentweaver/issues/1397)
 **Area:** Agent execution & sandbox
 
 ## User story
