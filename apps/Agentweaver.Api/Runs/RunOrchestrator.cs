@@ -590,7 +590,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// the steered instruction at the child's next turn boundary.
     /// </summary>
     public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false,
-        int? steeringDirectiveId = null, int? steeringAttempt = null)
+        int? steeringDirectiveId = null, int? steeringAttempt = null, RunLeaseClaim? existingLease = null)
     {
         if (string.IsNullOrEmpty(run.WorktreePath))
             throw new InvalidOperationException($"Run {run.Id} has no worktree path; cannot start revision.");
@@ -655,7 +655,13 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
             var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
             ctsRegistered = true;
-            _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+            _watchLoop.StartWatching(
+                run.Id.ToString(),
+                streamingRun,
+                entry,
+                run.SubmittingUser,
+                runCt,
+                existingLease);
         }
         catch
         {
@@ -698,7 +704,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         await StartRevisionAsync(run, run.Task, ct, isChild: true).ConfigureAwait(false);
     }
 
-    public async Task RestartInterruptedPinnedWorkflowRunAsync(Run run, CancellationToken ct)
+    public async Task RestartInterruptedPinnedWorkflowRunAsync(
+        Run run,
+        RunLeaseClaim recoveryLease,
+        CancellationToken ct)
     {
         if (run.ParentRunId is not null)
             throw new InvalidOperationException($"Run {run.Id} is not a root workflow run.");
@@ -726,7 +735,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             };
         }
 
-        await StartRevisionAsync(run, run.Task, ct).ConfigureAwait(false);
+        await StartRevisionAsync(run, run.Task, ct, existingLease: recoveryLease).ConfigureAwait(false);
     }
 
     /// <summary>
