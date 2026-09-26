@@ -13,6 +13,13 @@ import { validateReleaseAcceptanceManifest } from './release-acceptance.mjs';
 import { validateJsonSchema } from './schema-validator.mjs';
 
 const PACKAGE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const SURFACE_EVIDENCE_TYPES = new Set([
+  'event-query',
+  'surface-transcript',
+  'preview-validation',
+  'authorization-record',
+  'structural-validation',
+]);
 export const RELEASE_ACCEPTANCE_BUNDLE_SCHEMA_PATH = path.join(
   PACKAGE_DIR,
   'release-acceptance-bundle-v1.schema.json',
@@ -57,7 +64,11 @@ function findPassingClaim(result, claimContract, requiredSurfaces) {
   if (claim.cleanup.required && claim.cleanup.status !== 'SUCCEEDED') return false;
   const requiredSurfaceEvidence = requiredSurfaces.every((surface) => {
     const surfaceResult = claim.surfaceResults.find((item) => item.surface === surface);
-    return surfaceResult?.status === 'PASS' && surfaceResult.evidence.length > 0;
+    if (surfaceResult?.status !== 'PASS' || surfaceResult.evidence.length === 0) return false;
+    const requiredTypes = claimContract.requiredEvidence.filter((type) =>
+      SURFACE_EVIDENCE_TYPES.has(type));
+    const observedTypes = new Set(surfaceResult.evidence.map((item) => item.type));
+    return requiredTypes.every((type) => observedTypes.has(type));
   });
   const evidenceTypes = new Set([
     ...result.evidence.items,
@@ -135,7 +146,8 @@ export function validateReleaseAcceptance({
       const matching = validResults.filter((result) =>
         result.challenge.challengeId === focused.challengeId
         && result.feature.featureId === coverage.featureId
-        && result.feature.behaviorId === coverage.behaviorId);
+        && result.feature.behaviorId === coverage.behaviorId
+        && JSON.stringify([...result.feature.refs].sort()) === JSON.stringify(coverage.featureRefs));
       if (!claimContract || !matching.some((result) =>
         findPassingClaim(result, claimContract, coverage.requiredSurfaces))) {
         errors.push(

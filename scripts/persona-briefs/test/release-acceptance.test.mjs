@@ -25,6 +25,7 @@ const REVISION = 'revision-123';
 const PROJECT_ID = 'project-1';
 const EXECUTION_ID = 'execution-1';
 const RUN_ID = 'run-1';
+const DEPLOYMENT_IDENTITY = 'staging-a';
 
 function hashFile(filePath) {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
@@ -41,6 +42,7 @@ function evidence(surface, type = 'surface-transcript') {
     resultId: 'result-1',
     scenarioId: 'release-repair-disposition-v1',
     deployedRevision: REVISION,
+    deploymentIdentity: DEPLOYMENT_IDENTITY,
     projectId: PROJECT_ID,
     executionId: EXECUTION_ID,
     runId: RUN_ID,
@@ -60,7 +62,7 @@ function manifest() {
       version: '0.34.0',
       releaseId: 'agentweaver-0.34.0',
       deployedRevision: REVISION,
-      deploymentIdentity: 'staging-a',
+      deploymentIdentity: DEPLOYMENT_IDENTITY,
       verifiedAt: '2026-09-22T22:52:06Z',
     },
     feature: {
@@ -85,7 +87,7 @@ function manifest() {
         {
           surface: 'api',
           status: 'PASS',
-          evidence: [evidence('api')],
+          evidence: [evidence('api', 'structural-validation')],
         },
         {
           surface: 'ui',
@@ -200,6 +202,7 @@ test('schema validation rejects P0 PARTIAL and every required nested execution f
     'resultId',
     'scenarioId',
     'deployedRevision',
+    'deploymentIdentity',
     'projectId',
     'executionId',
     'runId',
@@ -218,6 +221,13 @@ test('schema validation rejects P0 PARTIAL and every required nested execution f
   const mismatch = validateReleaseAcceptanceManifest(mismatchedCatalog);
   assert.equal(mismatch.ok, false);
   assert.ok(mismatch.triggers.some((trigger) => trigger.code === 'EVIDENCE_BINDING_MISMATCH'));
+
+  const mismatchedDeployment = manifest();
+  mismatchedDeployment.claimResults[0].surfaceResults[0].evidence[0].deploymentIdentity = 'staging-b';
+  const deploymentMismatch = validateReleaseAcceptanceManifest(mismatchedDeployment);
+  assert.equal(deploymentMismatch.ok, false);
+  assert.ok(deploymentMismatch.triggers.some((trigger) =>
+    trigger.code === 'EVIDENCE_DEPLOYMENT_MISMATCH'));
 });
 
 test('stable anomaly identity deduplicates by feature, challenge version, surface, and claim', () => {
@@ -419,6 +429,36 @@ test('post-deployment release gate requires representative and focused exact-rev
     catalog,
     featureManifest,
     results: [result],
+  }).ok, false);
+
+  const wrongRefs = manifest();
+  wrongRefs.feature.behaviorId = 'release-repair-contract';
+  wrongRefs.feature.refs = ['sabbour/agentweaver#9999'];
+  wrongRefs.evidence.items = [
+    evidence('api', 'deployed-release-revision'),
+    evidence('api', 'structural-validation'),
+    evidence('api', 'artifact-file'),
+    evidence('api', 'artifact-hash'),
+  ];
+  assert.equal(validateReleaseAcceptance({
+    catalog,
+    featureManifest,
+    results: [wrongRefs],
+  }).ok, false);
+
+  const wrongSurfaceEvidence = manifest();
+  wrongSurfaceEvidence.feature.behaviorId = 'release-repair-contract';
+  wrongSurfaceEvidence.claimResults[0].surfaceResults[0].evidence = [evidence('api', 'project-record')];
+  wrongSurfaceEvidence.evidence.items = [
+    evidence('ui', 'deployed-release-revision'),
+    evidence('ui', 'structural-validation'),
+    evidence('ui', 'artifact-file'),
+    evidence('ui', 'artifact-hash'),
+  ];
+  assert.equal(validateReleaseAcceptance({
+    catalog,
+    featureManifest,
+    results: [wrongSurfaceEvidence],
   }).ok, false);
 });
 

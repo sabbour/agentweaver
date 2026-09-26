@@ -63,6 +63,13 @@ externally integrated, or specialist challenges remain manual. Missing claim lin
 or required surface coverage blocks acceptance unless a coordinator-owned reviewed
 disposition explicitly resolves it.
 
+`workflow-conservative-fan-generation-v1` links #1591-#1593 to focused API acceptance.
+Its contract requires safe fan generation for explicit, pairwise-disjoint content
+outputs, sequential fallback for overlapping or unknown write scopes, and the PM
+Discovery research fan before synthesis. `repository-workflow-primitives-v1` separately
+links #1418 to actual durable branch execution, so generation evidence cannot close the
+runtime-executor requirement.
+
 Release result producers use `release-acceptance-result-v1.schema.json` and the pure
 helpers in `release-acceptance.mjs`. Abnormality comes only from structured P0/P1
 verdicts, evidence integrity, termination, cleanup, revision, and required-surface

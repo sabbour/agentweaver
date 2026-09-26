@@ -22,9 +22,10 @@ test('checked-in challenge catalog is closed, valid, and contains the approved s
   const catalog = loadChallengeCatalog();
   const result = validateChallengeCatalog(catalog);
   assert.equal(result.ok, true, result.errors.join('\n'));
-  assert.equal(catalog.entries.length, 43);
+  assert.equal(catalog.entries.length, 44);
   for (const id of [
     'repository-map-reduce-error-index-v1',
+    'workflow-conservative-fan-generation-v1',
     'product-management-full-lifecycle-v1',
     'release-lumenpath-launch-integration-v1',
     'homepage-marketing-launch-page-v1',
@@ -96,7 +97,7 @@ test('CLI validate, list, and get return deterministic machine-readable output',
     valid: true,
     schemaVersion: 'agentweaver.challenge-catalog/v1',
     catalogVersion: 1,
-    challengeCount: 43,
+    challengeCount: 44,
   });
 
   const list = spawnSync(process.execPath, [cli, 'list', '--tier', 'release-integration'], { encoding: 'utf8' });
@@ -140,9 +141,84 @@ test('release selector returns only the representative project and directly link
       featureId: 'issue-1519',
       behaviorId: 'repair-contract',
       claimId: 'release-repair-contract-deterministic-v1',
+      featureRefs: ['sabbour/agentweaver#1519'],
       requiredSurfaces: ['api'],
     }],
   }]);
+});
+
+test('release selector links conservative fan generation PRs without substituting for issue 1418 runtime proof', () => {
+  const catalog = loadChallengeCatalog();
+  const result = selectReleaseChallenges(catalog, {
+    schemaVersion: 'agentweaver.release-feature-manifest/v1',
+    release: {
+      version: '0.34.0',
+      deployedRevision: 'revision-1',
+      deploymentIdentity: 'staging-a',
+    },
+    features: [{
+      id: 'fan-generation-corrections',
+      refs: ['sabbour/agentweaver#1591', 'sabbour/agentweaver#1592', 'sabbour/agentweaver#1593'],
+      shippedBehaviors: [{
+        id: 'conservative-fan-generation',
+        claimIds: ['workflow-conservative-fan-generation-v1'],
+        affectedSurfaces: ['api'],
+      }],
+    }],
+  });
+  assert.equal(result.ok, true, result.errors.join('\n'));
+  assert.deepEqual(result.focusedChallenges, [{
+    challengeId: 'workflow-conservative-fan-generation-v1',
+    claimIds: ['workflow-conservative-fan-generation-v1'],
+    requiredSurfaces: ['api'],
+    featureIds: ['fan-generation-corrections'],
+    behaviorIds: ['conservative-fan-generation'],
+    coverage: [{
+      featureId: 'fan-generation-corrections',
+      behaviorId: 'conservative-fan-generation',
+      claimId: 'workflow-conservative-fan-generation-v1',
+      featureRefs: ['sabbour/agentweaver#1591', 'sabbour/agentweaver#1592', 'sabbour/agentweaver#1593'],
+      requiredSurfaces: ['api'],
+    }],
+  }]);
+
+  const runtimeIssue = structuredClone(result);
+  assert.equal(
+    selectReleaseChallenges(catalog, {
+      schemaVersion: 'agentweaver.release-feature-manifest/v1',
+      release: {
+        version: '0.34.0',
+        deployedRevision: 'revision-1',
+        deploymentIdentity: 'staging-a',
+      },
+      features: [{
+        id: 'issue-1418',
+        refs: ['sabbour/agentweaver#1418'],
+        shippedBehaviors: [{
+          id: 'durable-fan-execution',
+          claimIds: ['workflow-conservative-fan-generation-v1'],
+          affectedSurfaces: ['api'],
+        }],
+      }],
+    }).ok,
+    false,
+    JSON.stringify(runtimeIssue),
+  );
+});
+
+test('full PM lifecycle requires dependency, concurrency, conflict, and validation evidence', () => {
+  const catalog = loadChallengeCatalog();
+  const challenge = getChallenge(catalog, 'product-management-full-lifecycle-v1');
+  const claim = challenge.claims.find((item) => item.id === 'pm-dependent-concurrent-delivery-v1');
+  assert.ok(claim);
+  assert.deepEqual(
+    ['work-plan', 'topology-record', 'repository-revision', 'review-record', 'event-query']
+      .filter((type) => !claim.requiredEvidence.includes(type)),
+    [],
+  );
+  assert.ok(challenge.completionRequirements.some((item) => item.includes('concurrent branches')));
+  assert.ok(challenge.completionRequirements.some((item) => item.includes('shared-contract conflict')));
+  assert.ok(challenge.completionRequirements.some((item) => item.includes('Validate the assembled revision')));
 });
 
 test('release selector fails closed on unknown claims, feature-link mismatches, and absent surface support', () => {
@@ -211,4 +287,40 @@ test('release selector enforces every nested feature-manifest schema requirement
     delete clonedTarget[field];
     assert.equal(selectReleaseChallenges(catalog, invalid).ok, false, field);
   }
+});
+
+test('release selector rejects duplicate feature and behavior identities', () => {
+  const catalog = loadChallengeCatalog();
+  const feature = {
+    id: 'issue-1519',
+    refs: ['sabbour/agentweaver#1519'],
+    shippedBehaviors: [{
+      id: 'repair-contract',
+      claimIds: ['release-repair-contract-deterministic-v1'],
+      affectedSurfaces: ['api'],
+    }],
+  };
+  const duplicateFeature = selectReleaseChallenges(catalog, {
+    schemaVersion: 'agentweaver.release-feature-manifest/v1',
+    release: {
+      version: '0.34.0',
+      deployedRevision: 'revision-1',
+      deploymentIdentity: 'staging-a',
+    },
+    features: [feature, structuredClone(feature)],
+  });
+  assert.match(duplicateFeature.errors.join('\n'), /duplicates feature/);
+
+  const duplicateBehaviorFeature = structuredClone(feature);
+  duplicateBehaviorFeature.shippedBehaviors.push(structuredClone(feature.shippedBehaviors[0]));
+  const duplicateBehavior = selectReleaseChallenges(catalog, {
+    schemaVersion: 'agentweaver.release-feature-manifest/v1',
+    release: {
+      version: '0.34.0',
+      deployedRevision: 'revision-1',
+      deploymentIdentity: 'staging-a',
+    },
+    features: [duplicateBehaviorFeature],
+  });
+  assert.match(duplicateBehavior.errors.join('\n'), /duplicates behavior/);
 });
