@@ -15,6 +15,7 @@ public sealed class BacklogTaskRecord
     public DateTimeOffset? ClaimedAt { get; set; }
     public string? RunId { get; set; }
     public string? WorkflowOverrideId { get; set; }
+    public string? WorkflowDefinitionSnapshotYaml { get; set; }
     public DateTimeOffset? ArchivedAt { get; set; }
     public string? SourceFilePath { get; set; }
     public string? ParentPrdRunId { get; set; }

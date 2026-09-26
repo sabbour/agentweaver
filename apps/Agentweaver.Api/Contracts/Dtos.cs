@@ -1306,6 +1306,9 @@ public sealed record WorkPlanResponse
     [JsonPropertyName("parentResumeState")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ParentResumeState { get; init; }
+    [JsonPropertyName("joinedOutput")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? JoinedOutput { get; init; }
 
     /// <summary>
     /// Current/last assembly stage (null until a collective gate/action starts). This remains useful
@@ -1398,6 +1401,18 @@ public sealed record CoordinatorChildResponse
     [JsonPropertyName("workflowBranchOrdinal")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? WorkflowBranchOrdinal { get; init; }
+    [JsonPropertyName("parentRunId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentRunId { get; init; }
+    [JsonPropertyName("parentWorkflowId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentWorkflowId { get; init; }
+    [JsonPropertyName("parentWorkflowNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentWorkflowNodeId { get; init; }
+    [JsonPropertyName("parentJoinNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentJoinNodeId { get; init; }
 }
 
 /// <summary>Request body for POST /api/runs/{coordinatorRunId}/steer.</summary>

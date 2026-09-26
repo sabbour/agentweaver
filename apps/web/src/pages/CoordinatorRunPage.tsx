@@ -5069,6 +5069,17 @@ export function CoordinatorRunPage() {
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
                   workPlanTopologyThumbnail={renderTopologyThumbnail('workplan')}
+                  workflowExecution={workPlanData && (
+                    workPlanData.parentWorkflowId
+                    || workPlanData.parentWorkflowNodeId
+                    || workPlanData.parentJoinNodeId
+                    || workPlanData.joinedOutput
+                  ) ? {
+                    parentWorkflowId: workPlanData.parentWorkflowId,
+                    parentWorkflowNodeId: workPlanData.parentWorkflowNodeId,
+                    parentJoinNodeId: workPlanData.parentJoinNodeId,
+                    joinedOutput: workPlanData.joinedOutput,
+                  } : undefined}
                   credits={{
                     totalNanoAiu: tokenBreakdown?.totalNanoAiu ?? null,
                     detail: <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} plain showHeader={false} />,

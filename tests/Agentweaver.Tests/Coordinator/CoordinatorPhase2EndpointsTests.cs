@@ -173,6 +173,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     [Fact]
     public async Task WorkPlanAndChildren_StaticWorkflowChild_ProjectCorrelationAndDeclaredOrder()
     {
+        var parentRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser);
         var coordinatorRunId = await InsertInactiveCoordinatorRunAsync(
             CoordinatorWebApplicationFactory.OwnerUser);
         var secondChildRunId = await SeedAssembleReadyChildRunAsync("second");
@@ -182,26 +184,34 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             [
                 ("branch-b", 1, secondChildRunId),
                 ("branch-a", 0, firstChildRunId),
-            ]);
+            ],
+            parentRunId);
 
         var workPlan = await _owner.GetFromJsonAsync<WorkPlanResponse>(
-            $"/api/runs/{coordinatorRunId}/work-plan");
+            $"/api/runs/{parentRunId}/work-plan");
         var children = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
-            $"/api/runs/{coordinatorRunId}/children");
+            $"/api/runs/{parentRunId}/children");
 
         workPlan.Should().NotBeNull();
-        workPlan!.ParentRunId.Should().Be("11111111-1111-1111-1111-111111111111");
+        workPlan!.ParentRunId.Should().Be(parentRunId);
         workPlan.ParentWorkflowId.Should().Be("fan-workflow");
         workPlan.ParentWorkflowNodeId.Should().Be("fan");
         workPlan.ParentJoinNodeId.Should().Be("join");
         workPlan.ParentResumeRequestId.Should().Be("resume-request");
         workPlan.ParentResumeState.Should().Be("ready");
+        workPlan.JoinedOutput.Should().Be(
+            "[1. branch-a]\nfirst-output\n\n[2. branch-b]\nsecond-output");
         workPlan.Subtasks.Select(branch => branch.WorkflowBranchOrdinal).Should().Equal(0, 1);
         workPlan.Subtasks.Select(branch => branch.WorkflowBranchNodeId).Should().Equal("branch-a", "branch-b");
 
         children.Should().NotBeNull();
         children!.Select(branch => branch.WorkflowBranchOrdinal).Should().Equal(0, 1);
         children.Select(branch => branch.WorkflowBranchNodeId).Should().Equal("branch-a", "branch-b");
+        children.Should().OnlyContain(branch =>
+            branch.ParentRunId == parentRunId
+            && branch.ParentWorkflowId == "fan-workflow"
+            && branch.ParentWorkflowNodeId == "fan"
+            && branch.ParentJoinNodeId == "join");
     }
 
     [Fact]
@@ -1247,7 +1257,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
 
     private async Task SeedFanWorkPlanAsync(
         string coordinatorRunId,
-        IReadOnlyList<(string NodeId, int Ordinal, string ChildRunId)> branches)
+        IReadOnlyList<(string NodeId, int Ordinal, string ChildRunId)> branches,
+        string parentRunId = "11111111-1111-1111-1111-111111111111")
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -1273,12 +1284,28 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             ProjectId = "proj-fan",
             CoordinatorRunId = coordinatorRunId,
             Status = WorkPlanStatus.Dispatching,
-            ParentRunId = "11111111-1111-1111-1111-111111111111",
+            ParentRunId = parentRunId,
             ParentWorkflowId = "fan-workflow",
             ParentWorkflowNodeId = "fan",
             ParentJoinNodeId = "join",
             ParentResumeRequestId = "resume-request",
             ParentResumeState = "ready",
+            ParentResumeResultJson = JsonSerializer.Serialize(
+                new WorkflowChildWorkResult(
+                    1,
+                    coordinatorRunId,
+                    "fan-workflow",
+                    "fan",
+                    "join",
+                    true,
+                    WorkPlanStatus.Complete,
+                    null,
+                    [
+                        new WorkflowChildWorkBranch(1, "branch-a", 0, SubtaskStatus.Completed, branches.Single(branch => branch.NodeId == "branch-a").ChildRunId, "first-output"),
+                        new WorkflowChildWorkBranch(2, "branch-b", 1, SubtaskStatus.Completed, branches.Single(branch => branch.NodeId == "branch-b").ChildRunId, "second-output"),
+                    ],
+                    "[1. branch-a]\nfirst-output\n\n[2. branch-b]\nsecond-output"),
+                JsonDefaults.Options),
             CreatedAt = now,
             UpdatedAt = now,
         };

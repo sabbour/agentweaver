@@ -1176,6 +1176,7 @@ export interface WorkPlanResponse {
   parentJoinNodeId?: string | null;
   parentResumeRequestId?: string | null;
   parentResumeState?: string | null;
+  joinedOutput?: string | null;
   statusReason?: string | null;
   assemblyStage?: string | null;
   assemblyTerminalStage?: string | null;
@@ -1197,6 +1198,10 @@ export interface CoordinatorChildResponse {
   stepCount: number;
   workflowBranchNodeId?: string;
   workflowBranchOrdinal?: number;
+  parentRunId?: string | null;
+  parentWorkflowId?: string | null;
+  parentWorkflowNodeId?: string | null;
+  parentJoinNodeId?: string | null;
 }
 
 export type SteerKind = 'send' | 'redirect' | 'amend' | 'stop';

@@ -452,6 +452,14 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             ApprovalPolicySource = approvalSnapshot.Source,
             ApprovalPolicyCapturedAt = approvalSnapshot.CapturedAt,
             ApprovalPolicySettingsUpdatedAt = approvalSnapshot.SettingsUpdatedAt,
+            ExecutableWorkflowPinRequired = coordinatorRun.ExecutableWorkflowPinRequired,
+            ExecutableWorkflowManifestSchemaVersion = coordinatorRun.ExecutableWorkflowManifestSchemaVersion,
+            ExecutableWorkflowDefinitionId = coordinatorRun.ExecutableWorkflowDefinitionId,
+            ExecutableWorkflowDefinitionVersion = coordinatorRun.ExecutableWorkflowDefinitionVersion,
+            ExecutableWorkflowSource = coordinatorRun.ExecutableWorkflowSource,
+            ExecutableWorkflowContentDigest = coordinatorRun.ExecutableWorkflowContentDigest,
+            ExecutableWorkflowDefinitionYaml = coordinatorRun.ExecutableWorkflowDefinitionYaml,
+            ExecutableWorkflowPinnedAt = coordinatorRun.ExecutableWorkflowPinnedAt,
         });
 
         await db.SaveChangesAsync(ct);
@@ -539,6 +547,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         ClaimedAt = t.ClaimedAt,
         RunId = t.RunId?.ToString(),
         WorkflowOverrideId = t.WorkflowOverrideId,
+        WorkflowDefinitionSnapshotYaml = t.WorkflowDefinitionSnapshotYaml,
         ArchivedAt = t.ArchivedAt,
         SourceFilePath = t.SourceFilePath,
         ParentPrdRunId = t.ParentPrdRunId?.ToString(),
@@ -563,6 +572,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         ClaimedAt = r.ClaimedAt,
         RunId = r.RunId is null ? null : RunId.Parse(r.RunId),
         WorkflowOverrideId = r.WorkflowOverrideId,
+        WorkflowDefinitionSnapshotYaml = r.WorkflowDefinitionSnapshotYaml,
         ArchivedAt = r.ArchivedAt,
         SourceFilePath = r.SourceFilePath,
         ParentPrdRunId = r.ParentPrdRunId is null ? null : RunId.Parse(r.ParentPrdRunId),

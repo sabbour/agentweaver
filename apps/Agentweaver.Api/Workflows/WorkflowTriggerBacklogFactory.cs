@@ -112,6 +112,7 @@ internal static class WorkflowTriggerBacklogFactory
             CreatedAt = now,
             CommittedAt = null,
             WorkflowOverrideId = definition.Id,
+            WorkflowDefinitionSnapshotYaml = WorkflowDefinitionYamlSerializer.Serialize(definition),
             SourceFilePath = idempotencyKey,
             IsAutomationInvocationPending = isAutomationInvocationPending,
             CapturedByUserId = capturedByUserId,

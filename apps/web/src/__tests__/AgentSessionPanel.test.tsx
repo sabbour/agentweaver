@@ -616,6 +616,47 @@ describe('AgentSessionPanel', () => {
     expect(screen.queryByTestId('topology-thumbnail-stub')).toBeNull();
   });
 
+  it('renders static fan correlation and declaration-ordered joined output on the Work Plan scope', async () => {
+    const workPlanTree: RunSessionTree[] = [{
+      ...tree[0],
+      children: [{
+        nodeId: 'work-plan',
+        label: 'Work Plan',
+        roleKey: 'work_plan',
+        status: 'completed',
+        depth: 1,
+        children: [],
+      }],
+    }];
+
+    render(
+      <Wrapper>
+        <AgentSessionPanel
+          open
+          onClose={vi.fn()}
+          tree={workPlanTree}
+          selectedNodeId="work-plan"
+          onSelectNode={vi.fn()}
+          coordinatorRunId="coord-run-1"
+          projectId="p1"
+          workflowExecution={{
+            parentWorkflowId: 'pm-discovery',
+            parentWorkflowNodeId: 'discovery-fan-out',
+            parentJoinNodeId: 'discovery-fan-in',
+            joinedOutput: '[1. customer-signal-research]\nfirst\n\n[2. technical-feasibility-research]\nsecond',
+          }}
+        />
+      </Wrapper>,
+    );
+
+    await screen.findByTestId('workflow-fan-result');
+    expect(document.body.textContent).toContain('workflow pm-discovery');
+    expect(document.body.textContent).toContain('fan discovery-fan-out');
+    expect(document.body.textContent).toContain('join discovery-fan-in');
+    expect(document.body.textContent).toContain('[1. customer-signal-research]');
+    expect(document.body.textContent).toContain('[2. technical-feasibility-research]');
+  });
+
   it('renders a red RAI verdict as an error state for a completed RAI gate', async () => {
     currentEvents = [
       {

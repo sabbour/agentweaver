@@ -319,7 +319,10 @@ internal sealed class WorkflowChildWorkService
             label = "Parallel branches",
             workPlanId,
             childCoordinatorRunId = snapshot.Plan.CoordinatorRunId,
+            parentWorkflowId = snapshot.Plan.ParentWorkflowId,
+            parentWorkflowNodeId = snapshot.Plan.ParentWorkflowNodeId,
             joinNodeId = snapshot.Plan.ParentJoinNodeId,
+            parentJoinNodeId = snapshot.Plan.ParentJoinNodeId,
             branchCount = snapshot.Branches.Count,
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
@@ -573,8 +576,12 @@ internal sealed class WorkflowChildWorkService
                     label = "Join parallel branches",
                     workPlanId,
                     childCoordinatorRunId = snapshot.Plan.CoordinatorRunId,
+                    parentWorkflowId = snapshot.Plan.ParentWorkflowId,
+                    parentWorkflowNodeId = snapshot.Plan.ParentWorkflowNodeId,
+                    parentJoinNodeId = snapshot.Plan.ParentJoinNodeId,
                     succeeded,
                     branchCount = branches.Count,
+                    joinedOutput,
                     timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
                 });
             }

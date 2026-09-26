@@ -20,6 +20,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -2154,7 +2155,9 @@ public sealed class CoordinatorRunService
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
         var plan = await db.WorkPlans.AsNoTracking()
-            .FirstOrDefaultAsync(w => w.CoordinatorRunId == coordinatorRunId, ct).ConfigureAwait(false);
+            .FirstOrDefaultAsync(
+                w => w.CoordinatorRunId == coordinatorRunId || w.ParentRunId == coordinatorRunId,
+                ct).ConfigureAwait(false);
         if (plan is null) return null;
 
         var subtasks = await db.Subtasks.AsNoTracking()
@@ -2201,7 +2204,8 @@ public sealed class CoordinatorRunService
             plan.ParentWorkflowNodeId,
             plan.ParentJoinNodeId,
             plan.ParentResumeRequestId,
-            plan.ParentResumeState);
+            plan.ParentResumeState,
+            ReadJoinedOutput(plan.ParentResumeResultJson));
     }
 
     /// <summary>
@@ -2238,7 +2242,9 @@ public sealed class CoordinatorRunService
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
         var plan = await db.WorkPlans.AsNoTracking()
-            .FirstOrDefaultAsync(w => w.CoordinatorRunId == coordinatorRunId, ct).ConfigureAwait(false);
+            .FirstOrDefaultAsync(
+                w => w.CoordinatorRunId == coordinatorRunId || w.ParentRunId == coordinatorRunId,
+                ct).ConfigureAwait(false);
         if (plan is null) return [];
 
         var subtasks = await db.Subtasks.AsNoTracking()
@@ -2265,10 +2271,24 @@ public sealed class CoordinatorRunService
                 child?.TreeHash,
                 await ResolveStepCountAsync(s.ChildRunId!, child, ct).ConfigureAwait(false),
                 s.WorkflowBranchNodeId,
-                s.WorkflowBranchOrdinal));
+                s.WorkflowBranchOrdinal,
+                plan.ParentRunId,
+                plan.ParentWorkflowId,
+                plan.ParentWorkflowNodeId,
+                plan.ParentJoinNodeId));
         }
 
         return children;
+    }
+
+    private static string? ReadJoinedOutput(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return null;
+
+        return JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+            resultJson,
+            JsonDefaults.Options)?.JoinedOutput;
     }
 
     private async Task<int> ResolveStepCountAsync(string runId, Run? child, CancellationToken ct)
@@ -2558,7 +2578,8 @@ public sealed record CoordinatorWorkPlanView(
     string? ParentWorkflowNodeId = null,
     string? ParentJoinNodeId = null,
     string? ParentResumeRequestId = null,
-    string? ParentResumeState = null);
+    string? ParentResumeState = null,
+    string? JoinedOutput = null);
 
 /// <summary>A subtask row in <see cref="CoordinatorWorkPlanView"/>.</summary>
 public sealed record CoordinatorSubtaskView(
@@ -2589,4 +2610,8 @@ public sealed record CoordinatorChildView(
     string? TreeHash,
     int StepCount,
     string? WorkflowBranchNodeId = null,
-    int? WorkflowBranchOrdinal = null);
+    int? WorkflowBranchOrdinal = null,
+    string? ParentRunId = null,
+    string? ParentWorkflowId = null,
+    string? ParentWorkflowNodeId = null,
+    string? ParentJoinNodeId = null);
