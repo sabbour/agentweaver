@@ -243,6 +243,12 @@ public static class EventTypes
     public const string CoordinatorOutcomeSpecDrafting = "coordinator.outcome_spec.drafting";
 
     /// <summary>
+    /// The coordinator received an unusable model response while drafting and is making its one
+    /// bounded schema-correction attempt before failing explicitly.
+    /// </summary>
+    public const string CoordinatorOutcomeSpecDraftRetrying = "coordinator.outcome_spec.draft_retrying";
+
+    /// <summary>
     /// Emitted when the coordinator presents an outcome-spec draft (or revision) for
     /// human confirmation. The run is suspended at the await-confirmation gate after this.
     /// Payload: { specId, status, desiredOutcome, scope, assumptions, clarifyingQuestions }

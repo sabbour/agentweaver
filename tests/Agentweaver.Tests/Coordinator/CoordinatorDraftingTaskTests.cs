@@ -1,5 +1,7 @@
 using System.Text;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Domain;
 using FluentAssertions;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -25,6 +27,10 @@ public sealed class CoordinatorDraftingTaskTests : IDisposable
 
     private const string SampleGoal =
         "Build me a meal planner web app, take it from the initial idea to a working preview.";
+
+    private const string Issue1598Goal =
+        "Plan a minimal multi-user task tracker with a reviewable implementation path, container " +
+        "packaging, Azure Container Apps deployment, and live verification. Stop before implementation.";
 
     private readonly string _root;
 
@@ -109,6 +115,116 @@ public sealed class CoordinatorDraftingTaskTests : IDisposable
         var endFenceIndex = task.LastIndexOf("<<<END_USER_GOAL>>>", StringComparison.Ordinal);
         summaryIndex.Should().BeLessThan(fenceIndex);
         endFenceIndex.Should().BeGreaterThan(fenceIndex);
+    }
+
+    [Fact]
+    public async Task DraftFromModelAsync_RefusalThenValidJson_ReasksOnceAndReturnsDraft()
+    {
+        var responses = new Queue<string>(
+        [
+            "I'm sorry, but I cannot assist with that request.",
+            """
+            {
+              "desired_outcome": "A reviewable delivery plan for the task tracker.",
+              "scope": "Plan application, container, deployment, and verification work; do not implement.",
+              "assumptions": "Azure Container Apps is the deployment target.",
+              "clarifying_questions": null
+            }
+            """,
+        ]);
+        var prompts = new List<string>();
+        var retryReasons = new List<string>();
+
+        var draft = await CopilotCoordinatorSpecDrafter.DraftFromModelAsync(
+            "7bedc0fb-01da-444e-a69c-5009829c2412",
+            ModelSource.Byok,
+            Issue1598Goal,
+            (prompt, _) =>
+            {
+                prompts.Add(prompt);
+                return Task.FromResult(responses.Dequeue());
+            },
+            (attempt, reason) => retryReasons.Add($"{attempt}:{reason}"),
+            CancellationToken.None);
+
+        draft.DesiredOutcome.Should().Be("A reviewable delivery plan for the task tracker.");
+        prompts.Should().HaveCount(2);
+        prompts[0].Should().Be(Issue1598Goal);
+        prompts[1].Should().Contain("previous response did not satisfy");
+        prompts[1].Should().Contain(Issue1598Goal);
+        retryReasons.Should().Equal("1:model_refusal");
+    }
+
+    [Fact]
+    public async Task DraftFromModelAsync_StructuredRefusal_ReasksInsteadOfPersistingRefusal()
+    {
+        var responses = new Queue<string>(
+        [
+            """
+            {
+              "desired_outcome": "I cannot assist with that request.",
+              "scope": "Not applicable.",
+              "assumptions": "Not applicable.",
+              "clarifying_questions": null
+            }
+            """,
+            """
+            {
+              "desired_outcome": "A reviewable delivery plan for the task tracker.",
+              "scope": "Plan only; do not implement.",
+              "assumptions": "Azure Container Apps is the deployment target.",
+              "clarifying_questions": null
+            }
+            """,
+        ]);
+        var retryReasons = new List<string>();
+
+        var draft = await CopilotCoordinatorSpecDrafter.DraftFromModelAsync(
+            "run-structured-refusal",
+            ModelSource.Byok,
+            Issue1598Goal,
+            (_, _) => Task.FromResult(responses.Dequeue()),
+            (attempt, reason) => retryReasons.Add($"{attempt}:{reason}"),
+            CancellationToken.None);
+
+        draft.DesiredOutcome.Should().Be("A reviewable delivery plan for the task tracker.");
+        retryReasons.Should().Equal("1:model_refusal");
+    }
+
+    [Fact]
+    public async Task DraftFromModelAsync_RepeatedRefusal_ThrowsTypedRetryableFailure()
+    {
+        var act = () => CopilotCoordinatorSpecDrafter.DraftFromModelAsync(
+            "7bedc0fb-01da-444e-a69c-5009829c2412",
+            ModelSource.Byok,
+            Issue1598Goal,
+            (_, _) => Task.FromResult("I'm sorry, but I cannot assist with that request."),
+            onRetry: null,
+            CancellationToken.None);
+
+        var failure = (await act.Should().ThrowAsync<AgentProviderException>()).Which;
+        failure.ErrorCode.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        failure.IsRetryable.Should().BeTrue();
+        failure.UserMessage.Should().Contain("outcome spec");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{\"desired_outcome\":\"only one field\"}")]
+    public async Task DraftFromModelAsync_RepeatedMissingOrMalformedState_ThrowsTypedRetryableFailure(
+        string response)
+    {
+        var act = () => CopilotCoordinatorSpecDrafter.DraftFromModelAsync(
+            "run-malformed-outcome-spec",
+            ModelSource.GitHubCopilot,
+            Issue1598Goal,
+            (_, _) => Task.FromResult(response),
+            onRetry: null,
+            CancellationToken.None);
+
+        var failure = (await act.Should().ThrowAsync<AgentProviderException>()).Which;
+        failure.ErrorCode.Should().Be(CoordinatorFailureCodes.OutcomeSpecInvalidResponse);
+        failure.IsRetryable.Should().BeTrue();
     }
 
     // =====================================================================

@@ -428,6 +428,52 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_RepeatedOutcomeSpecRefusal_EmitsActionableRetryableTerminal()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ExceptionToThrow = new AgentProviderException(
+            ModelSource.Byok,
+            AgentProviderFailureKind.ProviderUnavailable,
+            CoordinatorFailureCodes.OutcomeSpecModelRefused,
+            "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.",
+            isRetryable: true);
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "Plan a minimal multi-user task tracker with a reviewable implementation path, container " +
+            "packaging, Azure Container Apps deployment, and live verification. Stop before implementation.",
+            startMode: "defineOutcome");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        run.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        run.CoordinatorStatus.Should().Be("drafting");
+
+        var diagnostic = await _owner.GetFromJsonAsync<RunTerminalDiagnosticResponse>(
+            $"/api/runs/{runId}/terminal-diagnostic");
+        diagnostic.Should().NotBeNull();
+        diagnostic!.Code.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        diagnostic.Retryable.Should().BeTrue();
+        diagnostic.Message.Should().Contain("Retry the run or choose another model.");
+        diagnostic.CauseChain.Should().Contain("phase:coordinator-draft:failed");
+        diagnostic.CauseChain.Should().Contain("reason:coordinator_outcome_spec_model_refused");
+        diagnostic.CauseChain.Should().Contain(nameof(AgentProviderException));
+        diagnostic.CauseChain.Should().NotContain(nameof(InvalidOperationException));
+    }
+
+    [Fact]
     public async Task Start_DrafterThrowsTimeout_DoesNotMislabelCoordinatorDeadline()
     {
         var projectId = await CreateProjectAsync();

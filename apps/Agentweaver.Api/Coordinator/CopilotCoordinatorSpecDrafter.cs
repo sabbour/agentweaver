@@ -22,7 +22,13 @@ namespace Agentweaver.Api.Coordinator;
 /// </summary>
 public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 {
+    private const int MaxDraftAttempts = 2;
     private const string CoordinatorAgentName = "Coordinator";
+    private const string DraftRepairInstruction =
+        "Your previous response did not satisfy the outcome-spec response contract. Retry the " +
+        "original planning-only request below. Do not perform the user's work. Return ONLY one JSON " +
+        "object with non-empty string fields desired_outcome, scope, and assumptions, plus " +
+        "clarifying_questions as a string or null. Do not include markdown, prose, or code fences.";
     private const string CoordinatorMetaToolsRuntimeNote =
         """
 
@@ -153,13 +159,32 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 userId: input.SubmittingUser,
                 preferModelIdOverByokConfiguration: true).ConfigureAwait(false);
 
-            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            var response = await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
-
-            return ParseDraft(response)
-                ?? throw new InvalidOperationException(
-                    "Coordinator model draft returned no parseable outcome spec. The run fails rather " +
-                    "than fabricate a spec; retry once connectivity and the model are available.");
+            return await DraftFromModelAsync(
+                input.RunId,
+                acceptedModelSource,
+                task,
+                async (prompt, token) =>
+                {
+                    var session = await agent.CreateSessionAsync(token).ConfigureAwait(false);
+                    return await agent.ExecuteStreamingLoopAsync(prompt, session, token).ConfigureAwait(false);
+                },
+                (attempt, reason) =>
+                {
+                    _loggerFactory.CreateLogger<CopilotCoordinatorSpecDrafter>().LogWarning(
+                        "Coordinator outcome-spec response for run {RunId} was {Reason}; " +
+                        "requesting one schema-correction turn ({Attempt}/{MaxAttempts})",
+                        input.RunId,
+                        reason,
+                        attempt + 1,
+                        MaxDraftAttempts);
+                    coordEntry?.RecordNext(EventTypes.CoordinatorOutcomeSpecDraftRetrying, new
+                    {
+                        attempt = attempt + 1,
+                        maxAttempts = MaxDraftAttempts,
+                        reason,
+                    });
+                },
+                ct).ConfigureAwait(false);
         }
         finally
         {
@@ -376,6 +401,78 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 - "clarifying_questions": string or null. Only questions whose answers would
                   materially change the scope; null if there are none.
                 """;
+    }
+
+    internal static async Task<OutcomeSpecDraft> DraftFromModelAsync(
+        string runId,
+        ModelSource modelSource,
+        string initialTask,
+        Func<string, CancellationToken, Task<string>> executeTurn,
+        Action<int, string>? onRetry,
+        CancellationToken ct)
+    {
+        var prompt = initialTask;
+        string? lastResponse = null;
+        var lastReason = "invalid_response";
+
+        for (var attempt = 1; attempt <= MaxDraftAttempts; attempt++)
+        {
+            lastResponse = await executeTurn(prompt, ct).ConfigureAwait(false);
+            var parsedDraft = ParseDraft(lastResponse);
+            if (parsedDraft is not null && !IsLikelyModelRefusal(lastResponse, parsedDraft))
+            {
+                var draft = parsedDraft;
+                return draft;
+            }
+
+            lastReason = IsLikelyModelRefusal(lastResponse, parsedDraft)
+                ? "model_refusal"
+                : "invalid_response";
+            if (attempt < MaxDraftAttempts)
+            {
+                onRetry?.Invoke(attempt, lastReason);
+                prompt = BuildDraftRepairTask(initialTask);
+            }
+        }
+
+        var refused = lastReason == "model_refusal";
+        throw new AgentProviderException(
+            modelSource,
+            AgentProviderFailureKind.ProviderUnavailable,
+            refused
+                ? CoordinatorFailureCodes.OutcomeSpecModelRefused
+                : CoordinatorFailureCodes.OutcomeSpecInvalidResponse,
+            refused
+                ? $"The model declined to draft the outcome spec for run {runId} after one correction attempt. Retry the run or choose another model."
+                : $"The model returned an invalid outcome-spec response for run {runId} after one correction attempt. Retry the run or choose another model.",
+            isRetryable: true);
+    }
+
+    private static string BuildDraftRepairTask(string initialTask) =>
+        $"{DraftRepairInstruction}\n\nORIGINAL OUTCOME-SPEC REQUEST:\n{initialTask}";
+
+    private static bool IsLikelyModelRefusal(string? response, OutcomeSpecDraft? parsedDraft)
+    {
+        if (ContainsRefusal(response))
+            return true;
+
+        return parsedDraft is not null
+            && (ContainsRefusal(parsedDraft.DesiredOutcome)
+                || ContainsRefusal(parsedDraft.Scope)
+                || ContainsRefusal(parsedDraft.Assumptions)
+                || ContainsRefusal(parsedDraft.ClarifyingQuestions));
+    }
+
+    private static bool ContainsRefusal(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var normalized = value.Trim();
+        return normalized.StartsWith("I'm sorry", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("cannot assist with that request", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("can't assist with that request", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("unable to assist with that request", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Tolerant JSON extraction: pulls the first balanced object out of the response.</summary>

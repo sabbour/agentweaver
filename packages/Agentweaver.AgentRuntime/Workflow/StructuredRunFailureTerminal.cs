@@ -23,6 +23,8 @@ public static class StructuredRunFailureTerminal
         "agent_host_turn_incomplete",
         "coordinator_execution_failed",
         "coordinator_direct_execution_failed",
+        "coordinator_outcome_spec_invalid_response",
+        "coordinator_outcome_spec_model_refused",
         "coordinator_startup_failed",
         "github_copilot_auth_required",
         "github_copilot_capability_snapshot_unavailable",
@@ -253,6 +255,11 @@ public static class StructuredRunFailureTerminal
     public static string CreateDiagnosticMessage(string? errorCode, bool? retryable)
     {
         var code = NormalizeErrorCode(errorCode);
+        if (code == "coordinator_outcome_spec_model_refused")
+            return "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.";
+        if (code == "coordinator_outcome_spec_invalid_response")
+            return "The model returned an invalid outcome-spec response after one correction attempt. Retry the run or choose another model.";
+
         var retrySummary = retryable switch
         {
             true => " Retry is available.",
