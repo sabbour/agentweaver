@@ -134,6 +134,43 @@ public sealed class BacklogClaimReserveTests
         (await runStore.GetAsync(secondRunId))!.GetApprovalPolicySnapshot().Should().Be(second.ApprovalPolicySnapshot);
     }
 
+    [Fact]
+    public async Task Claim_PersistsExecutableWorkflowPinAtomicallyWithReservedRun()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var backlog = new SqliteBacklogTaskStore(testDb.Db);
+        var runs = new SqliteRunStore(testDb.Db);
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+        var task = MakeReadyTask(project.Id, "pin");
+        await backlog.InsertAsync(task);
+        var runId = RunId.New();
+        const string yaml = "id: pinned\nname: Pinned\nversion: \"1\"\nstart: done\nnodes:\n  - id: done\n    type: terminal\n";
+        var run = MakeCoordinatorRun(project.Id, runId) with
+        {
+            Status = RunStatus.Pending,
+            AgentName = null,
+            ExecutableWorkflowPinRequired = true,
+            ExecutableWorkflowManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+            ExecutableWorkflowDefinitionId = "pinned",
+            ExecutableWorkflowDefinitionVersion = "1",
+            ExecutableWorkflowSource = "backlog_snapshot",
+            ExecutableWorkflowContentDigest = "sha256:test",
+            ExecutableWorkflowDefinitionYaml = yaml,
+            ExecutableWorkflowPinnedAt = DateTimeOffset.UtcNow,
+        };
+
+        var claim = await backlog.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            project.Id, task.Id, run, DateTimeOffset.UtcNow);
+
+        claim.Result.Should().Be(ClaimReserveResult.Won);
+        var persisted = await runs.GetAsync(runId);
+        persisted.Should().NotBeNull();
+        persisted!.Status.Should().Be(RunStatus.Pending);
+        persisted.GetExecutableWorkflowPin().Should().BeEquivalentTo(run.GetExecutableWorkflowPin());
+    }
+
     // =========================================================================
     // 1b. Sequential overlapping claim: a second claim after the first Won returns Lost.
     // =========================================================================

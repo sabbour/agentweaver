@@ -1,8 +1,11 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using System.Security.Cryptography;
+using System.Text;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
@@ -24,6 +27,7 @@ public sealed class CoordinatorPickupService
     private readonly IBacklogTaskStore _backlogStore;
     private readonly IRunStore _runStore;
     private readonly CoordinatorRunService _coordinatorRunService;
+    private readonly RunOrchestrator _runOrchestrator;
     private readonly ILogger<CoordinatorPickupService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AiExecutionPlanAccessor _executionPlanAccessor;
@@ -32,6 +36,7 @@ public sealed class CoordinatorPickupService
         IBacklogTaskStore backlogStore,
         IRunStore runStore,
         CoordinatorRunService coordinatorRunService,
+        RunOrchestrator runOrchestrator,
         ILogger<CoordinatorPickupService> logger,
         IServiceScopeFactory scopeFactory,
         AiExecutionPlanAccessor executionPlanAccessor)
@@ -39,6 +44,7 @@ public sealed class CoordinatorPickupService
         _backlogStore = backlogStore;
         _runStore = runStore;
         _coordinatorRunService = coordinatorRunService;
+        _runOrchestrator = runOrchestrator;
         _logger = logger;
         _scopeFactory = scopeFactory;
         _executionPlanAccessor = executionPlanAccessor;
@@ -56,10 +62,11 @@ public sealed class CoordinatorPickupService
     {
         var now = DateTimeOffset.UtcNow;
         var runId = RunId.New();
+        var staticFanWorkflow = ResolveStaticFanWorkflow(task);
         var goal = string.IsNullOrWhiteSpace(task.Description)
             ? task.Title
             : $"{task.Title}\n\n{task.Description}";
-        if (!string.IsNullOrWhiteSpace(task.WorkflowOverrideId))
+        if (staticFanWorkflow is null && !string.IsNullOrWhiteSpace(task.WorkflowOverrideId))
             goal = $"use {task.WorkflowOverrideId.Trim()}\n\n{goal}";
 
         AiExecutionPlan? acceptedPlan = null;
@@ -140,15 +147,29 @@ public sealed class CoordinatorPickupService
             // subject into background execution. Legacy and automation tasks retain their existing
             // behavior through the fallback.
             SubmittingUser = task.CapturedByUserId ?? task.CapturedBy,
-            Status = RunStatus.InProgress,
+            Status = staticFanWorkflow is null ? RunStatus.InProgress : RunStatus.Pending,
             StartedAt = now,
             ProjectId = project.Id,
-            AgentName = "Coordinator",                // parent coordinator run
+            AgentName = staticFanWorkflow is null ? "Coordinator" : null,
             ParentRunId = null,
             SubtaskId = null,
             WorkflowRunId = null,                     // identity parity with interactive coordinator runs:
                                                       // detail page + endpoints resolve by run_id (no envelope)
             Origin = RunOrigin.BacklogPickup,         // durable origin marker; persisted atomically in step (b)
+            ExecutableWorkflowPinRequired = staticFanWorkflow is not null,
+            ExecutableWorkflowManifestSchemaVersion = staticFanWorkflow is null
+                ? null
+                : ExecutableWorkflowPin.CurrentSchemaVersion,
+            ExecutableWorkflowDefinitionId = staticFanWorkflow?.Id,
+            ExecutableWorkflowDefinitionVersion = staticFanWorkflow?.Version,
+            ExecutableWorkflowSource = staticFanWorkflow is null ? null : "backlog_snapshot",
+            ExecutableWorkflowContentDigest = staticFanWorkflow is null
+                ? null
+                : ComputeSha256Digest(task.WorkflowDefinitionSnapshotYaml!),
+            ExecutableWorkflowDefinitionYaml = staticFanWorkflow is null
+                ? null
+                : task.WorkflowDefinitionSnapshotYaml,
+            ExecutableWorkflowPinnedAt = staticFanWorkflow is null ? null : now,
         };
 
         if (blockedReason is not null)
@@ -243,14 +264,22 @@ public sealed class CoordinatorPickupService
                 : _executionPlanAccessor.Push(acceptedPlan);
             if (acceptedPlan is not null && acceptedByokConfiguration is not null)
                 _executionPlanAccessor.FreezeByokConfiguration(acceptedByokConfiguration);
-            await _coordinatorRunService.StartReservedCoordinatorRunAsync(
-                    run,
-                    approvalSnapshot,
-                    confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
-                    ct: CancellationToken.None,
-                    effectiveProvider: effectiveProvider,
-                    effectiveProviderBoundary: effectiveProviderBoundary)
-                .ConfigureAwait(false);
+            if (staticFanWorkflow is not null)
+            {
+                await _runOrchestrator.StartReservedProjectRunAsync(run, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await _coordinatorRunService.StartReservedCoordinatorRunAsync(
+                        run,
+                        approvalSnapshot,
+                        confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
+                        ct: CancellationToken.None,
+                        effectiveProvider: effectiveProvider,
+                        effectiveProviderBoundary: effectiveProviderBoundary)
+                    .ConfigureAwait(false);
+            }
         }
         catch (CoordinatorStartupException ex)
         {
@@ -262,11 +291,14 @@ public sealed class CoordinatorPickupService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Pickup: coordinator start failed for run {RunId}", runId);
+            _logger.LogError(ex, "Pickup: run start failed for run {RunId}", runId);
+            var failureCode = staticFanWorkflow is null
+                ? "coordinator_start_failed"
+                : "workflow_start_failed";
             var terminalized = await _runStore.TrySetTerminalOutcomeAsync(
                     runId,
-                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "coordinator_start_failed" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
-                    "coordinator_start_failed",
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = failureCode }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    failureCode,
                     CancellationToken.None).ConfigureAwait(false);
             if (!terminalized)
             {
@@ -278,6 +310,27 @@ public sealed class CoordinatorPickupService
             // Task stays Claimed -> Failed coordinator run shown in the terminal column. No silent re-queue (FR-012).
         }
     }
+
+    private static WorkflowDefinition? ResolveStaticFanWorkflow(BacklogTask task)
+    {
+        if (string.IsNullOrWhiteSpace(task.WorkflowDefinitionSnapshotYaml))
+            return null;
+
+        var loaded = WorkflowDefinitionLoader.Load(
+            task.WorkflowDefinitionSnapshotYaml,
+            "backlog_snapshot",
+            validationMode: WorkflowDefinitionValidationMode.LegacyCompatible);
+        if (!loaded.IsValid || loaded.Definition is null)
+            return null;
+
+        return loaded.Definition.Nodes.Any(node => node.Type == WorkflowNodeType.FanOut)
+            && loaded.Definition.Nodes.Any(node => node.Type == WorkflowNodeType.FanIn)
+                ? loaded.Definition
+                : null;
+    }
+
+    private static string ComputeSha256Digest(string content) =>
+        "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 
     /// <summary>
     /// Resolves the effective model provider for <paramref name="projectId"/> through the single

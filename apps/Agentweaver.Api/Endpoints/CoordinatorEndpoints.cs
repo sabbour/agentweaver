@@ -994,6 +994,7 @@ static WorkPlanResponse MapWorkPlan(CoordinatorWorkPlanView plan) => new()
     ParentJoinNodeId = plan.ParentJoinNodeId,
     ParentResumeRequestId = plan.ParentResumeRequestId,
     ParentResumeState = plan.ParentResumeState,
+    JoinedOutput = plan.JoinedOutput,
     AssemblyStage = plan.AssemblyStage,
     AssemblyTerminalStage = plan.AssemblyTerminalStage,
     StatusReason = plan.StatusReason,
@@ -1033,6 +1034,10 @@ static CoordinatorChildResponse MapChild(CoordinatorChildView child) => new()
     StepCount = child.StepCount,
     WorkflowBranchNodeId = child.WorkflowBranchNodeId,
     WorkflowBranchOrdinal = child.WorkflowBranchOrdinal,
+    ParentRunId = child.ParentRunId,
+    ParentWorkflowId = child.ParentWorkflowId,
+    ParentWorkflowNodeId = child.ParentWorkflowNodeId,
+    ParentJoinNodeId = child.ParentJoinNodeId,
 };
 
 // Maps a steering directive view to its camelCase response (Feature 008 Phase 2).

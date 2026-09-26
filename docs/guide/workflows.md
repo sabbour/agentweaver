@@ -153,7 +153,11 @@ update an integration Git branch, merge branch output, open or review a pull req
 artifacts, or invoke Scribe. Each branch may still use its ordinary isolated child-run worktree.
 While the parent is suspended for branch completion, REST, MCP, and the UI identify the pending
 request as `workflow_child_work`; this automated wait cannot be approved through `/review` or
-`run_review`.
+`run_review`. `GET /api/runs/{parentRunId}/work-plan` and `/children` resolve the embedded child
+plan from the parent workflow run as well as from its internal coordinator run. These projections
+include the parent workflow/node/join ids, each branch node id and declaration ordinal, and the
+ordered `joinedOutput` once the join is ready. The corresponding `workflow.step` events carry the
+same parent correlation and publish `joinedOutput` on `child_work_ready`.
 Nested fans, dynamic branches, quorum/first-success joins, and `coordinator_composed` remain
 unsupported.
 
@@ -216,7 +220,13 @@ For existing project workflows, use **Edit** to open the YAML editor or **Edit v
 
 Each workflow row shows all configured automation triggers, or **Manual only** when none are
 configured. Use **Run now** to queue a Ready task bound to that workflow; it is picked up and shown
-on the board through the same normal coordinator path as other work.
+on the board through the normal capacity-controlled pickup path. A saved workflow containing the
+supported static `fan_out` / `fan_in` region executes its pinned workflow graph directly, rather
+than asking the Coordinator model to decompose the task again. The queued task captures the saved
+definition immediately, and pickup copies that snapshot into the run's executable pin atomically,
+so an edit, deletion, process restart, or delayed pickup cannot substitute a different graph. Other
+workflows retain the ordinary Coordinator pickup behavior, and explicitly starting a Coordinator
+with a workflow override still uses the Coordinator flow.
 
 For project workflows, configure a schedule from the workflow row (**Add schedule** / **Edit
 schedule**) or from the visual editor to run the workflow daily, weekly, or monthly at a UTC time.

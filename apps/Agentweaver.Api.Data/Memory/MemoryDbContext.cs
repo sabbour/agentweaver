@@ -580,6 +580,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.ClaimedAt).HasColumnName("claimed_at");
             e.Property(t => t.RunId).HasColumnName("run_id");
             e.Property(t => t.WorkflowOverrideId).HasColumnName("workflow_override_id");
+            e.Property(t => t.WorkflowDefinitionSnapshotYaml).HasColumnName("workflow_definition_snapshot_yaml");
             e.Property(t => t.ArchivedAt).HasColumnName("archived_at");
             e.Property(t => t.SourceFilePath).HasColumnName("source_file_path");
             e.Property(t => t.ParentPrdRunId).HasColumnName("parent_prd_run_id");

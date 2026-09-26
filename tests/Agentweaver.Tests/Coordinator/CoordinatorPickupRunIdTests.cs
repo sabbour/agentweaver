@@ -4,6 +4,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
+using LibGit2Sharp;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
@@ -181,6 +182,153 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         // The run-detail endpoint also resolves by run_id post-confirm (no 404 cascade).
         var finalRun = await _owner.GetAsync($"/api/runs/{runId}");
         finalRun.StatusCode.Should().Be(HttpStatusCode.OK, "the coordinator run stays resolvable by run_id end-to-end");
+    }
+
+    [Fact]
+    public async Task RunNow_StaticFan_ExecutesPinnedWorkflowInsteadOfCoordinatorDecomposition()
+    {
+        await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
+        using var owner = factory.CreateOwnerClient();
+        factory.TestAgentRunner.Mode = TestFileEditAgentRunner.AgentMode.NoChange;
+
+        var workingDirectory = factory.NewWorkingDirectory();
+        var create = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Run now fan {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = workingDirectory,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        var pid = ProjectId.Parse(projectId);
+        SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory);
+
+        const string originalYaml = """
+            id: run-now-fan
+            name: Run now fan
+            version: "1"
+            start: fan
+            nodes:
+              - id: fan
+                type: fan_out
+                label: Parallel work
+              - id: branch-one
+                type: prompt
+                label: Branch one
+                agent: alpha
+                prompt: Produce branch one.
+              - id: branch-two
+                type: prompt
+                label: Branch two
+                agent: alpha
+                prompt: Produce branch two.
+              - id: join
+                type: fan_in
+                label: Join
+                target: fan
+              - id: done
+                type: terminal
+                label: Done
+            edges:
+              - from: fan
+                to: branch-one
+              - from: fan
+                to: branch-two
+              - from: branch-one
+                to: join
+              - from: branch-two
+                to: join
+              - from: join
+                to: done
+            """;
+        var save = await owner.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/run-now-fan",
+            new { yaml = originalYaml });
+        save.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Repository.Init(workingDirectory);
+        using (var repository = new Repository(workingDirectory))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial workflow", signature, signature);
+            if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+                repository.Branches.Rename(repository.Head, "main");
+        }
+
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var runNow = await owner.PostAsync(
+            $"/api/projects/{projectId}/workflows/run-now-fan/run",
+            content: null);
+        runNow.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var backlog = factory.Services.GetRequiredService<IBacklogTaskStore>();
+        var task = (await backlog.ListByProjectAsync(pid)).Should().ContainSingle().Subject;
+        task.WorkflowDefinitionSnapshotYaml.Should().Contain("id: branch-one");
+        await File.WriteAllTextAsync(
+            Path.Combine(workingDirectory, ".agentweaver", "workflows", "run-now-fan.yaml"),
+            originalYaml.Replace("branch-one", "edited-branch", StringComparison.Ordinal));
+        File.Delete(Path.Combine(workingDirectory, ".agentweaver", "workflows", "run-now-fan.yaml"));
+
+        var projectStore = factory.Services.GetRequiredService<IProjectStore>();
+        await projectStore.UpdatePickupSettingsAsync(
+            pid, 3, autopilot: true, autoApproveTools: true, DateTimeOffset.UtcNow);
+        var project = await projectStore.GetAsync(pid);
+        await factory.Services.GetRequiredService<CoordinatorPickupService>()
+            .TryPickupAsync(project!, task, CancellationToken.None);
+
+        var claimed = await backlog.GetAsync(pid, task.Id);
+        claimed!.RunId.Should().NotBeNull();
+        var runId = claimed.RunId!.Value.ToString();
+
+        JsonElement plan = default;
+        var attached = await PollUntilAsync(async () =>
+        {
+            var response = await owner.GetAsync($"/api/runs/{runId}/work-plan");
+            if (response.StatusCode != HttpStatusCode.OK)
+                return false;
+            plan = await response.Content.ReadFromJsonAsync<JsonElement>();
+            return plan.GetProperty("subtasks").GetArrayLength() == 2;
+        }, timeoutSeconds: 40);
+        attached.Should().BeTrue(
+            "Run now must enter the static fan child-work path; last plan: {0}",
+            plan.ValueKind == JsonValueKind.Undefined ? "<none>" : plan.GetRawText());
+
+        plan.GetProperty("parentRunId").GetString().Should().Be(runId);
+        plan.GetProperty("parentWorkflowId").GetString().Should().Be("run-now-fan");
+        plan.GetProperty("parentWorkflowNodeId").GetString().Should().Be("fan");
+        plan.GetProperty("parentJoinNodeId").GetString().Should().Be("join");
+        plan.GetProperty("subtasks").EnumerateArray()
+            .Select(item => (
+                item.GetProperty("workflowBranchNodeId").GetString(),
+                item.GetProperty("workflowBranchOrdinal").GetInt32()))
+            .Should().Equal(("branch-one", 0), ("branch-two", 1));
+
+        var events = string.Empty;
+        var waitingEvent = await PollUntilAsync(async () =>
+        {
+            events = await owner.GetStringAsync($"/api/runs/{runId}/events");
+            return events.Contains("waiting_child_work", StringComparison.Ordinal);
+        });
+        waitingEvent.Should().BeTrue();
+        events.Should().Contain("waiting_child_work");
+        events.Should().NotContain("coordinator.outcome_spec");
+
+        var persistedRun = await factory.Services.GetRequiredService<IRunStore>()
+            .GetAsync(RunId.Parse(runId));
+        persistedRun.Should().NotBeNull();
+        persistedRun!.AgentName.Should().BeNull("static saved workflows are workflow runs, not coordinator decompositions");
+        persistedRun.GetExecutableWorkflowPin().Should().NotBeNull();
+        persistedRun.ExecutableWorkflowDefinitionYaml.Should().Contain("id: branch-one");
+        persistedRun.ExecutableWorkflowDefinitionYaml.Should().NotContain("edited-branch");
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var storedPlan = await db.WorkPlans.SingleAsync(row => row.ParentRunId == runId);
+        storedPlan.IntegrationBranch.Should().BeNull();
+        storedPlan.AssemblyStage.Should().BeNull();
+        (await db.Subtasks.Where(row => row.WorkPlanId == storedPlan.Id).CountAsync()).Should().Be(2);
     }
 
     [Fact]

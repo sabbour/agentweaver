@@ -211,6 +211,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection,
             "ALTER TABLE backlog_tasks ADD COLUMN automation_invocation_pending INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN ai_execution_provider_key TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN workflow_definition_snapshot_yaml TEXT;", ct);
         await TryAlterAsync(connection,
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_parent_promotion_key
@@ -753,6 +754,7 @@ public sealed class SqliteDb
             committed_at  TEXT,
             claimed_at    TEXT,
             run_id        TEXT,                      -- non-null iff state = 'claimed'
+            workflow_definition_snapshot_yaml TEXT,
             archived_at   TEXT,
             source_file_path TEXT,
             parent_prd_run_id TEXT,

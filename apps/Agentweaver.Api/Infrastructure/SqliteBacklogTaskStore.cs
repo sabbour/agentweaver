@@ -28,12 +28,12 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             """
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
                                        captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
-                                       workflow_override_id, archived_at, source_file_path,
+                                       workflow_override_id, workflow_definition_snapshot_yaml, archived_at, source_file_path,
                                        parent_prd_run_id, promotion_key, promotion_reason,
                                        automation_invocation_pending, ai_execution_provider_key)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
                     $capturedBy, $capturedByUserId, $createdAt, $committedAt, $claimedAt, $runId,
-                    $workflowOverrideId, $archivedAt, $sourceFilePath,
+                    $workflowOverrideId, $workflowDefinitionSnapshotYaml, $archivedAt, $sourceFilePath,
                     $parentPrdRunId, $promotionKey, $promotionReason,
                     $automationInvocationPending, $aiExecutionProviderKey);
             """;
@@ -635,14 +635,22 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                                   agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id, origin,
                                   launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
                                   approval_policy_source,
-                                  approval_policy_captured_at, approval_policy_settings_updated_at)
+                                  approval_policy_captured_at, approval_policy_settings_updated_at,
+                                  executable_workflow_pin_required, executable_workflow_manifest_schema_version,
+                                  executable_workflow_definition_id, executable_workflow_definition_version,
+                                  executable_workflow_source, executable_workflow_content_digest,
+                                  executable_workflow_definition_yaml, executable_workflow_pinned_at)
                 SELECT $runId, $repo, $branch, $modelSource, $task,
                        $user, $status, $startedAt, $endedAt, $result,
                        NULL, NULL, $projectId, $modelId,
                        $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId, 'backlog_pickup',
                        $launchAutoApproveTools, $launchAutopilot, $approvalPolicySnapshotId,
                        $approvalPolicySource,
-                       $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt
+                       $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt,
+                       $executableWorkflowPinRequired, $executableWorkflowManifestSchemaVersion,
+                       $executableWorkflowDefinitionId, $executableWorkflowDefinitionVersion,
+                       $executableWorkflowSource, $executableWorkflowContentDigest,
+                       $executableWorkflowDefinitionYaml, $executableWorkflowPinnedAt
                 WHERE EXISTS (
                     SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
                 );
@@ -670,6 +678,14 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             insertRun.Parameters.AddWithValue("$approvalPolicySource", approvalSnapshot.Source);
             insertRun.Parameters.AddWithValue("$approvalPolicyCapturedAt", Ts(approvalSnapshot.CapturedAt));
             insertRun.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", Ts(approvalSnapshot.SettingsUpdatedAt!.Value));
+            insertRun.Parameters.AddWithValue("$executableWorkflowPinRequired", coordinatorRun.ExecutableWorkflowPinRequired ? 1 : 0);
+            insertRun.Parameters.AddWithValue("$executableWorkflowManifestSchemaVersion", (object?)coordinatorRun.ExecutableWorkflowManifestSchemaVersion ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowDefinitionId", (object?)coordinatorRun.ExecutableWorkflowDefinitionId ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowDefinitionVersion", (object?)coordinatorRun.ExecutableWorkflowDefinitionVersion ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowSource", (object?)coordinatorRun.ExecutableWorkflowSource ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowContentDigest", (object?)coordinatorRun.ExecutableWorkflowContentDigest ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowDefinitionYaml", (object?)coordinatorRun.ExecutableWorkflowDefinitionYaml ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowPinnedAt", coordinatorRun.ExecutableWorkflowPinnedAt is { } pinnedAt ? Ts(pinnedAt) : DBNull.Value);
             var runRows = await insertRun.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (runRows != 1)
             {
@@ -784,6 +800,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$claimedAt", NullableTs(task.ClaimedAt));
         command.Parameters.AddWithValue("$runId", (object?)task.RunId?.ToString() ?? DBNull.Value);
         command.Parameters.AddWithValue("$workflowOverrideId", (object?)task.WorkflowOverrideId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowDefinitionSnapshotYaml", (object?)task.WorkflowDefinitionSnapshotYaml ?? DBNull.Value);
         command.Parameters.AddWithValue("$archivedAt", NullableTs(task.ArchivedAt));
         command.Parameters.AddWithValue("$sourceFilePath", (object?)task.SourceFilePath ?? DBNull.Value);
         command.Parameters.AddWithValue("$parentPrdRunId", (object?)task.ParentPrdRunId?.ToString() ?? DBNull.Value);
@@ -795,14 +812,14 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
 
     // Ordinals: 0=task_id 1=project_id 2=title 3=description 4=state 5=order_key
     //           6=captured_by 7=captured_by_user_id 8=created_at 9=committed_at 10=claimed_at
-    //           11=run_id 12=workflow_override_id 13=archived_at 14=source_file_path
-    //           15=parent_prd_run_id 16=promotion_key 17=promotion_reason 18=automation_invocation_pending
-    //           19=ai_execution_provider_key
+    //           11=run_id 12=workflow_override_id 13=workflow_definition_snapshot_yaml
+    //           14=archived_at 15=source_file_path 16=parent_prd_run_id 17=promotion_key
+    //           18=promotion_reason 19=automation_invocation_pending 20=ai_execution_provider_key
     private const string SelectSql =
         """
         SELECT task_id, project_id, title, description, state, order_key,
               captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
-              workflow_override_id, archived_at, source_file_path,
+              workflow_override_id, workflow_definition_snapshot_yaml, archived_at, source_file_path,
               parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending,
               ai_execution_provider_key
           FROM backlog_tasks
@@ -823,13 +840,14 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         ClaimedAt   = r.IsDBNull(10) ? null : DateTimeOffset.Parse(r.GetString(10), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         RunId       = r.IsDBNull(11) ? null : RunId.Parse(r.GetString(11)),
         WorkflowOverrideId = r.IsDBNull(12) ? null : r.GetString(12),
-        ArchivedAt  = r.IsDBNull(13) ? null : DateTimeOffset.Parse(r.GetString(13), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        SourceFilePath = r.IsDBNull(14) ? null : r.GetString(14),
-        ParentPrdRunId = r.IsDBNull(15) ? null : RunId.Parse(r.GetString(15)),
-        PromotionKey = r.IsDBNull(16) ? null : r.GetString(16),
-        PromotionReason = r.IsDBNull(17) ? null : r.GetString(17),
-        IsAutomationInvocationPending = r.GetInt64(18) != 0,
-        AiExecutionProviderKey = r.IsDBNull(19) ? null : r.GetString(19),
+        WorkflowDefinitionSnapshotYaml = r.IsDBNull(13) ? null : r.GetString(13),
+        ArchivedAt  = r.IsDBNull(14) ? null : DateTimeOffset.Parse(r.GetString(14), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        SourceFilePath = r.IsDBNull(15) ? null : r.GetString(15),
+        ParentPrdRunId = r.IsDBNull(16) ? null : RunId.Parse(r.GetString(16)),
+        PromotionKey = r.IsDBNull(17) ? null : r.GetString(17),
+        PromotionReason = r.IsDBNull(18) ? null : r.GetString(18),
+        IsAutomationInvocationPending = r.GetInt64(19) != 0,
+        AiExecutionProviderKey = r.IsDBNull(20) ? null : r.GetString(20),
     };
 
     private static string AddTaskIdParameters(SqliteCommand command, IReadOnlyCollection<BacklogTaskId> taskIds)

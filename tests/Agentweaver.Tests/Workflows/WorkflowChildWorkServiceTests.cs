@@ -182,12 +182,14 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             ParentRunId = attached.ChildCoordinatorRunId,
             SubtaskId = attached.Branches[0].SubtaskId.ToString(),
             Result = "first-output",
+            EndedAt = DateTimeOffset.UtcNow.AddSeconds(2),
         };
         var second = NewRun(RunId.New(), DomainRunStatus.AssembleReady) with
         {
             ParentRunId = attached.ChildCoordinatorRunId,
             SubtaskId = attached.Branches[1].SubtaskId.ToString(),
             Result = "second-output",
+            EndedAt = DateTimeOffset.UtcNow,
         };
         await _runStore.InsertAsync(second);
         await _runStore.InsertAsync(first);
@@ -203,6 +205,8 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         await _service.SweepAsync();
 
         var result = _runtime.Deliveries.Should().ContainSingle().Subject;
+        second.EndedAt.Should().BeBefore(first.EndedAt!.Value,
+            "branch two must finish first so completion order differs from declaration order");
         result.Succeeded.Should().BeTrue();
         result.Branches.Select(branch => branch.NodeId).Should().Equal("research-a", "research-b");
         result.JoinedOutput.Should().Be(

@@ -42,6 +42,12 @@ public sealed record BacklogTask
     public string? WorkflowOverrideId { get; init; }
 
     /// <summary>
+    /// Immutable normalized workflow definition captured when a workflow-triggered task is created.
+    /// Pickup uses this snapshot so edits or deletion before launch cannot change the selected graph.
+    /// </summary>
+    public string? WorkflowDefinitionSnapshotYaml { get; init; }
+
+    /// <summary>
     /// The workspace-relative file path from which this task was decomposed (Feature 014).
     /// Used for idempotency: (project_id, source_file_path, title) must be unique when non-null.
     /// Null for tasks captured manually or via other methods.
