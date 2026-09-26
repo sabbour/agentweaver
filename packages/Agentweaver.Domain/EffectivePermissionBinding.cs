@@ -270,4 +270,10 @@ public interface IEffectivePermissionBindingProvider
         string repositoryPath,
         EffectivePermissionBinding? ceiling = null,
         CancellationToken ct = default);
+
+    Task<EffectivePermissionBinding> ResolveForInspectionAsync(
+        string runId,
+        string repositoryPath,
+        CancellationToken ct = default) =>
+        ResolveAsync(runId, repositoryPath, ceiling: null, ct);
 }

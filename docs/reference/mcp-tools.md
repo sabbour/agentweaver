@@ -160,7 +160,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
-| `sandbox_policy_get` | Get the sandbox policy for a repository. |
+| `sandbox_policy_get` | Get a configured repository sandbox policy or a run's effective permission inspection. |
 | `sandbox_policy_set` | Set the sandbox policy for a repository. |
 
 ## Skill

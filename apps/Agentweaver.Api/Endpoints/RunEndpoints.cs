@@ -2719,10 +2719,9 @@ app.MapGet("/api/runs/{id}/effective-permissions", async (
     try
     {
         var policyPath = run.WorktreePath ?? run.RepositoryPath;
-        var binding = await permissionBindings.ResolveAsync(
+        var binding = await permissionBindings.ResolveForInspectionAsync(
             id,
             policyPath,
-            ceiling: null,
             ct).ConfigureAwait(false);
         var configuredPolicy = await policyStore
             .GetPolicyAsync(policyPath, ct)

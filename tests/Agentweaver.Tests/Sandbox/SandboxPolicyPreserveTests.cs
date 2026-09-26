@@ -397,6 +397,44 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
             .Should().Be(EffectivePermissionOperations.Known.Count);
     }
 
+    [Fact]
+    public async Task EffectivePermissionInspection_DoesNotEstablishTheLaunchCeiling()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"permission-read-only-inspection-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = RunId.New();
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var eventStream = _factory.Services.GetRequiredService<IRunEventStream>();
+
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            ProjectId = ProjectId.Parse(project.GetProperty("project_id").GetString()!),
+            RepositoryPath = _repoPath,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "inspect without binding",
+            SubmittingUser = "permission-test",
+            Status = RunStatus.Pending,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+
+        var response = await _client.GetAsync($"/api/runs/{runId}/effective-permissions");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("binding").GetProperty("launch_binding_id").ValueKind
+            .Should().Be(JsonValueKind.Null);
+        var events = await eventStream.GetPersistedEventsAsync(runId.ToString());
+        events.Should().NotContain(evt => evt.Type == EventTypes.PermissionBindingBound);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private async Task SeedFullPolicyAsync()
