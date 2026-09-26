@@ -356,6 +356,9 @@ if (!isWorker)
         options.AddPolicy(
             EndpointAuthorizationPolicies.RunCapability,
             Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrRunCapabilityRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.PlatformMcpOrRunCapability,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformMcpOrRunCapabilityRequirement()).Build());
 
         options.FallbackPolicy = Authenticated()
             .RequireAuthenticatedUser()

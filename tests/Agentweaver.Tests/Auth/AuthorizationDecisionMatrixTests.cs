@@ -1,10 +1,12 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Claims;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Api.Auth;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -26,6 +28,7 @@ public sealed class AuthorizationDecisionMatrixTests : IClassFixture<EntraWebApp
         { "MCP-shaped forwarded platform credential", "GET", "/api/blueprints", "/api/blueprints", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.OK },
         { "internal service", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.OK },
         { "run capability", "GET", "/api/runs/not-a-run/tool-approval-policies/read_file", "/api/runs/{id}/tool-approval-policies/{toolName}", EndpointAuthorizationKind.RunCapability, HttpStatusCode.Unauthorized },
+        { "missing permission inspection credential", "GET", "/api/runs/not-a-run/effective-permissions", "/api/runs/{id}/effective-permissions", EndpointAuthorizationKind.PlatformMcpOrRunCapability, HttpStatusCode.Unauthorized },
         { "malformed bearer", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.Unauthorized },
         { "wrong audience", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.Unauthorized },
     };
@@ -64,6 +67,23 @@ public sealed class AuthorizationDecisionMatrixTests : IClassFixture<EntraWebApp
         FindEndpoint(method, routePattern).Metadata
             .GetRequiredMetadata<EndpointAuthorizationMetadata>().Kind
             .Should().Be(expectedClassification);
+    }
+
+    [Fact]
+    public async Task PermissionInspectionPolicy_AcceptsValidatedMcpBrokerPrincipal()
+    {
+        var requirement = new PlatformMcpOrRunCapabilityRequirement();
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(
+                AgentweaverClaimTypes.AuthenticationScheme,
+                AgentweaverAuthenticationSchemes.BrokerBearer),
+        ], AgentweaverAuthenticationSchemes.BrokerBearer));
+        var context = new AuthorizationHandlerContext([requirement], principal, resource: null);
+
+        await new EndpointSchemeAuthorizationHandler().HandleAsync(context);
+
+        context.HasSucceeded.Should().BeTrue();
     }
 
     private void ConfigureCredential(string callerShape, HttpRequestMessage request)

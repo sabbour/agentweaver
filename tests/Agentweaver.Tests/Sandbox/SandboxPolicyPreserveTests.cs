@@ -310,6 +310,93 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
             "a later project-policy widening cannot expand a child beyond its parent's persisted launch ceiling");
     }
 
+    [Fact]
+    public async Task EffectivePermissionInspection_ReturnsAuthorizedSafeCrossSurfaceProjection()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"permission-inspection-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var projectId = ProjectId.Parse(project.GetProperty("project_id").GetString()!);
+        var runId = RunId.New();
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var policyStore = _factory.Services.GetRequiredService<ISandboxPolicyStore>();
+        var provider = _factory.Services.GetRequiredService<IEffectivePermissionBindingProvider>();
+        var eventStream = _factory.Services.GetRequiredService<IRunEventStream>();
+
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            ProjectId = projectId,
+            RepositoryPath = _repoPath,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "inspect",
+            SubmittingUser = "permission-test",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await policyStore.SetPolicyAsync(SandboxPolicy.Default(_repoPath) with
+        {
+            AllowedOperations =
+            [
+                EffectivePermissionOperations.WorkspaceRead,
+                EffectivePermissionOperations.WorkspaceWrite,
+                EffectivePermissionOperations.NetworkAccess,
+            ],
+        });
+        var launch = await provider.ResolveAsync(runId.ToString(), _repoPath);
+        await policyStore.SetPolicyAsync(SandboxPolicy.Default(_repoPath) with
+        {
+            NetworkEnabled = false,
+            AllowedOperations = [EffectivePermissionOperations.WorkspaceRead],
+        });
+        await eventStream.AppendAsync(
+            runId.ToString(),
+            new RunEvent(0, EventTypes.RunDegraded, new
+            {
+                toolName = "write_file",
+                reason = $"Operation denied by effective permission binding {launch.BindingId} " +
+                         $"({launch.Version}, source={launch.Source}): " +
+                         $"'{EffectivePermissionOperations.WorkspaceWrite}' is not allowed.",
+                permissionBindingId = launch.BindingId,
+                permissionBindingVersion = launch.Version,
+                permissionSource = launch.Source,
+                permissionAttempt = launch.Attempt,
+                arguments = new { command = "do-not-expose", api_key = "do-not-expose" },
+            }));
+
+        var response = await _client.GetAsync($"/api/runs/{runId}/effective-permissions");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var raw = await response.Content.ReadAsStringAsync();
+        raw.Should().NotContain("do-not-expose");
+        raw.Should().NotContain("arguments");
+        using var body = JsonDocument.Parse(raw);
+        body.RootElement.GetProperty("configured_policy")
+            .GetProperty("allowed_operations")
+            .EnumerateArray()
+            .Select(value => value.GetString())
+            .Should().Equal(EffectivePermissionOperations.WorkspaceRead);
+        body.RootElement.GetProperty("effective_policy")
+            .GetProperty("allowed_operations")
+            .EnumerateArray()
+            .Select(value => value.GetString())
+            .Should().Equal(EffectivePermissionOperations.WorkspaceRead);
+        body.RootElement.GetProperty("current_revocation").GetProperty("active").GetBoolean()
+            .Should().BeTrue();
+        body.RootElement.GetProperty("overrides").GetProperty("parent_restriction_active").GetBoolean()
+            .Should().BeFalse();
+        body.RootElement.GetProperty("latest_denial").GetProperty("reason_code").GetString()
+            .Should().Be("operation_not_allowed");
+        body.RootElement.GetProperty("coverage").GetArrayLength()
+            .Should().Be(EffectivePermissionOperations.Known.Count);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private async Task SeedFullPolicyAsync()

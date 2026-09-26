@@ -49,6 +49,7 @@ vi.mock('../api/apiClient', () => ({
     steerCoordinator: vi.fn(),
     reviewAssembly: vi.fn(),
     getRun: vi.fn(),
+    getRunEffectivePermissions: vi.fn(),
     getRunTerminalDiagnostic: vi.fn().mockRejectedValue(new Error('not found')),
     getProject: vi.fn(),
     getRunTokenBreakdown: vi.fn().mockResolvedValue({
@@ -150,6 +151,85 @@ beforeEach(() => {
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getRun).mockResolvedValue({ run_id: 'coord-run-1', status: 'in_progress' } as never);
+  vi.mocked(apiClient.getRunEffectivePermissions).mockResolvedValue({
+    run_id: 'coord-run-1',
+    binding: {
+      schema_version: 1,
+      binding_id: 'epb-visible',
+      version: 'sha256:effective',
+      source: 'current-project-sandbox-policy+ceiling',
+      attempt: 1,
+      scope: 'project:p1',
+      parent_binding_id: null,
+      parent_version: null,
+      launch_binding_id: 'epb-launch',
+      launch_version: 'sha256:launch',
+    },
+    configured_policy: {
+      version: 'sha256:configured',
+      shell_enabled: true,
+      direct_execution: false,
+      network_enabled: true,
+      require_approval_for_all_shell: false,
+      redact_pii: true,
+      max_output_bytes: 4194304,
+      allowed_repository_root_count: 0,
+      destructive_command_pattern_count: 24,
+      allowed_operations: ['workspace.read', 'workspace.write', 'network.access'],
+    },
+    effective_policy: {
+      version: 'sha256:effective',
+      shell_enabled: true,
+      direct_execution: false,
+      network_enabled: false,
+      require_approval_for_all_shell: false,
+      redact_pii: true,
+      max_output_bytes: 4194304,
+      allowed_repository_root_count: 0,
+      destructive_command_pattern_count: 24,
+      allowed_operations: ['workspace.read'],
+    },
+    overrides: {
+      is_narrowed: true,
+      removed_operations: ['network.access', 'workspace.write'],
+      tightened_controls: ['network_disabled'],
+      launch_ceiling_active: true,
+      parent_restriction_active: false,
+    },
+    current_revocation: {
+      active: true,
+      removed_since_launch: ['network.access'],
+      tightened_controls: ['network_disabled'],
+      shell_revoked: false,
+      network_revoked: true,
+      direct_execution_revoked: false,
+    },
+    coverage: [
+      {
+        operation: 'workspace.read',
+        allowed: true,
+        tool_family: 'file and directory reads',
+        enforcement_gate: 'binding, then path containment',
+      },
+      {
+        operation: 'workspace.write',
+        allowed: false,
+        tool_family: 'create, edit, replace, and patch',
+        enforcement_gate: 'binding, then path containment and tool validation',
+      },
+    ],
+    latest_denial: {
+      reason_code: 'operation_not_allowed',
+      reason: "Operation 'workspace.write' was not allowed by the effective binding.",
+      operation: 'workspace.write',
+      tool_name: 'write_file',
+      binding_id: 'epb-visible',
+      binding_version: 'sha256:effective',
+      binding_source: 'current-project-sandbox-policy+ceiling',
+      sequence: 12,
+      timestamp_utc: '2026-01-02T03:04:05Z',
+    },
+  });
   vi.mocked(apiClient.getRunTerminalDiagnostic).mockRejectedValue(new ApiError(404, 'not found'));
   vi.mocked(apiClient.getProject).mockResolvedValue({
     project_id: 'p1',
@@ -254,6 +334,23 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
         '/projects/p1/observability/traces?run=coord-run-1',
       ),
     );
+  });
+
+  it('shows the authorized effective permission projection without tool arguments', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    fireEvent.click(await screen.findByTestId('open-effective-permissions', undefined, { timeout: 4000 }));
+
+    const inspection = await screen.findByTestId('effective-permissions-inspection');
+    expect(apiClient.getRunEffectivePermissions).toHaveBeenCalledWith('coord-run-1');
+    expect(within(inspection).getByText('Configured policy')).toBeTruthy();
+    expect(within(inspection).getByText('Effective narrowed policy')).toBeTruthy();
+    expect(within(inspection).getByText('Active: network.access, network_disabled')).toBeTruthy();
+    expect(within(inspection).getByText(/Latest denial:/)).toBeTruthy();
+    expect(within(inspection).getAllByText(/workspace.write/).length).toBeGreaterThan(0);
+    expect(inspection.textContent).not.toContain('command');
+    expect(inspection.textContent).not.toContain('arguments');
+    expect(inspection.textContent).not.toContain('api_key');
   });
 
   it('renders an explicit not-found state for a missing coordinator run', async () => {
