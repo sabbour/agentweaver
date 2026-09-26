@@ -393,19 +393,33 @@ validation prerequisites proportional to the change.
   is created. Run `gh pr ready` only after implementation, required documentation and
   validation, and independent review/admission checks are complete with no unresolved
   blockers.
-- **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
-  run the coordinator-owned external-state admission preflight before ready and again
-  before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph
-  fetches `origin/dev`, gets the live PR head SHA, and runs
-  `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
-  --head-sha <live-head-sha>`. The preflight resolves declared external state with the
-  pinned Squad SDK and requires the coordinator-owned findings ledger to resolve every
-  required finding with an owner, correction or waiver, fresh validation/review, and a
-  resolved transition. Coordinator/Ralph and authoritative external Squad state are
-  trusted operational components; GitHub is evidence and CI only, and repository code
-  does not provide an adversarially immutable execution boundary. PR comments preserve
-  evidence but do not enforce admission. Confirm the PR is actually merged before
-  dependents proceed.
+- **Milestone PR checkpoint:** use the candidate's absolute worktree. Materialize and
+  preflight before ready, then repeat both steps immediately before manual squash merge:
+  ```bash
+  cd <absolute-worktree>
+  git fetch origin dev
+  live_head_sha="$(gh pr view <pr-number> --json headRefOid --jq .headRefOid)"
+  node scripts/ci/squad-admission-ledger.mjs materialize <owner/repository> <pr-number> \
+    --head-sha "$live_head_sha" --input-file <absolute-complete-ledger-json>
+  node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
+    --head-sha "$live_head_sha"
+  gh pr ready <pr-number>
+  git fetch origin dev
+  live_head_sha="$(gh pr view <pr-number> --json headRefOid --jq .headRefOid)"
+  node scripts/ci/squad-admission-ledger.mjs materialize <owner/repository> <pr-number> \
+    --head-sha "$live_head_sha" --input-file <absolute-complete-ledger-json>
+  node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
+    --head-sha "$live_head_sha"
+  gh pr merge <pr-number> --squash --match-head-commit "$live_head_sha"
+  ```
+  If the second ledger differs, pass `--replace-existing-head
+  <previous-live-head-sha>`. The pinned SDK resolves the external root from static config.
+  The materializer validates and persists only the supplied complete ledger. It does not
+  construct findings, adjudicate waivers, or decide admission. Coordinator/Ralph and
+  authoritative external Squad state are trusted operational components. GitHub is
+  evidence and CI only. Repository code constrains this writer but does not provide an
+  adversarially immutable execution boundary. PR comments preserve evidence but do not
+  enforce admission. Confirm the PR is merged before dependents proceed.
 - **Merged-work cleanup checkpoint:** after the merge is confirmed, use the non-destructive
   cleanup procedure in the `git-workflow` skill for that issue worktree and branch. First
   verify the PR merged and that no unmerged or blocked dependent still needs the worktree;

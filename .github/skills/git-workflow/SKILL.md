@@ -52,17 +52,29 @@ Examples:
    Mark the PR ready only after required validation and independent review/admission have
    completed with no unresolved blocker:
    ```bash
+   cd <absolute-worktree>
+   git fetch origin dev
+   live_head_sha="$(gh pr view <number> --json headRefOid --jq .headRefOid)"
+   node scripts/ci/squad-admission-ledger.mjs materialize <owner/repository> <number> \
+     --head-sha "$live_head_sha" --input-file <absolute-complete-ledger-json>
+   node scripts/ci/squad-admission-preflight.mjs <owner/repository> <number> \
+     --head-sha "$live_head_sha"
    gh pr ready <number>
-   gh pr merge <number> --squash --match-head-commit <validated-sha>
+   git fetch origin dev
+   live_head_sha="$(gh pr view <number> --json headRefOid --jq .headRefOid)"
+   node scripts/ci/squad-admission-ledger.mjs materialize <owner/repository> <number> \
+     --head-sha "$live_head_sha" --input-file <absolute-complete-ledger-json>
+   node scripts/ci/squad-admission-preflight.mjs <owner/repository> <number> \
+     --head-sha "$live_head_sha"
+   gh pr merge <number> --squash --match-head-commit "$live_head_sha"
    ```
-   Before ready and immediately before this command, Ralph fetches `origin/dev`, gets
-   the live PR head SHA, and runs
-   `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> --head-sha <live-head-sha>`.
-   The preflight uses the pinned Squad SDK to resolve declared external state and checks
-   the coordinator-owned findings ledger. Ralph records the returned
-   `<validated-sha>` and uses it immediately with `--match-head-commit`. Coordinator/Ralph
-   and authoritative external Squad state are trusted operational components; GitHub is
-   evidence and CI only, and repository code is not an adversarially immutable boundary.
+   If the second complete ledger differs, pass
+   `--replace-existing-head <previous-live-head-sha>`. The materializer accepts no
+   caller-selected root or destination. It validates and persists the supplied complete
+   ledger but never constructs findings, adjudicates waivers, or decides admission.
+   Coordinator/Ralph and authoritative external Squad state are trusted operational
+   components. GitHub is evidence and CI only. Repository code constrains this writer
+   but is not an adversarially immutable boundary.
    Confirm the PR reports `MERGED`, `mergedAt`, and merge SHA before dispatching
    dependent work.
 

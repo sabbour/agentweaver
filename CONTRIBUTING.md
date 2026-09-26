@@ -58,13 +58,30 @@ they are not Agentweaver sign-in providers.
    - Before merge, the branch must be current with `dev` and all blocking CI must rerun
      successfully. GitHub enforces this through “require branches to be up to date
      before merging.”
-   - Before ready and immediately before merge, Ralph fetches `origin/dev`, gets the
-     live PR `headRefOid`, and runs the external-state preflight with that SHA:
-     `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
-     --head-sha <live-head-sha>`. The preflight resolves the declared external Squad
-     state with the pinned Squad SDK and validates its coordinator-owned findings ledger.
-     Ralph records the returned `<validated-sha>` and merges manually with
-     `gh pr merge <number> --squash --match-head-commit <validated-sha>`.
+   - Before ready and immediately before merge, Ralph uses the candidate's absolute
+     worktree and the live PR `headRefOid` to materialize and preflight the complete
+     coordinator-owned ledger:
+     ```bash
+     cd <absolute-worktree>
+     git fetch origin dev
+     live_head_sha="$(gh pr view <pr-number> --json headRefOid --jq .headRefOid)"
+     node scripts/ci/squad-admission-ledger.mjs materialize <owner/repository> <pr-number> \
+       --head-sha "$live_head_sha" --input-file <absolute-complete-ledger-json>
+     node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
+       --head-sha "$live_head_sha"
+     gh pr ready <pr-number>
+     git fetch origin dev
+     live_head_sha="$(gh pr view <pr-number> --json headRefOid --jq .headRefOid)"
+     node scripts/ci/squad-admission-ledger.mjs materialize <owner/repository> <pr-number> \
+       --head-sha "$live_head_sha" --input-file <absolute-complete-ledger-json>
+     node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
+       --head-sha "$live_head_sha"
+     gh pr merge <pr-number> --squash --match-head-commit "$live_head_sha"
+     ```
+     If the second complete ledger has different bytes, pass
+     `--replace-existing-head <previous-live-head-sha>`. The materializer accepts no
+     caller-selected root or destination. It validates and persists a supplied complete
+     ledger but never constructs findings, adjudicates waivers, or decides admission.
      GitHub automatically deletes the source branch after merge.
    - `main` is stable/published-only. Do not open ordinary PRs into it; it receives a
      soaked release promotion or an audited emergency hotfix only. A release promotion
@@ -217,9 +234,10 @@ on every `dev` PR so GitHub emits each required context. The GitHub ruleset desc
 branch and CI protection. **Squad/Ralph external-state preflight owns admission**:
 the Coordinator/Ralph process and authoritative external Squad state are trusted
 operational components, while GitHub supplies PR evidence and CI only. Repository code
-does not create an adversarially immutable execution boundary. The coordinator must
-validate the closed findings policy and ledger state at the live head before manual
-squash merge.
+constrains the repo-local writer and validates persisted bytes, but does not provide an
+adversarially immutable execution boundary. The coordinator must supply the complete
+ledger and validate its closed findings policy at the live head before manual squash
+merge.
 `Changeset advisory` now fails the build (not just a warning) when a release-relevant
 change has no changeset and no `changeset:not-required` exemption.
 
