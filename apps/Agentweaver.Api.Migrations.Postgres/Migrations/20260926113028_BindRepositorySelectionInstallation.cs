@@ -17,21 +17,19 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                 DROP CONSTRAINT IF EXISTS "FK_github_installations_projects_project_id";
                 """);
 
-            migrationBuilder.DropPrimaryKey(
-                name: "PK_github_repository_grants",
-                table: "github_repository_grants");
+            DropRepositoryGrantPrimaryKey(migrationBuilder);
 
-            migrationBuilder.DropIndex(
-                name: "IX_github_repository_grants_installation_id_repository_id",
-                table: "github_repository_grants");
+            migrationBuilder.Sql("""
+                DROP INDEX IF EXISTS "IX_github_repository_grants_installation_id_repository_id";
+                """);
 
             migrationBuilder.Sql("""
                 DROP INDEX IF EXISTS "IX_github_installations_project_id";
                 """);
 
-            migrationBuilder.DropIndex(
-                name: "IX_automation_activations_installation_id_repository_id",
-                table: "automation_activations");
+            migrationBuilder.Sql("""
+                DROP INDEX IF EXISTS "IX_automation_activations_installation_id_repository_id";
+                """);
 
             migrationBuilder.AddColumn<long>(
                 name: "installation_id",
@@ -72,9 +70,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
         {
             DropAutomationRepositoryGrantForeignKey(migrationBuilder);
 
-            migrationBuilder.DropPrimaryKey(
-                name: "PK_github_repository_grants",
-                table: "github_repository_grants");
+            DropRepositoryGrantPrimaryKey(migrationBuilder);
 
             migrationBuilder.DropIndex(
                 name: "IX_github_repository_grants_installation_id_repository_id_proj~",
@@ -146,6 +142,29 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     IF existing_constraint IS NOT NULL THEN
                         EXECUTE format(
                             'ALTER TABLE automation_activations DROP CONSTRAINT %I',
+                            existing_constraint);
+                    END IF;
+                END
+                $$;
+                """);
+
+        private static void DropRepositoryGrantPrimaryKey(MigrationBuilder migrationBuilder) =>
+            migrationBuilder.Sql("""
+                DO $$
+                DECLARE existing_constraint text;
+                BEGIN
+                    SELECT constraint_record.conname
+                    INTO existing_constraint
+                    FROM pg_constraint AS constraint_record
+                    INNER JOIN pg_class AS source_table
+                        ON source_table.oid = constraint_record.conrelid
+                    WHERE constraint_record.contype = 'p'
+                      AND source_table.relname = 'github_repository_grants'
+                    LIMIT 1;
+
+                    IF existing_constraint IS NOT NULL THEN
+                        EXECUTE format(
+                            'ALTER TABLE github_repository_grants DROP CONSTRAINT %I',
                             existing_constraint);
                     END IF;
                 END
