@@ -429,6 +429,9 @@ public sealed class DiagnosticsService
     private async Task<IReadOnlyList<WorkflowChildWorkDiagnosticDto>> GetWorkflowChildWorkAsync(
         CancellationToken ct)
     {
+        if (_scopeFactory is null)
+            return [];
+
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var plans = await db.WorkPlans.AsNoTracking()
