@@ -69,13 +69,13 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
-| `coordinator_children_get` | List child runs dispatched by a Coordinator run, including static workflow branch node ids and persisted ordinals alongside subtask, agent, model, and child-run status. Empty when nothing has been dispatched. |
+| `coordinator_children_get` | List child runs dispatched by a Coordinator or static workflow parent run, including parent workflow correlation, branch node ids, and persisted ordinals alongside subtask, agent, model, and child-run status. Empty when nothing has been dispatched. |
 | `coordinator_outcome_spec_confirm` | Confirm the drafted outcome spec for a Coordinator run, resuming the suspended run past the confirmation gate. |
 | `coordinator_outcome_spec_get` | Get the current persisted outcome spec for a Coordinator run. |
 | `coordinator_outcome_spec_revise` | Request a revision of the drafted outcome spec for a Coordinator run. The coordinator re-drafts using the feedback and re-suspends at the confirmation gate. |
 | `coordinator_start` | Start a Coordinator orchestration for a project from a plain-language goal. Optional per-run approval policy can auto-approve repository-defined safe tools and enable autopilot; destructive, privileged, preview, secret, and other network approvals remain gated. |
 | `coordinator_steer` | Steer a Coordinator run. Use 'stop' to cancel active subagents immediately; 'redirect' or 'amend' to inject guidance at the targeted subagent's next turn boundary; or a recovery verb (e.g. 'recover') to reset blocked/failed/parked subtasks and auto-resume the dispatch loop. Omit target_child_run_id to broadcast to every active child. instruction is required for redirect/amend and optional for stop/recovery verbs. Pause is not supported. |
-| `coordinator_work_plan_get` | Get a Coordinator work plan, including static workflow-fan parent/resume correlation plus each branch node id, persisted ordinal, status, child run id, and dependency edges. Returns null when no work plan has been drafted yet. |
+| `coordinator_work_plan_get` | Get a Coordinator work plan, including static workflow-fan parent/resume correlation, ordered joined output, each branch node id, persisted ordinal, status, child run id, and dependency edges. A static fan plan can be addressed by either its parent workflow run id or child coordinator run id. Returns null when no work plan has been drafted yet. |
 | `orchestration_topology` | Get a one-shot topology snapshot for a Coordinator run by combining the work plan and child runs into a current view of subtasks, dependency edges, and dispatched children. For the live graph, point run_watch at the coordinator run id and consume its coordinator.topology, subtask.*, and coordinator.steering events. |
 
 ## Diagnostics
