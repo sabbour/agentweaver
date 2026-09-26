@@ -2683,6 +2683,8 @@ app.MapGet("/api/runs/{id}/effective-permissions", async (
     string id,
     IRunStore runStore,
     IEffectivePermissionBindingProvider permissionBindings,
+    ISandboxPolicyStore policyStore,
+    IRunEventStream eventStream,
     IRunAuthorshipCapabilityStore capabilityStore,
     CancellationToken ct) =>
 {
@@ -2716,12 +2718,23 @@ app.MapGet("/api/runs/{id}/effective-permissions", async (
 
     try
     {
+        var policyPath = run.WorktreePath ?? run.RepositoryPath;
         var binding = await permissionBindings.ResolveAsync(
             id,
-            run.WorktreePath ?? run.RepositoryPath,
+            policyPath,
             ceiling: null,
             ct).ConfigureAwait(false);
-        return Results.Ok(binding);
+        var configuredPolicy = await policyStore
+            .GetPolicyAsync(policyPath, ct)
+            .ConfigureAwait(false);
+        var events = await eventStream
+            .GetPersistedEventsAsync(id, 0, ct)
+            .ConfigureAwait(false);
+        return Results.Ok(EffectivePermissionInspectionProjector.Project(
+            id,
+            configuredPolicy,
+            binding,
+            events));
     }
     catch (EffectivePermissionBindingException ex)
     {
@@ -2729,7 +2742,7 @@ app.MapGet("/api/runs/{id}/effective-permissions", async (
             new { error = "effective_permission_binding_unavailable", message = ex.Message },
             statusCode: StatusCodes.Status409Conflict);
     }
-}).RunCapability();
+}).PlatformMcpOrRunCapability();
 
 app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
     HttpContext httpContext,

@@ -85,6 +85,69 @@ export interface SandboxPolicy {
   destructive_command_patterns: string[];
 }
 
+export interface EffectivePermissionInspection {
+  run_id: string;
+  binding: {
+    schema_version: number;
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+    scope: string;
+    parent_binding_id: string | null;
+    parent_version: string | null;
+    launch_binding_id: string | null;
+    launch_version: string | null;
+  };
+  configured_policy: EffectivePermissionPolicySummary;
+  effective_policy: EffectivePermissionPolicySummary;
+  overrides: {
+    is_narrowed: boolean;
+    removed_operations: string[];
+    tightened_controls: string[];
+    launch_ceiling_active: boolean;
+    parent_restriction_active: boolean;
+  };
+  current_revocation: {
+    active: boolean;
+    removed_since_launch: string[];
+    tightened_controls: string[];
+    shell_revoked: boolean;
+    network_revoked: boolean;
+    direct_execution_revoked: boolean;
+  };
+  coverage: Array<{
+    operation: string;
+    allowed: boolean;
+    tool_family: string;
+    enforcement_gate: string;
+  }>;
+  latest_denial: {
+    reason_code: string;
+    reason: string;
+    operation: string | null;
+    tool_name: string | null;
+    binding_id: string | null;
+    binding_version: string | null;
+    binding_source: string | null;
+    sequence: number;
+    timestamp_utc: string | null;
+  } | null;
+}
+
+export interface EffectivePermissionPolicySummary {
+  version: string;
+  shell_enabled: boolean;
+  direct_execution: boolean;
+  network_enabled: boolean;
+  require_approval_for_all_shell: boolean;
+  redact_pii: boolean;
+  max_output_bytes: number;
+  allowed_repository_root_count: number;
+  destructive_command_pattern_count: number;
+  allowed_operations: string[];
+}
+
 export interface SubmitRunResponse {
   run_id: string;
   status: RunStatus;

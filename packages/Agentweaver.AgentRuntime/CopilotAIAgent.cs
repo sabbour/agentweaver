@@ -1611,6 +1611,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 permissionBindingId = _effectivePermissionBinding?.BindingId,
                 permissionBindingVersion = _effectivePermissionBinding?.Version,
                 permissionSource = _effectivePermissionBinding?.Source,
+                permissionAttempt = _effectivePermissionBinding?.Attempt,
             });
     }
 

@@ -9,16 +9,19 @@ public sealed class SandboxPolicyTools(AgentweaverApiClient api)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
 
-    [McpServerTool(Name = "sandbox_policy_get"), Description("Get the sandbox policy for a repository.")]
+    [McpServerTool(Name = "sandbox_policy_get"), Description("Get a configured repository sandbox policy or a run's effective permission inspection.")]
     public async Task<string> SandboxPolicyGetAsync(
         [Description("Repository path to get the policy for (optional)")] string? repository_path = null,
+        [Description("Run ID to inspect effective permissions, narrowing, revocation, coverage, and latest denial (optional)")] string? run_id = null,
         CancellationToken ct = default)
     {
         try
         {
-            var path = string.IsNullOrWhiteSpace(repository_path)
-                ? "/api/sandbox-policy"
-                : $"/api/sandbox-policy?repository_path={Uri.EscapeDataString(repository_path)}";
+            var path = !string.IsNullOrWhiteSpace(run_id)
+                ? $"/api/runs/{Uri.EscapeDataString(run_id)}/effective-permissions"
+                : string.IsNullOrWhiteSpace(repository_path)
+                    ? "/api/sandbox-policy"
+                    : $"/api/sandbox-policy?repository_path={Uri.EscapeDataString(repository_path)}";
             var result = await api.GetAsync<JsonElement>(path, ct);
             return JsonSerializer.Serialize(result, JsonOpts);
         }

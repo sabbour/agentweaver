@@ -25,6 +25,8 @@ permission contract tying the run to the policy enforced by the backend.
 - current-policy refresh before AgentHost turns
 - parent-to-child restriction inheritance
 - denial provenance in tool errors, degraded-run events, logs, and the run REST API
+- authorization-filtered REST, MCP, and web inspection of configured versus effective
+  permissions, current revocation, enforcement coverage, and safe denial provenance
 - explicit fail-closed behavior for missing, malformed, unsupported, mismatched, or
   unclassified permissions
 
@@ -52,6 +54,20 @@ permission contract tying the run to the policy enforced by the backend.
 - [x] Denials include safe binding provenance in existing tool/degraded-run evidence.
 - [x] Operators can read configured operation limits and a run's effective binding through
   the REST API.
+- [x] The authorized REST, `sandbox_policy_get(run_id: ...)` MCP, and run-page UI
+  surfaces expose the same credential-free projection.
+- [x] Inspection distinguishes configured policy, effective narrowed policy, inherited
+  or launch-ceiling overrides, current revocation, enforcement coverage, and the latest
+  permission-denial reason.
+- [x] Inspection omits credentials, commands, URLs, tool arguments, and arbitrary event
+  payloads.
+
+## Delivery
+
+- #1600 delivered the versioned binding and equivalent fail-closed enforcement in local,
+  AgentHost, and operator-assistant MCP execution.
+- The final slice adds the shared authorized inspection projection and cross-surface
+  REST/MCP/UI coverage without changing the merged enforcement semantics.
 
 ## Notable edge cases
 

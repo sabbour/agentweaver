@@ -338,6 +338,13 @@ export class AgentweaverApiClient {
     return this.request<RunDetail>('GET', `/runs/${encodeURIComponent(runId)}`);
   }
 
+  getRunEffectivePermissions(runId: string): Promise<import('./types').EffectivePermissionInspection> {
+    return this.request<import('./types').EffectivePermissionInspection>(
+      'GET',
+      `/runs/${encodeURIComponent(runId)}/effective-permissions`,
+    );
+  }
+
   getRunTerminalDiagnostic(runId: string): Promise<import('./types').RunTerminalDiagnostic> {
     return this.request<import('./types').RunTerminalDiagnostic>(
       'GET',

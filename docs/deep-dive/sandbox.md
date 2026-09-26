@@ -138,7 +138,13 @@ An unclassified operation is denied. A malformed policy or a missing, unsupporte
 run-mismatched binding also denies execution explicitly. Denials use existing
 `tool.error` and `run.degraded` events; the degraded event includes the binding ID,
 version, and source without credentials. `GET /api/runs/{id}/effective-permissions`
-returns the current binding for authorized operators or the matching run capability.
+returns an authorization-filtered inspection projection for authorized operators or the
+matching run capability. The projection distinguishes the current configured policy,
+the effective narrowed policy, restrictions imposed by the durable launch ceiling or a
+parent, permissions revoked since launch, fixed operation-family enforcement coverage,
+and the latest permission denial. Denial evidence is normalized to a reason code,
+operation, safe tool name, binding provenance, sequence, and timestamp; tool arguments,
+commands, URLs, arbitrary event payloads, and credentials are not returned.
 The first binding for each run lifecycle is also recorded as
 `permission.binding.bound`; current policy is always intersected with that durable
 launch ceiling. This keeps restored executions and newly delegated children from
@@ -146,7 +152,11 @@ recovering authority that their parent did not have at launch.
 
 The operator assistant's MCP tools use the same binding classifier. The permission
 check wraps the approval gate, so even an approved or normally ungated MCP mutation
-cannot bypass a read-only assignment.
+cannot bypass a read-only assignment. Operators can pass `run_id` to
+`sandbox_policy_get` to receive the same effective-permission projection as REST. In the
+web app, the **Permissions** action on an orchestration run opens the same projection,
+including configured/effective differences, revocation state, coverage, and safe denial
+provenance.
 
 Agentweaver also performs a direct sandbox-backend evaluation in addition to the governance kernel evaluation. That redundancy is deliberate: even if one policy integration changes behavior, the dedicated containment backend still has to approve the call.
 
