@@ -59,6 +59,16 @@ public sealed class CoordinatorRecoveryRouterTests
             .Should().Be(CoordinatorRecoveryAction.SettleComplete);
     }
 
+    [Fact]
+    public void AmbiguousMergeEvidence_WaitsForOperatorWithoutReplay()
+    {
+        CoordinatorRecoveryRouter.Route(
+                hasPlan: true,
+                hasSubtasks: true,
+                WorkPlanStatus.AssemblyUnknown)
+            .Should().Be(CoordinatorRecoveryAction.WaitForOperator);
+    }
+
     [Theory]
     [InlineData(WorkPlanStatus.AssemblyBlocked)]
     [InlineData(WorkPlanStatus.AssemblyFailed)]

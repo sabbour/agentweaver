@@ -1387,6 +1387,7 @@ internal sealed class WorkflowChildWorkService
         WorkPlanStatus.Complete
         or WorkPlanStatus.AssemblyBlocked
         or WorkPlanStatus.AssemblyFailed
+        or WorkPlanStatus.AssemblyUnknown
         or WorkPlanStatus.AssemblyDeclined
         or WorkPlanStatus.RaiBlocked
         or WorkPlanStatus.NeedsResolution

@@ -63,6 +63,7 @@ public sealed class WorkflowStageProjector : IWorkflowStageProjector
 
         var status = planStage?.Status;
         if (status is WorkPlanStatus.AssemblyBlocked or WorkPlanStatus.AssemblyFailed
+            or WorkPlanStatus.AssemblyUnknown
             or WorkPlanStatus.AssemblyDeclined)
             return ProblemsStageId;
 

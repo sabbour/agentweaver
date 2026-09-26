@@ -303,6 +303,52 @@ internal static class GitReferenceTransaction
         return new GitCheckoutConvergenceResult(GitCheckoutConvergenceKind.Converged);
     }
 
+    internal static GitCheckoutConvergenceResult VerifyCheckedOut(
+        string repositoryPath,
+        GitCheckoutPreState? preState,
+        string currentOid)
+    {
+        if (preState is null)
+            return new GitCheckoutConvergenceResult(GitCheckoutConvergenceKind.NotCheckedOut);
+
+        var current = ResolveOid(repositoryPath, preState.FullRef);
+        if (current.Kind != GitReferenceUpdateKind.Applied
+            || !string.Equals(current.CurrentOid, currentOid, StringComparison.Ordinal))
+        {
+            return new GitCheckoutConvergenceResult(
+                GitCheckoutConvergenceKind.RefMoved,
+                current.CurrentOid);
+        }
+
+        var worktree = FindCheckedOutWorktree(repositoryPath, preState.FullRef, out var worktreeError);
+        if (worktree is null
+            || !string.Equals(worktree.Path, preState.WorktreePath, PathComparison)
+            || !string.Equals(worktree.HeadOid, currentOid, StringComparison.Ordinal))
+        {
+            return new GitCheckoutConvergenceResult(
+                GitCheckoutConvergenceKind.PreStateMismatch,
+                worktreeError ?? "checked_out_worktree_changed");
+        }
+
+        var expectedTree = RunGit(repositoryPath, "rev-parse", $"{currentOid}^{{tree}}");
+        var indexTree = RunGit(preState.WorktreePath, "write-tree");
+        var trackedWorktree = RunGit(preState.WorktreePath, "diff-files", "--quiet", "--");
+        if (!expectedTree.Succeeded
+            || !indexTree.Succeeded
+            || !trackedWorktree.Succeeded
+            || !string.Equals(indexTree.Stdout.Trim(), expectedTree.Stdout.Trim(), StringComparison.Ordinal))
+        {
+            return new GitCheckoutConvergenceResult(
+                GitCheckoutConvergenceKind.PreStateMismatch,
+                "checked_out_state_changed");
+        }
+
+        return new GitCheckoutConvergenceResult(GitCheckoutConvergenceKind.Converged);
+    }
+
+    internal static GitReferenceUpdateResult ReadReference(string repositoryPath, string fullRef) =>
+        ResolveOid(repositoryPath, fullRef);
+
     private static GitConvergenceGuard? TryAcquireConvergenceGuard(
         string worktreePath,
         string fullRef)

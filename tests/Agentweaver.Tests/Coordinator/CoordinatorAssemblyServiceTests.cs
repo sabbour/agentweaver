@@ -1959,6 +1959,200 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         state.AssemblyStage.Should().Be(AssemblyStage.Done);
     }
 
+    [Fact]
+    public async Task RunAssembly_RecoveredAppliedReceipt_SkipsMergeReplayAndScribe()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(workPlanId, coordinatorRunId);
+        _pipeline.MergeOverride = CollectiveMergeResult.RecoveredApplied(
+            "merge-commit",
+            "merge-commit",
+            "NotCheckedOut");
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Merges.Should().Be(1, "recovery probes the prepared effect exactly once");
+        _pipeline.Scribes.Should().Be(0, "applied recovery never replays the arbitrary Scribe effect");
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.Complete);
+        state.MergeEffectState.Should().Be(MergeEffectState.Applied);
+        state.MergeRecoveryAction.Should().Be("finalize_without_replaying_merge_or_scribe");
+    }
+
+    [Fact]
+    public async Task RunAssembly_AmbiguousPreparedMerge_ParksUnknownWithoutReplay()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(workPlanId, coordinatorRunId);
+        _pipeline.MergeOverride = CollectiveMergeResult.Unknown(
+            "external-commit",
+            "target_moved_without_intended_commit");
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Scribes.Should().Be(0);
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.AssemblyUnknown);
+        state.MergeEffectState.Should().Be(MergeEffectState.Unknown);
+        state.MergeRecoveryAction.Should().Be("operator_inspection_required");
+        EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyMergeUnknown);
+    }
+
+    [Fact]
+    public async Task RunAssembly_InterruptedUnknownPark_RepairsStatusWithoutReplay()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(
+            workPlanId,
+            coordinatorRunId,
+            effectState: MergeEffectState.Unknown);
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Merges.Should().Be(0);
+        _pipeline.Scribes.Should().Be(0);
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.AssemblyUnknown);
+        state.MergeEffectState.Should().Be(MergeEffectState.Unknown);
+    }
+
+    [Fact]
+    public async Task RunAssembly_AppliedReceiptButTargetRewound_ParksUnknownWithoutReapplying()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(
+            workPlanId,
+            coordinatorRunId,
+            effectState: MergeEffectState.Applied);
+        _pipeline.MergeOverride = CollectiveMergeResult.Unauthorized(
+            "old-commit",
+            "merge_authorization_lost");
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Scribes.Should().Be(0);
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.AssemblyUnknown);
+        state.MergeEffectState.Should().Be(MergeEffectState.Unknown);
+        state.MergeEvidenceJson.Should().Contain("applied_receipt_no_longer_matches_target");
+    }
+
+    [Fact]
+    public async Task MergeObservation_StaleUnknownCannotOverwriteAppliedReceipt()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedPreparedMergeAsync(workPlanId, coordinatorRunId);
+        var effectId = $"{coordinatorRunId}:g1:collective-merge";
+
+        (await _assemblyStore.SetMergeObservationAsync(
+            workPlanId,
+            Environment.MachineName,
+            effectId,
+            1,
+            MergeEffectState.Prepared,
+            MergeEffectState.Applied,
+            """{"outcome":"AppliedNow"}""",
+            "continue_post_merge",
+            unknownReason: null,
+            default)).Should().BeTrue();
+
+        (await _assemblyStore.SetMergeObservationAsync(
+            workPlanId,
+            Environment.MachineName,
+            effectId,
+            1,
+            MergeEffectState.Prepared,
+            MergeEffectState.Unknown,
+            """{"outcome":"Unknown"}""",
+            "operator_inspection_required",
+            "assembly_merge_unknown: stale",
+            default)).Should().BeFalse();
+
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.MergeEffectState.Should().Be(MergeEffectState.Applied);
+        state.Status.Should().Be(WorkPlanStatus.Assembling);
+    }
+
+    [Fact]
+    public async Task RunAssembly_OwnershipLostBeforePreparedCas_DoesNotApply()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(workPlanId, coordinatorRunId, owner: "another-live-pod");
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Merges.Should().Be(0);
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.MergeEffectState.Should().Be(MergeEffectState.Prepared);
+    }
+
+    [Fact]
+    public async Task RunAssembly_CancellationAfterAppliedReceipt_RecordsTruthAndStopsFurtherEffects()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(workPlanId, coordinatorRunId);
+        _pipeline.AfterAuthorize = () => CancelRunAsync(coordinatorRunId);
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Scribes.Should().Be(0);
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.Cancelled);
+        state.MergeEffectState.Should().Be(MergeEffectState.Applied);
+    }
+
+    [Fact]
+    public async Task RunAssembly_CancellationBeforeCas_LeavesPreparedEffectWithoutScribe()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(workPlanId, coordinatorRunId);
+        await CancelRunAsync(coordinatorRunId);
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Scribes.Should().Be(0);
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.MergeEffectState.Should().Be(MergeEffectState.Prepared);
+    }
+
     // #236: when the assembly gate runs with a NON-EMPTY integration diff, the coordinator must
     // provision exactly ONE detached reviewer worktree (at the integration branch) and thread its path
     // into the reviewer requests, so RAI + rubber-duck can read the assembled integration files
@@ -3894,6 +4088,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             OutcomeSpecId = spec.Id,
             ProjectId = "proj-1",
             CoordinatorRunId = coordinatorRunId,
+            CoordinatorPodId = Environment.MachineName,
             Status = WorkPlanStatus.AwaitingAssembly,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -3926,6 +4121,56 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         return (plan.Id, ids);
     }
 
+    private async Task SeedPreparedMergeAsync(
+        int workPlanId,
+        string coordinatorRunId,
+        string? owner = null,
+        string effectState = MergeEffectState.Prepared)
+    {
+        var intent = new PreparedGitMergeIntent(
+            $"{coordinatorRunId}:g1:collective-merge",
+            1,
+            "repo",
+            "refs/heads/agentweaver/integration/recover",
+            "source-commit",
+            "agg-tree",
+            "refs/heads/main",
+            "old-commit",
+            "merge-commit",
+            "agg-tree",
+            PreparedGitMergeKind.MergeCommit,
+            null);
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plan = await db.WorkPlans.SingleAsync(w => w.Id == workPlanId);
+        plan.Status = WorkPlanStatus.Assembling;
+        plan.AssemblyStage = AssemblyStage.Merge;
+        plan.IntegrationBranch = "agentweaver/integration/recover";
+        plan.CoordinatorPodId = owner ?? Environment.MachineName;
+        plan.MergeEffectId = intent.EffectId;
+        plan.MergeLifecycleGeneration = intent.LifecycleGeneration;
+        plan.MergeIntentJson = JsonSerializer.Serialize(intent);
+        plan.MergeEffectState = effectState;
+        plan.MergePreparedAt = DateTimeOffset.UtcNow;
+        plan.UpdatedAt = owner is null ? DateTimeOffset.UtcNow : DateTimeOffset.UtcNow.AddMinutes(1);
+        await db.SaveChangesAsync();
+    }
+
+    private async Task CancelRunAsync(string coordinatorRunId)
+    {
+        var runId = RunId.Parse(coordinatorRunId);
+        var run = (await _runStore.GetAsync(runId))!;
+        await _runStore.TrySetTerminalOutcomeAsync(
+            runId,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed,
+                EventTypes.RunFailed,
+                new { reason = "cancelled" },
+                DateTimeOffset.UtcNow,
+                run.LifecycleGeneration),
+            "cancelled");
+    }
+
     public async ValueTask DisposeAsync()
     {
         _provider.Dispose();
@@ -3954,6 +4199,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         public Action<CollectiveBuildTestRequest>? OnBuildTest;
         public Action? OnCleanupBuildTestResources;
         public Func<CollectiveScribeRequest, CancellationToken, Task>? OnScribe;
+        public Func<Task>? AfterAuthorize;
         public CollectiveScribeRequest? LastScribeRequest;
 
         /// <summary>When set, <see cref="MergeAsync"/> returns this result instead of a clean merge.</summary>
@@ -4037,11 +4283,35 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             return LastReviewerWorktreePath;
         }
 
-        public Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
+        public PrepareGitMergeResult PrepareMerge(CollectiveMergeRequest request) =>
+            new(
+                PrepareGitMergeOutcome.Prepared,
+                new PreparedGitMergeIntent(
+                    request.EffectId,
+                    request.LifecycleGeneration,
+                    request.RepositoryPath,
+                    $"refs/heads/{request.IntegrationBranch}",
+                    "source-commit",
+                    request.TreeHash,
+                    $"refs/heads/{request.OriginatingBranch}",
+                    "old-commit",
+                    "merge-commit",
+                    request.TreeHash,
+                    PreparedGitMergeKind.MergeCommit,
+                    null));
+
+        public async Task<CollectiveMergeResult> ExecutePreparedMergeAsync(
+            CollectivePreparedMergeRequest request,
+            Func<CancellationToken, Task<bool>> authorize,
+            CancellationToken ct)
         {
             Merges++;
             if (MergeThrows) throw new InvalidOperationException("boom in merge");
-            return Task.FromResult(MergeOverride ?? CollectiveMergeResult.Merged("merge-commit"));
+            if (!await authorize(ct))
+                return CollectiveMergeResult.Unauthorized("old-commit", "merge_authorization_lost");
+            if (AfterAuthorize is not null)
+                await AfterAuthorize();
+            return MergeOverride ?? CollectiveMergeResult.Merged("merge-commit");
         }
 
         public Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct)

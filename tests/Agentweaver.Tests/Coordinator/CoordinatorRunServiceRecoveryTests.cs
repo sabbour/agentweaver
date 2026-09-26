@@ -554,6 +554,37 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RecoverInterruptedRunsAsync_RecoveredAppliedMerge_DoesNotEnqueueMissingScribe()
+    {
+        var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
+        var (planId, _) = await SeedPlanAsync(
+            coordinatorRun.Id.ToString(),
+            [(SubtaskStatus.Completed, (string?)null)]);
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(w => w.Id == planId);
+            plan.Status = WorkPlanStatus.Complete;
+            plan.MergeEffectId = $"{coordinatorRun.Id}:g1:collective-merge";
+            plan.MergeLifecycleGeneration = 1;
+            plan.MergeEffectState = MergeEffectState.Applied;
+            plan.MergeRecoveryAction = "finalize_without_replaying_merge_or_scribe";
+            await db.SaveChangesAsync();
+        }
+
+        var streamStore = new RunStreamStore();
+        var pipeline = new CountingScribePipeline();
+        var config = BuildConfiguration();
+        var assembly = BuildAssembly(_runStore, streamStore, pipeline, config);
+        var svc = BuildCoordinatorRunService(_runStore, streamStore, assembly, config);
+
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        await Task.Delay(100);
+
+        pipeline.InvocationCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task RecoverInterruptedRunsAsync_ThreeFailedScribes_DoesNotReenqueue()
     {
         var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
@@ -1187,8 +1218,12 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         public bool ReviewerWorktreeMatchesAggregate(string reviewerWorktreePath, string aggregateTreeHash) =>
             throw new NotImplementedException();
 
-        public Task<CollectiveMergeResult> MergeAsync(
-            CollectiveMergeRequest request,
+        public PrepareGitMergeResult PrepareMerge(CollectiveMergeRequest request) =>
+            throw new NotImplementedException();
+
+        public Task<CollectiveMergeResult> ExecutePreparedMergeAsync(
+            CollectivePreparedMergeRequest request,
+            Func<CancellationToken, Task<bool>> authorize,
             CancellationToken ct) =>
             throw new NotImplementedException();
     }

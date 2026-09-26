@@ -1910,6 +1910,333 @@ public sealed class WorktreeManager
         return null;
     }
 
+    public PrepareGitMergeResult PrepareMerge(
+        string repositoryPath,
+        string originatingBranch,
+        string sourceBranch,
+        string expectedTreeHash,
+        string effectId,
+        int lifecycleGeneration)
+    {
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            var target = repo.Branches[originatingBranch];
+            var source = repo.Branches[sourceBranch];
+            if (target?.Tip is null)
+                return new PrepareGitMergeResult(PrepareGitMergeOutcome.Failed, Reason: "missing_target_ref");
+            if (source?.Tip is null)
+                return new PrepareGitMergeResult(PrepareGitMergeOutcome.Failed, Reason: "missing_source_ref");
+            if (!string.Equals(source.Tip.Tree.Sha, expectedTreeHash, StringComparison.Ordinal))
+            {
+                return new PrepareGitMergeResult(
+                    PrepareGitMergeOutcome.Conflict,
+                    Reason: "source_tree_changed");
+            }
+
+            var targetRef = target.CanonicalName;
+            var sourceRef = source.CanonicalName;
+            var expectedTarget = target.Tip;
+            var sourceCommit = source.Tip;
+            var mergeBase = repo.ObjectDatabase.FindMergeBase(expectedTarget, sourceCommit);
+
+            Commit intended;
+            PreparedGitMergeKind kind;
+            if (mergeBase is not null
+                && string.Equals(mergeBase.Sha, sourceCommit.Sha, StringComparison.Ordinal))
+            {
+                intended = expectedTarget;
+                kind = PreparedGitMergeKind.AlreadyApplied;
+            }
+            else if (mergeBase is not null
+                     && string.Equals(mergeBase.Sha, expectedTarget.Sha, StringComparison.Ordinal))
+            {
+                intended = sourceCommit;
+                kind = PreparedGitMergeKind.FastForward;
+            }
+            else
+            {
+                var merge = MergeCommitsPreferringSquadStateFromOurs(repo, expectedTarget, sourceCommit);
+                if (merge.Status == MergeTreeStatus.Conflicts)
+                {
+                    return new PrepareGitMergeResult(
+                        PrepareGitMergeOutcome.Conflict,
+                        Reason: "merge_conflict",
+                        ConflictingFiles: ExtractConflictingFiles(merge));
+                }
+
+                var signature = WithTimestamp();
+                intended = repo.ObjectDatabase.CreateCommit(
+                    signature,
+                    signature,
+                    $"Merge agentweaver run into {originatingBranch}",
+                    merge.Tree,
+                    new[] { expectedTarget, sourceCommit },
+                    prettifyMessage: true);
+                kind = PreparedGitMergeKind.MergeCommit;
+            }
+
+            var checkout = GitReferenceTransaction.CaptureCheckedOutPreState(
+                repositoryPath,
+                targetRef,
+                expectedTarget.Sha,
+                out var checkoutError);
+            if (checkoutError is not null)
+            {
+                return new PrepareGitMergeResult(
+                    PrepareGitMergeOutcome.Failed,
+                    Reason: checkoutError);
+            }
+
+            return new PrepareGitMergeResult(
+                PrepareGitMergeOutcome.Prepared,
+                new PreparedGitMergeIntent(
+                    effectId,
+                    lifecycleGeneration,
+                    RepositoryIdentity(repo),
+                    sourceRef,
+                    sourceCommit.Sha,
+                    sourceCommit.Tree.Sha,
+                    targetRef,
+                    expectedTarget.Sha,
+                    intended.Sha,
+                    intended.Tree.Sha,
+                    kind,
+                    checkout is null
+                        ? null
+                        : new PreparedGitCheckoutState(
+                            checkout.WorktreePath,
+                            checkout.FullRef,
+                            checkout.HeadOid,
+                            checkout.IndexTreeOid)));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to prepare collective merge intent.");
+            return new PrepareGitMergeResult(
+                PrepareGitMergeOutcome.Failed,
+                Reason: "prepare_merge_failed");
+        }
+    }
+
+    public ApplyPreparedGitMergeResult InspectPreparedMerge(
+        string repositoryPath,
+        PreparedGitMergeIntent intent)
+    {
+        var validation = ValidatePreparedMerge(repositoryPath, intent);
+        if (validation is not null)
+            return validation;
+
+        var observed = GitReferenceTransaction.ReadReference(repositoryPath, intent.TargetRef);
+        if (observed.Kind != GitReferenceUpdateKind.Applied || observed.CurrentOid is null)
+        {
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.Unknown,
+                observed.CurrentOid,
+                observed.Error ?? observed.Kind.ToString());
+        }
+
+        if (string.Equals(observed.CurrentOid, intent.ExpectedTargetCommit, StringComparison.Ordinal))
+        {
+            if (intent.Kind == PreparedGitMergeKind.AlreadyApplied)
+            {
+                return VerifyRecoveredCheckout(
+                    repositoryPath,
+                    intent,
+                    observed.CurrentOid,
+                    exactIntended: true);
+            }
+
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.NotApplied,
+                observed.CurrentOid,
+                "target_still_at_precondition");
+        }
+
+        if (string.Equals(observed.CurrentOid, intent.IntendedCommit, StringComparison.Ordinal))
+        {
+            return VerifyRecoveredCheckout(
+                repositoryPath,
+                intent,
+                observed.CurrentOid,
+                exactIntended: true);
+        }
+
+        using var repo = new Repository(repositoryPath);
+        var current = repo.Lookup<Commit>(observed.CurrentOid);
+        var intended = repo.Lookup<Commit>(intent.IntendedCommit);
+        if (current is not null && intended is not null && IsAncestor(repo, intended, current))
+        {
+            return VerifyRecoveredCheckout(
+                repositoryPath,
+                intent,
+                observed.CurrentOid,
+                exactIntended: false);
+        }
+
+        return new ApplyPreparedGitMergeResult(
+            ApplyPreparedGitMergeOutcome.Unknown,
+            observed.CurrentOid,
+            "target_moved_without_intended_commit");
+    }
+
+    public ApplyPreparedGitMergeResult ApplyPreparedMerge(
+        string repositoryPath,
+        PreparedGitMergeIntent intent)
+    {
+        var inspected = InspectPreparedMerge(repositoryPath, intent);
+        if (inspected.Outcome != ApplyPreparedGitMergeOutcome.NotApplied)
+            return inspected;
+
+        var update = GitReferenceTransaction.CompareExchange(
+            repositoryPath,
+            intent.TargetRef,
+            intent.IntendedCommit,
+            intent.ExpectedTargetCommit);
+        if (update.Kind != GitReferenceUpdateKind.Applied)
+            return InspectPreparedMerge(repositoryPath, intent);
+
+        var convergence = GitReferenceTransaction.ConvergeCheckedOut(
+            repositoryPath,
+            ToCheckoutPreState(intent.CheckedOutState),
+            intent.IntendedCommit);
+        if (convergence.Kind is not (GitCheckoutConvergenceKind.Converged
+            or GitCheckoutConvergenceKind.NotCheckedOut))
+        {
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.Unknown,
+                intent.IntendedCommit,
+                "checked_out_convergence_unknown",
+                convergence.Error ?? convergence.Kind.ToString());
+        }
+
+        return new ApplyPreparedGitMergeResult(
+            ApplyPreparedGitMergeOutcome.AppliedNow,
+            intent.IntendedCommit,
+            CheckoutOutcome: convergence.Kind.ToString());
+    }
+
+    private ApplyPreparedGitMergeResult? ValidatePreparedMerge(
+        string repositoryPath,
+        PreparedGitMergeIntent intent)
+    {
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            if (!string.Equals(
+                    RepositoryIdentity(repo),
+                    intent.RepositoryIdentity,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                return new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    null,
+                    "repository_identity_changed");
+            }
+
+            var sourceRef = repo.Refs[intent.SourceRef];
+            var source = repo.Lookup<Commit>(intent.SourceCommit);
+            var expected = repo.Lookup<Commit>(intent.ExpectedTargetCommit);
+            var intended = repo.Lookup<Commit>(intent.IntendedCommit);
+            if (sourceRef?.TargetIdentifier is null
+                || !string.Equals(sourceRef.TargetIdentifier, intent.SourceCommit, StringComparison.Ordinal)
+                || source is null
+                || expected is null
+                || intended is null
+                || !string.Equals(source.Tree.Sha, intent.SourceTree, StringComparison.Ordinal)
+                || !string.Equals(intended.Tree.Sha, intent.IntendedTree, StringComparison.Ordinal))
+            {
+                return new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    null,
+                    "prepared_objects_or_source_changed");
+            }
+
+            var valid = intent.Kind switch
+            {
+                PreparedGitMergeKind.AlreadyApplied =>
+                    string.Equals(intended.Sha, expected.Sha, StringComparison.Ordinal)
+                    && IsAncestor(repo, source, expected),
+                PreparedGitMergeKind.FastForward =>
+                    string.Equals(intended.Sha, source.Sha, StringComparison.Ordinal)
+                    && IsAncestor(repo, expected, source),
+                PreparedGitMergeKind.MergeCommit =>
+                    intended.Parents.Count() == 2
+                    && string.Equals(intended.Parents.ElementAt(0).Sha, expected.Sha, StringComparison.Ordinal)
+                    && string.Equals(intended.Parents.ElementAt(1).Sha, source.Sha, StringComparison.Ordinal),
+                _ => false,
+            };
+            return valid
+                ? null
+                : new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    null,
+                    "prepared_commit_proof_failed");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to validate prepared collective merge intent.");
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.Unknown,
+                null,
+                "prepared_merge_validation_failed");
+        }
+    }
+
+    private static ApplyPreparedGitMergeResult VerifyRecoveredCheckout(
+        string repositoryPath,
+        PreparedGitMergeIntent intent,
+        string currentTarget,
+        bool exactIntended)
+    {
+        var preState = ToCheckoutPreState(intent.CheckedOutState);
+        var checkout = GitReferenceTransaction.VerifyCheckedOut(
+            repositoryPath,
+            preState,
+            currentTarget);
+        if (exactIntended
+            && checkout.Kind == GitCheckoutConvergenceKind.PreStateMismatch)
+        {
+            checkout = GitReferenceTransaction.ConvergeCheckedOut(
+                repositoryPath,
+                preState,
+                intent.IntendedCommit);
+        }
+        if (checkout.Kind is not (GitCheckoutConvergenceKind.Converged
+            or GitCheckoutConvergenceKind.NotCheckedOut))
+        {
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.Unknown,
+                currentTarget,
+                "checked_out_convergence_unknown",
+                checkout.Error ?? checkout.Kind.ToString());
+        }
+
+        return new ApplyPreparedGitMergeResult(
+            ApplyPreparedGitMergeOutcome.RecoveredApplied,
+            currentTarget,
+            CheckoutOutcome: checkout.Kind.ToString());
+    }
+
+    private static GitCheckoutPreState? ToCheckoutPreState(PreparedGitCheckoutState? state) =>
+        state is null
+            ? null
+            : new GitCheckoutPreState(
+                state.WorktreePath,
+                state.FullRef,
+                state.HeadCommit,
+                state.IndexTree);
+
+    private static bool IsAncestor(Repository repo, Commit ancestor, Commit descendant) =>
+        string.Equals(
+            repo.ObjectDatabase.FindMergeBase(ancestor, descendant)?.Sha,
+            ancestor.Sha,
+            StringComparison.Ordinal);
+
+    private static string RepositoryIdentity(Repository repo) =>
+        Path.GetFullPath(repo.Info.Path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
     /// <summary>
     /// Attempts to merge the run's worktree branch back into the originating branch.
     /// Returns a trichotomy outcome:

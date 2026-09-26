@@ -2104,7 +2104,19 @@ public sealed class CoordinatorRunService
             var plan = await db.WorkPlans.AsNoTracking()
                 .FirstOrDefaultAsync(w => w.CoordinatorRunId == runId, ct).ConfigureAwait(false);
             workPlanId = plan?.Id;
-            planState = plan is null ? null : new WorkPlanAssemblyState(plan.Id, plan.Status, plan.AssemblyStage, plan.IntegrationBranch);
+            planState = plan is null ? null : new WorkPlanAssemblyState(
+                plan.Id,
+                plan.Status,
+                plan.AssemblyStage,
+                plan.IntegrationBranch,
+                plan.AssemblyTerminalStage,
+                plan.AssemblyStatusReason,
+                plan.MergeEffectId,
+                plan.MergeLifecycleGeneration,
+                plan.MergeIntentJson,
+                plan.MergeEffectState,
+                plan.MergeEvidenceJson,
+                plan.MergeRecoveryAction);
             hasSubtasks = plan is not null && await db.Subtasks.AsNoTracking()
                 .AnyAsync(s => s.WorkPlanId == plan.Id, ct).ConfigureAwait(false);
         }
@@ -2187,11 +2199,14 @@ public sealed class CoordinatorRunService
                     ct).ConfigureAwait(false);
                 await CompleteTerminalOutcomeAsync(completedChanged, entry, runId, EventTypes.RunCompleted, new { result = "complete" }, ct).ConfigureAwait(false);
                 _factory.DeleteCheckpoints(runId);
-                _assembly.EnsureFinalScribe((await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)) ?? run with
+                if (planState.MergeRecoveryAction != "finalize_without_replaying_merge_or_scribe")
                 {
-                    Status = RunStatus.Completed,
-                    Result = "complete",
-                });
+                    _assembly.EnsureFinalScribe((await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)) ?? run with
+                    {
+                        Status = RunStatus.Completed,
+                        Result = "complete",
+                    });
+                }
                 break;
 
             case CoordinatorRecoveryAction.SettleFailed:
@@ -2207,6 +2222,14 @@ public sealed class CoordinatorRunService
                     Status = RunStatus.Failed,
                     Result = run.Result ?? planState.Status,
                 });
+                break;
+
+            case CoordinatorRecoveryAction.WaitForOperator:
+                _logger.LogWarning(
+                    "Coordinator run {RunId} remains parked because merge effect {EffectId} has unknown evidence; action={RecoveryAction}",
+                    runId,
+                    planState.MergeEffectId,
+                    planState.MergeRecoveryAction ?? "operator_inspection_required");
                 break;
         }
     }
@@ -2229,6 +2252,8 @@ public sealed class CoordinatorRunService
                 if (run.ParentRunId is not null
                     || !string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
                     continue;
+                if (await SuppressesRecoveredMergeScribeAsync(run.Id.ToString(), ct).ConfigureAwait(false))
+                    continue;
 
                 var existingChildren = await _runStore
                     .GetRunsByParentAsync(run.Id.ToString(), ct)
@@ -2241,6 +2266,19 @@ public sealed class CoordinatorRunService
                 _assembly.EnsureFinalScribe(run);
             }
         }
+    }
+
+    private async Task<bool> SuppressesRecoveredMergeScribeAsync(string runId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .AnyAsync(
+                plan => plan.CoordinatorRunId == runId
+                     && plan.MergeEffectState == MergeEffectState.Applied
+                     && plan.MergeRecoveryAction == "finalize_without_replaying_merge_or_scribe",
+                ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -2816,6 +2854,7 @@ public sealed class CoordinatorRunService
         string? statusReason = plan.AssemblyStatusReason;
         if (plan.Status is WorkPlanStatus.AssemblyBlocked
                         or WorkPlanStatus.AssemblyFailed
+                        or WorkPlanStatus.AssemblyUnknown
                         or WorkPlanStatus.AssemblyDeclined
                         or WorkPlanStatus.RaiBlocked
                         or WorkPlanStatus.NeedsResolution
@@ -2845,7 +2884,10 @@ public sealed class CoordinatorRunService
             plan.ParentJoinNodeId,
             plan.ParentResumeRequestId,
             plan.ParentResumeState,
-            ReadJoinedOutput(plan.ParentResumeResultJson));
+            ReadJoinedOutput(plan.ParentResumeResultJson),
+            plan.MergeEffectState,
+            plan.MergeRecoveryAction,
+            plan.MergeEvidenceJson);
     }
 
     /// <summary>
@@ -3292,7 +3334,10 @@ public sealed record CoordinatorWorkPlanView(
     string? ParentJoinNodeId = null,
     string? ParentResumeRequestId = null,
     string? ParentResumeState = null,
-    string? JoinedOutput = null);
+    string? JoinedOutput = null,
+    string? MergeEffectState = null,
+    string? MergeRecoveryAction = null,
+    string? MergeEvidence = null);
 
 /// <summary>A subtask row in <see cref="CoordinatorWorkPlanView"/>.</summary>
 public sealed record CoordinatorSubtaskView(
