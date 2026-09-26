@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI.Workflows;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Runs.Graph;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -88,6 +89,21 @@ internal sealed record StaticFanRegionValidation(
 /// </summary>
 internal static class RunWorkflowGraphBinder
 {
+    internal static bool ContainsStaticFanRegion(WorkflowDefinition definition) =>
+        definition.Nodes.Any(node => node.Type == WorkflowNodeType.FanOut)
+        && definition.Nodes.Any(node => node.Type == WorkflowNodeType.FanIn);
+
+    internal static bool ContainsStaticFanRegion(ExecutableWorkflowPin pin)
+    {
+        var loaded = WorkflowDefinitionLoader.Load(
+            pin.DefinitionYaml,
+            pin.Source,
+            validationMode: WorkflowDefinitionValidationMode.LegacyCompatible);
+        return loaded.IsValid
+            && loaded.Definition is not null
+            && ContainsStaticFanRegion(loaded.Definition);
+    }
+
     private static readonly NodeExecutorRegistry Factory = new();
 
     /// <summary>

@@ -221,6 +221,81 @@ public sealed class CoordinatorRunService
         return runId;
     }
 
+    public async Task<RunId> StartPinnedWorkflowRunAsync(
+        Project project,
+        WorkflowLoadResult workflow,
+        string goal,
+        string submittingUser,
+        string? modelId,
+        RunApprovalPolicy approvalPolicy,
+        CancellationToken ct,
+        string? retriedFrom = null)
+    {
+        if (workflow.Definition is null)
+            throw new ArgumentException("A valid workflow definition is required.", nameof(workflow));
+
+        CoordinatorRosterGuard.EnsureDispatchableTeam(project.WorkingDirectory);
+
+        var now = DateTimeOffset.UtcNow;
+        var effectiveProviderBoundary = await ResolveEffectiveProviderBoundaryForInvocationAsync(project.Id, ct)
+            .ConfigureAwait(false);
+        var effectiveProvider = effectiveProviderBoundary.Provider;
+        var approvalSnapshot = new RunApprovalPolicySnapshot(
+            approvalPolicy,
+            retriedFrom is null ? "direct" : "retry",
+            now,
+            InheritedFromRunId: retriedFrom);
+        var definition = workflow.Definition;
+        var yaml = WorkflowDefinitionYamlSerializer.Serialize(definition);
+        var run = new Run
+        {
+            Id = RunId.New(),
+            RepositoryPath = project.WorkingDirectory,
+            OriginatingBranch = project.DefaultBranch,
+            ModelSource = effectiveProvider.ToModelSource(),
+            ModelId = effectiveProviderBoundary.ResolveEffectiveModelId(modelId),
+            Task = goal,
+            SubmittingUser = submittingUser,
+            Status = RunStatus.Pending,
+            StartedAt = now,
+            ProjectId = project.Id,
+            AgentName = null,
+            ParentRunId = null,
+            SubtaskId = null,
+            RetriedFrom = retriedFrom,
+            WorkflowSelectionReason =
+                $"Selected '{definition.Name}' from an explicit workflow override.",
+            ExecutableWorkflowPinRequired = true,
+            ExecutableWorkflowManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+            ExecutableWorkflowDefinitionId = definition.Id,
+            ExecutableWorkflowDefinitionVersion = definition.Version,
+            ExecutableWorkflowSource = workflow.Source,
+            ExecutableWorkflowContentDigest =
+                "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(yaml))).ToLowerInvariant(),
+            ExecutableWorkflowDefinitionYaml = yaml,
+            ExecutableWorkflowPinnedAt = now,
+        }.WithApprovalPolicySnapshot(approvalSnapshot);
+
+        var capturedSnapshot = await CaptureProviderSnapshotAsync(run, effectiveProviderBoundary, ct)
+            .ConfigureAwait(false);
+        try
+        {
+            await EnsureAgentHostCapabilityAsync(run, effectiveProvider, ct).ConfigureAwait(false);
+            _runOptions.Set(run.Id.ToString(), approvalPolicy.ToRunOptions());
+            using var scope = _scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<RunOrchestrator>()
+                .StartRunAsync(run, ct).ConfigureAwait(false);
+        }
+        catch (Exception launchFailure)
+        {
+            await ReleaseUncommittedProviderSnapshotAsync(run, capturedSnapshot, launchFailure)
+                .ConfigureAwait(false);
+            throw;
+        }
+
+        return run.Id;
+    }
+
     private async Task<RunModelProviderSnapshotStore.Capture?> CaptureProviderSnapshotAsync(
         Run run,
         EffectiveModelProviderResult provider,

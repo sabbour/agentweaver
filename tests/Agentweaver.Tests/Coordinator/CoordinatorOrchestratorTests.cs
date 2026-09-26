@@ -192,6 +192,29 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_ExplicitNonFanOverride_RetainsCoordinatorPlanning()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "Draft a concise launch announcement.",
+            workflowOverrideId: "content-authoring",
+            startMode: "direct");
+
+        var workPlan = await PollAsync(async db =>
+            await db.WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+        workPlan.Should().NotBeNull();
+        workPlan!.WorkflowId.Should().Be("content-authoring");
+
+        var run = await _factory.Services.GetRequiredService<IRunStore>()
+            .GetAsync(RunId.Parse(runId));
+        run!.AgentName.Should().Be("Coordinator");
+        run.GetExecutableWorkflowPin().Should().BeNull(
+            "non-fan overrides retain coordinator decomposition rather than entering the static fan runtime");
+    }
+
+    [Fact]
     public void ProviderConnectionFailure_CannotFallBackToDeterministicDecomposition()
     {
         var exception = new ModelProviderConnectionRequiredException(ProjectId.New());

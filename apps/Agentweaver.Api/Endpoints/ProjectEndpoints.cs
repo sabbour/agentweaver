@@ -1535,6 +1535,7 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         StartOrchestrationRequest request,
         IProjectStore projectStore,
         IProjectWorkspaceProvider workspaceProvider,
+        WorkflowRegistry workflowRegistry,
         CoordinatorRunService coordinator,
         AiExecutionPlanService executionPlans,
         AiExecutionPlanAccessor executionPlanAccessor,
@@ -1573,6 +1574,34 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             ? project.ProviderSettings.GitHubCopilotModel
             : request.ModelId;
 
+        WorkflowLoadResult? pinnedDirectWorkflow = null;
+        if (startMode == CoordinatorStartMode.Direct
+            && !string.IsNullOrWhiteSpace(request.WorkflowOverrideId))
+        {
+            var workflow = workflowRegistry.Get(project, request.WorkflowOverrideId);
+            if (workflow?.Definition is not null
+                && RunWorkflowGraphBinder.ContainsStaticFanRegion(workflow.Definition))
+            {
+                var binding = WorkflowTeamBinding.Bind(project, workflow.Definition);
+                if (!binding.IsResolved)
+                    return Results.Conflict(new
+                    {
+                        error = "workflow_team_binding_required",
+                        unresolved_roles = binding.UnresolvedRoles,
+                    });
+
+                var bindErrors = RunWorkflowGraphBinder.GetBindabilityErrors(binding.Workflow);
+                if (bindErrors.Count > 0)
+                    return Results.BadRequest(new
+                    {
+                        error = "workflow_not_bindable",
+                        validation_errors = bindErrors,
+                    });
+
+                pinnedDirectWorkflow = workflow with { Definition = binding.Workflow };
+            }
+        }
+
         RunId runId;
         try
         {
@@ -1586,18 +1615,27 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
             execution.Activate();
             if (execution.Error is not null)
                 return execution.Error;
-            runId = await coordinator.StartCoordinatorRunAsync(
-                projectId,
-                request.Goal!,
-                caller.User,
-                project.WorkingDirectory,
-                project.DefaultBranch,
-                modelId,
-                request.ApprovalPolicy,
-                ct,
-                workflowOverrideId: request.WorkflowOverrideId,
-                startMode: startMode,
-                submittingUserDisplayName: CoordinatorEndpoints.CallerDisplayName(caller));
+            runId = pinnedDirectWorkflow is null
+                ? await coordinator.StartCoordinatorRunAsync(
+                    projectId,
+                    request.Goal!,
+                    caller.User,
+                    project.WorkingDirectory,
+                    project.DefaultBranch,
+                    modelId,
+                    request.ApprovalPolicy,
+                    ct,
+                    workflowOverrideId: request.WorkflowOverrideId,
+                    startMode: startMode,
+                    submittingUserDisplayName: CoordinatorEndpoints.CallerDisplayName(caller))
+                : await coordinator.StartPinnedWorkflowRunAsync(
+                    project,
+                    pinnedDirectWorkflow,
+                    request.Goal!,
+                    caller.User,
+                    modelId,
+                    request.ApprovalPolicy,
+                    ct);
         }
         catch (NoTeamException)
         {

@@ -23,6 +23,7 @@ namespace Agentweaver.Api.Runs;
 public sealed class WorkflowRestartService
 {
     internal Func<DomainRun, CancellationToken, Task>? RestartChildRunOverride { get; set; }
+    internal Func<DomainRun, CancellationToken, Task>? RestartPinnedWorkflowRunOverride { get; set; }
 
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
@@ -84,6 +85,38 @@ public sealed class WorkflowRestartService
             var childWorkCorrelation = await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false);
             if (childWorkCorrelation != WorkflowChildWorkCorrelation.None)
             {
+                if (childWorkCorrelation == WorkflowChildWorkCorrelation.ParentOrCoordinator
+                    && run.ParentRunId is null
+                    && run.GetExecutableWorkflowPin() is { } pin
+                    && RunWorkflowGraphBinder.ContainsStaticFanRegion(pin))
+                {
+                    await using var parentRecoveryLease = await TryAcquireRecoveryLeaseAsync(
+                        run.Id.ToString(), ct).ConfigureAwait(false);
+                    if (parentRecoveryLease is null)
+                    {
+                        _logger.LogInformation(
+                            "Leaving pinned workflow parent {RunId} untouched because a peer owns its recovery lease",
+                            run.Id);
+                        continue;
+                    }
+
+                    var checkpoint = await _factory.GetLatestCheckpointAsync(
+                        run.Id.ToString(), ct).ConfigureAwait(false);
+                    if (checkpoint is null)
+                    {
+                        await RestartCheckpointlessPinnedWorkflowAsync(run, entry: null, ct)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await _runStore.TryParkForChildWorkAsync(
+                            run.Id,
+                            run.LifecycleGeneration,
+                            ct).ConfigureAwait(false);
+                    }
+                    continue;
+                }
+
                 if (childWorkCorrelation == WorkflowChildWorkCorrelation.Branch)
                 {
                     await using var childRecoveryLease = await TryAcquireRecoveryLeaseAsync(
@@ -252,6 +285,27 @@ public sealed class WorkflowRestartService
             var checkpointInfo = await _factory.GetLatestCheckpointAsync(runIdStr, ct).ConfigureAwait(false);
             if (checkpointInfo is null)
             {
+                if (run.GetExecutableWorkflowPin() is { } executablePin
+                    && RunWorkflowGraphBinder.ContainsStaticFanRegion(executablePin)
+                    && await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false)
+                        == WorkflowChildWorkCorrelation.ParentOrCoordinator)
+                {
+                    if (!await _runStore.TryTransitionReviewToInProgressAsync(run.Id, ct)
+                            .ConfigureAwait(false))
+                    {
+                        _logger.LogInformation(
+                            "Pinned workflow parent {RunId} changed state before checkpointless restart recovery",
+                            run.Id);
+                        continue;
+                    }
+
+                    run = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException(
+                            $"Pinned workflow parent {run.Id} disappeared during restart recovery.");
+                    await RestartCheckpointlessPinnedWorkflowAsync(run, entry, ct).ConfigureAwait(false);
+                    continue;
+                }
+
                 // No checkpoint — cannot resume via MAF. Auto-expire runs older than 24 hours
                 // to prevent stale dev/test runs accumulating forever on every restart.
                 if (DateTimeOffset.UtcNow - run.StartedAt > TimeSpan.FromHours(24))
@@ -446,6 +500,47 @@ public sealed class WorkflowRestartService
 
         if (childWork is not null)
             await childWork.SweepAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task RestartCheckpointlessPinnedWorkflowAsync(
+        DomainRun run,
+        RunStreamEntry? entry,
+        CancellationToken ct)
+    {
+        try
+        {
+            var restart = RestartPinnedWorkflowRunOverride;
+            if (restart is null)
+            {
+                using var restartScope = _scopeFactory.CreateScope();
+                var orchestrator = restartScope.ServiceProvider.GetService<RunOrchestrator>();
+                if (orchestrator is not null)
+                    restart = (parentRun, token) =>
+                        orchestrator.RestartInterruptedPinnedWorkflowRunAsync(parentRun, token);
+            }
+
+            if (restart is null)
+                throw new InvalidOperationException("No pinned workflow restart launcher is registered.");
+
+            await restart(run, ct).ConfigureAwait(false);
+            _logger.LogInformation(
+                "Restarted checkpointless pinned workflow parent {RunId} under its original durable identity",
+                run.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to restart checkpointless pinned workflow parent {RunId}",
+                run.Id);
+            await FailRecoveredRunAsync(
+                run,
+                "workflow_parent_restart_failed",
+                entry,
+                cleanupWorktree: false,
+                retryable: true,
+                ct: CancellationToken.None).ConfigureAwait(false);
+        }
     }
 
     private async Task<WorkflowChildWorkCorrelation> GetWorkflowChildWorkCorrelationAsync(

@@ -1824,9 +1824,12 @@ app.MapPost("/api/runs/{id}/retry", async (
 
     var isCoordinatorRun = run.ParentRunId is null
         && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
+    var isPinnedWorkflowRun = run.ParentRunId is null
+        && run.GetExecutableWorkflowPin() is { } executablePin
+        && RunWorkflowGraphBinder.ContainsStaticFanRegion(executablePin);
     using var execution = await EndpointHelpers.BeginAiExecutionAsync(
         httpContext,
-        isCoordinatorRun ? "orchestration" : "agent_turn",
+        isCoordinatorRun || isPinnedWorkflowRun ? "orchestration" : "agent_turn",
         run.ProjectId,
         executionPlans,
         executionPlanAccessor,
@@ -1957,6 +1960,12 @@ app.MapPost("/api/runs/{id}/retry", async (
         else
         {
             // Regular single-agent project run: rebuild from persisted inputs and start fresh.
+            var sourcePolicy = run.GetApprovalPolicySnapshot()
+                ?? new RunApprovalPolicySnapshot(
+                    runOptions.GetLaunchPolicy(run.Id.ToString()),
+                    "retry",
+                    DateTimeOffset.UtcNow,
+                    InheritedFromRunId: run.Id.ToString());
             var newRun = new Run
             {
                 Id = RunId.New(),
@@ -1972,7 +1981,21 @@ app.MapPost("/api/runs/{id}/retry", async (
                 AgentName = run.AgentName,
                 Origin = run.Origin,
                 RetriedFrom = run.Id.ToString(),
-            };
+                WorkflowSelectionReason = run.WorkflowSelectionReason,
+                ExecutableWorkflowPinRequired = run.ExecutableWorkflowPinRequired,
+                ExecutableWorkflowManifestSchemaVersion = run.ExecutableWorkflowManifestSchemaVersion,
+                ExecutableWorkflowDefinitionId = run.ExecutableWorkflowDefinitionId,
+                ExecutableWorkflowDefinitionVersion = run.ExecutableWorkflowDefinitionVersion,
+                ExecutableWorkflowSource = run.ExecutableWorkflowSource,
+                ExecutableWorkflowContentDigest = run.ExecutableWorkflowContentDigest,
+                ExecutableWorkflowDefinitionYaml = run.ExecutableWorkflowDefinitionYaml,
+                ExecutableWorkflowPinnedAt = run.ExecutableWorkflowPinnedAt,
+            }.WithApprovalPolicySnapshot(new RunApprovalPolicySnapshot(
+                sourcePolicy.Policy,
+                "retry",
+                DateTimeOffset.UtcNow,
+                sourcePolicy.SettingsUpdatedAt,
+                run.Id.ToString()));
             await orchestrator.StartRunAsync(newRun, ct).ConfigureAwait(false);
             newRunId = newRun.Id;
         }
