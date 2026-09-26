@@ -555,6 +555,11 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
         var claimResult = await store.TryClaimAndReserveCoordinatorRunAsync(
             project.Id, readyTask.Id, coordinatorRun, DateTimeOffset.UtcNow);
         claimResult.Should().Be(ClaimReserveResult.Won);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            (await db.ExecutionIdentities.CountAsync(identity => identity.RunId == runId.ToString()))
+                .Should().Be(1);
+        }
 
         // Insert a second task with the same key in 'ready' — allowed because the first is now 'claimed'
         var newReadyTask = MakeReadyTask(project.Id, "key-x");

@@ -34,6 +34,15 @@ public sealed record RunStatusResult
     public IDictionary<string, JsonElement>? Additional { get; init; }
 }
 
+public sealed record RunExecutionIdentityResult
+{
+    [JsonPropertyName("evidence_state")]
+    public string? EvidenceState { get; init; }
+
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Additional { get; init; }
+}
+
 /// <summary>Structured output for <c>run_show_artifacts</c>: an object whose <c>artifacts</c> field is the file array.</summary>
 public sealed record RunArtifactsResult(
     [property: JsonPropertyName("artifacts")] IReadOnlyList<JsonElement> Artifacts);
@@ -239,6 +248,22 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         try
         {
             return await api.GetAsync<RunStatusResult>($"/api/runs/{Uri.EscapeDataString(run_id)}", ct);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    [McpServerTool(Name = "run_execution_identity", UseStructuredContent = true),
+     Description("Get the authorization-filtered execution identity, delegation, retry, backend, permission-binding, and tool-decision record for a run.")]
+    public async Task<RunExecutionIdentityResult> RunExecutionIdentityAsync(
+        [Description("Run ID")] string run_id,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            return await api.GetAsync<RunExecutionIdentityResult>(
+                $"/api/runs/{Uri.EscapeDataString(run_id)}/execution-identity",
+                ct);
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }

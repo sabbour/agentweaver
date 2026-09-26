@@ -435,6 +435,47 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
         events.Should().NotContain(evt => evt.Type == EventTypes.PermissionBindingBound);
     }
 
+    [Fact]
+    public async Task ExecutionIdentityInspection_ReadsTheLocalDescriptorAndRedactsSensitiveFields()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"execution-identity-inspection-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = RunId.New();
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            ProjectId = ProjectId.Parse(project.GetProperty("project_id").GetString()!),
+            RepositoryPath = @"C:\private\customer-repository",
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "private prompt text",
+            SubmittingUser = "private-user@example.test",
+            Status = RunStatus.Pending,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Tank",
+        });
+
+        var response = await _client.GetAsync($"/api/runs/{runId}/execution-identity");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var raw = await response.Content.ReadAsStringAsync();
+        raw.Should().NotContain("private-user@example.test");
+        raw.Should().NotContain("private prompt text");
+        raw.Should().NotContain(@"C:\private\customer-repository");
+        using var body = JsonDocument.Parse(raw);
+        body.RootElement.GetProperty("descriptor").GetProperty("descriptor_id").GetString()
+            .Should().StartWith("execution-");
+        body.RootElement.GetProperty("descriptor").GetProperty("principal_ref").GetString()
+            .Should().StartWith("principal-");
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private async Task SeedFullPolicyAsync()

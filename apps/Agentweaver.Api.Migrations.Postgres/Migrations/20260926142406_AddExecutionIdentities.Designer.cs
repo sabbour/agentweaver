@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Api.Migrations.Postgres.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260926142406_AddExecutionIdentities")]
+    partial class AddExecutionIdentities
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -3835,9 +3838,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("EventIdentity")
-                        .HasColumnType("text");
-
                     b.Property<string>("EventType")
                         .IsRequired()
                         .HasColumnType("text");
@@ -3856,10 +3856,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("RunId");
-
-                    b.HasIndex("RunId", "EventIdentity")
-                        .IsUnique()
-                        .HasFilter("\"EventIdentity\" IS NOT NULL");
 
                     b.HasIndex("RunId", "Sequence")
                         .IsUnique();

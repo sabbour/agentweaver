@@ -426,6 +426,16 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             SettingsUpdatedAt: projectSettings.UpdatedAt);
 
         // (c) persist the coordinator run and immutable policy snapshot atomically with the claim.
+        var persistedRun = coordinatorRun with
+        {
+            Origin = RunOrigin.BacklogPickup,
+            LaunchAutoApproveTools = approvalSnapshot.Policy.AutoApproveTools,
+            LaunchAutopilot = approvalSnapshot.Policy.Autopilot,
+            ApprovalPolicySnapshotId = approvalSnapshot.SnapshotId,
+            ApprovalPolicySource = approvalSnapshot.Source,
+            ApprovalPolicyCapturedAt = approvalSnapshot.CapturedAt,
+            ApprovalPolicySettingsUpdatedAt = approvalSnapshot.SettingsUpdatedAt,
+        };
         db.Runs.Add(new Memory.RunRecord
         {
             RunId = coordinatorRun.Id.ToString(),
@@ -461,6 +471,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             ExecutableWorkflowDefinitionYaml = coordinatorRun.ExecutableWorkflowDefinitionYaml,
             ExecutableWorkflowPinnedAt = coordinatorRun.ExecutableWorkflowPinnedAt,
         });
+        db.ExecutionIdentities.Add(await EfRunStore.CreateExecutionIdentityAsync(db, persistedRun, ct));
 
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);

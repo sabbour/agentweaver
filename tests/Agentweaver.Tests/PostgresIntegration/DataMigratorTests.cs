@@ -62,6 +62,8 @@ public sealed class DataMigratorTests : IDisposable
         var runs = await db.Runs.CountAsync();
         var revisions = await db.RunRevisions.CountAsync();
         var workflowRuns = await db.WorkflowRuns.CountAsync();
+        var executionIdentity = await db.ExecutionIdentities
+            .SingleAsync(identity => identity.RunId == _seededRecoveredRunId);
         var backlogTasks = await db.BacklogTasks.CountAsync();
         var seededProject = await db.Projects.SingleAsync(project => project.ProjectId == _seededProjectId);
         var recoveredRun = await db.Runs.SingleAsync(run => run.RunId == _seededRecoveredRunId);
@@ -92,6 +94,10 @@ public sealed class DataMigratorTests : IDisposable
         recoveredRun.ExecutableWorkflowContentDigest.Should().Be(new string('d', 64));
         recoveredRun.ExecutableWorkflowDefinitionYaml.Should().Be("id: pinned-workflow");
         recoveredRun.ExecutableWorkflowPinnedAt.Should().NotBeNull();
+        executionIdentity.Attempt.Should().Be(2);
+        executionIdentity.ProjectId.Should().Be(_seededProjectId);
+        executionIdentity.InitiatingPrincipalId.Should().Be("bob");
+        executionIdentity.ExecutingServiceId.Should().Be("service:agentweaver-api");
         packageVersions.Should().ContainSingle();
         packageVersions.Single().CanonicalVersionKey.Should().Be(
             BlueprintPackageLibraryLimits.CanonicalVersionKey(packageVersions.Single().CanonicalVersion));
@@ -685,6 +691,13 @@ public sealed class DataMigratorTests : IDisposable
                     'id: pinned-workflow','{now}');
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
                 VALUES ('{rid3}','/repo','main','github_copilot','task3','alice','failed','{now}','{now}','err','{pid2}');
+
+            INSERT INTO execution_identities (
+                descriptor_id, schema_version, run_id, attempt, project_id,
+                initiating_principal_id, executing_service_id, agent_assignment_id, created_at)
+                VALUES (
+                    'execution-{rid2}',1,'{rid2}',2,'{pid1}',
+                    'bob','service:agentweaver-api','assignment-{rid2}','{now}');
 
             INSERT INTO run_revisions (run_id, revision_number, reviewer_user, created_at, raw_comment, sanitized_comment, previous_tree_hash)
                 VALUES ('{rid1}',1,'alice','{now}','raw1','sanitized1','hash0');

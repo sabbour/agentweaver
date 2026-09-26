@@ -1,5 +1,6 @@
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Execution;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -24,8 +25,11 @@ public sealed class EfRunStore : IRunStore
     public async Task InsertAsync(Run run, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         db.Runs.Add(ToRecord(run));
+        db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, run, ct));
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
     }
 
     public async Task<Run?> GetAsync(RunId runId, CancellationToken ct = default)
@@ -121,16 +125,25 @@ public sealed class EfRunStore : IRunStore
     public async Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null)
     {
-        var ts = now ?? DateTimeOffset.UtcNow;
         var id = runId.ToString();
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && r.Status == "awaiting_review", ct);
-        if (rec is null) return false;
-        rec.Status = "in_progress";
-        rec.EndedAt = null;
-        rec.ReviewReadyAt = null;
-        rec.LifecycleGeneration++;
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var rows = await db.Runs
+            .Where(r => r.RunId == id && r.Status == "awaiting_review")
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(r => r.Status, "in_progress")
+                .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.ReviewReadyAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
+        if (rows != 1)
+        {
+            await tx.RollbackAsync(ct);
+            return false;
+        }
+        var rec = await db.Runs.AsNoTracking().SingleAsync(r => r.RunId == id, ct);
+        db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, FromRecord(rec), ct));
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return true;
     }
 
@@ -182,13 +195,24 @@ public sealed class EfRunStore : IRunStore
             RunStatus.AssembleReady.ToApiString(),
         };
         await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var id = runId.ToString();
         var rows = await db.Runs
-            .Where(r => r.RunId == runId.ToString() && terminalStatuses.Contains(r.Status))
-            .ExecuteUpdateAsync(s => s
+            .Where(r => r.RunId == id && terminalStatuses.Contains(r.Status))
+            .ExecuteUpdateAsync(updates => updates
                 .SetProperty(r => r.Status, RunStatus.InProgress.ToApiString())
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
                 .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
-        return rows > 0;
+        if (rows != 1)
+        {
+            await tx.RollbackAsync(ct);
+            return false;
+        }
+        var record = await db.Runs.AsNoTracking().SingleAsync(r => r.RunId == id, ct);
+        db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, FromRecord(record), ct));
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return true;
     }
 
     public async Task<bool> TryTransitionReviewAsync(
@@ -541,13 +565,22 @@ public sealed class EfRunStore : IRunStore
         var idleStr = RunStatus.Idle.ToApiString();
         var inProgressStr = RunStatus.InProgress.ToApiString();
         await using var db = await _factory.CreateDbContextAsync(ct);
-        // CAS: only the replica that still sees this run as Idle wakes it back to InProgress.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var rows = await db.Runs
             .Where(r => r.RunId == id && r.Status == idleStr)
-            .ExecuteUpdateAsync(s => s
+            .ExecuteUpdateAsync(updates => updates
                 .SetProperty(r => r.Status, inProgressStr)
                 .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
-        return rows > 0;
+        if (rows != 1)
+        {
+            await tx.RollbackAsync(ct);
+            return false;
+        }
+        var record = await db.Runs.AsNoTracking().SingleAsync(r => r.RunId == id, ct);
+        db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, FromRecord(record), ct));
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return true;
     }
 
     public async Task UpdateToInProgressAsync(
@@ -600,13 +633,13 @@ public sealed class EfRunStore : IRunStore
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(backend))
+        if (string.IsNullOrWhiteSpace(rec.SandboxBackend) && !string.IsNullOrWhiteSpace(backend))
             rec.SandboxBackend = backend;
-        if (!string.IsNullOrWhiteSpace(claimName))
+        if (string.IsNullOrWhiteSpace(rec.SandboxClaimName) && !string.IsNullOrWhiteSpace(claimName))
             rec.SandboxClaimName = claimName;
-        if (!string.IsNullOrWhiteSpace(podName))
+        if (string.IsNullOrWhiteSpace(rec.SandboxPodName) && !string.IsNullOrWhiteSpace(podName))
             rec.SandboxPodName = podName;
-        if (!string.IsNullOrWhiteSpace(@namespace))
+        if (string.IsNullOrWhiteSpace(rec.SandboxNamespace) && !string.IsNullOrWhiteSpace(@namespace))
             rec.SandboxNamespace = @namespace;
 
         await db.SaveChangesAsync(ct);
@@ -706,6 +739,7 @@ public sealed class EfRunStore : IRunStore
             return false;
         }
         db.Runs.Add(ToRecord(run));
+        db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, run, ct));
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return true;
@@ -768,6 +802,31 @@ public sealed class EfRunStore : IRunStore
     {
         if (rows == 0)
             _logger?.LogWarning("Run transition no-op while attempting to {Operation} for run {RunId}", operation, runId);
+    }
+
+    internal static async Task<ExecutionIdentityRecord> CreateExecutionIdentityAsync(
+        MemoryDbContext db,
+        Run run,
+        CancellationToken ct)
+    {
+        async Task<string?> LatestDescriptorIdAsync(string? linkedRunId)
+        {
+            if (string.IsNullOrWhiteSpace(linkedRunId))
+                return null;
+
+            return await db.ExecutionIdentities.AsNoTracking()
+                .Where(identity => identity.RunId == linkedRunId)
+                .OrderByDescending(identity => identity.Attempt)
+                .Select(identity => identity.DescriptorId)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        var parentDescriptorId = await LatestDescriptorIdAsync(run.ParentRunId);
+        var retryDescriptorId = await LatestDescriptorIdAsync(run.RetriedFrom);
+        return ExecutionIdentityDescriptor.CreateWithResolvedLineage(
+            run,
+            parentDescriptorId,
+            retryDescriptorId).ToRecord();
     }
 
     private static RunRecord ToRecord(Run r) => new()

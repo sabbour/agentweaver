@@ -1118,6 +1118,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             AgentCharter = subtask.AgentCharter,
             ParentRunId = context.CoordinatorRunId,
             SubtaskId = subtaskId.ToString(),
+            RetriedFrom = subtask.PriorChildRunId,
         };
         if (childApprovalSnapshot is not null)
             childRun = childRun.WithApprovalPolicySnapshot(childApprovalSnapshot);

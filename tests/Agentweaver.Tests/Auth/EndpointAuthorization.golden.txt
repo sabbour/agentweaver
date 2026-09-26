@@ -102,6 +102,7 @@ GET /api/runs/{id}/assembly/files/{**path} | PlatformOrMcp
 GET /api/runs/{id}/assembly/workspace | PlatformOrMcp
 GET /api/runs/{id}/effective-permissions | PlatformMcpOrRunCapability
 GET /api/runs/{id}/events | PlatformOrMcp
+GET /api/runs/{id}/execution-identity | PlatformMcpOrRunCapability
 GET /api/runs/{id}/files | PlatformOrMcp
 GET /api/runs/{id}/files/{**path} | PlatformOrMcp
 GET /api/runs/{id}/graph | PlatformOrMcp
