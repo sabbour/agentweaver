@@ -97,6 +97,9 @@ export function abnormalTriggers(manifest) {
         if (nonEmpty(requiredRevision) && evidence.deployedRevision !== requiredRevision) {
           addTrigger(triggers, 'EVIDENCE_MIXED_REVISION', claim.claimId, result.surface);
         }
+        if (evidence.deploymentIdentity !== manifest?.release?.deploymentIdentity) {
+          addTrigger(triggers, 'EVIDENCE_DEPLOYMENT_MISMATCH', claim.claimId, result.surface);
+        }
         if (evidence.projectId !== challenge?.projectId
           || evidence.executionId !== challenge?.executionId
           || evidence.runId !== challenge?.runId
@@ -120,6 +123,11 @@ export function abnormalTriggers(manifest) {
     }
     if (nonEmpty(requiredRevision) && evidence.deployedRevision !== requiredRevision) {
       for (const claim of manifest?.claimResults ?? []) addTrigger(triggers, 'EVIDENCE_MIXED_REVISION', claim.claimId);
+    }
+    if (evidence.deploymentIdentity !== manifest?.release?.deploymentIdentity) {
+      for (const claim of manifest?.claimResults ?? []) {
+        addTrigger(triggers, 'EVIDENCE_DEPLOYMENT_MISMATCH', claim.claimId, evidence.surface);
+      }
     }
     if (evidence.projectId !== challenge?.projectId
       || evidence.executionId !== challenge?.executionId

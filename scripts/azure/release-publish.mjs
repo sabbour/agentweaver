@@ -227,6 +227,34 @@ export async function waitForImageWorkflow({
   throw new ImagePublishError(`Timed out after ${timeoutMs}ms waiting for ${IMAGE_WORKFLOW_FILE} for ${tag}.`);
 }
 
+export async function validatePreparedRelease({
+  repoRoot = DEFAULT_REPO_ROOT,
+  exec = execDefault,
+  readFile = fs.readFileSync,
+  resumeTag,
+} = {}) {
+  const clean = await isWorkingTreeClean({ cwd: repoRoot, capture: exec.capture });
+  if (!clean) {
+    throw new DirtyWorkingTreeError("Working tree has uncommitted changes. Commit or stash first.");
+  }
+
+  const version = assertVersionMirrors(repoRoot, { readFile });
+  const tag = `v${version}`;
+  if (resumeTag && resumeTag !== tag) {
+    throw new ReleaseResumeError(`Cannot resume ${resumeTag}: prepared version is ${tag}.`);
+  }
+
+  const changelog = readFile(path.join(repoRoot, "CHANGELOG.md"), "utf8");
+  const notes = extractChangelogSection(changelog, version);
+  const mainSha = await validateMainSha({ cwd: repoRoot, capture: exec.capture });
+  return {
+    version,
+    tag,
+    commit: mainSha,
+    changelog: notes,
+  };
+}
+
 export async function run(opts = {}) {
   const {
     argv = [],
@@ -250,20 +278,18 @@ export async function run(opts = {}) {
   }
 
   try {
-    const clean = await isWorkingTreeClean({ cwd: repoRoot, capture: exec.capture });
-    if (!clean) {
-      throw new DirtyWorkingTreeError("Working tree has uncommitted changes. Commit or stash first.");
-    }
-
-    const version = assertVersionMirrors(repoRoot, { readFile });
-    const tag = `v${version}`;
-    if (resumeTag && resumeTag !== tag) {
-      throw new ReleaseResumeError(`Cannot resume ${resumeTag}: prepared version is ${tag}.`);
-    }
-
-    const changelog = readFile(path.join(repoRoot, "CHANGELOG.md"), "utf8");
-    const notes = extractChangelogSection(changelog, version);
-    const mainSha = await validateMainSha({ cwd: repoRoot, capture: exec.capture });
+    const prepared = await validatePreparedRelease({
+      repoRoot,
+      exec,
+      readFile,
+      resumeTag,
+    });
+    const {
+      version,
+      tag,
+      commit: mainSha,
+      changelog: notes,
+    } = prepared;
     const fetchedTags = await exec.capture("git", ["fetch", "origin", "--tags"], {
       cwd: repoRoot,
       allowFailure: true,

@@ -7,6 +7,10 @@
 import * as logDefault from "./lib/log.mjs";
 import * as publishDefault from "./release-publish.mjs";
 import * as deployFromReleaseDefault from "./deploy-from-release.mjs";
+import * as acceptanceDefault from "../persona-briefs/release-acceptance-gate.mjs";
+import * as execDefault from "./lib/exec.mjs";
+import { DEFAULT_REPO_ROOT, resolveVariables } from "./variables.mjs";
+import { releaseDeploymentIdentity } from "./deploy-from-release.mjs";
 
 export function parseArgs(argv = []) {
   let resumeTag;
@@ -71,6 +75,12 @@ export async function run(opts = {}) {
     log = logDefault,
     publish = publishDefault,
     deployFromRelease = deployFromReleaseDefault,
+    acceptance = acceptanceDefault,
+    exec = execDefault,
+    repoRoot = DEFAULT_REPO_ROOT,
+    readFile,
+    env = process.env,
+    resolveVariables: resolveVariablesFn = resolveVariables,
   } = opts;
   const { resumeTag, dryRun, help, featureManifestPath, acceptanceBundlePath } = parseArgs(argv);
 
@@ -82,6 +92,23 @@ export async function run(opts = {}) {
     throw new Error(
       "Release deployment requires --feature-manifest <path> before publication and deployment.",
     );
+  }
+  if (!dryRun) {
+    const prepared = await publish.validatePreparedRelease({
+      repoRoot,
+      exec,
+      readFile,
+      resumeTag,
+    });
+    const cfg = await resolveVariablesFn({ env, repoRoot });
+    acceptance.runReleaseDeclarationGate({
+      featureManifestPath,
+      expectedDeployment: {
+        version: prepared.version,
+        deployedRevision: prepared.commit,
+        deploymentIdentity: releaseDeploymentIdentity(cfg),
+      },
+    });
   }
   const publishArgs = [];
   if (resumeTag) publishArgs.push("--resume", resumeTag);

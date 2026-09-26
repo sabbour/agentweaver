@@ -466,17 +466,26 @@ export function selectReleaseChallenges(catalog, manifest) {
   const errors = [];
 
   const focused = new Map();
+  const featureIds = new Set();
   for (const [featureIndex, feature] of (manifest?.features ?? []).entries()) {
     const label = `features[${featureIndex}]`;
     if (!nonEmpty(feature?.id)) errors.push(`${label}.id is required`);
+    else if (featureIds.has(feature.id)) errors.push(`${label}.id duplicates feature "${feature.id}"`);
+    else featureIds.add(feature.id);
     if (!Array.isArray(feature?.refs) || feature.refs.length === 0) errors.push(`${label}.refs must be non-empty`);
     if (!Array.isArray(feature?.shippedBehaviors) || feature.shippedBehaviors.length === 0) {
       errors.push(`${label}.shippedBehaviors must be non-empty`);
       continue;
     }
+    const behaviorIds = new Set();
     for (const [behaviorIndex, behavior] of feature.shippedBehaviors.entries()) {
       const behaviorLabel = `${label}.shippedBehaviors[${behaviorIndex}]`;
       if (!nonEmpty(behavior?.id)) errors.push(`${behaviorLabel}.id is required`);
+      else if (behaviorIds.has(behavior.id)) {
+        errors.push(`${behaviorLabel}.id duplicates behavior "${behavior.id}"`);
+      } else {
+        behaviorIds.add(behavior.id);
+      }
       validateStringArray(behavior?.claimIds, `${behaviorLabel}.claimIds`, errors);
       validateStringArray(behavior?.affectedSurfaces, `${behaviorLabel}.affectedSurfaces`, errors, SURFACES);
       for (const claimId of behavior?.claimIds ?? []) {
@@ -517,6 +526,7 @@ export function selectReleaseChallenges(catalog, manifest) {
           featureId: feature.id,
           behaviorId: behavior.id,
           claimId,
+          featureRefs: [...feature.refs].sort(),
           requiredSurfaces,
         });
         focused.set(challenge.id, selected);
