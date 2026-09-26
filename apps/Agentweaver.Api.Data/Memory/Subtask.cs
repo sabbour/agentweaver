@@ -32,6 +32,8 @@ public sealed class Subtask
     public required string Status { get; set; }            // pending | dispatched | running | rai_flagged | assemble_ready | completed | failed
     public string? ChildRunId { get; set; }
     public string? LockedOutAgents { get; set; }
+    public DateTimeOffset? CancellationRequestedAt { get; set; }
+    public string? CancellationRequestedByRunId { get; set; }
 
     /// <summary>
     /// UNIFIED AUTONOMOUS STEERING (Req-1, change #1) — the <c>ChildRunId</c> of the PRIOR child run,

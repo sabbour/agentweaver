@@ -457,7 +457,32 @@ internal static async Task CancelRunWorkAsync(
     try
     {
         if (!terminalized)
+        {
+            if (reason == "parent_cancelled"
+                && requestedByRunId is not null
+                && eventStream is not null)
+            {
+                if (terminalOutcomeProjector is not null)
+                {
+                    await terminalOutcomeProjector.ProjectPendingAsync(
+                        CancellationToken.None,
+                        streamStore).ConfigureAwait(false);
+                }
+
+                var persistedEvents = await eventStream.GetPersistedEventsAsync(
+                    id, 0, CancellationToken.None).ConfigureAwait(false);
+                var existing = persistedEvents.FirstOrDefault(evt =>
+                    evt.Type == EventTypes.RunCancelled
+                    && HasParentCancellationProvenance(evt, requestedByRunId));
+                var cancellationEvent = existing ?? await eventStream.AppendIdentifiedAsync(
+                    id,
+                    $"parent-cancelled:{run.LifecycleGeneration}:{requestedByRunId}",
+                    new RunEvent(0, EventTypes.RunCancelled, cancellationPayload),
+                    CancellationToken.None).ConfigureAwait(false);
+                streamStore.Get(id)?.RecordDurable(cancellationEvent);
+            }
             return;
+        }
 
         if (run.WorktreePath is not null && worktreeOps.WorktreeExists(run.WorktreePath))
         {
@@ -491,6 +516,17 @@ internal static async Task CancelRunWorkAsync(
         // #350: reliably tear down the remote AgentHost pod itself, not just the local token above.
         await ReleaseAgentHostPodSafeAsync(id, podLifecycle, sandboxRuntime, logger).ConfigureAwait(false);
     }
+}
+
+private static bool HasParentCancellationProvenance(RunEvent evt, string requestedByRunId)
+{
+    var payload = JsonSerializer.SerializeToElement(evt.Payload);
+    return payload.TryGetProperty("reason", out var reason)
+        && string.Equals(reason.GetString(), "parent_cancelled", StringComparison.Ordinal)
+        && payload.TryGetProperty("requested", out var requested)
+        && requested.ValueKind == JsonValueKind.True
+        && payload.TryGetProperty("requestedByRunId", out var parent)
+        && string.Equals(parent.GetString(), requestedByRunId, StringComparison.Ordinal);
 }
 
 /// <summary>

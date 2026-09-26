@@ -24,6 +24,20 @@ public interface IRunEventStream
     ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
 
     /// <summary>
+    /// Appends one logical event exactly once across retries, restarts, and replicas.
+    /// The identity is scoped to the run and must always describe the same event type.
+    /// </summary>
+    async Task<RunEvent> AppendIdentifiedAsync(
+        string runId,
+        string eventIdentity,
+        RunEvent evt,
+        CancellationToken ct = default)
+    {
+        var sequence = await AppendAsync(runId, evt, ct).ConfigureAwait(false);
+        return evt with { Sequence = sequence };
+    }
+
+    /// <summary>
     /// Appends one logical successful child-work ready event exactly once while the correlated work
     /// plan is still complete and ready. The eligibility claim and event append are one transaction,
     /// so cancellation and readiness have a durable order across retries and replicas.
