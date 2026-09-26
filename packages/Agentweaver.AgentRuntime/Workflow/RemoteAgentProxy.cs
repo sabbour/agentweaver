@@ -76,6 +76,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RemoteAgentProxy> _logger;
     private readonly RemoteAgentProxyOptions _options;
+    private IEffectivePermissionBindingProvider? _permissionBindingProvider;
     private readonly string _remoteApiBaseUrl;
 
     // Per-run state — populated by SetupAsync, consumed by RunTurnAsync.
@@ -94,6 +95,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
     private bool _preparedWritebackEnvelopeSeen;
     private bool _preparedWritebackEnvelopeInvalid;
     private PreparedWriteback? _preparedWriteback;
+    private EffectivePermissionBinding? _permissionCeiling;
 
     // Created in SetupAsync, used in RunTurnAsync, disposed in DisposeAsync.
     private A2AAgent? _a2aAgent;
@@ -119,6 +121,14 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
         _turnTokenRegistry = turnTokenRegistry;
         _options = options ?? new RemoteAgentProxyOptions();
         _logger = loggerFactory.CreateLogger<RemoteAgentProxy>();
+    }
+
+    public RemoteAgentProxy UsePermissionBindingProvider(
+        IEffectivePermissionBindingProvider permissionBindingProvider)
+    {
+        _permissionBindingProvider = permissionBindingProvider
+            ?? throw new ArgumentNullException(nameof(permissionBindingProvider));
+        return this;
     }
 
     /// <inheritdoc />
@@ -147,6 +157,12 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
         _apiBaseUrl = _remoteApiBaseUrl;
         _apiKey = apiKey;
         _userId = userId;
+        if (_permissionBindingProvider is not null)
+        {
+            _permissionCeiling = await _permissionBindingProvider
+                .ResolveAsync(runId, repositoryPath, ceiling: null, ct)
+                .ConfigureAwait(false);
+        }
         _preparedWritebackRequired = false;
         _preparedWritebackEnvelopeSeen = false;
         _preparedWritebackEnvelopeInvalid = false;
@@ -223,6 +239,11 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
 
         // Encode setup parameters as a JSON DataPart (first content part) so the pod's
         // CopilotAIAgent can call its own SetupAsync before executing the task.
+        var currentBinding = _permissionBindingProvider is null
+            ? _permissionCeiling
+            : await _permissionBindingProvider
+                .ResolveAsync(_runId, _repositoryPath, _permissionCeiling, ct)
+                .ConfigureAwait(false);
         var setupParams = new AgentSetupParams
         {
             WorkingDirectory = _workingDirectory,
@@ -236,6 +257,7 @@ public sealed class RemoteAgentProxy : IWorkflowTurnAgent, IPreparedWritebackSou
             ApiKey = _apiKey,
             UserId = _userId,
             IsRevision = isRevision,
+            EffectivePermissionBinding = currentBinding,
         };
 
         var setupJson = JsonSerializer.SerializeToUtf8Bytes(

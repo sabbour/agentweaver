@@ -63,7 +63,8 @@ public sealed class RemoteOperatorAssistantAgent(
     IRunEventStream eventStream,
     ILogger<RemoteOperatorAssistantAgent> logger,
     IAgentHostPodLifecycle? podLifecycle = null,
-    IServiceScopeFactory? scopeFactory = null) : IOperatorAssistantAgent
+    IServiceScopeFactory? scopeFactory = null,
+    IEffectivePermissionBindingProvider? permissionBindingProvider = null) : IOperatorAssistantAgent
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -125,6 +126,8 @@ public sealed class RemoteOperatorAssistantAgent(
             RemoteWorkflowAgentFactory.ResolveRemoteApiBaseUrl(configuration),
             turnTokenRegistry,
             proxyOptions.Value);
+        if (permissionBindingProvider is not null)
+            proxy.UsePermissionBindingProvider(permissionBindingProvider);
 
         var channel = Channel.CreateUnbounded<RunEvent>(new UnboundedChannelOptions
         {

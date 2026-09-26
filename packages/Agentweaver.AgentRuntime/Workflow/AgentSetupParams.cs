@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Agentweaver.Domain;
 using Microsoft.Extensions.AI;
 
 namespace Agentweaver.AgentRuntime.Workflow;
@@ -32,6 +33,7 @@ public sealed class AgentSetupParams
     public string? ApiKey { get; init; }
     public string? UserId { get; init; }
     public bool IsRevision { get; init; }
+    public EffectivePermissionBinding? EffectivePermissionBinding { get; init; }
 
     /// <summary>
     /// Tries to decode a <see cref="DataContent"/> item (sent as the first content part of the

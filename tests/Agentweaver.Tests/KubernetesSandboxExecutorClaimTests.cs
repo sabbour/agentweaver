@@ -69,7 +69,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
         Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
         IAgentHostReadinessProbe? readinessProbe = null,
-        ILogger<KubernetesSandboxExecutor>? logger = null) =>
+        ILogger<KubernetesSandboxExecutor>? logger = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null) =>
         new(ClientFor(handler), Options(), logger ?? NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: readinessProbe,
             submittingUserResolver: submittingUserResolver,
@@ -77,7 +78,27 @@ public sealed class KubernetesSandboxExecutorClaimTests
             copilotCredentials: copilotCredentials ?? new FixedGitHubCopilotCapabilityCredentialProvider(),
             previewService: previewService,
             byokProviderConfiguration: byokProviderConfiguration,
-            effectiveProviderResolver: effectiveProviderResolver);
+            effectiveProviderResolver: effectiveProviderResolver,
+            permissionBindingProvider: permissionBindingProvider ?? new FixedPermissionBindingProvider());
+
+    private sealed class FixedPermissionBindingProvider : IEffectivePermissionBindingProvider
+    {
+        public Task<EffectivePermissionBinding> ResolveAsync(
+            string runId,
+            string repositoryPath,
+            EffectivePermissionBinding? ceiling = null,
+            CancellationToken ct = default)
+        {
+            var binding = EffectivePermissionBinding.Create(
+                runId,
+                1,
+                "test-policy",
+                "project:test",
+                SandboxPolicy.Default(repositoryPath));
+            return Task.FromResult(
+                ceiling is null ? binding : EffectivePermissionBinding.Intersect(binding, ceiling));
+        }
+    }
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
@@ -396,6 +417,11 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("userId").GetString().Should().Be("sabbour");
         body.GetProperty("turnBearerToken").GetString().Should().NotBeNullOrEmpty();
         body.GetProperty("toolApprovalApiBaseUrl").GetString().Should().Be("https://agentweaver-api.internal");
+        var permissionBinding = body.GetProperty("effectivePermissionBinding");
+        permissionBinding.GetProperty("schemaVersion").GetInt32()
+            .Should().Be(EffectivePermissionBinding.CurrentSchemaVersion);
+        permissionBinding.GetProperty("bindingId").GetString().Should().StartWith("epb-");
+        permissionBinding.GetProperty("version").GetString().Should().StartWith("sha256:");
         var credential = body.GetProperty("copilotCredential");
         credential.GetProperty("snapshotReference").GetString().Should().Be("snapshot-test");
         credential.GetProperty("accessToken").GetString().Should().NotBeNullOrEmpty();

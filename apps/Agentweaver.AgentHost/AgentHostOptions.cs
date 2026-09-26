@@ -8,6 +8,12 @@ namespace Agentweaver.AgentHost;
 public sealed class AgentHostOptions
 {
     /// <summary>
+    /// Required versioned execution ceiling for non-warm launches. Warm pods receive the same
+    /// contract through POST /configure instead.
+    /// </summary>
+    public Agentweaver.Domain.EffectivePermissionBinding? EffectivePermissionBinding { get; init; }
+
+    /// <summary>
     /// Deployment isolation mode. Set to <c>kata</c> only for in-cluster AgentHost pods that already
     /// run inside a per-run Kata VM; this selects direct in-pod command execution instead of nesting
     /// bubblewrap. Native Linux and local development leave this unset.

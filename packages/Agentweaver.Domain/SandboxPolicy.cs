@@ -90,6 +90,13 @@ public sealed record SandboxPolicy
     /// <summary>Max output bytes from a sandboxed command. Default: 4 MB.</summary>
     public int MaxOutputBytes { get; init; } = 4 * 1024 * 1024;
 
+    /// <summary>
+    /// Optional explicit effective-operation allow-list. Null or empty preserves the existing
+    /// default/restricted profile behavior; a populated list can narrow a run to read-only or
+    /// another reviewed subset. Unknown operation names make binding resolution fail closed.
+    /// </summary>
+    public IReadOnlyList<string>? AllowedOperations { get; init; }
+
     /// <summary>Returns default policy for the given repository path.</summary>
     public static SandboxPolicy Default(string repositoryPath) => new() { RepositoryPath = repositoryPath };
 }

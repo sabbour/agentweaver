@@ -399,6 +399,9 @@ public sealed record SandboxPolicyDto
 
     [JsonPropertyName("max_output_bytes")]
     public int MaxOutputBytes { get; init; }
+
+    [JsonPropertyName("allowed_operations")]
+    public IReadOnlyList<string>? AllowedOperations { get; init; }
 }
 
 /// <summary>
@@ -436,6 +439,9 @@ public sealed record SandboxPolicyUpdateRequest
 
     [JsonPropertyName("max_output_bytes")]
     public int? MaxOutputBytes { get; init; }
+
+    [JsonPropertyName("allowed_operations")]
+    public IReadOnlyList<string>? AllowedOperations { get; init; }
 }
 public sealed record GitHubRepoResponse(
     string FullName,

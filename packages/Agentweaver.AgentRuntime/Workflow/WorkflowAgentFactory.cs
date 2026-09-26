@@ -22,6 +22,7 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private readonly IModelInvocationGuard? _modelInvocationGuard;
+    private readonly IEffectivePermissionBindingProvider? _permissionBindingProvider;
 
     public WorkflowAgentFactory(
         GitHubCopilotClientFactory copilotClientFactory,
@@ -33,7 +34,8 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
         IRunOptionsStore runOptions,
         ILoggerFactory loggerFactory,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        IModelInvocationGuard? modelInvocationGuard = null)
+        IModelInvocationGuard? modelInvocationGuard = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _sandboxExecutor = sandboxExecutor;
@@ -45,30 +47,36 @@ public sealed class WorkflowAgentFactory : IWorkflowAgentFactory
         _loggerFactory = loggerFactory;
         _byokProviderConfiguration = byokProviderConfiguration;
         _modelInvocationGuard = modelInvocationGuard;
+        _permissionBindingProvider = permissionBindingProvider;
     }
 
     public IWorkflowTurnAgent CreateWorkerAgent() => new CopilotAIAgent(
         _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(), _questionGate, _runOptions,
-        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);
+        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard,
+        permissionBindingProvider: _permissionBindingProvider);
 
     public IWorkflowTurnAgent CreateRaiAgent() => EphemeralCopilotAIAgent.CreateRai(
         _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(),
-        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);
+        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard,
+        permissionBindingProvider: _permissionBindingProvider);
 
     public IWorkflowTurnAgent CreateRubberduckAgent() => new CopilotAIAgent(
         _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(),
-        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);
+        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard,
+        permissionBindingProvider: _permissionBindingProvider);
 
     public IWorkflowTurnAgent CreateBuildTestAgent() => new CopilotAIAgent(
         _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(),
-        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);
+        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard,
+        permissionBindingProvider: _permissionBindingProvider);
 
     public IWorkflowTurnAgent CreateScribeAgent() => EphemeralCopilotAIAgent.CreateScribe(
         _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
         _approvalStore, _toolApprovalGate, _loggerFactory.CreateLogger<CopilotAIAgent>(),
-        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard);
+        byokProviderConfiguration: _byokProviderConfiguration, modelInvocationGuard: _modelInvocationGuard,
+        permissionBindingProvider: _permissionBindingProvider);
 }

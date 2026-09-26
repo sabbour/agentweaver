@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Sandbox;
 
@@ -32,6 +33,7 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
     private readonly ILoggerFactory _loggerFactory;
     private readonly RemoteAgentProxyOptions _proxyOptions;
     private readonly string _remoteApiBaseUrl;
+    private readonly IEffectivePermissionBindingProvider? _permissionBindingProvider;
 
     public RemoteWorkflowAgentFactory(
         ISandboxAgentEndpointResolver endpointResolver,
@@ -39,7 +41,8 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
         IOptions<RemoteAgentProxyOptions> proxyOptions,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null)
     {
         _endpointResolver = endpointResolver ?? throw new ArgumentNullException(nameof(endpointResolver));
         _turnTokenRegistry = turnTokenRegistry ?? throw new ArgumentNullException(nameof(turnTokenRegistry));
@@ -47,6 +50,7 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
         _proxyOptions = proxyOptions?.Value ?? throw new ArgumentNullException(nameof(proxyOptions));
         _remoteApiBaseUrl = ResolveRemoteApiBaseUrl(configuration);
+        _permissionBindingProvider = permissionBindingProvider;
     }
 
     public IWorkflowTurnAgent CreateWorkerAgent() => CreateProxy();
@@ -55,14 +59,19 @@ internal sealed class RemoteWorkflowAgentFactory : IWorkflowAgentFactory
     public IWorkflowTurnAgent CreateBuildTestAgent() => CreateProxy();
     public IWorkflowTurnAgent CreateScribeAgent() => CreateProxy();
 
-    private RemoteAgentProxy CreateProxy() =>
-        new(
+    private RemoteAgentProxy CreateProxy()
+    {
+        var proxy = new RemoteAgentProxy(
             _endpointResolver,
             _httpClientFactory,
             _loggerFactory,
             _remoteApiBaseUrl,
             _turnTokenRegistry,
             _proxyOptions);
+        return _permissionBindingProvider is null
+            ? proxy
+            : proxy.UsePermissionBindingProvider(_permissionBindingProvider);
+    }
 
     internal static string ResolveRemoteApiBaseUrl(IConfiguration configuration)
     {

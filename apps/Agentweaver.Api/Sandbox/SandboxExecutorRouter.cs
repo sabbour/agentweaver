@@ -37,6 +37,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
     private readonly IRunStore? _runStore;
     private readonly IByokProviderConfigurationProvider _byokProviderConfiguration;
     private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IEffectivePermissionBindingProvider? _permissionBindingProvider;
     private readonly Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? _effectiveProviderResolver;
     private readonly Func<bool> _isInCluster;
     private readonly Func<IKubernetes> _kubernetesClientFactory;
@@ -57,6 +58,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         RunRepositoryCredentialRegistry? repositoryCredentials = null,
         Security.IRunAuthorshipCapabilityStore? authorshipCapabilityStore = null,
         IRunStore? runStore = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null,
         Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
         Func<bool>? isInCluster = null,
         Func<IKubernetes>? kubernetesClientFactory = null)
@@ -75,6 +77,7 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
         _repositoryCredentials = repositoryCredentials;
         _authorshipCapabilityStore = authorshipCapabilityStore;
         _runStore = runStore;
+        _permissionBindingProvider = permissionBindingProvider;
         _byokProviderConfiguration = byokProviderConfiguration;
         _serviceScopeFactory = serviceScopeFactory;
         _effectiveProviderResolver = effectiveProviderResolver;
@@ -194,7 +197,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
             authorshipCapabilityStore: _authorshipCapabilityStore,
             runStore: _runStore,
             byokProviderConfiguration: _byokProviderConfiguration,
-            effectiveProviderResolver: ResolveEffectiveProviderAsync);
+            effectiveProviderResolver: ResolveEffectiveProviderAsync,
+            permissionBindingProvider: _permissionBindingProvider);
 
     private async Task<EffectiveModelProviderResult> ResolveEffectiveProviderAsync(
         ProjectId? projectId,

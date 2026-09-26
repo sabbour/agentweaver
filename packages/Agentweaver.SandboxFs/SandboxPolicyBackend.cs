@@ -35,6 +35,8 @@ public sealed class SandboxPolicyBackend : IExternalPolicyBackend
         "apply_patch",
         // report_intent is UI-observability only; no filesystem or shell action.
         "report_intent",
+        // ask_question delegates to the run-scoped human question gate.
+        "ask_question",
     };
 
     /// <summary>Known shell-tool names that require working-directory containment.</summary>

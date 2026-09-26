@@ -765,7 +765,8 @@ public sealed class A2ARoundTripIntegrationTests
             string? projectId,
             string? agentName,
             string? apiBaseUrl = null,
-            string? apiKey = null)
+            string? apiKey = null,
+            EffectivePermissionBinding? permissionBinding = null)
         {
             Contexts.Add((apiBaseUrl, apiKey));
             return true;

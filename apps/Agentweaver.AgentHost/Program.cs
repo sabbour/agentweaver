@@ -257,6 +257,18 @@ app.MapPost("/configure", async (HttpContext ctx) =>
 
     if (body is null || string.IsNullOrWhiteSpace(body.RunId))
         return Results.BadRequest("runId is required");
+    if (body.EffectivePermissionBinding is null)
+        return Results.BadRequest("effectivePermissionBinding is required");
+    try
+    {
+        body.EffectivePermissionBinding.Validate(
+            body.RunId,
+            body.EffectivePermissionBinding.Attempt);
+    }
+    catch (EffectivePermissionBindingException ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
     var hasMcpBrokerToken = !string.IsNullOrWhiteSpace(body.McpBrokerToken);
     if ((body.Purpose == AgentHostPurpose.OperatorAssistant) != hasMcpBrokerToken)
         return Results.BadRequest("mcpBrokerToken is required exclusively for the operator assistant purpose");
@@ -595,6 +607,7 @@ internal sealed record ConfigureRequest
     public GitHubCapabilitySnapshotCredential? CopilotCredential { get; init; }
     public ByokProviderConfiguration? ByokProviderConfiguration { get; init; }
     public string? ModelProviderKey { get; init; }
+    public EffectivePermissionBinding? EffectivePermissionBinding { get; init; }
 
     /// <summary>
     /// Short-lived credential for the configured run and repository. The runtime gives this value
@@ -701,7 +714,8 @@ internal sealed record ConfigureRequest
         RepositoryAccessToken,
         ToolApprovalApiBaseUrl,
         ByokProviderConfiguration,
-        ModelProviderKey);
+        ModelProviderKey,
+        EffectivePermissionBinding);
 }
 
 internal sealed record McpBrokerTokenRefreshRequest(string? McpBrokerToken);

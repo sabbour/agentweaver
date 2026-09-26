@@ -33,10 +33,12 @@ public sealed class EphemeralCopilotAIAgent : CopilotAIAgent
         ILogger<CopilotAIAgent> logger,
         IEnumerable<string>? allowedTools = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        IModelInvocationGuard? modelInvocationGuard = null)
+        IModelInvocationGuard? modelInvocationGuard = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null)
         : base(factory, executor, sandboxPolicyStore, approvalStore, toolApprovalGate, logger,
             byokProviderConfiguration: byokProviderConfiguration,
-            modelInvocationGuard: modelInvocationGuard)
+            modelInvocationGuard: modelInvocationGuard,
+            permissionBindingProvider: permissionBindingProvider)
     {
         if (string.IsNullOrWhiteSpace(auditRoleName))
             throw new ArgumentException("An explicit audit role name is required.", nameof(auditRoleName));
@@ -57,10 +59,12 @@ public sealed class EphemeralCopilotAIAgent : CopilotAIAgent
         IToolApprovalGate toolApprovalGate,
         ILogger<CopilotAIAgent> logger,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        IModelInvocationGuard? modelInvocationGuard = null) =>
+        IModelInvocationGuard? modelInvocationGuard = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null) =>
         new("Rai", factory, executor, sandboxPolicyStore, approvalStore, toolApprovalGate, logger,
             byokProviderConfiguration: byokProviderConfiguration,
-            modelInvocationGuard: modelInvocationGuard);
+            modelInvocationGuard: modelInvocationGuard,
+            permissionBindingProvider: permissionBindingProvider);
 
     public static EphemeralCopilotAIAgent CreateScribe(
         GitHubCopilotClientFactory factory,
@@ -70,11 +74,13 @@ public sealed class EphemeralCopilotAIAgent : CopilotAIAgent
         IToolApprovalGate toolApprovalGate,
         ILogger<CopilotAIAgent> logger,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        IModelInvocationGuard? modelInvocationGuard = null) =>
+        IModelInvocationGuard? modelInvocationGuard = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null) =>
         new("Scribe", factory, executor, sandboxPolicyStore, approvalStore, toolApprovalGate, logger,
             allowedTools: ScribeAllowedTools,
             byokProviderConfiguration: byokProviderConfiguration,
-            modelInvocationGuard: modelInvocationGuard);
+            modelInvocationGuard: modelInvocationGuard,
+            permissionBindingProvider: permissionBindingProvider);
 
     /// <summary>No-op: ephemeral built-in roles are never resumed across restarts.</summary>
     protected override ValueTask<JsonElement> SerializeSessionCoreAsync(

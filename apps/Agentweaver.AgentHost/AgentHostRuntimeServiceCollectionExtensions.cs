@@ -12,6 +12,7 @@ internal static class AgentHostRuntimeServiceCollectionExtensions
         services.AddSingleton<AgentHostRuntimeState>();
         services.AddSingleton<IModelInvocationGuard, AgentHostModelInvocationGuard>();
         services.AddSingleton<IByokProviderConfigurationProvider, AgentHostByokProviderConfigurationProvider>();
+        services.AddSingleton<IEffectivePermissionBindingProvider, AgentHostPermissionBindingProvider>();
         services.AddSingleton<IToolApprovalOwnerResolver, AgentHostToolApprovalOwnerResolver>();
         services.AddAgentRuntime();
         services.AddSingleton<IAgentHostToolApprovalPolicyClient, AgentHostToolApprovalPolicyClient>();
@@ -26,6 +27,26 @@ internal static class AgentHostRuntimeServiceCollectionExtensions
     {
         public Task<ByokProviderConfiguration?> GetAsync(CancellationToken ct) =>
             Task.FromResult(runtimeState.ByokProviderConfiguration);
+    }
+
+    internal sealed class AgentHostPermissionBindingProvider(AgentHostRuntimeState runtimeState)
+        : IEffectivePermissionBindingProvider
+    {
+        public Task<EffectivePermissionBinding> ResolveAsync(
+            string runId,
+            string repositoryPath,
+            EffectivePermissionBinding? ceiling = null,
+            CancellationToken ct = default)
+        {
+            var binding = runtimeState.EffectivePermissionBinding
+                ?? throw new EffectivePermissionBindingException(
+                    "AgentHost effective permission binding is unavailable.");
+            binding.Validate(runId, binding.Attempt);
+            return Task.FromResult(
+                ceiling is null
+                    ? binding
+                    : EffectivePermissionBinding.Intersect(binding, ceiling));
+        }
     }
 }
 

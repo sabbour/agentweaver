@@ -13,6 +13,7 @@ public static class EventTypes
     public const string RunCompleted = "run.completed";
     public const string RunFailed    = "run.failed";
     public const string RunBounded   = "run.bounded";
+    public const string PermissionBindingBound = "permission.binding.bound";
     /// <summary>
     /// Non-terminal error event emitted when an operation fails but the run is
     /// reverted to a retryable state (e.g., AwaitingReview after merge InternalError).

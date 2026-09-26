@@ -2678,6 +2678,59 @@ app.MapGet("/api/runs/{id}/tool-approval-policies/{toolName}", async (
     });
 }).RunCapability();
 
+app.MapGet("/api/runs/{id}/effective-permissions", async (
+    HttpContext httpContext,
+    string id,
+    IRunStore runStore,
+    IEffectivePermissionBindingProvider permissionBindings,
+    IRunAuthorshipCapabilityStore capabilityStore,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null)
+        return Results.NotFound();
+
+    if (httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.RunCapability)
+        || httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.InternalServiceKey))
+    {
+        var capabilityRunId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
+        var capabilityToken = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+        if (!string.Equals(capabilityRunId, id, StringComparison.Ordinal)
+            || !await capabilityStore.ValidateAsync(id, capabilityToken, ct).ConfigureAwait(false))
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+    }
+    else if (await EndpointHelpers.RequireRunAccessAsync(
+            httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+    {
+        return denied;
+    }
+
+    try
+    {
+        var binding = await permissionBindings.ResolveAsync(
+            id,
+            run.WorktreePath ?? run.RepositoryPath,
+            ceiling: null,
+            ct).ConfigureAwait(false);
+        return Results.Ok(binding);
+    }
+    catch (EffectivePermissionBindingException ex)
+    {
+        return Results.Json(
+            new { error = "effective_permission_binding_unavailable", message = ex.Message },
+            statusCode: StatusCodes.Status409Conflict);
+    }
+}).RunCapability();
+
 app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
     HttpContext httpContext,
     string id,
