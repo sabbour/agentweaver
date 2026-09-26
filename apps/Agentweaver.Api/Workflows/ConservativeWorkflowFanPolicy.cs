@@ -62,6 +62,44 @@ internal static partial class ConservativeWorkflowFanPolicy
 
     private sealed record FanSafetyIssue(string Reason, bool PreventLinearization);
 
+    public static bool TryGetRequiredFanOutputPaths(
+        string description,
+        out IReadOnlyList<string> outputPaths)
+    {
+        outputPaths = [];
+        if (string.IsNullOrWhiteSpace(description) ||
+            !ExplicitIndependentIntentRegex().IsMatch(description) ||
+            NegatedIndependentIntentRegex().IsMatch(description) ||
+            RequestDependencyLanguageRegex().IsMatch(description) ||
+            SourceMutationLanguageRegex().IsMatch(description) ||
+            SharedArtifactLanguageRegex().IsMatch(description))
+        {
+            return false;
+        }
+
+        var paths = ExplicitOutputPathRegex().Matches(description)
+            .Cast<Match>()
+            .Select(match => match.Groups["path"].Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (paths.Length < 2)
+            return false;
+
+        var normalized = new List<string>(paths.Length);
+        foreach (var path in paths)
+        {
+            if (!TryNormalizeExactPath(path, out var safePath, out _))
+                return false;
+            normalized.Add(safePath!);
+        }
+
+        if (HasOverlap(normalized, out _))
+            return false;
+
+        outputPaths = normalized;
+        return true;
+    }
+
     public static bool TryApply(
         WorkflowDefinition workflow,
         out ConservativeWorkflowFanResult result,
@@ -464,6 +502,26 @@ internal static partial class ConservativeWorkflowFanPolicy
         @"\b(?:write|draft|produce|create|save)\s+only\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ExplicitContentOutputContractRegex();
+
+    [GeneratedRegex(
+        @"\bindependent(?:ly)?\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ExplicitIndependentIntentRegex();
+
+    [GeneratedRegex(
+        @"\b(?:(?:do\s+not|don't|never|not)\b.{0,48})independent(?:ly)?\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex NegatedIndependentIntentRegex();
+
+    [GeneratedRegex(
+        @"\b(?:depends?\s+on|based\s+on|requires?\s+(?:the\s+)?(?:output|result|artifact|report|analysis|findings)|from\s+(?:the\s+)?(?:(?:other|previous|prior|sibling)\s+)?branch|use\s+(?:those|the|its|their)\s+(?:findings|results?|outputs?|artifacts?))\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex RequestDependencyLanguageRegex();
+
+    [GeneratedRegex(
+        @"\b(?:write|draft|produce|create|save)\s+only\s+(?<path>(?:[a-zA-Z0-9_.-]+[\\/])*[a-zA-Z0-9_.-]+\.[a-zA-Z0-9]{1,16})",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ExplicitOutputPathRegex();
 
     [GeneratedRegex(
         @"(?<![a-zA-Z0-9_])(?:[a-zA-Z0-9_.-]+[\\/])*[a-zA-Z0-9_.-]+\.[a-zA-Z0-9]{1,16}(?![a-zA-Z0-9_])",

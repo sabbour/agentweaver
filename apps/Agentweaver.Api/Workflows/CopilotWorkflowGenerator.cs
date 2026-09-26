@@ -131,6 +131,26 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                 out var fanError))
             return (yaml, null, fanError, null);
 
+        if (ConservativeWorkflowFanPolicy.TryGetRequiredFanOutputPaths(
+                request.Description,
+                out var requiredFanOutputPaths))
+        {
+            var generatedFanOutputPaths = fanResult.Workflow.Nodes
+                .Where(node => node.Independent is true)
+                .SelectMany(node => node.DeclaredOutputPaths)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (!requiredFanOutputPaths.All(generatedFanOutputPaths.Contains))
+            {
+                return (
+                    yaml,
+                    null,
+                    "The request explicitly declares independent work with exact, disjoint content outputs. " +
+                    $"Generate one policy-valid fan_out/fan_in region whose branches write only: " +
+                    $"{string.Join(", ", requiredFanOutputPaths)}.",
+                    null);
+            }
+        }
+
         var softwareReviewError = ValidateSoftwareReviewGate(fanResult.Workflow, request.ContentOnly);
         if (softwareReviewError is not null)
             return (yaml, null, softwareReviewError, null);
@@ -360,6 +380,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               branch's result and every write is named as an exact file. Each branch prompt must use
               an explicit content-output contract such as `Write only reports/topic.md`, and every
               path named in the prompt must appear in `declared_output_paths`.
+            - When the request explicitly says tasks run independently and names at least two exact,
+              pairwise-disjoint supported content files, you MUST emit one policy-valid fan_out/fan_in
+              region. Do not silently return a sequential graph for that explicit safe fan request.
             - Treat dependency language (`after`, `once`, `based on`, `depends on`, `consume`, `use`,
               `incorporate`, `findings`, `results`, `from branch`, `requires the output`) plus any
               sibling branch id, label, full output path, or output basename as a dependency. Do not

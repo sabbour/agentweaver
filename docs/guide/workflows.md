@@ -390,8 +390,12 @@ Agentweaver normalizes path separators and compares scopes case-insensitively wi
 prefix checks. Missing, dynamic, broad, shared, or overlapping scopes stay sequential.
 
 The supported starting point is independent research, analysis, and documentation with exact
-disjoint output files. Agentweaver does not infer independence from prose and does not claim generic
-code implementation or refactoring is safe to parallelize. If a model returns a structurally valid
+disjoint output files. When a request explicitly says the tasks run independently and gives at least
+two disjoint `write only <path>` content contracts, Agentweaver uses its single correction pass if the
+first model draft omits the requested fan. The corrected graph must still pass every branch-level
+safety check and cover the exact requested output paths. Ambiguous, negated, dependency-bearing,
+unknown-scope, overlapping, or code-writing requests remain sequential; Agentweaver does not claim
+generic implementation or refactoring is safe to parallelize. If a model returns a structurally valid
 but insufficiently proven non-dependent fan, the server deterministically keeps branch declaration
 order and returns a sequential draft. A branch that consumes a sibling by node id, label, output path,
 basename, findings, or results is rejected for model correction instead of being reordered
