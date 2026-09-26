@@ -323,8 +323,7 @@ public sealed class CoordinatorPickupService
         if (!loaded.IsValid || loaded.Definition is null)
             return null;
 
-        return loaded.Definition.Nodes.Any(node => node.Type == WorkflowNodeType.FanOut)
-            && loaded.Definition.Nodes.Any(node => node.Type == WorkflowNodeType.FanIn)
+        return RunWorkflowGraphBinder.ContainsStaticFanRegion(loaded.Definition)
                 ? loaded.Definition
                 : null;
     }

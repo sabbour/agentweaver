@@ -229,8 +229,10 @@ supported static `fan_out` / `fan_in` region executes its pinned workflow graph 
 than asking the Coordinator model to decompose the task again. The queued task captures the saved
 definition immediately, and pickup copies that snapshot into the run's executable pin atomically,
 so an edit, deletion, process restart, or delayed pickup cannot substitute a different graph. Other
-workflows retain the ordinary Coordinator pickup behavior, and explicitly starting a Coordinator
-with a workflow override still uses the Coordinator flow.
+workflows retain the ordinary Coordinator pickup behavior. A direct orchestration with an explicit
+static fan workflow override uses the same pinned executable path immediately, without creating a
+backlog task or asking the Coordinator model to replace the authored topology. Direct requests
+without an override, and explicit non-fan workflow overrides, retain the ordinary Coordinator flow.
 
 For project workflows, configure a schedule from the workflow row (**Add schedule** / **Edit
 schedule**) or from the visual editor to run the workflow daily, weekly, or monthly at a UTC time.

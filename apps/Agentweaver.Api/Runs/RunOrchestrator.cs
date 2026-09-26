@@ -698,6 +698,37 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         await StartRevisionAsync(run, run.Task, ct, isChild: true).ConfigureAwait(false);
     }
 
+    public async Task RestartInterruptedPinnedWorkflowRunAsync(Run run, CancellationToken ct)
+    {
+        if (run.ParentRunId is not null)
+            throw new InvalidOperationException($"Run {run.Id} is not a root workflow run.");
+        if (run.GetExecutableWorkflowPin() is null)
+            throw new InvalidOperationException($"Run {run.Id} has no executable workflow pin.");
+        if (_registry.Get(run.Id.ToString()) is not null)
+            return;
+
+        var worktree = _worktreeManager.EnsureWorktree(
+            run.RepositoryPath,
+            run.OriginatingBranch,
+            run.Id);
+        if (!string.Equals(run.WorktreePath, worktree.WorktreePath, StringComparison.Ordinal)
+            || !string.Equals(run.WorktreeBranch, worktree.BranchName, StringComparison.Ordinal))
+        {
+            await _runStore.UpdateWorktreeAsync(
+                run.Id,
+                worktree.WorktreePath,
+                worktree.BranchName,
+                ct).ConfigureAwait(false);
+            run = run with
+            {
+                WorktreePath = worktree.WorktreePath,
+                WorktreeBranch = worktree.BranchName,
+            };
+        }
+
+        await StartRevisionAsync(run, run.Task, ct).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Fix-A(3a) Path-2: conscious hand-off of a REJECTED subtask to a DIFFERENT (non-locked-out)
     /// agent under the Reviewer Rejection Lockout Protocol. Unlike <see cref="StartRevisionAsync"/>
@@ -968,8 +999,12 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
         var platformScoped = string.Equals(run.AgentName, "Operator", StringComparison.Ordinal);
         var resolutionProjectId = platformScoped ? null : run.ProjectId;
+        var isPinnedStaticFanRun = run.ParentRunId is null
+            && run.GetExecutableWorkflowPin() is { } executablePin
+            && RunWorkflowGraphBinder.ContainsStaticFanRegion(executablePin);
         var expectedOperation = platformScoped ? "assistant_turn" : run.ParentRunId is null
-            && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+            && (string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+                || isPinnedStaticFanRun)
                 ? "orchestration"
                 : "agent_turn";
         var accepted = _executionPlanAccessor?.Current is { } candidate

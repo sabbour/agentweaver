@@ -747,6 +747,126 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         streamStore.Get(secondBranchId.ToString()).Should().BeNull();
     }
 
+    [Fact]
+    public async Task RecoverAsync_CheckpointlessPinnedFanParent_RestartsOriginalRunWithoutDuplicatingPlan()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var service = BuildService(
+            runStore,
+            streamStore,
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null));
+        var parentId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "resume the pinned fan",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            WorktreePath = _worktreePath,
+            WorktreeBranch = "agentweaver/test",
+            ExecutableWorkflowPinRequired = true,
+            ExecutableWorkflowManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+            ExecutableWorkflowDefinitionId = "pinned-fan",
+            ExecutableWorkflowDefinitionVersion = "1",
+            ExecutableWorkflowSource = "test",
+            ExecutableWorkflowContentDigest = "sha256:test",
+            ExecutableWorkflowDefinitionYaml = """
+                id: pinned-fan
+                name: Pinned fan
+                version: "1"
+                start: fan
+                nodes:
+                  - id: fan
+                    type: fan_out
+                    label: Parallel work
+                  - id: branch-one
+                    type: prompt
+                    label: Branch one
+                    agent: alpha
+                    prompt: Produce branch one.
+                  - id: branch-two
+                    type: prompt
+                    label: Branch two
+                    agent: alpha
+                    prompt: Produce branch two.
+                  - id: join
+                    type: fan_in
+                    label: Join
+                    target: fan
+                  - id: done
+                    type: terminal
+                    label: Done
+                edges:
+                  - from: fan
+                    to: branch-one
+                  - from: fan
+                    to: branch-two
+                  - from: branch-one
+                    to: join
+                  - from: branch-two
+                    to: join
+                  - from: join
+                    to: done
+                """,
+            ExecutableWorkflowPinnedAt = DateTimeOffset.UtcNow,
+        });
+
+        await using (var scope = _memoryServiceProvider!.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project",
+                CoordinatorRunId = RunId.New().ToString(),
+                Goal = "g",
+                DesiredOutcome = "o",
+                Scope = "s",
+                Assumptions = "a",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            db.WorkPlans.Add(new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "project",
+                CoordinatorRunId = spec.CoordinatorRunId,
+                ParentRunId = parentId.ToString(),
+                ParentWorkflowId = "pinned-fan",
+                ParentWorkflowNodeId = "fan",
+                ParentJoinNodeId = "join",
+                ParentResumeState = WorkflowChildWorkResumeStates.Committed,
+                Status = WorkPlanStatus.Planned,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var restarted = new List<RunId>();
+        service.RestartPinnedWorkflowRunOverride = (run, _) =>
+        {
+            restarted.Add(run.Id);
+            return Task.CompletedTask;
+        };
+
+        await service.RecoverAsync(CancellationToken.None);
+
+        restarted.Should().Equal(parentId);
+        (await runStore.GetAsync(parentId))!.Status.Should().Be(RunStatus.InProgress);
+        await using var verificationScope = _memoryServiceProvider!.CreateAsyncScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verificationDb.WorkPlans.CountAsync(plan => plan.ParentRunId == parentId.ToString()))
+            .Should().Be(1);
+    }
+
     [Theory]
     [InlineData(RunStatus.InProgress)]
     [InlineData(RunStatus.Committing)]
