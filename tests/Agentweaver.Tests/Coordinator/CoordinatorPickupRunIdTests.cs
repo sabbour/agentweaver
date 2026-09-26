@@ -514,7 +514,10 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         await runStore.TryTransitionReviewToInProgressAsync(RunId.Parse(runId));
         var restartable = await runStore.GetAsync(RunId.Parse(runId));
         await factory.Services.GetRequiredService<RunOrchestrator>()
-            .RestartInterruptedPinnedWorkflowRunAsync(restartable!, CancellationToken.None);
+            .RestartInterruptedPinnedWorkflowRunAsync(
+                restartable!,
+                new RunLeaseClaim("test-recovery", 1),
+                CancellationToken.None);
 
         var reattached = await PollUntilAsync(async () =>
         {

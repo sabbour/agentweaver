@@ -23,7 +23,7 @@ namespace Agentweaver.Api.Runs;
 public sealed class WorkflowRestartService
 {
     internal Func<DomainRun, CancellationToken, Task>? RestartChildRunOverride { get; set; }
-    internal Func<DomainRun, CancellationToken, Task>? RestartPinnedWorkflowRunOverride { get; set; }
+    internal Func<DomainRun, RunLeaseClaim, CancellationToken, Task>? RestartPinnedWorkflowRunOverride { get; set; }
 
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
@@ -83,40 +83,42 @@ public sealed class WorkflowRestartService
         foreach (var run in inProgress)
         {
             var childWorkCorrelation = await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false);
-            if (childWorkCorrelation != WorkflowChildWorkCorrelation.None)
+            if (run.ParentRunId is null
+                && run.GetExecutableWorkflowPin() is { } pin
+                && RunWorkflowGraphBinder.ContainsStaticFanRegion(pin))
             {
-                if (childWorkCorrelation == WorkflowChildWorkCorrelation.ParentOrCoordinator
-                    && run.ParentRunId is null
-                    && run.GetExecutableWorkflowPin() is { } pin
-                    && RunWorkflowGraphBinder.ContainsStaticFanRegion(pin))
+                await using var parentRecoveryLease = await TryAcquireRecoveryLeaseAsync(
+                    run.Id.ToString(), ct).ConfigureAwait(false);
+                if (parentRecoveryLease is null)
                 {
-                    await using var parentRecoveryLease = await TryAcquireRecoveryLeaseAsync(
-                        run.Id.ToString(), ct).ConfigureAwait(false);
-                    if (parentRecoveryLease is null)
-                    {
-                        _logger.LogInformation(
-                            "Leaving pinned workflow parent {RunId} untouched because a peer owns its recovery lease",
-                            run.Id);
-                        continue;
-                    }
-
-                    var checkpoint = await _factory.GetLatestCheckpointAsync(
-                        run.Id.ToString(), ct).ConfigureAwait(false);
-                    if (checkpoint is null)
-                    {
-                        await RestartCheckpointlessPinnedWorkflowAsync(run, entry: null, ct)
-                            .ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await _runStore.TryParkForChildWorkAsync(
-                            run.Id,
-                            run.LifecycleGeneration,
-                            ct).ConfigureAwait(false);
-                    }
+                    _logger.LogInformation(
+                        "Leaving pinned workflow parent {RunId} untouched because a peer owns its recovery lease",
+                        run.Id);
                     continue;
                 }
 
+                var checkpoint = await _factory.GetLatestCheckpointAsync(
+                    run.Id.ToString(), ct).ConfigureAwait(false);
+                if (checkpoint is null)
+                {
+                    await RestartCheckpointlessPinnedWorkflowAsync(
+                            run, entry: null, parentRecoveryLease, ct)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                if (childWorkCorrelation == WorkflowChildWorkCorrelation.ParentOrCoordinator)
+                {
+                    await _runStore.TryParkForChildWorkAsync(
+                        run.Id,
+                        run.LifecycleGeneration,
+                        ct).ConfigureAwait(false);
+                    continue;
+                }
+            }
+
+            if (childWorkCorrelation != WorkflowChildWorkCorrelation.None)
+            {
                 if (childWorkCorrelation == WorkflowChildWorkCorrelation.Branch)
                 {
                     await using var childRecoveryLease = await TryAcquireRecoveryLeaseAsync(
@@ -302,7 +304,9 @@ public sealed class WorkflowRestartService
                     run = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)
                         ?? throw new InvalidOperationException(
                             $"Pinned workflow parent {run.Id} disappeared during restart recovery.");
-                    await RestartCheckpointlessPinnedWorkflowAsync(run, entry, ct).ConfigureAwait(false);
+                    await RestartCheckpointlessPinnedWorkflowAsync(
+                            run, entry, recoveryLease, ct)
+                        .ConfigureAwait(false);
                     continue;
                 }
 
@@ -478,7 +482,8 @@ public sealed class WorkflowRestartService
                         entry,
                         run.SubmittingUser,
                         runCt,
-                        recoveryLease.Transfer());
+                        recoveryLease.Claim);
+                    recoveryLease.MarkTransferred();
                 }
                 catch
                 {
@@ -505,6 +510,7 @@ public sealed class WorkflowRestartService
     private async Task RestartCheckpointlessPinnedWorkflowAsync(
         DomainRun run,
         RunStreamEntry? entry,
+        RecoveryLeaseHandle recoveryLease,
         CancellationToken ct)
     {
         try
@@ -515,14 +521,15 @@ public sealed class WorkflowRestartService
                 using var restartScope = _scopeFactory.CreateScope();
                 var orchestrator = restartScope.ServiceProvider.GetService<RunOrchestrator>();
                 if (orchestrator is not null)
-                    restart = (parentRun, token) =>
-                        orchestrator.RestartInterruptedPinnedWorkflowRunAsync(parentRun, token);
+                    restart = (parentRun, lease, token) =>
+                        orchestrator.RestartInterruptedPinnedWorkflowRunAsync(parentRun, lease, token);
             }
 
             if (restart is null)
                 throw new InvalidOperationException("No pinned workflow restart launcher is registered.");
 
-            await restart(run, ct).ConfigureAwait(false);
+            await restart(run, recoveryLease.Claim, ct).ConfigureAwait(false);
+            recoveryLease.MarkTransferred();
             _logger.LogInformation(
                 "Restarted checkpointless pinned workflow parent {RunId} under its original durable identity",
                 run.Id);
@@ -600,11 +607,11 @@ public sealed class WorkflowRestartService
         private bool _transferred;
 
         public long FencingToken => fencingToken;
+        public RunLeaseClaim Claim => new(ownerId, fencingToken);
 
-        public RunLeaseClaim Transfer()
+        public void MarkTransferred()
         {
             _transferred = true;
-            return new RunLeaseClaim(ownerId, fencingToken);
         }
 
         public async ValueTask DisposeAsync()

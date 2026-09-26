@@ -747,15 +747,20 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         streamStore.Get(secondBranchId.ToString()).Should().BeNull();
     }
 
-    [Fact]
-    public async Task RecoverAsync_CheckpointlessPinnedFanParent_RestartsOriginalRunWithoutDuplicatingPlan()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RecoverAsync_CheckpointlessPinnedFanParent_RestartsOriginalRunWithoutDuplicatingPlan(
+        bool existingPlan)
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
+        var leaseStore = new RecordingRunLeaseStore(claimed: true, fencingToken: 73);
         var service = BuildService(
             runStore,
             streamStore,
-            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null));
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+            leaseStore: leaseStore);
         var parentId = RunId.New();
         await runStore.InsertAsync(new Run
         {
@@ -816,8 +821,9 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             ExecutableWorkflowPinnedAt = DateTimeOffset.UtcNow,
         });
 
-        await using (var scope = _memoryServiceProvider!.CreateAsyncScope())
+        if (existingPlan)
         {
+            await using var scope = _memoryServiceProvider!.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             var spec = new OutcomeSpec
             {
@@ -851,20 +857,26 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         }
 
         var restarted = new List<RunId>();
-        service.RestartPinnedWorkflowRunOverride = (run, _) =>
+        RunLeaseClaim? transferredLease = null;
+        service.RestartPinnedWorkflowRunOverride = (run, lease, _) =>
         {
             restarted.Add(run.Id);
+            transferredLease = lease;
             return Task.CompletedTask;
         };
 
         await service.RecoverAsync(CancellationToken.None);
 
         restarted.Should().Equal(parentId);
+        transferredLease.Should().NotBeNull();
+        transferredLease!.OwnerId.Should().Contain("/startup-recovery/");
+        transferredLease.FencingToken.Should().Be(73);
+        leaseStore.ReleasedRunIds.Should().NotContain(parentId.ToString());
         (await runStore.GetAsync(parentId))!.Status.Should().Be(RunStatus.InProgress);
         await using var verificationScope = _memoryServiceProvider!.CreateAsyncScope();
         var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await verificationDb.WorkPlans.CountAsync(plan => plan.ParentRunId == parentId.ToString()))
-            .Should().Be(1);
+            .Should().Be(existingPlan ? 1 : 0);
     }
 
     [Theory]
