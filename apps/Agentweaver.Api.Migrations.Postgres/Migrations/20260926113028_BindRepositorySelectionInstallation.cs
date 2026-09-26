@@ -12,9 +12,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
         {
             DropAutomationRepositoryGrantForeignKey(migrationBuilder);
 
-            migrationBuilder.DropForeignKey(
-                name: "FK_github_installations_projects_project_id",
-                table: "github_installations");
+            migrationBuilder.Sql("""
+                ALTER TABLE github_installations
+                DROP CONSTRAINT IF EXISTS "FK_github_installations_projects_project_id";
+                """);
 
             migrationBuilder.DropPrimaryKey(
                 name: "PK_github_repository_grants",
@@ -24,9 +25,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                 name: "IX_github_repository_grants_installation_id_repository_id",
                 table: "github_repository_grants");
 
-            migrationBuilder.DropIndex(
-                name: "IX_github_installations_project_id",
-                table: "github_installations");
+            migrationBuilder.Sql("""
+                DROP INDEX IF EXISTS "IX_github_installations_project_id";
+                """);
 
             migrationBuilder.DropIndex(
                 name: "IX_automation_activations_installation_id_repository_id",
