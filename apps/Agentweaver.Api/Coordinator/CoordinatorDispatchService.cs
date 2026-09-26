@@ -14,6 +14,7 @@ using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 using Run = Agentweaver.Domain.Run;
@@ -293,7 +294,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var entry = _streamStore.Get(context.CoordinatorRunId);
         var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
         var seq = new SeqCounter();
-        var stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
+        var stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(
+                context.CoordinatorRunId, workPlanId.Value, context.StaticWorkflowChild, ct)
             .ConfigureAwait(false);
         var coordinatorStopped = stoppedWorkPlanStatus is not null;
         if (coordinatorStopped && !HasActiveSubtasks(subtasks))
@@ -308,7 +310,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         // Advance the plan to dispatching and publish the FULL topology snapshot (reflecting the new
         // status) so the client can render the graph thin before any child has been launched.
-        await SetWorkPlanStatusAsync(workPlanId.Value, WorkPlanStatus.Dispatching, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
+        if (!coordinatorStopped)
+            await SetWorkPlanStatusAsync(workPlanId.Value, WorkPlanStatus.Dispatching, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
 
         // Lease heartbeat (issue #218): while this loop owns the plan, renew the coordinator lease every
         // ~30s from its OWN DI scope + DbContext so a long child turn (implement/debug runs of 5-15+ min)
@@ -371,7 +374,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         while (!ct.IsCancellationRequested)
         {
             if (coordinatorStopped
-                || (stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
+                || (stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(
+                        context.CoordinatorRunId, workPlanId.Value, context.StaticWorkflowChild, ct)
                     .ConfigureAwait(false)) is not null)
             {
                 coordinatorStopped = true;
@@ -392,7 +396,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             foreach (var subtaskId in SubtaskFrontier.ReadyPending(statusById, edges))
             {
                 if (coordinatorStopped
-                    || (stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
+                    || (stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(
+                            context.CoordinatorRunId, workPlanId.Value, context.StaticWorkflowChild, ct)
                         .ConfigureAwait(false)) is not null)
                 {
                     coordinatorStopped = true;
@@ -416,7 +421,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     && ConflictsWithAnyInFlight(subtaskId, inFlight.Keys, subtasksById))
                     continue;
 
-                if ((stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
+                if ((stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(
+                        context.CoordinatorRunId, workPlanId.Value, context.StaticWorkflowChild, ct)
                     .ConfigureAwait(false)) is not null)
                 {
                     coordinatorStopped = true;
@@ -741,13 +747,31 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         CancellationToken ct)
     {
         var status = stoppedWorkPlanStatus
-            ?? await GetStoppedCoordinatorWorkPlanStatusAsync(coordinatorRunId, ct).ConfigureAwait(false)
+            ?? await GetStoppedCoordinatorWorkPlanStatusAsync(
+                coordinatorRunId, workPlanId, staticWorkflowChild: true, ct).ConfigureAwait(false)
             ?? WorkPlanStatus.AssemblyFailed;
         await SetWorkPlanStatusAsync(workPlanId, status, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
     }
 
-    private async Task<string?> GetStoppedCoordinatorWorkPlanStatusAsync(string coordinatorRunId, CancellationToken ct)
+    private async Task<string?> GetStoppedCoordinatorWorkPlanStatusAsync(
+        string coordinatorRunId,
+        int workPlanId,
+        bool staticWorkflowChild,
+        CancellationToken ct)
     {
+        if (staticWorkflowChild)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.AsNoTracking()
+                .Where(candidate => candidate.Id == workPlanId)
+                .Select(candidate => new { candidate.Status, candidate.ParentResumeState })
+                .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+            if (plan?.Status == WorkPlanStatus.Cancelled
+                || plan?.ParentResumeState == WorkflowChildWorkResumeStates.Suppressed)
+                return WorkPlanStatus.Cancelled;
+        }
+
         if (!RunId.TryParse(coordinatorRunId, out var runId))
             return null;
 
@@ -1136,6 +1160,35 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             if (failed is not null)
                 EmitSubtask(context, workPlanId, failed, EventTypes.SubtaskFailed, seq.Next());
             return null;
+        }
+
+        if (context.StaticWorkflowChild
+            && await GetStoppedCoordinatorWorkPlanStatusAsync(
+                context.CoordinatorRunId, workPlanId, staticWorkflowChild: true, ct).ConfigureAwait(false)
+                is not null)
+        {
+            try
+            {
+                await _orchestrator.CancelChildRunAsync(
+                    childRun,
+                    "parent_cancelled",
+                    context.CoordinatorRunId,
+                    _eventStream,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                await ReleaseAgentHostPodSafeAsync(childRun.Id.ToString(), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+
+            var cancelled = await UpdateSubtaskAsync(
+                subtaskId, SubtaskStatus.Cancelled, childRun.Id.ToString(), CancellationToken.None)
+                .ConfigureAwait(false);
+            statusById[subtaskId] = SubtaskStatus.Cancelled;
+            if (cancelled is not null)
+                EmitSubtask(context, workPlanId, cancelled, EventTypes.SubtaskFailed, seq.Next());
+            return childRun.Id.ToString();
         }
 
         // Only publish the childRunId after StartChildRunAsync has inserted the child Run row and

@@ -709,6 +709,60 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         _assembly.Started.Should().Be(0, "cancelled static fan work must never enter ordinary coordinator assembly");
     }
 
+    [Fact]
+    public async Task RunDispatchLoop_StaticChildStartedDuringCancellation_IsImmediatelyCancelled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
+        var (planId, ids) = await SeedPlanAsync(
+            coord,
+            [(SubtaskStatus.Pending, null), (SubtaskStatus.Pending, null)]);
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId);
+            plan.ParentRunId = RunId.New().ToString();
+            plan.ParentWorkflowId = "fan-workflow";
+            plan.ParentWorkflowNodeId = "fan";
+            plan.ParentJoinNodeId = "join";
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Waiting;
+            var branches = await db.Subtasks.Where(row => ids.Contains(row.Id)).OrderBy(row => row.Id).ToListAsync();
+            for (var index = 0; index < branches.Count; index++)
+            {
+                branches[index].WorkflowBranchNodeId = $"branch-{index}";
+                branches[index].WorkflowBranchOrdinal = index;
+            }
+            await db.SaveChangesAsync();
+        }
+
+        _streamStore.Create(coord, "owner");
+        var sut = BuildDispatch(stream);
+        Run? launched = null;
+        sut.StartChildRunOverride = async (child, ct) =>
+        {
+            launched = child;
+            await _runStore.InsertAsync(child, ct);
+            _streamStore.Create(child.Id.ToString(), child.SubmittingUser);
+            await using var scope = _provider.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId, ct);
+            plan.Status = WorkPlanStatus.Cancelled;
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Suppressed;
+            await db.SaveChangesAsync(ct);
+        };
+
+        await sut.RunDispatchLoopAsync(Context(coord, staticWorkflowChild: true), default);
+
+        launched.Should().NotBeNull();
+        (await _runStore.GetAsync(launched!.Id))!.Status.Should().Be(RunStatus.Failed);
+        _streamStore.Get(launched.Id.ToString())!.GetSnapshotSince(0).Events.Should().Contain(evt =>
+            evt.Type == EventTypes.RunCancelled);
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Cancelled);
+        (await GetSubtaskAsync(ids[1])).Status.Should().Be(SubtaskStatus.Pending);
+        _assembly.Started.Should().Be(0);
+    }
+
     // -----------------------------------------------------------------------
     // MID-RUN STEERING drain (Feature 008 Phase 2; #226 mid-run counterpart).
     //
@@ -1029,7 +1083,7 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
         var orchestrator = new RunOrchestrator(
             _runStore, _streamStore,
-            worktreeManager: null!, workflowFactory: null!, registry: null!, watchLoop: null!,
+            worktreeManager: null!, workflowFactory: null!, registry: new RunWorkflowRegistry(), watchLoop: null!,
             _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
 
         return new CoordinatorDispatchService(

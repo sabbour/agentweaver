@@ -312,6 +312,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
         }
+
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to provision child worktree for run {RunId} (coordinator {CoordinatorRunId})", run.Id, run.ParentRunId);
@@ -390,6 +391,73 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             if (!launchCompleted)
                 CleanupWorktreeSafe(run.RepositoryPath, worktreeInfo, run.Id);
+        }
+    }
+
+    internal async Task CancelChildRunAsync(
+        Run run,
+        string reason,
+        string requestedByRunId,
+        IRunEventStream? durableEventStream,
+        CancellationToken ct)
+    {
+        var runId = run.Id.ToString();
+        var entry = _streamStore.Get(runId);
+        var eventStream = _eventStream ?? durableEventStream;
+        var payload = new
+        {
+            reason,
+            requestedByRunId,
+            requested = true,
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        };
+
+        _registry.Abandon(runId);
+
+        if (run.WorktreePath is not null)
+        {
+            try
+            {
+                _worktreeManager.RemoveWorktree(
+                    run.RepositoryPath,
+                    run.WorktreePath,
+                    run.WorktreeBranch ?? string.Empty);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up cancelled child worktree for run {RunId}", runId);
+            }
+        }
+
+        var terminalized = await _runStore.TrySetTerminalOutcomeAsync(
+            run.Id,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed,
+                EventTypes.RunCancelled,
+                payload,
+                DateTimeOffset.UtcNow,
+                run.LifecycleGeneration),
+            reason,
+            CancellationToken.None).ConfigureAwait(false);
+        if (terminalized && _terminalOutcomeProjector is not null)
+        {
+            await ProjectTerminalOutcomeAsync(true, CancellationToken.None).ConfigureAwait(false);
+        }
+        else if (terminalized)
+        {
+            var cancellationEvent = new RunEvent(0, EventTypes.RunCancelled, payload);
+            if (eventStream is not null)
+            {
+                var sequence = await eventStream.AppendAsync(
+                    runId, cancellationEvent, CancellationToken.None).ConfigureAwait(false);
+                entry?.RecordDurable(cancellationEvent with { Sequence = sequence });
+                await eventStream.CompleteAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                entry?.RecordNext(EventTypes.RunCancelled, payload);
+            }
+            _streamStore.Complete(runId);
         }
     }
 

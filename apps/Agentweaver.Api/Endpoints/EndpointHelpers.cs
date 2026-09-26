@@ -411,9 +411,21 @@ internal static async Task CancelRunWorkAsync(
     ILogger logger,
     CancellationToken ct,
     IAgentHostPodLifecycle? podLifecycle = null,
-    SandboxRuntimeOptions? sandboxRuntime = null)
+    SandboxRuntimeOptions? sandboxRuntime = null,
+    IRunEventStream? eventStream = null,
+    TerminalOutcomeProjector? terminalOutcomeProjector = null,
+    string reason = "abandoned",
+    string? requestedByRunId = null)
 {
     var id = run.Id.ToString();
+
+    var cancellationPayload = new
+    {
+        reason,
+        requestedByRunId,
+        requested = true,
+        timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+    };
 
     registry.Abandon(id);
     // Give the running agent a brief window to observe the cancellation signal before the worktree
@@ -423,7 +435,6 @@ internal static async Task CancelRunWorkAsync(
     // Explicit cancellation must interrupt publication rather than wait behind its renewable lease.
     // Complete the stream first so the publication token is cancelled, then clear the durable lease
     // so terminalization cannot outlive the request or leave a destroyed worktree on an active run.
-    streamStore.Complete(id);
     try
     {
         await runStore.EndPreviewPublicationAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
@@ -439,14 +450,44 @@ internal static async Task CancelRunWorkAsync(
         catch (Exception ex) { logger.LogWarning(ex, "Best-effort worktree cleanup failed for cancelled run {RunId}", id); }
     }
 
-    await runStore.TrySetTerminalOutcomeAsync(
+    var terminalized = await runStore.TrySetTerminalOutcomeAsync(
         run.Id,
-        TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "abandoned" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
-        "abandoned",
+        TerminalRunOutcome.Create(
+            RunStatus.Failed,
+            EventTypes.RunCancelled,
+            cancellationPayload,
+            DateTimeOffset.UtcNow,
+            run.LifecycleGeneration),
+        reason,
         CancellationToken.None);
-
-    // #350: reliably tear down the remote AgentHost pod itself, not just the local token above.
-    await ReleaseAgentHostPodSafeAsync(id, podLifecycle, sandboxRuntime, logger).ConfigureAwait(false);
+    try
+    {
+        if (terminalized && terminalOutcomeProjector is not null)
+        {
+            await terminalOutcomeProjector.ProjectPendingAsync(CancellationToken.None, streamStore).ConfigureAwait(false);
+        }
+        else if (terminalized)
+        {
+            var cancellationEvent = new RunEvent(0, EventTypes.RunCancelled, cancellationPayload);
+            if (eventStream is not null)
+            {
+                var sequence = await eventStream.AppendAsync(id, cancellationEvent, CancellationToken.None)
+                    .ConfigureAwait(false);
+                streamStore.Get(id)?.RecordDurable(cancellationEvent with { Sequence = sequence });
+                await eventStream.CompleteAsync(id, CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                streamStore.Get(id)?.RecordNext(EventTypes.RunCancelled, cancellationPayload);
+            }
+            streamStore.Complete(id);
+        }
+    }
+    finally
+    {
+        // #350: reliably tear down the remote AgentHost pod itself, not just the local token above.
+        await ReleaseAgentHostPodSafeAsync(id, podLifecycle, sandboxRuntime, logger).ConfigureAwait(false);
+    }
 }
 
 /// <summary>

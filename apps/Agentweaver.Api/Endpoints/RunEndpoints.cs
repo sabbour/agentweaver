@@ -306,8 +306,11 @@ app.MapDelete("/api/runs/{id}", async (
     IRunStore runStore,
     RunStreamStore streamStore,
     RunWorkflowRegistry registry,
+    WorkflowChildWorkService childWork,
     IWorktreeOperations worktreeOps,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
+    IRunEventStream eventStream,
+    TerminalOutcomeProjector terminalOutcomeProjector,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -326,12 +329,26 @@ app.MapDelete("/api/runs/{id}", async (
     if (await EndpointHelpers.RequireRunDeletionAccessAsync(httpContext, run, ct) is { } denied)
         return denied;
 
+    registry.Abandon(id);
+    await childWork.CancelForParentAsync(id, CancellationToken.None).ConfigureAwait(false);
+
     // For any non-terminal run: cancel the workflow, clean up worktree, force to terminal.
     if (!EndpointHelpers.IsTerminal(run.Status))
     {
         var podLifecycle = httpContext.RequestServices.GetService<IAgentHostPodLifecycle>();
         await EndpointHelpers.CancelRunWorkAsync(
-            run, runStore, streamStore, registry, worktreeOps, logger, ct, podLifecycle, sandboxRuntime.Value);
+            run,
+            runStore,
+            streamStore,
+            registry,
+            worktreeOps,
+            logger,
+            CancellationToken.None,
+            podLifecycle,
+            sandboxRuntime.Value,
+            eventStream,
+            terminalOutcomeProjector,
+            reason: "user_cancelled");
     }
 
     try { await runStore.DeleteAsync(runId, ct); }
@@ -351,8 +368,11 @@ app.MapPost("/api/runs/{id}/cancel", async (
     IRunStore runStore,
     RunStreamStore streamStore,
     RunWorkflowRegistry registry,
+    WorkflowChildWorkService childWork,
     IWorktreeOperations worktreeOps,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
+    IRunEventStream eventStream,
+    TerminalOutcomeProjector terminalOutcomeProjector,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -373,14 +393,33 @@ app.MapPost("/api/runs/{id}/cancel", async (
 
     // Already-terminal runs have no live work to cancel: report the current state without acting.
     if (EndpointHelpers.IsTerminal(run.Status))
+    {
+        registry.Abandon(id);
+        await childWork.CancelForParentAsync(id, CancellationToken.None).ConfigureAwait(false);
         return Results.Ok(new { run_id = id, status = run.Status.ToApiString(), cancelled = false, already_terminal = true });
+    }
 
-    // Cancel the live workflow (which also stops child subtask runs driven by the coordinator),
-    // clean up the worktree, and force the run to a terminal state — but KEEP the run row so the
-    // user can still inspect it. Same shared path the DELETE endpoint uses.
+    // Suppress fan continuation before terminalizing the parent so another replica cannot dispatch
+    // or resume child work through the cancellation boundary.
+    registry.Abandon(id);
+    await childWork.CancelForParentAsync(id, CancellationToken.None).ConfigureAwait(false);
+
+    // Cancel the live workflow, clean up the worktree, and force the run to a terminal state — but
+    // KEEP the run row so the user can still inspect it. Same shared path the DELETE endpoint uses.
     var cancelPodLifecycle = httpContext.RequestServices.GetService<IAgentHostPodLifecycle>();
     await EndpointHelpers.CancelRunWorkAsync(
-        run, runStore, streamStore, registry, worktreeOps, logger, ct, cancelPodLifecycle, sandboxRuntime.Value);
+        run,
+        runStore,
+        streamStore,
+        registry,
+        worktreeOps,
+        logger,
+        CancellationToken.None,
+        cancelPodLifecycle,
+        sandboxRuntime.Value,
+        eventStream,
+        terminalOutcomeProjector,
+        reason: "user_cancelled");
 
     var updated = await runStore.GetAsync(runId, ct);
     return Results.Ok(new

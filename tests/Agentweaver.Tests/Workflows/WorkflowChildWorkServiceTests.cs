@@ -280,17 +280,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             await db.SaveChangesAsync();
         }
 
-        await _runStore.TrySetTerminalOutcomeAsync(
-            _parent.Id,
-            TerminalRunOutcome.Create(
-                DomainRunStatus.Failed,
-                EventTypes.RunFailed,
-                new { reason = "cancelled" },
-                DateTimeOffset.UtcNow,
-                _parent.LifecycleGeneration),
-            "cancelled");
-
-        await _service.SweepAsync();
+        await _service.CancelForParentAsync(_parent.Id.ToString());
 
         var plan = await GetPlanAsync(attached.WorkPlanId);
         plan.Status.Should().Be(WorkPlanStatus.Cancelled);
@@ -301,6 +291,90 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
 
         (await _service.TryStartDispatchAsync(attached.WorkPlanId)).Should().BeFalse();
         _runtime.Started.Should().ContainSingle("the parent cancellation cannot launch another dispatch");
+    }
+
+    [Fact]
+    public async Task RepeatedParentCancellation_CancelsChildThatBecameActiveAfterSuppression()
+    {
+        var attached = await CreateAsync(Request());
+        (await _service.TryStartDispatchAsync(attached.WorkPlanId)).Should().BeTrue();
+
+        await _service.CancelForParentAsync(_parent.Id.ToString());
+
+        var lateChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = attached.ChildCoordinatorRunId,
+            SubtaskId = attached.Branches[0].SubtaskId.ToString(),
+        };
+        await _runStore.InsertAsync(lateChild);
+        await SetBranchRunsAsync(
+            attached.WorkPlanId,
+            WorkPlanStatus.Cancelled,
+            [
+                (attached.Branches[0].SubtaskId, lateChild.Id.ToString(), SubtaskStatus.Running),
+                (attached.Branches[1].SubtaskId, null, SubtaskStatus.Pending),
+            ]);
+
+        await _service.CancelForParentAsync(_parent.Id.ToString());
+
+        _runtime.Cancelled.Select(run => run.Id.ToString()).Should().Contain(lateChild.Id.ToString());
+        (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+            .Should().Be(WorkflowChildWorkResumeStates.Suppressed);
+        (await _service.TryPrepareResumeAsync(attached.WorkPlanId)).Should().BeFalse();
+        _runtime.Deliveries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RestartRecovery_ReissuesCancellationForLateActiveChild()
+    {
+        var attached = await CreateAsync(Request());
+        await _service.CancelForParentAsync(_parent.Id.ToString());
+
+        var lateChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = attached.ChildCoordinatorRunId,
+            SubtaskId = attached.Branches[0].SubtaskId.ToString(),
+        };
+        await _runStore.InsertAsync(lateChild);
+        await SetBranchRunsAsync(
+            attached.WorkPlanId,
+            WorkPlanStatus.Cancelled,
+            [
+                (attached.Branches[0].SubtaskId, lateChild.Id.ToString(), SubtaskStatus.Running),
+                (attached.Branches[1].SubtaskId, null, SubtaskStatus.Pending),
+            ]);
+        _runtime.Cancelled.Clear();
+
+        await _service.PrepareRestartRecoveryAsync();
+
+        _runtime.Cancelled.Select(run => run.Id.ToString()).Should().Contain(lateChild.Id.ToString());
+        _runtime.Started.Should().ContainSingle("restart recovery must not restart a cancelled fan");
+    }
+
+    [Fact]
+    public async Task ParentCancellation_DoesNotRecancelAlreadyTerminalChild()
+    {
+        var attached = await CreateAsync(Request());
+        var completedChild = NewRun(RunId.New(), DomainRunStatus.AssembleReady) with
+        {
+            ParentRunId = attached.ChildCoordinatorRunId,
+            SubtaskId = attached.Branches[0].SubtaskId.ToString(),
+        };
+        await _runStore.InsertAsync(completedChild with { Status = DomainRunStatus.InProgress });
+        (await _runStore.TerminalizeForTestAsync(completedChild.Id, DomainRunStatus.AssembleReady))
+            .Should().BeTrue();
+        await SetBranchRunsAsync(
+            attached.WorkPlanId,
+            WorkPlanStatus.Dispatching,
+            [
+                (attached.Branches[0].SubtaskId, completedChild.Id.ToString(), SubtaskStatus.Completed),
+                (attached.Branches[1].SubtaskId, null, SubtaskStatus.Pending),
+            ]);
+
+        await _service.CancelForParentAsync(_parent.Id.ToString());
+
+        _runtime.Cancelled.Select(run => run.Id).Should().NotContain(completedChild.Id);
+        _runtime.Cancelled.Select(run => run.Id.ToString()).Should().Contain(attached.ChildCoordinatorRunId);
     }
 
     [Fact]

@@ -173,7 +173,7 @@ public sealed class TerminalOutcomeProjector(
     private static bool IsCompatible(RunStatus status, string eventType) => status switch
     {
         RunStatus.Completed => eventType == EventTypes.RunCompleted,
-        RunStatus.Failed => eventType == EventTypes.RunFailed,
+        RunStatus.Failed => eventType is EventTypes.RunFailed or EventTypes.RunCancelled,
         RunStatus.Merged => eventType == EventTypes.MergeCompleted,
         RunStatus.Declined => eventType == EventTypes.ReviewDeclined,
         RunStatus.MergeFailed => eventType == EventTypes.MergeFailed,
