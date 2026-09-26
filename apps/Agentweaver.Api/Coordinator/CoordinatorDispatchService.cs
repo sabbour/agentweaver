@@ -3397,6 +3397,12 @@ public static class WorkPlanStatus
     /// <summary>The collective merge of the integration branch into origin failed. Terminal.</summary>
     public const string AssemblyFailed = "assembly_failed";
 
+    /// <summary>
+    /// Git evidence cannot prove whether the prepared merge effect completed. Operator-visible and
+    /// never automatically re-armed, because replay could duplicate or overwrite an external move.
+    /// </summary>
+    public const string AssemblyUnknown = "assembly_unknown";
+
     /// <summary>The reviewer declined the collective output (not request-changes). Terminal.</summary>
     public const string AssemblyDeclined = "assembly_declined";
     public const string Cancelled = "cancelled";

@@ -3582,6 +3582,33 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("IsolationSummary")
                         .HasColumnType("text");
 
+                    b.Property<DateTimeOffset?>("MergeAppliedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("MergeEffectId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MergeEffectState")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MergeEvidenceJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("MergeIntentJson")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("MergeLifecycleGeneration")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("MergeObservedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("MergePreparedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("MergeRecoveryAction")
+                        .HasColumnType("text");
+
                     b.Property<int>("OutcomeSpecId")
                         .HasColumnType("integer");
 

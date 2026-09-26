@@ -630,6 +630,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var (workPlanId, planStatus, _, edges) = plan.Value;
         if (planStatus is WorkPlanStatus.Complete
             or WorkPlanStatus.AssemblyFailed
+            or WorkPlanStatus.AssemblyUnknown
             or WorkPlanStatus.AssemblyDeclined)
             return; // already terminal — nothing to do.
 
@@ -779,6 +780,29 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
             if (planStatus == WorkPlanStatus.Assembling)
             {
+                var mergeEffect = await _assemblyStore.GetAsync(workPlanId, ct).ConfigureAwait(false);
+                if (mergeEffect?.MergeEffectId is not null)
+                {
+                    var mergeStaleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
+                    if (!await _assemblyStore.TryClaimMergeRecoveryAsync(
+                            workPlanId, _myPodId, mergeStaleBefore, ct).ConfigureAwait(false))
+                    {
+                        _logger.LogInformation(
+                            "Collective assembly: prepared merge for run {RunId} is owned by a live replica; skipping",
+                            context.CoordinatorRunId);
+                        return;
+                    }
+
+                    await CompleteAfterApprovalAsync(
+                        context,
+                        workPlanId,
+                        edges,
+                        mergeEffect.IntegrationBranch ?? IntegrationBranchName(context.CoordinatorRunId),
+                        aggregateTreeHash: string.Empty,
+                        ct).ConfigureAwait(false);
+                    return;
+                }
+
                 // Cross-pod idempotency guard for the git integration merge. An `assembling` plan is
                 // normally owned by a LIVE assembly loop; reclaim it here ONLY if the claim is stale
                 // (owner likely dead). If it is fresh, another replica is actively building the
@@ -1696,19 +1720,162 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         string aggregateTreeHash,
         CancellationToken ct)
     {
-        // in_review -> assembling (during merge/scribe).
-        await _assemblyStore.SetStatusAndStageAsync(
-            workPlanId, WorkPlanStatus.Assembling, AssemblyStage.Merge, ct).ConfigureAwait(false);
-        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
-            .ConfigureAwait(false);
+        var run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (run is null)
+            return;
+
+        var state = await _assemblyStore.GetAsync(workPlanId, ct).ConfigureAwait(false);
+        if (state is null)
+            return;
+
+        var recoveringPreparedEffect = state.MergeEffectId is not null;
+        PreparedGitMergeIntent intent;
+        if (!recoveringPreparedEffect)
+        {
+            var effectId = $"{context.CoordinatorRunId}:g{run.LifecycleGeneration}:collective-merge";
+            var preparation = _pipeline.PrepareMerge(new CollectiveMergeRequest(
+                context.CoordinatorRunId,
+                context.RepositoryPath,
+                context.OriginatingBranch,
+                integrationBranch,
+                aggregateTreeHash,
+                effectId,
+                run.LifecycleGeneration));
+            if (preparation.Outcome == PrepareGitMergeOutcome.Conflict)
+            {
+                await NeedsResolutionAsync(context, workPlanId, edges, preparation.Reason ?? "merge_conflict", new
+                {
+                    workPlanId,
+                    reason = preparation.Reason ?? "merge_conflict",
+                    conflictingFiles = preparation.ConflictingFiles ?? [],
+                    integrationBranch,
+                }, ct).ConfigureAwait(false);
+                return;
+            }
+            if (preparation.Outcome != PrepareGitMergeOutcome.Prepared || preparation.Intent is null)
+            {
+                await FailPreparedMergeAsync(
+                    context,
+                    workPlanId,
+                    edges,
+                    preparation.Reason ?? "prepare_merge_failed",
+                    preparation.ConflictingFiles ?? [],
+                    ct).ConfigureAwait(false);
+                return;
+            }
+
+            intent = preparation.Intent;
+            var persisted = await _assemblyStore.TryPrepareMergeEffectAsync(
+                workPlanId,
+                _myPodId,
+                effectId,
+                run.LifecycleGeneration,
+                JsonSerializer.Serialize(intent),
+                ct).ConfigureAwait(false);
+            if (!persisted)
+            {
+                state = await _assemblyStore.GetAsync(workPlanId, ct).ConfigureAwait(false);
+                if (state?.MergeIntentJson is null)
+                    return;
+                recoveringPreparedEffect = true;
+                intent = JsonSerializer.Deserialize<PreparedGitMergeIntent>(state.MergeIntentJson)
+                    ?? throw new InvalidOperationException("Persisted merge intent was invalid.");
+            }
+        }
+        else
+        {
+            if (state.MergeEffectState == MergeEffectState.Unknown)
+                return;
+            intent = JsonSerializer.Deserialize<PreparedGitMergeIntent>(state.MergeIntentJson!)
+                ?? throw new InvalidOperationException("Persisted merge intent was invalid.");
+        }
+        var startingEffectState = state.MergeEffectState ?? MergeEffectState.Prepared;
+
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
-        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeStarted, new { workPlanId, integrationBranch });
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeStarted, new
+        {
+            workPlanId,
+            integrationBranch,
+            effectId = intent.EffectId,
+            recovery = recoveringPreparedEffect,
+        });
 
-        var merge = await _pipeline.MergeAsync(new CollectiveMergeRequest(
-            context.CoordinatorRunId, context.RepositoryPath, context.OriginatingBranch,
-            integrationBranch, aggregateTreeHash), ct).ConfigureAwait(false);
+        var merge = await _pipeline.ExecutePreparedMergeAsync(
+            new CollectivePreparedMergeRequest(
+                context.CoordinatorRunId,
+                context.RepositoryPath,
+                intent),
+            token => IsMergeAuthorizedAsync(context, workPlanId, intent, token),
+            ct).ConfigureAwait(false);
 
-        if (merge.Outcome != CollectiveMergeOutcome.Merged)
+        if (startingEffectState == MergeEffectState.Applied
+            && merge.Outcome is not (CollectiveMergeOutcome.AppliedNow
+                or CollectiveMergeOutcome.RecoveredApplied))
+        {
+            merge = CollectiveMergeResult.Unknown(
+                merge.CurrentTargetCommit,
+                "applied_receipt_no_longer_matches_target",
+                merge.CheckoutOutcome);
+        }
+
+        var evidence = new CoordinatorMergeEvidence(
+            merge.Outcome.ToString(),
+            merge.CurrentTargetCommit,
+            merge.Reason,
+            merge.CheckoutOutcome,
+            DateTimeOffset.UtcNow);
+        var evidenceJson = JsonSerializer.Serialize(evidence);
+
+        if (merge.Outcome == CollectiveMergeOutcome.Unknown)
+        {
+            var reason = $"assembly_merge_unknown: {merge.Reason ?? "ambiguous_git_evidence"}";
+            var parked = await _assemblyStore.SetMergeObservationAsync(
+                workPlanId,
+                _myPodId,
+                intent.EffectId,
+                intent.LifecycleGeneration,
+                startingEffectState,
+                MergeEffectState.Unknown,
+                evidenceJson,
+                "operator_inspection_required",
+                reason,
+                ct).ConfigureAwait(false);
+            if (!parked)
+                return;
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeUnknown, new
+            {
+                workPlanId,
+                effectId = intent.EffectId,
+                recoveryAction = "operator_inspection_required",
+                evidence,
+            });
+            await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+            await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyUnknown, edges, ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (merge.Outcome == CollectiveMergeOutcome.Unauthorized)
+            return;
+
+        if (merge.Outcome == CollectiveMergeOutcome.NotApplied)
+        {
+            if (!await _assemblyStore.SetMergeObservationAsync(
+                workPlanId,
+                _myPodId,
+                intent.EffectId,
+                intent.LifecycleGeneration,
+                startingEffectState,
+                MergeEffectState.NotApplied,
+                evidenceJson,
+                "retry_prepared_compare_exchange",
+                unknownReason: null,
+                ct).ConfigureAwait(false))
+                return;
+            return;
+        }
+
+        if (merge.Outcome is not (CollectiveMergeOutcome.AppliedNow or CollectiveMergeOutcome.RecoveredApplied))
         {
             var mergeReason = merge.Reason ?? merge.Outcome.ToString().ToLowerInvariant();
             // Issue #523: gate strictly on Outcome == Conflict (real git merge conflicts), not on
@@ -1756,22 +1923,104 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
+        var receiptPersisted = await _assemblyStore.SetMergeObservationAsync(
+            workPlanId,
+            _myPodId,
+            intent.EffectId,
+            intent.LifecycleGeneration,
+            startingEffectState,
+            MergeEffectState.Applied,
+            evidenceJson,
+            merge.Outcome == CollectiveMergeOutcome.RecoveredApplied
+                ? "finalize_without_replaying_merge_or_scribe"
+                : "continue_post_merge",
+            unknownReason: null,
+            ct).ConfigureAwait(false);
+        if (!receiptPersisted)
+        {
+            var currentState = await _assemblyStore.GetAsync(workPlanId, ct).ConfigureAwait(false);
+            if (currentState?.MergeEffectState != MergeEffectState.Applied)
+                return;
+        }
+        await CoordinatorAssemblyReviewPersistence.ClearAsync(_scopeFactory, context.CoordinatorRunId, ct)
+            .ConfigureAwait(false);
+
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeCompleted, new
         {
             workPlanId,
             commitHash = merge.CommitHash,
+            effectId = intent.EffectId,
+            recovery = merge.Outcome == CollectiveMergeOutcome.RecoveredApplied,
+            recoveryAction = merge.Outcome == CollectiveMergeOutcome.RecoveredApplied
+                ? "finalize_without_replaying_merge_or_scribe"
+                : "continue_post_merge",
+            evidence,
         });
 
-        await RunCoordinatorScribeAsync(
-            context,
-            workPlanId,
-            terminalStatus: RunStatus.Completed.ToApiString(),
-            mergeResult: merge.CommitHash,
-            ct).ConfigureAwait(false);
+        run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (run?.LifecycleGeneration == intent.LifecycleGeneration
+            && run.Status == RunStatus.Completed)
+        {
+            if (merge.Outcome == CollectiveMergeOutcome.AppliedNow)
+            {
+                await RunCoordinatorScribeAsync(
+                    context,
+                    workPlanId,
+                    terminalStatus: RunStatus.Completed.ToApiString(),
+                    mergeResult: merge.CommitHash,
+                    ct).ConfigureAwait(false);
+            }
+            return;
+        }
+
+        if (run is null
+            || run.LifecycleGeneration != intent.LifecycleGeneration
+            || run.Status != RunStatus.InProgress)
+        {
+            await _assemblyStore.TrySetCancelledAfterAppliedMergeAsync(
+                workPlanId,
+                intent.EffectId,
+                intent.LifecycleGeneration,
+                "merge_applied_but_lifecycle_authorization_ended",
+                ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (merge.Outcome == CollectiveMergeOutcome.AppliedNow || !recoveringPreparedEffect)
+        {
+            await RunCoordinatorScribeAsync(
+                context,
+                workPlanId,
+                terminalStatus: RunStatus.Completed.ToApiString(),
+                mergeResult: merge.CommitHash,
+                ct).ConfigureAwait(false);
+        }
+
+        run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (run?.LifecycleGeneration == intent.LifecycleGeneration
+            && run.Status == RunStatus.Completed)
+            return;
+        if (run is null
+            || run.LifecycleGeneration != intent.LifecycleGeneration
+            || run.Status != RunStatus.InProgress)
+        {
+            await _assemblyStore.TrySetCancelledAfterAppliedMergeAsync(
+                workPlanId,
+                intent.EffectId,
+                intent.LifecycleGeneration,
+                "merge_applied_but_lifecycle_authorization_ended",
+                ct).ConfigureAwait(false);
+            return;
+        }
 
         // ── Complete ─────────────────────────────────────────────────────────────────────────────
-        await _assemblyStore.SetStatusAndStageAsync(
-            workPlanId, WorkPlanStatus.Complete, AssemblyStage.Done, ct).ConfigureAwait(false);
+        if (!await _assemblyStore.TryCompleteAfterAppliedMergeAsync(
+                workPlanId,
+                _myPodId,
+                intent.EffectId,
+                intent.LifecycleGeneration,
+                ct).ConfigureAwait(false))
+            return;
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyCompleted, new
         {
@@ -1787,6 +2036,62 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogInformation("Collective assembly complete for run {RunId}", context.CoordinatorRunId);
+    }
+
+    private async Task<bool> IsMergeAuthorizedAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        PreparedGitMergeIntent intent,
+        CancellationToken ct)
+    {
+        if (!await _assemblyStore.IsMergeAuthorizedAsync(
+                workPlanId,
+                _myPodId,
+                intent.EffectId,
+                intent.LifecycleGeneration,
+                ct).ConfigureAwait(false))
+            return false;
+
+        var run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        return run is not null
+            && run.Status == RunStatus.InProgress
+            && run.LifecycleGeneration == intent.LifecycleGeneration
+            && string.Equals(
+                Path.GetFullPath(run.RepositoryPath),
+                Path.GetFullPath(context.RepositoryPath),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+            && string.Equals(run.OriginatingBranch, context.OriginatingBranch, StringComparison.Ordinal);
+    }
+
+    private async Task FailPreparedMergeAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyCollection<(int, int)> edges,
+        string mergeReason,
+        IReadOnlyList<string> conflictingFiles,
+        CancellationToken ct)
+    {
+        Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeFailed, new
+        {
+            workPlanId,
+            reason = mergeReason,
+            conflictingFiles,
+        });
+        var terminalReason = $"assembly_merge_failed: {mergeReason}";
+        await _assemblyStore.SetTerminalStatusAsync(
+            workPlanId, WorkPlanStatus.AssemblyFailed, terminalReason, ct).ConfigureAwait(false);
+        await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.AssemblyFailed, edges, ct)
+            .ConfigureAwait(false);
+        await TerminalizeCoordinatorRunAsync(
+            context.CoordinatorRunId, RunStatus.MergeFailed, terminalReason, ct).ConfigureAwait(false);
+        await RunCoordinatorScribeAsync(
+            context,
+            workPlanId,
+            terminalStatus: RunStatus.MergeFailed.ToApiString(),
+            mergeResult: mergeReason,
+            ct).ConfigureAwait(false);
+        await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
     }
 
     private async Task RunCoordinatorScribeAsync(

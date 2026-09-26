@@ -406,6 +406,7 @@ public static class CoordinatorGraphDescriptor
     private static bool IsParkedOrTerminalAssemblyStatus(string? status) => status is
         WorkPlanStatus.AssemblyBlocked
         or WorkPlanStatus.AssemblyFailed
+        or WorkPlanStatus.AssemblyUnknown
         or WorkPlanStatus.AssemblyDeclined
         or WorkPlanStatus.RaiBlocked
         or WorkPlanStatus.NeedsResolution;

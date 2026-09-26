@@ -1337,6 +1337,18 @@ public sealed record WorkPlanResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? StatusReason { get; init; }
 
+    [JsonPropertyName("mergeEffectState")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MergeEffectState { get; init; }
+
+    [JsonPropertyName("mergeRecoveryAction")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MergeRecoveryAction { get; init; }
+
+    [JsonPropertyName("mergeEvidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MergeEvidence { get; init; }
+
     [JsonPropertyName("isolationSummary")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IsolationSummary { get; init; }

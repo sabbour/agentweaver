@@ -2,6 +2,8 @@ using System.Text;
 using Agentweaver.Api.Git;
 using FluentAssertions;
 using LibGit2Sharp;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Git;
 
@@ -251,6 +253,213 @@ public sealed class GitReferenceTransactionTests : IDisposable
         Resolve(repoPath, "refs/heads/main").Should().Be(later);
     }
 
+    [Fact]
+    public void PreparedMerge_CrashBeforeRefUpdate_AppliesExactIntent()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+
+        var prepared = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-1", 7);
+
+        prepared.Outcome.Should().Be(PrepareGitMergeOutcome.Prepared);
+        manager.InspectPreparedMerge(repoPath, prepared.Intent!).Outcome
+            .Should().Be(ApplyPreparedGitMergeOutcome.NotApplied);
+        manager.ApplyPreparedMerge(repoPath, prepared.Intent!).Outcome
+            .Should().Be(ApplyPreparedGitMergeOutcome.AppliedNow);
+        Resolve(repoPath, "refs/heads/main").Should().Be(sourceOid);
+    }
+
+    [Fact]
+    public void PreparedMerge_CrashAfterRefUpdate_RecoversWithoutReplay()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-2", 4).Intent!;
+
+        GitReferenceTransaction.CompareExchange(
+                repoPath, intent.TargetRef, intent.IntendedCommit, intent.ExpectedTargetCommit)
+            .Kind.Should().Be(GitReferenceUpdateKind.Applied);
+
+        var recovered = manager.InspectPreparedMerge(repoPath, intent);
+        recovered.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.RecoveredApplied);
+        recovered.CurrentTargetCommit.Should().Be(intent.IntendedCommit);
+    }
+
+    [Fact]
+    public void PreparedMerge_WorktreeAppearsAfterPreparation_ParksWithoutMovingRef()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-worktree-race", 1).Intent!;
+        intent.CheckedOutState.Should().BeNull();
+        var linkedPath = AddLinkedWorktree(repoPath, "main");
+
+        var result = manager.ApplyPreparedMerge(repoPath, intent);
+
+        result.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.Unknown);
+        result.Reason.Should().Be("checked_out_worktree_appeared_after_prepare");
+        Resolve(repoPath, intent.TargetRef).Should().Be(oldOid);
+        Resolve(linkedPath, "HEAD").Should().Be(oldOid);
+    }
+
+    [Fact]
+    public void PreparedMerge_WorktreeAppearsAfterRefUpdate_RecoveryParksUnknown()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-worktree-crash", 1).Intent!;
+        intent.CheckedOutState.Should().BeNull();
+        GitReferenceTransaction.CompareExchange(
+                repoPath, intent.TargetRef, intent.IntendedCommit, intent.ExpectedTargetCommit)
+            .Kind.Should().Be(GitReferenceUpdateKind.Applied);
+        var linkedPath = AddLinkedWorktree(repoPath, "main");
+
+        var result = manager.InspectPreparedMerge(repoPath, intent);
+
+        result.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.Unknown);
+        result.Reason.Should().Be("checked_out_convergence_unknown");
+        Resolve(linkedPath, "HEAD").Should().Be(intent.IntendedCommit);
+    }
+
+    [Fact]
+    public async Task PreparedMerge_ConcurrentRecoverers_OneAppliesAndOneObservesApplied()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-concurrent", 1).Intent!;
+
+        var results = await Task.WhenAll(
+            Task.Run(() => manager.ApplyPreparedMerge(repoPath, intent)),
+            Task.Run(() => manager.ApplyPreparedMerge(repoPath, intent)));
+
+        results.Count(result => result.Outcome == ApplyPreparedGitMergeOutcome.AppliedNow).Should().Be(1);
+        results.Count(result => result.Outcome == ApplyPreparedGitMergeOutcome.RecoveredApplied).Should().Be(1);
+        Resolve(repoPath, intent.TargetRef).Should().Be(intent.IntendedCommit);
+    }
+
+    [Fact]
+    public void PreparedMerge_SameTreeDifferentCommitMovement_IsUnknownAndNeverRewound()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "same");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-3", 1).Intent!;
+        var external = CreateCommitWithTree(
+            repoPath,
+            oldOid,
+            ResolveTree(repoPath, sourceOid),
+            "different commit, same tree");
+        UpdateRef(repoPath, intent.TargetRef, external);
+
+        var result = manager.ApplyPreparedMerge(repoPath, intent);
+
+        result.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.Unknown);
+        Resolve(repoPath, intent.TargetRef).Should().Be(external);
+    }
+
+    [Fact]
+    public void PreparedMerge_TargetAdvancedFromIntended_IsProvenAppliedWithoutRewind()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-4", 1).Intent!;
+        var later = CreateCommit(repoPath, intent.IntendedCommit, "later.txt", "later");
+        UpdateRef(repoPath, intent.TargetRef, later);
+
+        var result = manager.ApplyPreparedMerge(repoPath, intent);
+
+        result.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.RecoveredApplied);
+        Resolve(repoPath, intent.TargetRef).Should().Be(later);
+    }
+
+    [Fact]
+    public void PreparedMerge_SourceRefMovedAfterPreparation_IsUnknown()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-5", 1).Intent!;
+        var movedSource = CreateCommit(repoPath, sourceOid, "later.txt", "later");
+        UpdateRef(repoPath, intent.SourceRef, movedSource);
+
+        manager.ApplyPreparedMerge(repoPath, intent).Outcome
+            .Should().Be(ApplyPreparedGitMergeOutcome.Unknown);
+        Resolve(repoPath, intent.TargetRef).Should().Be(oldOid);
+    }
+
+    [Fact]
+    public void PreparedMerge_CrashAfterRefThenNewEdit_ParksUnknownWithoutDestroyingEdit()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "tracked.txt", "updated");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var linkedPath = AddLinkedWorktree(repoPath, "main");
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-6", 1).Intent!;
+        GitReferenceTransaction.CompareExchange(
+                repoPath, intent.TargetRef, intent.IntendedCommit, intent.ExpectedTargetCommit)
+            .Kind.Should().Be(GitReferenceUpdateKind.Applied);
+        File.WriteAllText(Path.Combine(linkedPath, "tracked.txt"), "new edit");
+
+        var result = manager.InspectPreparedMerge(repoPath, intent);
+
+        result.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.Unknown);
+        File.ReadAllText(Path.Combine(linkedPath, "tracked.txt")).Should().Be("new edit");
+        Resolve(repoPath, intent.TargetRef).Should().Be(intent.IntendedCommit);
+    }
+
+    [Fact]
+    public void PreparedMerge_CrashAfterCheckoutConvergence_RecoveryIsIdempotent()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "tracked.txt", "updated");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var linkedPath = AddLinkedWorktree(repoPath, "main");
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-7", 1).Intent!;
+
+        manager.ApplyPreparedMerge(repoPath, intent).Outcome
+            .Should().Be(ApplyPreparedGitMergeOutcome.AppliedNow);
+        var recovered = manager.InspectPreparedMerge(repoPath, intent);
+
+        recovered.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.RecoveredApplied);
+        File.ReadAllText(Path.Combine(linkedPath, "tracked.txt")).Should().Be("updated");
+    }
+
     private string CreateRepository()
     {
         var path = NewTempDirectory("repo");
@@ -289,6 +498,38 @@ public sealed class GitReferenceTransactionTests : IDisposable
         return repo.ObjectDatabase.CreateCommit(
             signature, signature, path, tree, [parent], prettifyMessage: true).Sha;
     }
+
+    private static string CreateCommitWithTree(
+        string repoPath,
+        string parentOid,
+        string treeOid,
+        string message)
+    {
+        using var repo = new Repository(repoPath);
+        var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+        return repo.ObjectDatabase.CreateCommit(
+            signature,
+            signature,
+            message,
+            repo.Lookup<Tree>(treeOid)!,
+            [repo.Lookup<Commit>(parentOid)!],
+            prettifyMessage: true).Sha;
+    }
+
+    private static string ResolveTree(string repositoryPath, string revision)
+    {
+        using var repo = new Repository(repositoryPath);
+        return repo.Lookup<Commit>(revision)!.Tree.Sha;
+    }
+
+    private static void CreateBranch(string repositoryPath, string name, string oid)
+    {
+        using var repo = new Repository(repositoryPath);
+        repo.CreateBranch(name, repo.Lookup<Commit>(oid));
+    }
+
+    private static WorktreeManager CreateManager() =>
+        new(new ConfigurationBuilder().Build(), NullLogger<WorktreeManager>.Instance);
 
     private static Blob CreateBlob(Repository repo, string content)
     {

@@ -998,6 +998,9 @@ static WorkPlanResponse MapWorkPlan(CoordinatorWorkPlanView plan) => new()
     AssemblyStage = plan.AssemblyStage,
     AssemblyTerminalStage = plan.AssemblyTerminalStage,
     StatusReason = plan.StatusReason,
+    MergeEffectState = plan.MergeEffectState,
+    MergeRecoveryAction = plan.MergeRecoveryAction,
+    MergeEvidence = plan.MergeEvidence,
     IsolationSummary = plan.IsolationSummary,
     Subtasks = plan.Subtasks.Select(s => new WorkPlanSubtaskResponse
     {

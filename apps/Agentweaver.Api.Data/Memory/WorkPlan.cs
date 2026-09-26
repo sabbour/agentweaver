@@ -55,6 +55,28 @@ public sealed class WorkPlan
     /// exactly-once CAS claim). Null until assembly is claimed.</summary>
     public DateTimeOffset? AssemblyStartedAt { get; set; }
 
+    /// <summary>Stable identity for the coordinator's one authorized Git merge effect.</summary>
+    public string? MergeEffectId { get; set; }
+
+    /// <summary>Run lifecycle generation that authorized <see cref="MergeEffectId"/>.</summary>
+    public int? MergeLifecycleGeneration { get; set; }
+
+    /// <summary>Immutable serialized prepared merge intent, persisted before any ref mutation.</summary>
+    public string? MergeIntentJson { get; set; }
+
+    /// <summary>prepared | not_applied | applied | unknown.</summary>
+    public string? MergeEffectState { get; set; }
+
+    /// <summary>Serialized observation used to justify the current merge-effect state.</summary>
+    public string? MergeEvidenceJson { get; set; }
+
+    /// <summary>Operator-facing recovery action taken for the latest observation.</summary>
+    public string? MergeRecoveryAction { get; set; }
+
+    public DateTimeOffset? MergePreparedAt { get; set; }
+    public DateTimeOffset? MergeObservedAt { get; set; }
+    public DateTimeOffset? MergeAppliedAt { get; set; }
+
     /// <summary>
     /// The Kubernetes pod (hostname) that currently owns the coordinator dispatch loop for this plan.
     /// Set atomically when a pod starts or re-arms dispatch; used by <c>CoordinatorReconciler</c> as a

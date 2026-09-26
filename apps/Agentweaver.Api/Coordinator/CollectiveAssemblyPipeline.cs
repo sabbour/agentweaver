@@ -469,7 +469,19 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         }
     }
 
-    public async Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
+    public PrepareGitMergeResult PrepareMerge(CollectiveMergeRequest request) =>
+        _worktreeManager.PrepareMerge(
+            request.RepositoryPath,
+            request.OriginatingBranch,
+            request.IntegrationBranch,
+            request.TreeHash,
+            request.EffectId,
+            request.LifecycleGeneration);
+
+    public async Task<CollectiveMergeResult> ExecutePreparedMergeAsync(
+        CollectivePreparedMergeRequest request,
+        Func<CancellationToken, Task<bool>> authorize,
+        CancellationToken ct)
     {
         string canonicalPath;
         try { canonicalPath = Path.GetFullPath(request.RepositoryPath); }
@@ -481,14 +493,37 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 
         try
         {
-            var outcome = _worktreeManager.MergeWorktree(
-                request.RepositoryPath, request.OriginatingBranch, request.IntegrationBranch, request.TreeHash);
-
-            return outcome.Kind switch
+            var inspected = _worktreeManager.InspectPreparedMerge(
+                request.RepositoryPath,
+                request.Intent);
+            if (inspected.Outcome == ApplyPreparedGitMergeOutcome.NotApplied
+                && !await authorize(ct).ConfigureAwait(false))
             {
-                MergeOutcomeKind.Merged => CollectiveMergeResult.Merged(outcome.CommitHash),
-                MergeOutcomeKind.Conflict => CollectiveMergeResult.Conflict(outcome.ConflictingFiles ?? [], outcome.Reason),
-                MergeOutcomeKind.Blocked => CollectiveMergeResult.Failed(outcome.Reason ?? "blocked", outcome.ConflictingFiles),
+                return CollectiveMergeResult.Unauthorized(
+                    inspected.CurrentTargetCommit,
+                    "merge_authorization_lost");
+            }
+
+            var outcome = inspected.Outcome == ApplyPreparedGitMergeOutcome.NotApplied
+                ? _worktreeManager.ApplyPreparedMerge(request.RepositoryPath, request.Intent)
+                : inspected;
+            return outcome.Outcome switch
+            {
+                ApplyPreparedGitMergeOutcome.AppliedNow => CollectiveMergeResult.AppliedNow(
+                    request.Intent.IntendedCommit,
+                    outcome.CurrentTargetCommit,
+                    outcome.CheckoutOutcome),
+                ApplyPreparedGitMergeOutcome.RecoveredApplied => CollectiveMergeResult.RecoveredApplied(
+                    request.Intent.IntendedCommit,
+                    outcome.CurrentTargetCommit,
+                    outcome.CheckoutOutcome),
+                ApplyPreparedGitMergeOutcome.NotApplied => CollectiveMergeResult.NotApplied(
+                    outcome.CurrentTargetCommit,
+                    outcome.Reason),
+                ApplyPreparedGitMergeOutcome.Unknown => CollectiveMergeResult.Unknown(
+                    outcome.CurrentTargetCommit,
+                    outcome.Reason,
+                    outcome.CheckoutOutcome),
                 _ => CollectiveMergeResult.Failed("unexpected_merge_outcome"),
             };
         }

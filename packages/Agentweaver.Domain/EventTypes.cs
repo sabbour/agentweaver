@@ -466,6 +466,7 @@ public static class EventTypes
 
     /// <summary>The single collective merge succeeded. Payload: { workPlanId, commitHash }.</summary>
     public const string CoordinatorAssemblyMergeCompleted = "coordinator.assembly_merge_completed";
+    public const string CoordinatorAssemblyMergeUnknown = "coordinator.assembly_merge_unknown";
 
     /// <summary>The single collective merge failed (conflict/error). Payload: { workPlanId, reason,
     /// conflictingFiles }.</summary>
