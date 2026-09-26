@@ -130,7 +130,8 @@ public sealed class OperatorAssistantAgent(
     IAgentweaverMcpToolProvider mcpToolProvider,
     ILogger<OperatorAssistantAgent> logger,
     IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-    IModelInvocationGuard? modelInvocationGuard = null) : IOperatorAssistantAgent
+    IModelInvocationGuard? modelInvocationGuard = null,
+    IEffectivePermissionBindingProvider? permissionBindingProvider = null) : IOperatorAssistantAgent
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -175,12 +176,20 @@ public sealed class OperatorAssistantAgent(
             await EmitProviderFailureAsync(providerFailure, sink, ct).ConfigureAwait(false);
             throw providerFailure;
         }
+        if (permissionBindingProvider is null)
+            throw new EffectivePermissionBindingException(
+                "Operator assistant denied: no effective permission binding provider is configured.");
+        var permissionRunId = request.RunId ?? request.ConversationId;
+        var permissionBinding = await permissionBindingProvider
+            .ResolveAsync(permissionRunId, repositoryPath: string.Empty, ceiling: null, ct)
+            .ConfigureAwait(false);
+        permissionBinding.Validate(permissionRunId, permissionBinding.Attempt);
 
         // Connect to the real MCP server as the caller and adapt its tools to AIFunctions.
         await using var mcpSession = await mcpToolProvider
             .ConnectAsync(request.McpBrokerToken, ct)
             .ConfigureAwait(false);
-        var toolDeclarations = BuildToolDeclarations(mcpSession, sink, ct);
+        var toolDeclarations = BuildToolDeclarations(mcpSession, sink, permissionBinding, ct);
         logger.LogInformation(
             "Operator assistant connected to MCP server: {ToolCount} tools available for conversation {ConversationId}",
             toolDeclarations.Count, request.ConversationId);
@@ -395,6 +404,7 @@ public sealed class OperatorAssistantAgent(
     private static IReadOnlyList<AIFunctionDeclaration> BuildToolDeclarations(
         AgentweaverMcpToolSession session,
         IOperatorAssistantTurnSink? sink,
+        EffectivePermissionBinding permissionBinding,
         CancellationToken ct)
     {
         var declarations = new List<AIFunctionDeclaration>(session.Tools.Count);
@@ -408,6 +418,7 @@ public sealed class OperatorAssistantAgent(
                 tool,
                 sink,
                 OperatorToolApprovalPolicy.RequiresApproval(tool.Name),
+                permissionBinding,
                 ToolInvocationTimeout,
                 ct));
         }
@@ -425,21 +436,68 @@ public sealed class OperatorAssistantAgent(
         IOperatorAssistantTurnSink sink,
         bool requiresApproval,
         CancellationToken ct) =>
-        WrapTool(inner, sink, requiresApproval, TimeSpan.FromMinutes(1), ct);
+        WrapTool(
+            inner,
+            sink,
+            requiresApproval,
+            EffectivePermissionBinding.Create(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                1,
+                "test",
+                "test",
+                SandboxPolicy.Default(".") with
+                {
+                    AllowedOperations = [.. EffectivePermissionOperations.Known],
+                }),
+            TimeSpan.FromMinutes(1),
+            ct);
+
+    internal static AIFunction CreatePermissionBoundToolForTests(
+        AIFunction inner,
+        IOperatorAssistantTurnSink sink,
+        bool requiresApproval,
+        EffectivePermissionBinding binding,
+        CancellationToken ct) =>
+        WrapTool(inner, sink, requiresApproval, binding, TimeSpan.FromMinutes(1), ct);
 
     private static AIFunction WrapTool(
         AIFunction tool,
         IOperatorAssistantTurnSink? sink,
         bool requiresApproval,
+        EffectivePermissionBinding permissionBinding,
         TimeSpan timeout,
         CancellationToken ct)
     {
         AIFunction wrapped = new DeadlineAIFunction(tool, timeout);
         if (sink is not null)
             wrapped = new BrokerTokenRefreshingAIFunction(wrapped, sink, ct);
-        return sink is not null && requiresApproval
+        wrapped = sink is not null && requiresApproval
             ? new ApprovalGatingAIFunction(wrapped, sink, ct)
             : wrapped;
+        return new EffectivePermissionAIFunction(wrapped, permissionBinding);
+    }
+
+    private sealed class EffectivePermissionAIFunction(
+        AIFunction inner,
+        EffectivePermissionBinding binding) : AIFunction
+    {
+        public override string Name => inner.Name;
+        public override string Description => inner.Description;
+        public override IReadOnlyDictionary<string, object?> AdditionalProperties => inner.AdditionalProperties;
+        public override JsonElement JsonSchema => inner.JsonSchema;
+        public override JsonElement? ReturnJsonSchema => inner.ReturnJsonSchema;
+        public override MethodInfo? UnderlyingMethod => inner.UnderlyingMethod;
+        public override JsonSerializerOptions JsonSerializerOptions => inner.JsonSerializerOptions;
+
+        protected override ValueTask<object?> InvokeCoreAsync(
+            AIFunctionArguments arguments,
+            CancellationToken cancellationToken)
+        {
+            var decision = EffectivePermissionClassifier.Evaluate(binding, inner.Name);
+            if (!decision.Allowed)
+                throw new EffectivePermissionBindingException(decision.Reason);
+            return inner.InvokeAsync(arguments, cancellationToken);
+        }
     }
 
     /// <summary>

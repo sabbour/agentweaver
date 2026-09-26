@@ -246,8 +246,15 @@ internal sealed class RoutingPodTurnRunner(
         string? projectId,
         string? agentName,
         string? apiBaseUrl = null,
-        string? apiKey = null) =>
-        Active.ApplyPerTurnContext(systemPromptContext, projectId, agentName, apiBaseUrl, apiKey);
+        string? apiKey = null,
+        EffectivePermissionBinding? permissionBinding = null) =>
+        Active.ApplyPerTurnContext(
+            systemPromptContext,
+            projectId,
+            agentName,
+            apiBaseUrl,
+            apiKey,
+            permissionBinding);
 
     public Task ForceStopTurnAsync() => Active.ForceStopTurnAsync();
 }

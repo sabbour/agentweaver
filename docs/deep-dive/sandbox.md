@@ -99,12 +99,54 @@ Where this lives: `packages/Agentweaver.SandboxFs`
 
 The governance layer is the first policy checkpoint for model-selected tools. Its conceptual contract is:
 
+- every run has a credential-free effective permission binding with a schema version,
+  binding ID, policy digest, source, run ID, lifecycle attempt, and scope;
+- child bindings are intersected with their parent bindings, and refreshed bindings are
+  intersected with the launch binding, so delegation, recovery, or a stale warm pod cannot
+  widen authority;
 - default action is deny;
 - unknown tool names are denied;
 - known file tools must provide a recognized path argument;
 - search tools are allowed only because they are implemented as sandbox-root enumeration;
 - shell tools must provide a working directory inside the sandbox root;
 - internal governance exceptions deny the call rather than allowing it.
+
+The same binding is used by in-process execution and AgentHost. The API sends it in the
+one-time AgentHost `/configure` request, and the worker sends the current narrowed binding
+again with every A2A turn. A policy change can therefore revoke or narrow later work in a
+warm pod. Automatic approval is evaluated only after the binding allows the operation, so
+it can remove a prompt but cannot turn a denial into an allow.
+
+The optional `sandbox.allowed_operations` list in `.agentweaver/settings.yml` narrows the
+legacy sandbox profile. Omit it (or leave it empty) to preserve existing `default` and
+`restricted` behavior. Supported operation values and enforcement gates are:
+
+| Operation | Tool family | Enforcement gate |
+| --- | --- | --- |
+| `observe` | `report_intent`, `report_outcome` | runtime permission handler |
+| `workspace.read` | file and directory reads | binding, then path containment |
+| `workspace.search` | workspace search/glob | binding, then bounded root enumeration |
+| `workspace.write` | create, edit, replace, patch | binding, then path containment and tool validation |
+| `shell.execute` | `run_command` | binding, isolation check, command policy, executor |
+| `network.access` | `web_fetch` | binding before approval or auto-approval |
+| `agentweaver.read` | read-only Agentweaver API tools | binding before authenticated API call |
+| `agentweaver.write` | mutating Agentweaver API tools | binding before authenticated API call |
+| `preview.manage` | preview process/session tools | binding, then preview runner gates |
+| `human.interaction` | `ask_question` | binding, then the run-scoped question gate |
+
+An unclassified operation is denied. A malformed policy or a missing, unsupported, or
+run-mismatched binding also denies execution explicitly. Denials use existing
+`tool.error` and `run.degraded` events; the degraded event includes the binding ID,
+version, and source without credentials. `GET /api/runs/{id}/effective-permissions`
+returns the current binding for authorized operators or the matching run capability.
+The first binding for each run lifecycle is also recorded as
+`permission.binding.bound`; current policy is always intersected with that durable
+launch ceiling. This keeps restored executions and newly delegated children from
+recovering authority that their parent did not have at launch.
+
+The operator assistant's MCP tools use the same binding classifier. The permission
+check wraps the approval gate, so even an approved or normally ungated MCP mutation
+cannot bypass a read-only assignment.
 
 Agentweaver also performs a direct sandbox-backend evaluation in addition to the governance kernel evaluation. That redundancy is deliberate: even if one policy integration changes behavior, the dedicated containment backend still has to approve the call.
 
@@ -165,7 +207,7 @@ The "Sandbox controller" above is the upstream [`kubernetes-sigs/agent-sandbox`]
 Agentweaver installs the controller and its three CRDs (API group `extensions.agents.x-k8s.io`) in `scripts/azure/steps/10-create-cluster.mjs` (install default `SANDBOX_CONTROLLER_VERSION=v0.5.3` — production clusters run **agent-sandbox v0.5.3**, #487). The installed controller serves both `v1beta1` (the **storage** version) and the deprecated-but-served `v1alpha1`; `KubernetesSandboxExecutor` targets **`v1beta1`** ([`SandboxClaimConventions.cs:23`](#source)):
 
 - **`SandboxTemplate`** (`k8s/base/sandbox-template-agenthost.yaml`, `agentweaver-agent-host`) defines the live AgentHost pod shape: `kata-vm-isolation` runtime class, non-root UID/GID 1000, dropped capabilities, `/workspace` PVC, A2A listener port `8088`, workload identity, and the `agentweaver-exec` **executor sidecar** — a second container from the same image that owns every model-controlled process in its own PID namespace (see [sandbox pod execution](./sandbox-pod-execution.md#why-a-sidecar-and-not-a-nested-pid-namespace)).
-- **`SandboxWarmPool`** keeps AgentHost pods pre-built from that template so claims bind without a cold pod start. The live pool is `agentweaver-agent-host` (`k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). AgentHost warm pods boot without `RunId`, enter standby, and are configured after binding by `POST /configure`, so the .NET process and Copilot SDK are pre-warmed without per-run env.
+- **`SandboxWarmPool`** keeps AgentHost pods pre-built from that template so claims bind without a cold pod start. The live pool is `agentweaver-agent-host` (`k8s/base/sandbox-warmpool-agenthost.yaml`, `replicas: 2`). AgentHost warm pods boot without `RunId`, enter standby, and are configured after binding by `POST /configure`, so the .NET process and Copilot SDK are pre-warmed without per-run env. Configuration carries the effective permission binding, and every later A2A turn must carry a current valid binding or the pod rejects the turn before execution.
 - **`SandboxClaim`** (created per run by `KubernetesSandboxExecutor`; shape in `k8s/reference/sandbox-claim-template.yaml`) carries `spec.warmPoolRef.name` (`agentweaver-agent-host` on the live path) and `spec.lifecycle.{ttlSecondsAfterFinished, shutdownPolicy: Delete}`. The AgentHost claim omits `spec.env`; static values belong to the template/config map. Per-run identity, workspace, credentials, turn authentication, purpose, and approval values arrive later via `/configure`. The controller adopts a warm pod, then signals readiness with a `Ready` **condition** (`status.conditions[type=Ready].status == "True"`) and writes the bound pod name into `status.sandbox.name`. There is **no** `status.phase` field.
 - **Model-controlled `run_command` calls do not create a Kubernetes claim or pod exec session.**
   After the AgentHost pod is configured, the tool uses the pod-private `agentweaver-exec`
@@ -208,6 +250,7 @@ Per-run values are delivered by `POST /configure` after the claim binds:
 | `turnBearerToken` | Production supplies a 256-bit per-run bearer token; turn middleware enforces equality when the configured token is nonempty. |
 | `copilotCredential` / `byokProviderConfiguration` | Alternative run-scoped model-provider payloads. |
 | `workingDirectory` | Shared coordinate; local modes resolve a verified pod-local effective execution directory. |
+| `effectivePermissionBinding` | Credential-free run/attempt binding and policy ceiling. Missing or invalid values return `400`. |
 
 `TryConfigure` is one-shot; repeat configuration returns 409. Setup resolves a valid Shared workspace, a verified local checkout, or a pod-private fallback when Shared has no supplied path. The effective directory is not universally `Run.WorktreePath`. `/healthz` is already 200 in standby. Production supplies a turn token, enforced when nonempty. `/configure` delivers that token and instead relies on configured transport controls and network policy; the additive preview range includes 8088, so policy alone is not API/worker-exclusive.
 

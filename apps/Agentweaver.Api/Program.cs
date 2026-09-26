@@ -149,6 +149,7 @@ builder.Services.AddSingleton<SqliteDb>();
     }
 }
 builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
+builder.Services.AddSingleton<IEffectivePermissionBindingProvider, RunEffectivePermissionBindingProvider>();
 builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<TerminalOutcomeProjector>();
 builder.Services.AddHostedService<TerminalOutcomeRecoveryService>();

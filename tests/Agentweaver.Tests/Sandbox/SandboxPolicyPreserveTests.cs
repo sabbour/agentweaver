@@ -238,6 +238,78 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
         policy.DestructiveCommandPatterns.Should().NotContain("gh workflow run");
     }
 
+    [Fact]
+    public async Task GetPolicy_MalformedYaml_FailsClosed()
+    {
+        await WriteSettingsAsync("sandbox: [unterminated");
+
+        var act = () => _factory.Services.GetRequiredService<ISandboxPolicyStore>()
+            .GetPolicyAsync(_repoPath);
+
+        await act.Should().ThrowAsync<EffectivePermissionBindingException>()
+            .WithMessage("*malformed or unreadable*");
+    }
+
+    [Fact]
+    public async Task EffectiveBinding_ChildCannotExceedParentsDurableLaunchCeiling()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"permission-ceiling-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var parentId = RunId.New();
+        var childId = RunId.New();
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var policyStore = _factory.Services.GetRequiredService<ISandboxPolicyStore>();
+        var provider = _factory.Services.GetRequiredService<IEffectivePermissionBindingProvider>();
+        var startedAt = DateTimeOffset.UtcNow;
+
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = _repoPath,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "inspect",
+            SubmittingUser = "permission-test",
+            Status = RunStatus.InProgress,
+            StartedAt = startedAt,
+        });
+        await policyStore.SetPolicyAsync(SandboxPolicy.Default(_repoPath) with
+        {
+            AllowedOperations =
+            [
+                EffectivePermissionOperations.WorkspaceRead,
+                EffectivePermissionOperations.WorkspaceSearch,
+            ],
+        });
+        var parentLaunch = await provider.ResolveAsync(parentId.ToString(), _repoPath);
+        parentLaunch.Allows(EffectivePermissionOperations.WorkspaceWrite).Should().BeFalse();
+
+        await policyStore.SetPolicyAsync(SandboxPolicy.Default(_repoPath));
+        await runStore.InsertAsync(new Run
+        {
+            Id = childId,
+            RepositoryPath = _repoPath,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "edit",
+            SubmittingUser = "permission-test",
+            Status = RunStatus.InProgress,
+            StartedAt = startedAt,
+            ParentRunId = parentId.ToString(),
+        });
+
+        var child = await provider.ResolveAsync(childId.ToString(), _repoPath);
+
+        child.Allows(EffectivePermissionOperations.WorkspaceRead).Should().BeTrue();
+        child.Allows(EffectivePermissionOperations.WorkspaceWrite).Should().BeFalse(
+            "a later project-policy widening cannot expand a child beyond its parent's persisted launch ceiling");
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private async Task SeedFullPolicyAsync()

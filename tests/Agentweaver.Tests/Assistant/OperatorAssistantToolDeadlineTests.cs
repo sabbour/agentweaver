@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.Extensions.AI;
 
@@ -97,6 +98,37 @@ public sealed class OperatorAssistantToolDeadlineTests
         order.Should().Equal(
             "approval", "refresh", "invoke",
             "approval", "refresh", "invoke");
+    }
+
+    [Fact]
+    public async Task PermissionDeniedTool_IsRejectedBeforeApprovalOrInvocation()
+    {
+        var order = new List<string>();
+        var inner = AIFunctionFactory.Create(
+            () =>
+            {
+                order.Add("invoke");
+                return "ok";
+            },
+            "backlog_capture_task");
+        var sink = new RecordingRenewalSink(order);
+        var binding = EffectivePermissionBinding.Create(
+            "run-operator-test",
+            1,
+            "test",
+            "test",
+            SandboxPolicy.Default(".") with
+            {
+                AllowedOperations = [EffectivePermissionOperations.AgentweaverRead],
+            });
+        var tool = OperatorAssistantAgent.CreatePermissionBoundToolForTests(
+            inner, sink, requiresApproval: true, binding, CancellationToken.None);
+
+        var act = () => tool.InvokeAsync(new AIFunctionArguments(), CancellationToken.None).AsTask();
+
+        await act.Should().ThrowAsync<EffectivePermissionBindingException>()
+            .WithMessage("*agentweaver.write*not allowed*");
+        order.Should().BeEmpty("permission denial must happen before approval, token refresh, or execution");
     }
 
     private sealed class RecordingRenewalSink(List<string> order) : IOperatorAssistantTurnSink

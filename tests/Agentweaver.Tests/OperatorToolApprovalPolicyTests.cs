@@ -90,5 +90,7 @@ public sealed class OperatorToolApprovalPolicyTests
             "every MCP tool must be explicitly classified as gated or ungated in OperatorToolApprovalPolicy; "
             + "unclassified tools fail closed by default but must be triaged: "
             + string.Join(", ", unclassified));
+        toolNames.Should().OnlyContain(name =>
+            OperatorToolApprovalPolicy.ClassifyEffectivePermission(name) != null);
     }
 }

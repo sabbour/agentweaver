@@ -688,6 +688,7 @@ internal static SandboxPolicyDto ToSandboxPolicyDto(SandboxPolicy policy) => new
     RequireApprovalForAllShell = policy.RequireApprovalForAllShell,
     RedactPii                  = policy.RedactPii,
     MaxOutputBytes             = policy.MaxOutputBytes,
+    AllowedOperations          = policy.AllowedOperations,
 };
 
 /// <summary>
@@ -708,6 +709,7 @@ internal static SandboxPolicy MergeSandboxPolicy(SandboxPolicy existing, Sandbox
     RequireApprovalForAllShell = request.RequireApprovalForAllShell ?? existing.RequireApprovalForAllShell,
     RedactPii                  = request.RedactPii ?? existing.RedactPii,
     MaxOutputBytes             = request.MaxOutputBytes ?? existing.MaxOutputBytes,
+    AllowedOperations          = request.AllowedOperations ?? existing.AllowedOperations,
 };
 
 /// <summary>

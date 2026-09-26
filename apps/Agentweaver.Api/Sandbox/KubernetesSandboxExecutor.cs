@@ -240,6 +240,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     // run's real cluster claim. Null in unit tests → the persistence is skipped (same null-skip
     // convention as the other optional collaborators above).
     private readonly IRunStore? _runStore;
+    private readonly IEffectivePermissionBindingProvider? _permissionBindingProvider;
 
     public bool IsRealIsolation => true;
     public string BackendName => "kubernetes-sandbox-claim";
@@ -267,7 +268,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         IRunStore? runStore = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
         Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
-        IRunModelProviderBoundaryResolver? providerBoundaryResolver = null)
+        IRunModelProviderBoundaryResolver? providerBoundaryResolver = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null)
     {
         _client = client;
         _options = options;
@@ -288,6 +290,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         _byokProviderConfiguration = byokProviderConfiguration;
         _effectiveProviderResolver = effectiveProviderResolver;
         _providerBoundaryResolver = providerBoundaryResolver;
+        _permissionBindingProvider = permissionBindingProvider;
     }
 
     public async Task<SandboxExecResult> ExecuteAsync(
@@ -1387,6 +1390,15 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         // run secret store so any replica can re-fetch it for reconcile/keepalive. Durably deleted on
         // pod release. Every launch/relaunch mints a new value — the old one is never reused.
         var previewRunnerCredential = await MintPreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
+        var effectivePermissionBinding = _permissionBindingProvider is null
+            ? null
+            : await _permissionBindingProvider.ResolveAsync(
+                runId,
+                sharedWorkingDirectory
+                    ?? launchContext.SourceRepositoryPath
+                    ?? string.Empty,
+                ceiling: null,
+                ct).ConfigureAwait(false);
 
         var body = new
         {
@@ -1422,6 +1434,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // /AgentName, so without these the memory/decision tools never reach the agent.
             projectId,
             agentName,
+            effectivePermissionBinding,
         };
 
         _logger.LogInformation(
