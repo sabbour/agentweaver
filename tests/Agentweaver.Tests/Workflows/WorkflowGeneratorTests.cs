@@ -744,6 +744,87 @@ public sealed class WorkflowGeneratorTests
         runner.CallCount.Should().Be(1);
     }
 
+    [Fact]
+    public async Task ExplicitIndependentDisjointContentRequest_CorrectsSequentialDraftToFan()
+    {
+        var runner = new ScriptedAgentRunner(SequentialResearchYaml, SafeResearchFanYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research customer signals and technical feasibility independently. " +
+            "The customer branch must write only reports/customer-signals.md. " +
+            "The technical branch must write only reports/technical-feasibility.md. " +
+            "Join both branches, then synthesize their ordered findings.",
+            ContentOnly: true));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Nodes.Should().ContainSingle(node => node.Type == WorkflowNodeType.FanOut);
+        result.Workflow.Nodes.Should().ContainSingle(node => node.Type == WorkflowNodeType.FanIn);
+        RunWorkflowGraphBinder.GetBindabilityErrors(result.Workflow).Should().BeEmpty();
+        runner.CallCount.Should().Be(2);
+        runner.LastTask.Should().Contain(
+            "Generate one policy-valid fan_out/fan_in region whose branches write only:");
+    }
+
+    [Fact]
+    public async Task ExplicitIndependentOverlappingContentRequest_RemainsSequential()
+    {
+        var runner = new ScriptedAgentRunner(SequentialResearchYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research customer signals and technical feasibility independently. " +
+            "Both tasks must write only reports/discovery.md, then synthesize.",
+            ContentOnly: true));
+
+        result.Workflow.Nodes.Should().NotContain(node =>
+            node.Type == WorkflowNodeType.FanOut || node.Type == WorkflowNodeType.FanIn);
+        runner.CallCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(
+        "Do not run these independently. Write only reports/customer-signals.md, then use those findings to write only reports/technical-feasibility.md.")]
+    [InlineData(
+        "Research independently using docs/source-a.md and docs/source-b.md. Write only reports/customer-signals.md and synthesize.")]
+    public async Task AmbiguousOrDependencyBearingIndependentRequest_RemainsSequential(string description)
+    {
+        var runner = new ScriptedAgentRunner(SequentialResearchYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            description,
+            ContentOnly: true));
+
+        result.Workflow.Nodes.Should().NotContain(node =>
+            node.Type == WorkflowNodeType.FanOut || node.Type == WorkflowNodeType.FanIn);
+        runner.CallCount.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ExplicitIndependentRequest_RequiresFanToCoverItsDeclaredOutputs()
+    {
+        var unrelatedFan = SafeResearchFanYaml
+            .Replace("reports/customer-signals.md", "reports/market.md", StringComparison.Ordinal)
+            .Replace("reports/technical-feasibility.md", "reports/platform.md", StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(unrelatedFan, SafeResearchFanYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research two topics independently. " +
+            "Write only reports/customer-signals.md for customer evidence. " +
+            "Write only reports/technical-feasibility.md for technical evidence.",
+            ContentOnly: true));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Nodes.Where(node => node.Independent is true)
+            .SelectMany(node => node.DeclaredOutputPaths)
+            .Should().BeEquivalentTo(
+                "reports/customer-signals.md",
+                "reports/technical-feasibility.md");
+        runner.CallCount.Should().Be(2);
+    }
+
     [Theory]
     [MemberData(nameof(UnsafeFanCandidates))]
     public async Task UnsafeGeneratedFan_IsDeterministicallyLinearized(
