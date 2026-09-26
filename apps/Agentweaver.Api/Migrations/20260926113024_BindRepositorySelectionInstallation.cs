@@ -58,7 +58,7 @@ namespace Agentweaver.Api.Migrations
                 columns: new[] { "installation_id", "repository_id", "project_id" });
 
             migrationBuilder.AddForeignKey(
-                name: "FK_automation_activations_repository_grants_installation_id_repository_id",
+                name: "FK_automation_activations_repository_grants_authority",
                 table: "automation_activations",
                 columns: new[] { "installation_id", "repository_id", "project_id" },
                 principalTable: "github_repository_grants",
@@ -72,7 +72,7 @@ namespace Agentweaver.Api.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropForeignKey(
-                name: "FK_automation_activations_repository_grants_installation_id_repository_id",
+                name: "FK_automation_activations_repository_grants_authority",
                 table: "automation_activations");
 
             migrationBuilder.DropPrimaryKey(

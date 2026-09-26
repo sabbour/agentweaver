@@ -3749,7 +3749,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .WithMany()
                         .HasForeignKey("InstallationId", "RepositoryId", "ProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
+                        .HasConstraintName("FK_automation_activations_repository_grants_authority");
                 });
 
             modelBuilder.Entity("Agentweaver.Api.Memory.AutomationInvocationRecord", b =>

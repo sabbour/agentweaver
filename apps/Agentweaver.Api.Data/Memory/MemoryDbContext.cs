@@ -926,7 +926,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 .HasForeignKey(x => new { x.InstallationId, x.RepositoryId, x.ProjectId })
                 .IsRequired(false)
                 .OnDelete(DeleteBehavior.Cascade)
-                .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
+                .HasConstraintName("FK_automation_activations_repository_grants_authority");
             ConfigureProjectForeignKey(e, "FK_automation_activations_projects_project_id");
         });
 
