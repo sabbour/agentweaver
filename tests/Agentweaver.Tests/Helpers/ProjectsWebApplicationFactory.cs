@@ -121,3 +121,57 @@ internal sealed class NoOpProjectGitInitializer : ProjectGitInitializer
         // No-op: tests never need a real remote push.
     }
 }
+
+internal sealed class CancellingGitHubProjectWebApplicationFactory : ProjectsWebApplicationFactory
+{
+    public BlockingProjectGitInitializer GitInitializer { get; } = new();
+
+    protected override void ConfigureTestServices(IServiceCollection services)
+    {
+        RemoveService<ProjectGitInitializer>(services);
+        services.AddSingleton<ProjectGitInitializer>(GitInitializer);
+    }
+}
+
+internal sealed class BlockingProjectGitInitializer()
+    : ProjectGitInitializer(Microsoft.Extensions.Logging.Abstractions.NullLogger<ProjectGitInitializer>.Instance)
+{
+    public ManualResetEventSlim CloneStarted { get; } = new(false);
+    public ManualResetEventSlim AllowCloneToFinish { get; } = new(false);
+
+    public override string Clone(
+        string workingDirectory,
+        string sourceRepository,
+        string accessToken,
+        GitClonePurpose purpose)
+    {
+        Directory.CreateDirectory(workingDirectory);
+        CloneStarted.Set();
+        AllowCloneToFinish.Wait(TimeSpan.FromSeconds(5));
+        return "main";
+    }
+}
+
+internal sealed class FailingGitHubProjectWebApplicationFactory : ProjectsWebApplicationFactory
+{
+    protected override void ConfigureTestServices(IServiceCollection services)
+    {
+        RemoveService<ProjectGitInitializer>(services);
+        services.AddSingleton<ProjectGitInitializer, FailingProjectGitInitializer>();
+    }
+}
+
+internal sealed class FailingProjectGitInitializer()
+    : ProjectGitInitializer(Microsoft.Extensions.Logging.Abstractions.NullLogger<ProjectGitInitializer>.Instance)
+{
+    public override string Clone(
+        string workingDirectory,
+        string sourceRepository,
+        string accessToken,
+        GitClonePurpose purpose)
+    {
+        Directory.CreateDirectory(workingDirectory);
+        File.WriteAllText(Path.Combine(workingDirectory, "partial.clone"), "partial");
+        throw new InvalidOperationException("Injected clone failure.");
+    }
+}

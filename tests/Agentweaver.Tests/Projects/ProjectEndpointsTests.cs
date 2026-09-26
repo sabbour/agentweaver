@@ -202,6 +202,109 @@ public sealed class ProjectEndpointsTests : IClassFixture<ProjectsWebApplication
         response.Headers.Location.Should().NotBeNull();
     }
 
+    [Fact]
+    public async Task CreateFromGitHub_RequestCancelledAfterReservation_CompletesDurably()
+    {
+        using var factory = new CancellingGitHubProjectWebApplicationFactory();
+        await using var scope = factory.Services.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<ProjectService>();
+        var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+        using var cancellation = new CancellationTokenSource();
+        var workingDirectory = factory.NewWorkingDirectory();
+        var projectId = ProjectId.New();
+
+        var create = Task.Run(() => service.CreateFromGitHubAsync(
+            projectId,
+            "Cancelled GitHub Project",
+            "octo/secure-repo",
+            "https://github.com/octo/secure-repo.git",
+            workingDirectory,
+            defaultProvider: null,
+            defaultModelCopilot: null,
+            defaultModelFoundry: null,
+            owner: ProjectsWebApplicationFactory.TestUser,
+            accessToken: "ephemeral-test-token",
+            ct: cancellation.Token));
+
+        factory.GitInitializer.CloneStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        (await store.GetAsync(projectId, CancellationToken.None))!.State.Should().Be(ProjectState.Creating);
+        cancellation.Cancel();
+        factory.GitInitializer.AllowCloneToFinish.Set();
+
+        var project = await create;
+        project.State.Should().Be(ProjectState.Active);
+        (await store.ListAsync(CancellationToken.None)).Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(project);
+    }
+
+    [Fact]
+    public async Task CreateFromGitHub_ConcurrentSameIdRetry_JoinsExistingReservation()
+    {
+        using var factory = new CancellingGitHubProjectWebApplicationFactory();
+        await using var scope = factory.Services.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<ProjectService>();
+        var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+        var projectId = ProjectId.New();
+        var workingDirectory = factory.NewWorkingDirectory();
+
+        Task<Project> CreateAsync() => service.CreateFromGitHubAsync(
+            projectId,
+            "Retried GitHub Project",
+            "octo/secure-repo",
+            "https://github.com/octo/secure-repo.git",
+            workingDirectory,
+            defaultProvider: null,
+            defaultModelCopilot: null,
+            defaultModelFoundry: null,
+            owner: ProjectsWebApplicationFactory.TestUser,
+            accessToken: "ephemeral-test-token",
+            ct: CancellationToken.None);
+
+        var first = Task.Run(CreateAsync);
+        factory.GitInitializer.CloneStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+        var retry = await CreateAsync();
+
+        retry.Id.Should().Be(projectId);
+        retry.State.Should().Be(ProjectState.Creating);
+        factory.GitInitializer.AllowCloneToFinish.Set();
+        (await first).State.Should().Be(ProjectState.Active);
+        (await store.ListAsync(CancellationToken.None)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task CreateFromGitHub_CloneFailure_RetainsFailedProjectAndCleansWorkspace()
+    {
+        using var factory = new FailingGitHubProjectWebApplicationFactory();
+        await using var scope = factory.Services.CreateAsyncScope();
+        var service = scope.ServiceProvider.GetRequiredService<ProjectService>();
+        var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+        var projectId = ProjectId.New();
+        var workingDirectory = factory.NewWorkingDirectory();
+
+        Func<Task> act = () => service.CreateFromGitHubAsync(
+            projectId,
+            "Failed GitHub Project",
+            "octo/secure-repo",
+            "https://github.com/octo/secure-repo.git",
+            workingDirectory,
+            defaultProvider: null,
+            defaultModelCopilot: null,
+            defaultModelFoundry: null,
+            owner: ProjectsWebApplicationFactory.TestUser,
+            accessToken: "ephemeral-test-token",
+            ct: CancellationToken.None);
+
+        var failure = await act.Should().ThrowAsync<ProjectService.ProjectCreationFailedException>();
+        failure.Which.ProjectId.Should().Be(projectId);
+        failure.Which.Phase.Should().Be("clone");
+
+        var persisted = await store.GetAsync(projectId, CancellationToken.None);
+        persisted.Should().NotBeNull();
+        persisted!.State.Should().Be(ProjectState.Failed);
+        Directory.Exists(workingDirectory).Should().BeFalse();
+    }
+
     // =========================================================================
     // PE-02: GET /api/projects lists created projects
     // =========================================================================

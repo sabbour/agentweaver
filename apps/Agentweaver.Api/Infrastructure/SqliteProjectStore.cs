@@ -145,7 +145,7 @@ public sealed class SqliteProjectStore : IProjectStore
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE projects SET state = 'deleting' WHERE project_id = $projectId AND state = 'active';";
+        command.CommandText = "UPDATE projects SET state = 'deleting' WHERE project_id = $projectId AND state IN ('creating', 'active', 'failed');";
         command.Parameters.AddWithValue("$projectId", id.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         return rows > 0;
@@ -311,6 +311,25 @@ public sealed class SqliteProjectStore : IProjectStore
         command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
         command.Parameters.AddWithValue("$projectId", id.ToString());
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task UpdateCreationStateAsync(
+        ProjectId id,
+        ProjectState state,
+        string defaultBranch,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            "UPDATE projects SET state = $state, default_branch = $defaultBranch, updated_at = $updatedAt WHERE project_id = $projectId;";
+        command.Parameters.AddWithValue("$state", StateToString(state));
+        command.Parameters.AddWithValue("$defaultBranch", defaultBranch);
+        command.Parameters.AddWithValue("$updatedAt", Ts(updatedAt));
+        command.Parameters.AddWithValue("$projectId", id.ToString());
+        if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+            throw new InvalidOperationException($"Project '{id}' was not found while updating creation state.");
     }
 
     public async Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default)
@@ -525,14 +544,18 @@ public sealed class SqliteProjectStore : IProjectStore
 
     private static string StateToString(ProjectState state) => state switch
     {
+        ProjectState.Creating => "creating",
         ProjectState.Active   => "active",
+        ProjectState.Failed   => "failed",
         ProjectState.Deleting => "deleting",
         _ => throw new ArgumentOutOfRangeException(nameof(state))
     };
 
     private static ProjectState StateFromString(string s) => s switch
     {
+        "creating" => ProjectState.Creating,
         "active"   => ProjectState.Active,
+        "failed"   => ProjectState.Failed,
         "deleting" => ProjectState.Deleting,
         _ => throw new ArgumentException($"Unknown project state: {s}")
     };

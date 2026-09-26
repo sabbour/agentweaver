@@ -312,7 +312,7 @@ export interface RequestChangesResponse {
 
 // Projects
 export type ProjectOrigin = 'blank' | 'github';
-export type ProjectState = 'active' | 'deleting';
+export type ProjectState = 'creating' | 'active' | 'failed' | 'deleting';
 
 export interface Project {
   project_id: string;

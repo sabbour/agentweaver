@@ -122,6 +122,7 @@ public sealed class ProjectService
     }
 
     public async Task<Project> CreateFromGitHubAsync(
+        ProjectId id,
         string name,
         string sourceRepository,
         string cloneUrl,
@@ -131,6 +132,7 @@ public sealed class ProjectService
         string? defaultModelFoundry,
         string owner,
         string accessToken,
+        Func<Project, CancellationToken, Task>? onReserved = null,
         CancellationToken ct = default)
     {
         ValidateName(name);
@@ -140,7 +142,6 @@ public sealed class ProjectService
             throw new ArgumentException("Clone URL must not be empty.", nameof(cloneUrl));
         ValidateGitHubHttpsUrl(cloneUrl);
 
-        var id = ProjectId.New();
         var workingDir = await _workspace.ResolveWorkingDirectoryAsync(id, requestedPath, ct)
             .ConfigureAwait(false);
         EnsureEmptyOrCreatable(workingDir);
@@ -151,65 +152,103 @@ public sealed class ProjectService
 
         var providerSettings = BuildProviderSettings(defaultProvider, defaultModelCopilot, defaultModelFoundry);
 
-        bool appCreatedDir = !Directory.Exists(workingDir);
-        await _workspace.EnsureWorkspaceAsync(id, workingDir, ct).ConfigureAwait(false);
-
-        string defaultBranch;
-        bool dirWasCreated = appCreatedDir;
-        try
-        {
-            defaultBranch = _gitInit.Clone(
-                workingDir,
-                cloneUrl,
-                accessToken,
-                GitClonePurpose.ProjectCreation);
-        }
-        catch
-        {
-            TryDeleteDirectory(workingDir);
-            throw;
-        }
-
-        // Materialize the default workflow into the cloned project so .agentweaver/workflows/ exists and
-        // is visible/editable in the Workspace. Non-clobbering: a
-        // repo that already ships a default.yaml is never overwritten. The WorkflowRegistry treats this
-        // on-disk 'default' as the built-in copy, so it introduces no reserved-id conflict.
-        TryMaterializeDefaultWorkflow(workingDir);
-
-        // Materialize the GitHub Copilot agent definition into the cloned project (agent-file-gen). Best-effort
-        // and non-clobbering: a repo that already ships its own .github/agents/agentweaver.agent.md is never
-        // overwritten. Never fails creation.
-        TryMaterializeAgentDefinition(workingDir);
-
-        // Commit any scaffold files written above so the base-branch git tree reflects the starting
-        // state. Best-effort: a failure here is logged but never fails project creation.
-        _gitInit.CommitAllUntracked(workingDir, "Add scaffold files");
-
+        var now = DateTimeOffset.UtcNow;
         var project = new Project
         {
             Id = id,
             Name = name,
             Origin = ProjectOrigin.FromGitHub(sourceRepository),
             WorkingDirectory = workingDir,
-            DefaultBranch = defaultBranch,
+            DefaultBranch = "main",
             Owner = owner,
             ProviderSettings = providerSettings,
-            State = ProjectState.Active,
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
+            State = ProjectState.Creating,
+            CreatedAt = now,
+            UpdatedAt = now
         };
 
+        _logger.LogInformation(
+            "GitHub project creation phase {Phase} for project {ProjectId} and repository {Repository}",
+            "reserve", id, sourceRepository);
+        ct.ThrowIfCancellationRequested();
         try
         {
-            await _store.InsertAsync(project, ct).ConfigureAwait(false);
+            await _store.InsertAsync(project, CancellationToken.None).ConfigureAwait(false);
         }
         catch
         {
-            TryDeleteDirectory(workingDir);
+            var existing = await _store.GetAsync(id, CancellationToken.None).ConfigureAwait(false);
+            if (existing is not null)
+            {
+                _logger.LogInformation(
+                    "GitHub project creation reservation already exists for project {ProjectId} in state {State}",
+                    id,
+                    existing.State);
+                return existing;
+            }
+
             throw;
         }
 
-        return project;
+        var phase = "authorization";
+        try
+        {
+            if (onReserved is not null)
+                await onReserved(project, CancellationToken.None).ConfigureAwait(false);
+
+            phase = "workspace";
+            await _workspace.EnsureWorkspaceAsync(id, workingDir, CancellationToken.None).ConfigureAwait(false);
+            phase = "clone";
+            var defaultBranch = _gitInit.Clone(
+                workingDir,
+                cloneUrl,
+                accessToken,
+                GitClonePurpose.ProjectCreation);
+            phase = "scaffold";
+            TryMaterializeDefaultWorkflow(workingDir);
+            TryMaterializeAgentDefinition(workingDir);
+            _gitInit.CommitAllUntracked(workingDir, "Add scaffold files");
+
+            phase = "activate";
+            var completedAt = DateTimeOffset.UtcNow;
+            await _store.UpdateCreationStateAsync(
+                id, ProjectState.Active, defaultBranch, completedAt, CancellationToken.None).ConfigureAwait(false);
+            _logger.LogInformation(
+                "GitHub project creation phase {Phase} completed for project {ProjectId} and repository {Repository}",
+                phase, id, sourceRepository);
+            return project with
+            {
+                DefaultBranch = defaultBranch,
+                State = ProjectState.Active,
+                UpdatedAt = completedAt,
+            };
+        }
+        catch (Exception ex)
+        {
+            TryDeleteDirectory(workingDir);
+            var failedAt = DateTimeOffset.UtcNow;
+            try
+            {
+                await _store.UpdateCreationStateAsync(
+                    id, ProjectState.Failed, project.DefaultBranch, failedAt, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception stateEx)
+            {
+                _logger.LogError(
+                    stateEx,
+                    "Failed to persist GitHub project creation failure for project {ProjectId} in phase {Phase}",
+                    id,
+                    phase);
+            }
+
+            _logger.LogError(
+                ex,
+                "GitHub project creation failed for project {ProjectId} and repository {Repository} in phase {Phase}",
+                id,
+                sourceRepository,
+                phase);
+            throw new ProjectCreationFailedException(id, phase, ex);
+        }
     }
 
     public async Task<Project> ConnectCreatedRepositoryAsync(
@@ -389,7 +428,7 @@ public sealed class ProjectService
     private ProjectView ToView(Project p) => new()
     {
         Project = p,
-        Available = _workspace.IsAvailable(p.WorkingDirectory)
+        Available = p.State == ProjectState.Active && _workspace.IsAvailable(p.WorkingDirectory)
     };
 
     // -----------------------------------------------------------------------
@@ -441,6 +480,13 @@ public sealed class ProjectService
                 "source_repository must be an HTTPS URL on the configured GitHub origin.",
                 nameof(sourceRepository));
         }
+    }
+
+    public sealed class ProjectCreationFailedException(ProjectId projectId, string phase, Exception innerException)
+        : Exception($"Project creation failed during {phase}.", innerException)
+    {
+        public ProjectId ProjectId { get; } = projectId;
+        public string Phase { get; } = phase;
     }
 
     private static void ValidateModelId(string? modelId, string paramName)
