@@ -163,6 +163,20 @@ The compact run header keeps the operator-facing identity first: status, run ID,
 start time, progress, elapsed time, provider state, and actions. The submitted
 prompt is not displayed on the run-detail page.
 
+Use **Execution identity** in the run header to inspect the immutable attempt
+descriptor, agent assignment, delegation or retry lineage, backend evidence, current
+effective permission binding, and safe tool/gate outcomes. The panel never displays
+the submitted prompt, raw tool arguments, credentials, repository roots, or Kubernetes
+resource names. Missing legacy records and incomplete backend or tool-call evidence are
+labeled explicitly.
+
+API and MCP clients can read the same projection through
+`GET /api/runs/{id}/execution-identity` and
+`run_execution_identity(run_id)`. Access follows the run's normal viewer authorization;
+unauthorized project runs are returned as not found to prevent enumeration. The
+permission binding shown at read time is current evidence, not authority restored from
+the immutable launch descriptor.
+
 Use **Enter focus mode** to hide the global navigation and Start task row while
 keeping the run tree, selected task, messages, changes, and files available.
 Use **Exit focus mode** to restore the shell. Focus mode is temporary: it resets

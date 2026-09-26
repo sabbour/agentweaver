@@ -60,6 +60,7 @@ public static class OperatorToolApprovalPolicy
         "project_github_capability_status",
         "project_list",
         "project_list_runs",
+        "run_execution_identity",
         "run_failure_diagnostic",
         "run_get_file",
         "run_show_artifacts",
@@ -222,6 +223,7 @@ public static class OperatorToolApprovalPolicy
         "project_get",
         "project_list",
         "project_list_runs",
+        "run_execution_identity",
         "project_rename",
 
         // Runs: reads (submit/task/retry/review/archive are gated).

@@ -694,6 +694,21 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             }
         }
 
+        var persistedRun = coordinatorRun with
+        {
+            Origin = RunOrigin.BacklogPickup,
+            LaunchAutoApproveTools = approvalSnapshot.Policy.AutoApproveTools,
+            LaunchAutopilot = approvalSnapshot.Policy.Autopilot,
+            ApprovalPolicySnapshotId = approvalSnapshot.SnapshotId,
+            ApprovalPolicySource = approvalSnapshot.Source,
+            ApprovalPolicyCapturedAt = approvalSnapshot.CapturedAt,
+            ApprovalPolicySettingsUpdatedAt = approvalSnapshot.SettingsUpdatedAt,
+        };
+        await SqliteRunStore.CreateExecutionIdentityAsync(
+            connection,
+            (SqliteTransaction)tx,
+            persistedRun,
+            ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return new ClaimReserveOutcome(ClaimReserveResult.Won, approvalSnapshot);
     }

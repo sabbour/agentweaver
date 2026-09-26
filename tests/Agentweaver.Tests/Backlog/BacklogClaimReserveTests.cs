@@ -85,6 +85,8 @@ public sealed class BacklogClaimReserveTests
         runs.Should().ContainSingle().Which.Id.Should().Be(winnerRunId);
         (await ScalarAsync(testDb.Db, "SELECT COUNT(*) FROM workflow_runs WHERE project_id = $p;",
             ("$p", project.Id.ToString()))).Should().Be(0);
+        (await ScalarAsync(testDb.Db, "SELECT COUNT(*) FROM execution_identities WHERE run_id = $r;",
+            ("$r", winnerRunId.ToString()))).Should().Be(1);
 
         // Every loser persisted NOTHING (no orphan run).
         for (var i = 0; i < contenders; i++)

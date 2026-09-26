@@ -50,6 +50,7 @@ vi.mock('../api/apiClient', () => ({
     reviewAssembly: vi.fn(),
     getRun: vi.fn(),
     getRunEffectivePermissions: vi.fn(),
+    getRunExecutionIdentity: vi.fn(),
     getRunTerminalDiagnostic: vi.fn().mockRejectedValue(new Error('not found')),
     getProject: vi.fn(),
     getRunTokenBreakdown: vi.fn().mockResolvedValue({
@@ -247,6 +248,50 @@ beforeEach(() => {
     created_at: '2026-07-07T00:00:00.000Z',
     updated_at: '2026-07-07T00:00:00.000Z',
   } as never);
+  vi.mocked(apiClient.getRunExecutionIdentity).mockResolvedValue({
+    evidence_state: 'complete',
+    descriptor: {
+      descriptor_id: 'execution-safe',
+      schema_version: 1,
+      run_id: 'coord-run-1',
+      attempt: 1,
+      principal_ref: 'principal-safe',
+      executing_service: 'service:agentweaver-api',
+      agent_assignment_id: 'assignment-safe',
+      agent_role: 'Coordinator',
+      agent_display_name: 'Coordinator',
+      parent_descriptor_id: null,
+      retry_of_descriptor_id: null,
+      workflow_run_id: null,
+      subtask_id: null,
+      approval_policy_snapshot_id: 'approval-safe',
+      executable_workflow_digest: 'sha256:workflow-safe',
+      created_at: '2026-09-26T12:00:00Z',
+    },
+    backend: { kind: 'agenthost', sandbox_ref: 'sandbox-safe', evidence_state: 'observed' },
+    launch_permission_binding: {
+      binding_id: 'epb-launch',
+      version: 'sha256:permission-launch',
+      source: 'launch',
+      attempt: 1,
+    },
+    permission_binding: {
+      binding_id: 'epb-safe',
+      version: 'sha256:permission-safe',
+      source: 'current-project-sandbox-policy',
+      attempt: 1,
+    },
+    decisions: [{
+      sequence: 4,
+      tool_call_id: 'call-safe',
+      tool_name: 'run_command',
+      gate: 'human_approval',
+      outcome: 'denied',
+      reason_code: 'operation_not_allowed',
+      correlation_state: 'matched',
+      timestamp_utc: '2026-09-26T12:01:00Z',
+    }],
+  } as never);
   vi.mocked(apiClient.getRunTokenBreakdown).mockResolvedValue({
     runId: 'coord-run-1',
     source: 'events',
@@ -351,6 +396,20 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(inspection.textContent).not.toContain('command');
     expect(inspection.textContent).not.toContain('arguments');
     expect(inspection.textContent).not.toContain('api_key');
+  });
+
+  it('shows the safe execution identity and decision lineage', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    fireEvent.click(await screen.findByTestId('open-execution-identity', undefined, { timeout: 4000 }));
+
+    const inspection = await screen.findByTestId('execution-identity');
+    expect(apiClient.getRunExecutionIdentity).toHaveBeenCalledWith('coord-run-1');
+    expect(within(inspection).getByText('execution-safe')).toBeTruthy();
+    expect(within(inspection).getByText('principal-safe')).toBeTruthy();
+    expect(within(inspection).getByText(/run_command/)).toBeTruthy();
+    expect(inspection.textContent).not.toContain('repository');
+    expect(inspection.textContent).not.toContain('arguments');
   });
 
   it('renders an explicit not-found state for a missing coordinator run', async () => {

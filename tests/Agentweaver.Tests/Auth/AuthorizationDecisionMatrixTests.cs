@@ -29,6 +29,7 @@ public sealed class AuthorizationDecisionMatrixTests : IClassFixture<EntraWebApp
         { "internal service", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.OK },
         { "run capability", "GET", "/api/runs/not-a-run/tool-approval-policies/read_file", "/api/runs/{id}/tool-approval-policies/{toolName}", EndpointAuthorizationKind.RunCapability, HttpStatusCode.Unauthorized },
         { "missing permission inspection credential", "GET", "/api/runs/not-a-run/effective-permissions", "/api/runs/{id}/effective-permissions", EndpointAuthorizationKind.PlatformMcpOrRunCapability, HttpStatusCode.Unauthorized },
+        { "missing execution identity credential", "GET", "/api/runs/not-a-run/execution-identity", "/api/runs/{id}/execution-identity", EndpointAuthorizationKind.PlatformMcpOrRunCapability, HttpStatusCode.Unauthorized },
         { "malformed bearer", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.Unauthorized },
         { "wrong audience", "GET", "/api/projects", "/api/projects", EndpointAuthorizationKind.PlatformOrMcp, HttpStatusCode.Unauthorized },
     };

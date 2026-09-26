@@ -130,6 +130,35 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_content_digest TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_definition_yaml TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_pinned_at TEXT;", ct);
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS execution_identities (
+                descriptor_id TEXT NOT NULL PRIMARY KEY,
+                schema_version INTEGER NOT NULL,
+                run_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                project_id TEXT,
+                initiating_principal_id TEXT NOT NULL,
+                executing_service_id TEXT NOT NULL,
+                agent_assignment_id TEXT NOT NULL,
+                agent_role TEXT,
+                agent_display_name TEXT,
+                parent_run_id TEXT,
+                parent_descriptor_id TEXT,
+                retry_of_run_id TEXT,
+                retry_of_descriptor_id TEXT,
+                workflow_run_id TEXT,
+                subtask_id TEXT,
+                approval_policy_snapshot_id TEXT,
+                executable_workflow_content_digest TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE (run_id, attempt)
+            );
+            CREATE INDEX IF NOT EXISTS idx_execution_identities_parent
+                ON execution_identities (parent_descriptor_id);
+            CREATE INDEX IF NOT EXISTS idx_execution_identities_retry
+                ON execution_identities (retry_of_descriptor_id);
+            """, ct);
 
         // Per-project backlog pickup configuration (Feature 009, FR-008a + unattended seeding).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);

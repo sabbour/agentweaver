@@ -345,6 +345,13 @@ export class AgentweaverApiClient {
     );
   }
 
+  getRunExecutionIdentity(runId: string): Promise<import('./types').ExecutionIdentityProjection> {
+    return this.request<import('./types').ExecutionIdentityProjection>(
+      'GET',
+      `/runs/${encodeURIComponent(runId)}/execution-identity`,
+    );
+  }
+
   getRunTerminalDiagnostic(runId: string): Promise<import('./types').RunTerminalDiagnostic> {
     return this.request<import('./types').RunTerminalDiagnostic>(
       'GET',

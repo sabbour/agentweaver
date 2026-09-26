@@ -33,6 +33,7 @@ import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { EffectivePermissionsPanel } from '../components/EffectivePermissionsPanel';
+import { ExecutionIdentityPanel } from '../components/ExecutionIdentityPanel';
 import { AiCredits } from '../components/AiCredits';
 import {
   AiExecutionProviderHint,
@@ -3690,6 +3691,7 @@ export function CoordinatorRunPage() {
   const [runChangesSummary, setRunChangesSummary] = useState<{ files: number; added: number; removed: number } | null>(null);
   const [topologyPanelOpen, setTopologyPanelOpen] = useState(false);
   const [permissionsPanelOpen, setPermissionsPanelOpen] = useState(false);
+  const [executionIdentityPanelOpen, setExecutionIdentityPanelOpen] = useState(false);
 
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
@@ -4861,6 +4863,17 @@ export function CoordinatorRunPage() {
                   <Button
                     appearance="secondary"
                     size="small"
+                    icon={<InfoRegular />}
+                    onClick={() => setExecutionIdentityPanelOpen(true)}
+                    data-testid="open-execution-identity"
+                  >
+                    Execution identity
+                  </Button>
+                )}
+                {projectId && runId && (
+                  <Button
+                    appearance="secondary"
+                    size="small"
                     icon={<OpenRegular />}
                     onClick={() => navigate(`/projects/${projectId}/observability/traces?run=${runId}`)}
                     data-testid="view-trace-button"
@@ -5123,6 +5136,14 @@ export function CoordinatorRunPage() {
         title="Effective permissions"
       >
         {permissionsPanelOpen && <EffectivePermissionsPanel key={runId} runId={runId} />}
+      </SlidePanel>
+
+      <SlidePanel
+        open={executionIdentityPanelOpen}
+        onClose={() => setExecutionIdentityPanelOpen(false)}
+        title="Execution identity"
+      >
+        {executionIdentityPanelOpen && <ExecutionIdentityPanel key={runId} runId={runId} />}
       </SlidePanel>
 
       <SlidePanel

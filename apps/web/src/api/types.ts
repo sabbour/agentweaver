@@ -135,6 +135,55 @@ export interface EffectivePermissionInspection {
   } | null;
 }
 
+export interface ExecutionIdentityProjection {
+  evidence_state: 'complete' | 'partial' | 'missing_legacy_descriptor';
+  descriptor: {
+    descriptor_id: string;
+    schema_version: number;
+    run_id: string;
+    attempt: number;
+    principal_ref: string;
+    executing_service: string;
+    agent_assignment_id: string;
+    agent_role: string | null;
+    agent_display_name: string | null;
+    parent_descriptor_id: string | null;
+    retry_of_descriptor_id: string | null;
+    workflow_run_id: string | null;
+    subtask_id: string | null;
+    approval_policy_snapshot_id: string | null;
+    executable_workflow_digest: string | null;
+    created_at: string;
+  } | null;
+  backend: {
+    kind: string;
+    sandbox_ref: string | null;
+    evidence_state: string;
+  } | null;
+  launch_permission_binding: {
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+  } | null;
+  permission_binding: {
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+  } | null;
+  decisions: Array<{
+    sequence: number;
+    tool_call_id: string | null;
+    tool_name: string | null;
+    gate: string;
+    outcome: string;
+    reason_code: string | null;
+    correlation_state: string;
+    timestamp_utc: string | null;
+  }>;
+}
+
 export interface EffectivePermissionPolicySummary {
   version: string;
   shell_enabled: boolean;

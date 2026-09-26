@@ -839,6 +839,24 @@ public sealed class SqliteToPostgresMigrator
         _logger.LogInformation("  Runs: {Migrated}/{Total} migrated, {Skipped} skipped.",
             runsMigrated, runs.Count, runs.Count - runsMigrated);
 
+        var executionIdentities = await ReadExecutionIdentitiesAsync(conn, ct);
+        _logger.LogInformation("Migrating {Count} execution identities...", executionIdentities.Count);
+        var executionIdentitiesMigrated = 0;
+        foreach (var rec in executionIdentities)
+        {
+            if (!await db.ExecutionIdentities.AnyAsync(
+                    identity => identity.DescriptorId == rec.DescriptorId, ct))
+            {
+                db.ExecutionIdentities.Add(rec);
+                executionIdentitiesMigrated++;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+        _logger.LogInformation("  ExecutionIdentities: {Migrated}/{Total} migrated, {Skipped} skipped.",
+            executionIdentitiesMigrated,
+            executionIdentities.Count,
+            executionIdentities.Count - executionIdentitiesMigrated);
+
         var revisions = await ReadRunRevisionsAsync(conn, ct);
         _logger.LogInformation("Migrating {Count} run revisions...", revisions.Count);
         var revMigrated = 0;
@@ -1182,6 +1200,22 @@ public sealed class SqliteToPostgresMigrator
         return false;
     }
 
+    private static async Task<bool> HasTableAsync(
+        SqliteConnection conn,
+        string table,
+        CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT 1
+              FROM sqlite_master
+             WHERE type = 'table' AND name = $table;
+            """;
+        cmd.Parameters.AddWithValue("$table", table);
+        return await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false) is not null;
+    }
+
     private static async Task<List<ProjectRecord>> ReadProjectsAsync(SqliteConnection conn, CancellationToken ct)
     {
         var results = new List<ProjectRecord>();
@@ -1353,6 +1387,56 @@ public sealed class SqliteToPostgresMigrator
                 ExecutableWorkflowContentDigest = reader.IsDBNull(38) ? null : reader.GetString(38),
                 ExecutableWorkflowDefinitionYaml = reader.IsDBNull(39) ? null : reader.GetString(39),
                 ExecutableWorkflowPinnedAt = reader.IsDBNull(40) ? null : ParseTs(reader.GetString(40)),
+            });
+        }
+        return results;
+    }
+
+    private static async Task<List<ExecutionIdentityRecord>> ReadExecutionIdentitiesAsync(
+        SqliteConnection conn,
+        CancellationToken ct)
+    {
+        if (!await HasTableAsync(conn, "execution_identities", ct))
+            return [];
+
+        var results = new List<ExecutionIdentityRecord>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT descriptor_id, schema_version, run_id, attempt, project_id,
+                   initiating_principal_id, executing_service_id, agent_assignment_id,
+                   agent_role, agent_display_name, parent_run_id, parent_descriptor_id,
+                   retry_of_run_id, retry_of_descriptor_id, workflow_run_id, subtask_id,
+                   approval_policy_snapshot_id, executable_workflow_content_digest, created_at
+              FROM execution_identities;
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new ExecutionIdentityRecord
+            {
+                DescriptorId = reader.GetString(0),
+                SchemaVersion = reader.GetInt32(1),
+                RunId = reader.GetString(2),
+                Attempt = reader.GetInt32(3),
+                ProjectId = reader.IsDBNull(4) ? null : reader.GetString(4),
+                InitiatingPrincipalId = reader.GetString(5),
+                ExecutingServiceId = reader.GetString(6),
+                AgentAssignmentId = reader.GetString(7),
+                AgentRole = reader.IsDBNull(8) ? null : reader.GetString(8),
+                AgentDisplayName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                ParentRunId = reader.IsDBNull(10) ? null : reader.GetString(10),
+                ParentDescriptorId = reader.IsDBNull(11) ? null : reader.GetString(11),
+                RetryOfRunId = reader.IsDBNull(12) ? null : reader.GetString(12),
+                RetryOfDescriptorId = reader.IsDBNull(13) ? null : reader.GetString(13),
+                WorkflowRunId = reader.IsDBNull(14) ? null : reader.GetString(14),
+                SubtaskId = reader.IsDBNull(15) ? null : reader.GetString(15),
+                ApprovalPolicySnapshotId = reader.IsDBNull(16) ? null : reader.GetString(16),
+                ExecutableWorkflowContentDigest = reader.IsDBNull(17) ? null : reader.GetString(17),
+                CreatedAt = DateTimeOffset.Parse(
+                    reader.GetString(18),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind),
             });
         }
         return results;

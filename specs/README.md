@@ -75,6 +75,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 ## Observability & operations
 
 - [Watch run events live and replay history](./observability-operations/watch-run-events-live.md) — [#27](https://github.com/sabbour/agentweaver/issues/27)
+- [Inspect execution identity and decision lineage](./observability-operations/inspect-execution-identity.md) — [#1404](https://github.com/sabbour/agentweaver/issues/1404)
 - [Track token and AI credit usage](./observability-operations/track-token-and-cost-usage.md) — [#29](https://github.com/sabbour/agentweaver/issues/29)
 - [Operate health, heartbeat, and cluster status](./observability-operations/operate-health-heartbeat-and-cluster.md) — [#31](https://github.com/sabbour/agentweaver/issues/31)
 

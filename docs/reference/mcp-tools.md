@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **118 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **119 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -146,6 +146,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | Tool | Description |
 | --- | --- |
 | `run_archive` | Archive a run off active project board/list projections. |
+| `run_execution_identity` | Get the authorization-filtered execution identity, delegation, retry, backend, permission-binding, and tool-decision record for a run. |
 | `run_get_file` | Get the content or diff of a specific file changed by a run. |
 | `run_retry` | Retry a failed run by creating a fresh run from its original inputs. |
 | `run_review` | Approve or reject a run that is awaiting review. |

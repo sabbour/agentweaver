@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Execution;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Infrastructure;
@@ -20,7 +21,9 @@ public sealed class SqliteRunStore : IRunStore
     public async Task InsertAsync(Run run, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)tx;
         command.CommandText =
             """
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task,
@@ -94,6 +97,12 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", NullableTs(run.ApprovalPolicySettingsUpdatedAt));
         command.Parameters.AddWithValue("$approvalPolicyInheritedFromRunId", (object?)run.ApprovalPolicyInheritedFromRunId ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await CreateExecutionIdentityAsync(
+            connection,
+            (SqliteTransaction)tx,
+            run,
+            ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
     }
 
     public async Task<Run?> GetAsync(RunId runId, CancellationToken ct = default)
@@ -222,9 +231,10 @@ public sealed class SqliteRunStore : IRunStore
     public async Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null)
     {
-        var ts = now ?? DateTimeOffset.UtcNow;
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)tx;
         command.CommandText =
             """
             UPDATE runs
@@ -232,10 +242,14 @@ public sealed class SqliteRunStore : IRunStore
                    lifecycle_generation = lifecycle_generation + 1
              WHERE run_id = $runId AND status = 'awaiting_review';
             """;
-        command.Parameters.AddWithValue("$now", Ts(ts));
         command.Parameters.AddWithValue("$runId", runId.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        return rows > 0;
+        if (rows == 0)
+            return false;
+        await InsertCurrentExecutionIdentityAsync(connection, (SqliteTransaction)tx, runId, ct)
+            .ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
     }
 
     public async Task<bool> TryParkForChildWorkAsync(
@@ -281,15 +295,24 @@ public sealed class SqliteRunStore : IRunStore
 
     public async Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default)
     {
-        var rows = await ExecuteNonQueryAsync(
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)tx;
+        command.CommandText =
             """
             UPDATE runs
                SET status = 'in_progress', ended_at = NULL, lifecycle_generation = lifecycle_generation + 1
              WHERE run_id = $runId AND status IN ('failed', 'merge_failed', 'assemble_ready');
-            """,
-            cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()),
-            ct).ConfigureAwait(false);
-        return rows > 0;
+            """;
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        if (rows == 0)
+            return false;
+        await InsertCurrentExecutionIdentityAsync(connection, (SqliteTransaction)tx, runId, ct)
+            .ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
     }
     /// Returns true if the transition was applied (exactly one row updated), false if a
     /// concurrent request already changed the status. This single-row conditional UPDATE
@@ -787,15 +810,24 @@ public sealed class SqliteRunStore : IRunStore
     public async Task<bool> TryWakeFromIdleAsync(RunId runId, CancellationToken ct = default)
     {
         // CAS: only the replica that still sees this run as idle wakes it back to in_progress.
-        var rows = await ExecuteNonQueryAsync(
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)tx;
+        command.CommandText =
             """
             UPDATE runs
                SET status = 'in_progress', lifecycle_generation = lifecycle_generation + 1
              WHERE run_id = $runId AND status = 'idle';
-            """,
-            cmd => cmd.Parameters.AddWithValue("$runId", runId.ToString()),
-            ct).ConfigureAwait(false);
-        return rows > 0;
+            """;
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        if (rows == 0)
+            return false;
+        await InsertCurrentExecutionIdentityAsync(connection, (SqliteTransaction)tx, runId, ct)
+            .ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>
@@ -863,10 +895,10 @@ public sealed class SqliteRunStore : IRunStore
         var rows = await ExecuteNonQueryAsync(
             """
             UPDATE runs
-               SET sandbox_backend = COALESCE($backend, sandbox_backend),
-                   sandbox_claim_name = COALESCE($claimName, sandbox_claim_name),
-                   sandbox_pod_name = COALESCE($podName, sandbox_pod_name),
-                   sandbox_namespace = COALESCE($namespace, sandbox_namespace)
+               SET sandbox_backend = COALESCE(sandbox_backend, $backend),
+                   sandbox_claim_name = COALESCE(sandbox_claim_name, $claimName),
+                   sandbox_pod_name = COALESCE(sandbox_pod_name, $podName),
+                   sandbox_namespace = COALESCE(sandbox_namespace, $namespace)
              WHERE run_id = $runId;
             """,
             cmd =>
@@ -1099,8 +1131,112 @@ public sealed class SqliteRunStore : IRunStore
             run.ExecutableWorkflowPinRequired || (run.ParentRunId is null && run.ProjectId is not null) ? 1 : 0);
         AddExecutableWorkflowPinParameters(command, run);
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        if (rows > 0)
+        {
+            await CreateExecutionIdentityAsync(connection, tx, run, ct).ConfigureAwait(false);
+        }
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return rows > 0;
+    }
+
+    internal static async Task InsertExecutionIdentityAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ExecutionIdentityDescriptor descriptor,
+        CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO execution_identities (
+                descriptor_id, schema_version, run_id, attempt, project_id,
+                initiating_principal_id, executing_service_id, agent_assignment_id,
+                agent_role, agent_display_name, parent_run_id, parent_descriptor_id,
+                retry_of_run_id, retry_of_descriptor_id, workflow_run_id, subtask_id,
+                approval_policy_snapshot_id, executable_workflow_content_digest, created_at)
+            VALUES (
+                $descriptorId, $schemaVersion, $runId, $attempt, $projectId,
+                $initiatingPrincipalId, $executingServiceId, $agentAssignmentId,
+                $agentRole, $agentDisplayName, $parentRunId, $parentDescriptorId,
+                $retryOfRunId, $retryOfDescriptorId, $workflowRunId, $subtaskId,
+                $approvalPolicySnapshotId, $executableWorkflowContentDigest, $createdAt);
+            """;
+        command.Parameters.AddWithValue("$descriptorId", descriptor.DescriptorId);
+        command.Parameters.AddWithValue("$schemaVersion", descriptor.SchemaVersion);
+        command.Parameters.AddWithValue("$runId", descriptor.RunId);
+        command.Parameters.AddWithValue("$attempt", descriptor.Attempt);
+        command.Parameters.AddWithValue("$projectId", (object?)descriptor.ProjectId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$initiatingPrincipalId", descriptor.InitiatingPrincipalId);
+        command.Parameters.AddWithValue("$executingServiceId", descriptor.ExecutingServiceId);
+        command.Parameters.AddWithValue("$agentAssignmentId", descriptor.AgentAssignmentId);
+        command.Parameters.AddWithValue("$agentRole", (object?)descriptor.AgentRole ?? DBNull.Value);
+        command.Parameters.AddWithValue("$agentDisplayName", (object?)descriptor.AgentDisplayName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$parentRunId", (object?)descriptor.ParentRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$parentDescriptorId", (object?)descriptor.ParentDescriptorId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$retryOfRunId", (object?)descriptor.RetryOfRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$retryOfDescriptorId", (object?)descriptor.RetryOfDescriptorId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowRunId", (object?)descriptor.WorkflowRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$subtaskId", (object?)descriptor.SubtaskId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$approvalPolicySnapshotId", (object?)descriptor.ApprovalPolicySnapshotId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executableWorkflowContentDigest", (object?)descriptor.ExecutableWorkflowContentDigest ?? DBNull.Value);
+        command.Parameters.AddWithValue("$createdAt", Ts(descriptor.CreatedAt));
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+    }
+
+    internal static async Task CreateExecutionIdentityAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Run run,
+        CancellationToken ct)
+    {
+        async Task<string?> LatestDescriptorIdAsync(string? linkedRunId)
+        {
+            if (string.IsNullOrWhiteSpace(linkedRunId))
+                return null;
+
+            await using var select = connection.CreateCommand();
+            select.Transaction = transaction;
+            select.CommandText =
+                """
+                SELECT descriptor_id
+                  FROM execution_identities
+                 WHERE run_id = $runId
+                 ORDER BY attempt DESC
+                 LIMIT 1;
+                """;
+            select.Parameters.AddWithValue("$runId", linkedRunId);
+            return await select.ExecuteScalarAsync(ct).ConfigureAwait(false) as string;
+        }
+
+        var parentDescriptorId = await LatestDescriptorIdAsync(run.ParentRunId);
+        var retryDescriptorId = await LatestDescriptorIdAsync(run.RetriedFrom);
+        await InsertExecutionIdentityAsync(
+            connection,
+            transaction,
+            ExecutionIdentityDescriptor.CreateWithResolvedLineage(
+                run,
+                parentDescriptorId,
+                retryDescriptorId),
+            ct).ConfigureAwait(false);
+    }
+
+    private static async Task InsertCurrentExecutionIdentityAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        RunId runId,
+        CancellationToken ct)
+    {
+        await using var select = connection.CreateCommand();
+        select.Transaction = transaction;
+        select.CommandText = SelectSql + " WHERE run_id = $runId;";
+        select.Parameters.AddWithValue("$runId", runId.ToString());
+        await using var reader = await select.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+            throw new InvalidOperationException($"Run '{runId}' disappeared while creating its execution identity.");
+        var run = Map(reader);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await CreateExecutionIdentityAsync(connection, transaction, run, ct).ConfigureAwait(false);
     }
 
     private static void AddExecutableWorkflowPinParameters(SqliteCommand command, Run run)

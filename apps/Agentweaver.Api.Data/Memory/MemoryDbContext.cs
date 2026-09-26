@@ -68,6 +68,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
     // Entities migrated from agentweaver.db (spec-018 P2)
     public DbSet<RunRecord> Runs => Set<RunRecord>();
+    public DbSet<ExecutionIdentityRecord> ExecutionIdentities => Set<ExecutionIdentityRecord>();
     public DbSet<TerminalRunOutcomeRecord> TerminalRunOutcomes => Set<TerminalRunOutcomeRecord>();
     public DbSet<TerminalRunOutcomeProjectionRecord> TerminalRunOutcomeProjections => Set<TerminalRunOutcomeProjectionRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
@@ -360,6 +361,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 e.Property(x => x.ProjectId).HasColumnName("project_id");
             });
             model.Ignore<RunRecord>();
+            model.Ignore<ExecutionIdentityRecord>();
             model.Ignore<TerminalRunOutcomeRecord>();
             model.Ignore<RunRevisionRecord>();
             model.Ignore<ProjectRoleAssignmentRecord>();
@@ -444,6 +446,34 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(r => new { r.Origin, r.Status }).HasDatabaseName("IX_runs_origin_status");
             e.HasIndex(r => new { r.ParentRunId, r.SubtaskId }).HasDatabaseName("IX_runs_parent_subtask");
             e.HasIndex(r => r.WorkflowRunId).HasDatabaseName("IX_runs_workflow_run_id");
+        });
+
+        model.Entity<ExecutionIdentityRecord>(e =>
+        {
+            e.ToTable("execution_identities");
+            e.HasKey(record => record.DescriptorId);
+            e.Property(record => record.DescriptorId).HasColumnName("descriptor_id").HasMaxLength(80);
+            e.Property(record => record.SchemaVersion).HasColumnName("schema_version");
+            e.Property(record => record.RunId).HasColumnName("run_id").HasMaxLength(128);
+            e.Property(record => record.Attempt).HasColumnName("attempt");
+            e.Property(record => record.ProjectId).HasColumnName("project_id").HasMaxLength(128);
+            e.Property(record => record.InitiatingPrincipalId).HasColumnName("initiating_principal_id").HasMaxLength(256);
+            e.Property(record => record.ExecutingServiceId).HasColumnName("executing_service_id").HasMaxLength(128);
+            e.Property(record => record.AgentAssignmentId).HasColumnName("agent_assignment_id").HasMaxLength(80);
+            e.Property(record => record.AgentRole).HasColumnName("agent_role").HasMaxLength(128);
+            e.Property(record => record.AgentDisplayName).HasColumnName("agent_display_name").HasMaxLength(128);
+            e.Property(record => record.ParentRunId).HasColumnName("parent_run_id").HasMaxLength(128);
+            e.Property(record => record.ParentDescriptorId).HasColumnName("parent_descriptor_id").HasMaxLength(80);
+            e.Property(record => record.RetryOfRunId).HasColumnName("retry_of_run_id").HasMaxLength(128);
+            e.Property(record => record.RetryOfDescriptorId).HasColumnName("retry_of_descriptor_id").HasMaxLength(80);
+            e.Property(record => record.WorkflowRunId).HasColumnName("workflow_run_id").HasMaxLength(128);
+            e.Property(record => record.SubtaskId).HasColumnName("subtask_id").HasMaxLength(128);
+            e.Property(record => record.ApprovalPolicySnapshotId).HasColumnName("approval_policy_snapshot_id").HasMaxLength(128);
+            e.Property(record => record.ExecutableWorkflowContentDigest).HasColumnName("executable_workflow_content_digest").HasMaxLength(128);
+            e.Property(record => record.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(record => new { record.RunId, record.Attempt }).IsUnique();
+            e.HasIndex(record => record.ParentDescriptorId);
+            e.HasIndex(record => record.RetryOfDescriptorId);
         });
 
         model.Entity<TerminalRunOutcomeRecord>(e =>

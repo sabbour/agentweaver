@@ -16,6 +16,7 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Execution;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
@@ -247,6 +248,7 @@ app.MapGet("/api/runs/{id}/terminal-diagnostic", async (
     string id,
     IRunStore runStore,
     MemoryDbContext db,
+    ExecutionIdentityReader executionIdentityReader,
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
@@ -266,6 +268,15 @@ app.MapGet("/api/runs/{id}/terminal-diagnostic", async (
         && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
         && run.Status is RunStatus.Failed or RunStatus.MergeFailed)
         diagnostic = RunTerminalDiagnosticReader.CreateFallback(run);
+    if (diagnostic is not null)
+    {
+        var identity = await executionIdentityReader.GetAsync(run, ct).ConfigureAwait(false);
+        diagnostic = diagnostic with
+        {
+            ExecutionDescriptorId = identity.Descriptor?.DescriptorId,
+            ExecutionIdentityEvidenceState = identity.EvidenceState,
+        };
+    }
     return diagnostic is null ? Results.NotFound() : Results.Ok(diagnostic);
 })
     .Produces<RunTerminalDiagnosticResponse>(StatusCodes.Status200OK)
@@ -2764,6 +2775,45 @@ app.MapGet("/api/runs/{id}/effective-permissions", async (
             new { error = "effective_permission_binding_unavailable", message = ex.Message },
             statusCode: StatusCodes.Status409Conflict);
     }
+}).PlatformMcpOrRunCapability();
+
+app.MapGet("/api/runs/{id}/execution-identity", async (
+    HttpContext httpContext,
+    string id,
+    IRunStore runStore,
+    ExecutionIdentityReader reader,
+    IRunAuthorshipCapabilityStore capabilityStore,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null)
+        return Results.NotFound();
+
+    if (httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.RunCapability)
+        || httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.InternalServiceKey))
+    {
+        var capabilityRunId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
+        var capabilityToken = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+        if (!string.Equals(capabilityRunId, id, StringComparison.Ordinal)
+            || !await capabilityStore.ValidateAsync(id, capabilityToken, ct).ConfigureAwait(false))
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+    }
+    else if (await EndpointHelpers.RequireRunAccessAsync(
+            httpContext, run, ProjectRole.Viewer, ct) is not null)
+    {
+        return Results.NotFound();
+    }
+
+    return Results.Ok(await reader.GetAsync(run, ct).ConfigureAwait(false));
 }).PlatformMcpOrRunCapability();
 
 app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
