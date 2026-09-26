@@ -265,6 +265,64 @@ export interface RunTerminalDiagnostic {
   retryable: boolean | null;
   correlation_ids: Record<string, string>;
   cause_chain: string[];
+  schema_version?: number;
+  attempt?: number | null;
+  observed_at?: string | null;
+  completeness?: 'complete' | 'partial' | 'unavailable';
+  evidence_sources?: DiagnosticEvidenceSource[];
+  evidence_references?: DiagnosticEvidenceReference[];
+  observed_facts?: DiagnosticStatement[];
+  supported_interpretations?: DiagnosticStatement[];
+  unknowns?: DiagnosticStatement[];
+  denial_gate?: DiagnosticDenialGate | null;
+  next_actions?: DiagnosticNextAction[];
+  execution_descriptor_id?: string | null;
+  execution_identity_evidence_state?: string | null;
+}
+
+export interface DiagnosticEvidenceSource {
+  name: string;
+  availability: string;
+  completeness: string;
+  observed_at: string;
+  detail?: string | null;
+}
+
+export interface DiagnosticEvidenceReference {
+  id: string;
+  source: string;
+  kind: string;
+  sequence?: number | null;
+  observed_at?: string | null;
+  tool_call_id?: string | null;
+  synthetic: boolean;
+}
+
+export interface DiagnosticStatement {
+  code: string;
+  summary: string;
+  evidence_reference_ids: string[];
+}
+
+export interface DiagnosticDenialGate {
+  gate: string;
+  outcome: string;
+  reason_code?: string | null;
+  tool_call_id?: string | null;
+  tool_name?: string | null;
+  capability?: string | null;
+  permission_binding_id?: string | null;
+  permission_binding_version?: string | null;
+  permission_binding_source?: string | null;
+  evidence_reference_id: string;
+}
+
+export interface DiagnosticNextAction {
+  kind: 'safe_retry' | 'authorization_or_configuration_repair' | 'investigate_unknown';
+  label: string;
+  preconditions: string[];
+  expected_effect: string;
+  mutating: false;
 }
 
 const TERMINAL_FAILURE_CODES = new Set([
@@ -1741,12 +1799,21 @@ export interface ClusterDiagnosticsDto {
   generated_utc: string;
   total_duration_ms: number;
   checks: DetailedHealthCheckDto[];
+  inventory_sources?: InventoryCollectionStatusDto[];
   active_agent_pods: AgentPodInfoDto[];
   orphaned_agent_pods: AgentPodInfoDto[];
   pending_capacity_runs: PendingCapacityRunDto[];
   warm_pools?: WarmPoolStatusDto[];
   sandbox_claims?: SandboxClaimObjectDto[];
   details?: TopologyResourceDetailsDto | null;
+}
+
+export interface InventoryCollectionStatusDto {
+  name: string;
+  outcome: 'available' | 'no_resources' | 'forbidden' | 'timeout' | 'unsupported' | 'malformed' | 'collection_error';
+  complete: boolean;
+  observed_at: string;
+  detail: string;
 }
 
 export type KubernetesTopologyLayer =

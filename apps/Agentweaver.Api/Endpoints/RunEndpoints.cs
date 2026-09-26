@@ -247,8 +247,7 @@ app.MapGet("/api/runs/{id}/terminal-diagnostic", async (
     HttpContext httpContext,
     string id,
     IRunStore runStore,
-    MemoryDbContext db,
-    ExecutionIdentityReader executionIdentityReader,
+    RunFailureExplanationService explanationService,
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
@@ -263,23 +262,10 @@ app.MapGet("/api/runs/{id}/terminal-diagnostic", async (
     if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
         return Results.NotFound();
 
-    var diagnostic = await new RunTerminalDiagnosticReader(db).GetAsync(runId.ToString(), ct).ConfigureAwait(false);
-    if (diagnostic is null
-        && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
-        && run.Status is RunStatus.Failed or RunStatus.MergeFailed)
-        diagnostic = RunTerminalDiagnosticReader.CreateFallback(run);
-    if (diagnostic is not null)
-    {
-        var identity = await executionIdentityReader.GetAsync(run, ct).ConfigureAwait(false);
-        diagnostic = diagnostic with
-        {
-            ExecutionDescriptorId = identity.Descriptor?.DescriptorId,
-            ExecutionIdentityEvidenceState = identity.EvidenceState,
-        };
-    }
+    var diagnostic = await explanationService.GetAsync(run, ct).ConfigureAwait(false);
     return diagnostic is null ? Results.NotFound() : Results.Ok(diagnostic);
 })
-    .Produces<RunTerminalDiagnosticResponse>(StatusCodes.Status200OK)
+    .Produces<Agentweaver.AspNetCore.RunTerminalDiagnosticResponse>(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status404NotFound);
 
 app.MapPost("/api/runs/{id}/archive", async (

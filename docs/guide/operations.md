@@ -194,16 +194,26 @@ the normal steering and human-review paths.
 
 To investigate:
 
-1. Inspect the persisted run events with `GET /api/runs/{id}/events` and record the
-   `errorCode`, `retryable`, message, and diagnostic fields.
-2. Correlate the run id with worker and AgentHost logs to determine whether the pod,
-   transport, or turn failed.
-3. Retry or redispatch through the normal run/coordinator controls only after confirming
-   that the task is still valid.
+1. Read `GET /api/runs/{id}/terminal-diagnostic` or `run_failure_diagnostic`.
+2. Start with `observed_facts`, then review `supported_interpretations`. Do not treat a
+   nearby or repeated tool error as causal unless the terminal evidence directly
+   references the same call or gate.
+3. Check `evidence_sources` and `completeness`. Missing telemetry does not erase durable
+   terminal evidence, but partial or unavailable sources are not a healthy result.
+4. If `denial_gate` is present, repair the named authorization/configuration gate before
+   retrying. A pending human approval is waiting, not denial.
+5. Follow the structured `next_actions`; they describe preconditions and effects but do
+   not mutate the run, policy, or authorization.
 
 Diagnostics in the run event are deliberately bounded, flattened to one line, and
 credential-redacted. They are safe context for triage, not a replacement for
 restricted server-side logs.
+
+Cluster inventory collection uses the same explicit absence rule. Each
+`inventory_sources` entry reports `available`, `no_resources`, `forbidden`, `timeout`,
+`unsupported`, `malformed`, or `collection_error`. Only `no_resources` means collection
+completed successfully and found nothing. The Cluster page warns when any source is
+incomplete instead of presenting an unavailable inventory as an empty healthy one.
 
 ## Related scripts
 

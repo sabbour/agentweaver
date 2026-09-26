@@ -386,9 +386,11 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         foreach (var response in new[] { terminal, rest, stream })
         {
             response.Should().NotContain(signature).And.NotContain("SharedAccessSignature")
-                .And.NotContain("\"reason\"").And.NotContain("\"detail\"");
+                .And.NotContain("\"reason\"");
             response.Should().Contain("a2a_transport_failure");
         }
+        using var terminalDocument = System.Text.Json.JsonDocument.Parse(terminal);
+        terminalDocument.RootElement.TryGetProperty("detail", out _).Should().BeFalse();
     }
 
     [Fact]

@@ -268,21 +268,10 @@ public sealed record RunResponse
 }
 
 /// <summary>
-/// Safe, bounded terminal diagnostic for a failed run. This intentionally excludes raw exceptions,
-/// stack traces, prompts, tool payloads, headers, credentials, and infrastructure logs.
+/// Compatibility name for API consumers. The shared contract lives in Agentweaver.AspNetCore so
+/// REST and MCP expose the same shape without duplicating sanitization.
 /// </summary>
-public sealed record RunTerminalDiagnosticResponse
-{
-    [JsonPropertyName("code")] public required string Code { get; init; }
-    [JsonPropertyName("message")] public required string Message { get; init; }
-    [JsonPropertyName("component")] public required string Component { get; init; }
-    [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
-    [JsonPropertyName("retryable")] public bool? Retryable { get; init; }
-    [JsonPropertyName("correlation_ids")] public required IReadOnlyDictionary<string, string> CorrelationIds { get; init; }
-    [JsonPropertyName("cause_chain")] public required IReadOnlyList<string> CauseChain { get; init; }
-    [JsonPropertyName("execution_descriptor_id")] public string? ExecutionDescriptorId { get; init; }
-    [JsonPropertyName("execution_identity_evidence_state")] public string? ExecutionIdentityEvidenceState { get; init; }
-}
+public sealed record RunTerminalDiagnosticResponse : Agentweaver.AspNetCore.RunTerminalDiagnosticResponse;
 
 /// <summary>Summary of a workflow run returned by GET /api/projects/{id}/runs.</summary>
 public sealed record WorkflowRunSummary

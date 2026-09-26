@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../../api/apiClient';
 import { ApiError } from '../../api/client';
 import { isSafeTerminalCause, safeTerminalFailureMessage, type Project, type RunTerminalDiagnostic, type WorkflowRunDto } from '../../api/types';
+import { FailureDiagnosticDetails } from '../../components/FailureDiagnosticDetails';
 import {
   Badge,
   Button,
@@ -234,6 +235,7 @@ function FailureDiagnosticPanel({
               </Link>
             </span>
           ))}
+          <FailureDiagnosticDetails diagnostic={diagnostic} />
         </MessageBarBody>
       </MessageBar>
     );

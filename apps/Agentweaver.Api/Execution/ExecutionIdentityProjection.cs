@@ -50,6 +50,10 @@ public sealed record ExecutionDecisionSummary(
     [property: JsonPropertyName("gate")] string Gate,
     [property: JsonPropertyName("outcome")] string Outcome,
     [property: JsonPropertyName("reason_code")] string? ReasonCode,
+    [property: JsonPropertyName("operation")] string? Operation,
+    [property: JsonPropertyName("permission_binding_id")] string? PermissionBindingId,
+    [property: JsonPropertyName("permission_binding_version")] string? PermissionBindingVersion,
+    [property: JsonPropertyName("permission_binding_source")] string? PermissionBindingSource,
     [property: JsonPropertyName("correlation_state")] string CorrelationState,
     [property: JsonPropertyName("timestamp_utc")] DateTimeOffset? TimestampUtc);
 
@@ -67,14 +71,15 @@ public static class ExecutionIdentityProjector
             return new("missing_legacy_descriptor", null, Backend(run), null, null, []);
 
         var backend = Backend(run);
-        var attemptEvents = events
-            .Where(evt => evt.TimestampUtc == default || evt.TimestampUtc >= descriptor.CreatedAt)
-            .ToArray();
-        var launchBinding = attemptEvents
+        var launchBindingEvent = events
             .Where(evt => evt.Type == EventTypes.PermissionBindingBound)
             .OrderBy(evt => evt.Sequence)
-            .Select(evt => Deserialize<EffectivePermissionBinding>(evt.Payload))
-            .FirstOrDefault(candidate => candidate?.Attempt == descriptor.Attempt);
+            .Select(evt => (Event: evt, Binding: Deserialize<EffectivePermissionBinding>(evt.Payload)))
+            .FirstOrDefault(candidate => candidate.Binding?.Attempt == descriptor.Attempt);
+        var launchBinding = launchBindingEvent.Binding;
+        var attemptEvents = descriptor.Attempt > 1 && launchBinding is null
+            ? []
+            : events.Where(evt => evt.Sequence >= (launchBindingEvent.Event?.Sequence ?? 0)).ToArray();
         var binding = currentPermissionBinding ?? launchBinding;
         var calls = attemptEvents
             .Where(evt => evt.Type == EventTypes.ToolCall)
@@ -175,7 +180,7 @@ public static class ExecutionIdentityProjector
                 call.Sequence < evt.Sequence
                 && directToolName is not null
                 && string.Equals(call.ToolName, directToolName, StringComparison.Ordinal));
-        var callId = explicitCallId ?? correlatedCall?.CallId;
+        var callId = explicitCallId ?? correlatedCall?.CallId ?? $"event-{evt.Sequence}";
         var toolName = correlatedCall?.ToolName ?? directToolName;
         var outcome = evt.Type switch
         {
@@ -196,6 +201,28 @@ public static class ExecutionIdentityProjector
             : evt.Type == EventTypes.ToolError
                 ? "tool_error"
                 : null;
+        var operation = evt.Type == EventTypes.RunDegraded
+            ? EffectivePermissionOperations.Known
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .FirstOrDefault(value =>
+                    GetString(payload, "reason")?.Contains($"'{value}'", StringComparison.Ordinal) == true)
+            : null;
+        var permissionBindingId = evt.Type == EventTypes.RunDegraded
+            ? SafeIdentifier(GetString(payload, "permissionBindingId"))
+            : null;
+        var permissionBindingVersion = evt.Type == EventTypes.RunDegraded
+            ? SafeIdentifier(GetString(payload, "permissionBindingVersion"))
+            : null;
+        var permissionBindingSource = evt.Type == EventTypes.RunDegraded
+            ? SafeIdentifier(GetString(payload, "permissionSource"))
+            : null;
+        var correlationState = explicitCallId is not null && correlatedCall is not null
+            ? "explicit"
+            : explicitCallId is not null
+                ? "unmatched"
+                : correlatedCall is not null
+                    ? "inferred_tool_name"
+                    : "synthetic";
         return new(
             evt.Sequence,
             callId,
@@ -203,7 +230,11 @@ public static class ExecutionIdentityProjector
             gate,
             outcome,
             reason,
-            correlatedCall is null ? "missing_tool_call" : "matched",
+            operation,
+            permissionBindingId,
+            permissionBindingVersion,
+            permissionBindingSource,
+            correlationState,
             evt.TimestampUtc == default ? null : evt.TimestampUtc);
     }
 

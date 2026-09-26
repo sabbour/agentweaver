@@ -257,7 +257,8 @@ public sealed class DiagnosticsService
         var overallSw = Stopwatch.StartNew();
         var generatedUtc = DateTimeOffset.UtcNow;
 
-        // Checks + inventory run concurrently; the inventory tasks are best-effort (never throw).
+        // Checks + inventory run concurrently. Inventory collectors retain partial data and report
+        // why a source is empty instead of making collection failure look like "no resources".
         var checksTask = Task.WhenAll(
             RunGuardedAsync("postgresql", CheckPostgresAsync, ct),
             RunGuardedAsync("key_vault", CheckKeyVaultAsync, ct),
@@ -265,11 +266,26 @@ public sealed class DiagnosticsService
             RunGuardedAsync("warm_pool", CheckWarmPoolAsync, ct),
             RunGuardedAsync("k8s_api", CheckK8sApiAsync, ct));
 
-        var podsTask = GetAgentPodInventoryAsync(ct);
-        var pendingTask = GetPendingCapacityRunsAsync(ct);
-        var workflowChildWorkTask = GetWorkflowChildWorkAsync(ct);
-        var warmPoolSnapshotsTask = GetWarmPoolSnapshotInventoryAsync(ct);
-        var claimsTask = GetSandboxClaimInventoryAsync(ct);
+        var podsTask = CollectInventoryAsync(
+            "agent_pods", _reaper is not null, GetAgentPodInventoryAsync,
+            (Array.Empty<AgentPodInfoDto>(), Array.Empty<AgentPodInfoDto>()),
+            value => value.Item1.Count == 0 && value.Item2.Count == 0, ct);
+        var pendingTask = CollectInventoryAsync(
+            "pending_capacity_runs", _scopeFactory is not null, GetPendingCapacityRunsAsync,
+            Array.Empty<PendingCapacityRunDto>(),
+            value => value.Count == 0, ct);
+        var workflowChildWorkTask = CollectInventoryAsync(
+            "workflow_child_work", _scopeFactory is not null, GetWorkflowChildWorkAsync,
+            Array.Empty<WorkflowChildWorkDiagnosticDto>(),
+            value => value.Count == 0, ct);
+        var warmPoolSnapshotsTask = CollectInventoryAsync(
+            "warm_pool_objects", _k8s is not null, GetWarmPoolSnapshotInventoryAsync,
+            Array.Empty<WarmPoolSnapshot>(),
+            value => value.Count == 0, ct);
+        var claimsTask = CollectInventoryAsync(
+            "sandbox_claims", _k8s is not null, GetSandboxClaimInventoryAsync,
+            Array.Empty<SandboxClaimObjectDto>(),
+            value => value.Count == 0, ct);
 
         await Task.WhenAll(
             checksTask,
@@ -280,15 +296,27 @@ public sealed class DiagnosticsService
             claimsTask).ConfigureAwait(false);
 
         var checks = await checksTask.ConfigureAwait(false);
-        var (activePods, orphanedPods) = await podsTask.ConfigureAwait(false);
-        var pending = await pendingTask.ConfigureAwait(false);
-        var workflowChildWork = await workflowChildWorkTask.ConfigureAwait(false);
-        var claims = await claimsTask.ConfigureAwait(false);
-        var warmPoolSnapshots = await warmPoolSnapshotsTask.ConfigureAwait(false);
+        var podsResult = await podsTask.ConfigureAwait(false);
+        var pendingResult = await pendingTask.ConfigureAwait(false);
+        var workflowChildWorkResult = await workflowChildWorkTask.ConfigureAwait(false);
+        var claimsResult = await claimsTask.ConfigureAwait(false);
+        var warmPoolSnapshotsResult = await warmPoolSnapshotsTask.ConfigureAwait(false);
+        var (activePods, orphanedPods) = podsResult.Value;
+        var pending = pendingResult.Value;
+        var workflowChildWork = workflowChildWorkResult.Value;
+        var claims = claimsResult.Value;
+        var warmPoolSnapshots = warmPoolSnapshotsResult.Value;
         // Warm-pool pod matching depends on the pool names just resolved above (pods are named
         // "<pool-name>-<suffix>" via the SandboxWarmPool's pod-template generateName), so this
         // must run after warmPoolSnapshotsTask rather than concurrently with it.
-        var warmPoolPods = await GetWarmPoolPodInventoryAsync(warmPoolSnapshots, ct).ConfigureAwait(false);
+        var warmPoolPodsResult = await CollectInventoryAsync(
+            "warm_pool_pods",
+            _k8s is not null && warmPoolSnapshotsResult.Status.Outcome is "available" or "no_resources",
+            token => GetWarmPoolPodInventoryAsync(warmPoolSnapshots, token),
+            Array.Empty<WarmPoolPodSnapshot>(),
+            value => value.Count == 0,
+            ct).ConfigureAwait(false);
+        var warmPoolPods = warmPoolPodsResult.Value;
         var runMetadata = await ResolveRunMetadataAsync(
             claims.Select(c => c.RunId)
                 .Concat(activePods.Select(p => p.RunId))
@@ -302,9 +330,20 @@ public sealed class DiagnosticsService
             runMetadata);
         var active = EnrichAgentPods(activePods, warmPoolPods, runMetadata, orphaned: false);
         var orphaned = EnrichAgentPods(orphanedPods, warmPoolPods, runMetadata, orphaned: true);
+        var inventorySources = new[]
+        {
+            podsResult.Status,
+            pendingResult.Status,
+            workflowChildWorkResult.Status,
+            warmPoolSnapshotsResult.Status,
+            warmPoolPodsResult.Status,
+            claimsResult.Status,
+        };
+        var incompleteInventory = inventorySources.Any(source => !source.Complete);
         var clusterStatus = checks.Any(c => c.Status is "critical" or "degraded")
             ? "critical"
             : checks.Any(c => c.Status == "warning") ? "warning"
+            : incompleteInventory ? "unknown"
             : checks.Length > 0 && checks.All(c => c.Status == "healthy") ? "healthy"
             : "unknown";
         var clusterReason = checks.FirstOrDefault(c => c.Status is "critical" or "degraded" or "warning");
@@ -317,6 +356,7 @@ public sealed class DiagnosticsService
             GeneratedUtc        = generatedUtc,
             TotalDurationMs     = overallSw.Elapsed.TotalMilliseconds,
             Checks              = checks,
+            InventorySources    = inventorySources,
             ActiveAgentPods     = active,
             OrphanedAgentPods   = orphaned,
             PendingCapacityRuns = pending,
@@ -329,8 +369,12 @@ public sealed class DiagnosticsService
                 ResourceType = "cluster",
                 Status = clusterStatus,
                 Summary = $"{checks.Count(c => c.Status == "healthy")} of {checks.Length} checks healthy",
-                AttentionRequired = clusterStatus is "critical" or "warning",
-                Reason = clusterReason is null ? null : $"{clusterReason.Name} is {clusterReason.Status}",
+                AttentionRequired = clusterStatus is "critical" or "warning" or "unknown",
+                Reason = clusterReason is not null
+                    ? $"{clusterReason.Name} is {clusterReason.Status}"
+                    : incompleteInventory
+                        ? "One or more inventories are unavailable or incomplete"
+                        : null,
                 CreatedUtc = ProcessStartUtc,
                 Capacity = new TopologyResourceCapacityDto
                 {
@@ -346,19 +390,95 @@ public sealed class DiagnosticsService
         };
     }
 
+    private static async Task<InventoryCollectionResult<T>> CollectInventoryAsync<T>(
+        string name,
+        bool supported,
+        Func<CancellationToken, Task<T>> collect,
+        T emptyValue,
+        Func<T, bool> isEmpty,
+        CancellationToken ct)
+    {
+        var observedAt = DateTimeOffset.UtcNow;
+        if (!supported)
+        {
+            return new(
+                emptyValue,
+                new InventoryCollectionStatusDto
+                {
+                    Name = name,
+                    Outcome = "unsupported",
+                    Complete = false,
+                    ObservedAt = observedAt,
+                    Detail = "This inventory source is not supported in the current environment.",
+                });
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(DetailedCheckTimeout);
+        try
+        {
+            var value = await collect(timeout.Token).ConfigureAwait(false);
+            var empty = isEmpty(value);
+            return new(
+                value,
+                new InventoryCollectionStatusDto
+                {
+                    Name = name,
+                    Outcome = empty ? "no_resources" : "available",
+                    Complete = true,
+                    ObservedAt = observedAt,
+                    Detail = empty
+                        ? "Collection completed and found no resources."
+                        : "Collection completed.",
+                });
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            return Failure("timeout", "Collection exceeded the bounded timeout.");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (k8s.Autorest.HttpOperationException ex)
+            when (ex.Response?.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            return Failure("forbidden", "The runtime identity is not authorized to list this inventory.");
+        }
+        catch (k8s.Autorest.HttpOperationException ex)
+            when (ex.Response?.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return Failure("unsupported", "The inventory API or resource type is not installed.");
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return Failure("malformed", "The inventory source returned malformed evidence.");
+        }
+        catch
+        {
+            return Failure("collection_error", "Inventory collection failed.");
+        }
+
+        InventoryCollectionResult<T> Failure(string outcome, string detail) =>
+            new(
+                emptyValue,
+                new InventoryCollectionStatusDto
+                {
+                    Name = name,
+                    Outcome = outcome,
+                    Complete = false,
+                    ObservedAt = observedAt,
+                    Detail = detail,
+                });
+    }
+
     /// <summary>
-    /// Splits the reaper's agent-host claim inventory into active vs orphaned pods. Best-effort:
-    /// returns empty lists outside Kubernetes or on any failure (diagnostics must never throw).
+    /// Splits the reaper's agent-host claim inventory into active vs orphaned pods.
     /// </summary>
     private async Task<(IReadOnlyList<AgentPodInfoDto> Active, IReadOnlyList<AgentPodInfoDto> Orphaned)>
         GetAgentPodInventoryAsync(CancellationToken ct)
     {
-        if (_reaper is null)
-            return (Array.Empty<AgentPodInfoDto>(), Array.Empty<AgentPodInfoDto>());
-
-        try
-        {
-            var inventory = await _reaper.GetClaimInventoryAsync(ct).ConfigureAwait(false);
+        var inventory = await _reaper!.GetClaimInventoryAsync(ct).ConfigureAwait(false);
             var now = DateTimeOffset.UtcNow;
 
             var active = new List<AgentPodInfoDto>();
@@ -375,16 +495,7 @@ public sealed class DiagnosticsService
                 };
                 (c.Orphaned ? orphaned : active).Add(dto);
             }
-            return (active, orphaned);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            return (Array.Empty<AgentPodInfoDto>(), Array.Empty<AgentPodInfoDto>());
-        }
+        return (active, orphaned);
     }
 
     /// <summary>
@@ -393,9 +504,7 @@ public sealed class DiagnosticsService
     /// </summary>
     private async Task<IReadOnlyList<PendingCapacityRunDto>> GetPendingCapacityRunsAsync(CancellationToken ct)
     {
-        try
-        {
-            using var scope = _scopeFactory.CreateScope();
+        using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             var now = DateTimeOffset.UtcNow;
 
@@ -405,7 +514,7 @@ public sealed class DiagnosticsService
                 .ToListAsync(ct)
                 .ConfigureAwait(false);
 
-            return rows.Select(s => new PendingCapacityRunDto
+        return rows.Select(s => new PendingCapacityRunDto
             {
                 SubtaskId  = s.Id,
                 WorkPlanId = s.WorkPlanId,
@@ -414,24 +523,11 @@ public sealed class DiagnosticsService
                 Reason     = s.RecoveryGuidance,
                 AgeSeconds = (now - s.UpdatedAt).TotalSeconds,
             }).ToList();
-        }
-
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            return Array.Empty<PendingCapacityRunDto>();
-        }
     }
 
     private async Task<IReadOnlyList<WorkflowChildWorkDiagnosticDto>> GetWorkflowChildWorkAsync(
         CancellationToken ct)
     {
-        if (_scopeFactory is null)
-            return [];
-
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var plans = await db.WorkPlans.AsNoTracking()
@@ -686,12 +782,8 @@ public sealed class DiagnosticsService
     /// </summary>
     private async Task<IReadOnlyList<WarmPoolSnapshot>> GetWarmPoolSnapshotInventoryAsync(CancellationToken ct)
     {
-        if (_k8s is null) return Array.Empty<WarmPoolSnapshot>();
-
         var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
-        try
-        {
-            var list = await _k8s.CustomObjects.ListNamespacedCustomObjectAsync(
+        var list = await _k8s!.CustomObjects.ListNamespacedCustomObjectAsync(
                 SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
                 ns, "sandboxwarmpools", cancellationToken: ct).ConfigureAwait(false);
 
@@ -733,10 +825,7 @@ public sealed class DiagnosticsService
                     age,
                     createdUtc));
             }
-            return result;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { return Array.Empty<WarmPoolSnapshot>(); }
+        return result;
     }
 
     /// <summary>
@@ -750,17 +839,13 @@ public sealed class DiagnosticsService
     private async Task<IReadOnlyList<WarmPoolPodSnapshot>> GetWarmPoolPodInventoryAsync(
         IReadOnlyList<WarmPoolSnapshot> pools, CancellationToken ct)
     {
-        if (_k8s is null) return Array.Empty<WarmPoolPodSnapshot>();
-
         var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
         var poolPrefixes = pools
             .Where(p => !string.IsNullOrWhiteSpace(p.Name))
             .Select(p => p.Name + "-")
             .OrderByDescending(p => p.Length)
             .ToList();
-        try
-        {
-            var list = await _k8s.CoreV1.ListNamespacedPodAsync(ns, cancellationToken: ct).ConfigureAwait(false);
+        var list = await _k8s!.CoreV1.ListNamespacedPodAsync(ns, cancellationToken: ct).ConfigureAwait(false);
             var now = DateTimeOffset.UtcNow;
             var result = new List<WarmPoolPodSnapshot>();
 
@@ -795,10 +880,7 @@ public sealed class DiagnosticsService
                     image,
                     pod.Spec?.RuntimeClassName));
             }
-            return result;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { return Array.Empty<WarmPoolPodSnapshot>(); }
+        return result;
     }
 
     private static bool IsPodReady(k8s.Models.V1Pod pod)
@@ -957,12 +1039,8 @@ public sealed class DiagnosticsService
     /// </summary>
     private async Task<IReadOnlyList<SandboxClaimObjectDto>> GetSandboxClaimInventoryAsync(CancellationToken ct)
     {
-        if (_k8s is null) return Array.Empty<SandboxClaimObjectDto>();
-
         var ns = _configuration["Sandbox:Kubernetes:Namespace"] ?? "agentweaver";
-        try
-        {
-            var list = await _k8s.CustomObjects.ListNamespacedCustomObjectAsync(
+        var list = await _k8s!.CustomObjects.ListNamespacedCustomObjectAsync(
                 SandboxClaimConventions.ApiGroup, SandboxClaimConventions.ApiVersion,
                 ns, SandboxClaimConventions.ClaimPlural, cancellationToken: ct).ConfigureAwait(false);
 
@@ -1063,10 +1141,7 @@ public sealed class DiagnosticsService
                     },
                 });
             }
-            return result;
-        }
-        catch (OperationCanceledException) { throw; }
-        catch { return Array.Empty<SandboxClaimObjectDto>(); }
+        return result;
     }
 
     /// <summary>Kubernetes API reachability: lists pods (capped) with the per-check timeout.
@@ -1896,4 +1971,8 @@ public sealed class DiagnosticsService
         string? AgentName,
         DateTimeOffset? StartedAt,
         DateTimeOffset? EndedAt);
+
+    private sealed record InventoryCollectionResult<T>(
+        T Value,
+        InventoryCollectionStatusDto Status);
 }

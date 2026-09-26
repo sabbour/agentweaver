@@ -1111,6 +1111,8 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();
 builder.Services.AddScoped<Agentweaver.Api.Execution.ExecutionIdentityReader>();
+builder.Services.AddScoped<RunTerminalDiagnosticReader>();
+builder.Services.AddScoped<RunFailureExplanationService>();
 builder.Services.AddScoped<IScribeExportOperation, ScribeExportOperation>();
 builder.Services.AddScoped<ScribeHousekeepingService>();
 builder.Services.AddScoped<ScribeFinalizationService>();
