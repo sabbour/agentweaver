@@ -100,6 +100,138 @@ internal static partial class ConservativeWorkflowFanPolicy
         return true;
     }
 
+    public static bool TryPromoteSequentialRequiredFan(
+        WorkflowDefinition workflow,
+        IReadOnlyList<string> requiredOutputPaths,
+        out WorkflowDefinition promoted)
+    {
+        promoted = workflow;
+        if (requiredOutputPaths.Count < 2 ||
+            workflow.Nodes.Any(node => node.Type is WorkflowNodeType.FanOut or WorkflowNodeType.FanIn))
+        {
+            return false;
+        }
+
+        var branches = new List<WorkflowNode>(requiredOutputPaths.Count);
+        foreach (var requiredPath in requiredOutputPaths)
+        {
+            var matches = workflow.Nodes
+                .Where(node =>
+                    node.Type == WorkflowNodeType.Prompt &&
+                    node.DeclaredOutputPaths.Contains(requiredPath, StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            if (matches.Length != 1 || branches.Contains(matches[0]))
+                return false;
+            branches.Add(matches[0]);
+        }
+
+        var branchIds = branches.Select(node => node.Id).ToHashSet(StringComparer.Ordinal);
+        var declaredPaths = branches
+            .SelectMany(node => node.DeclaredOutputPaths)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (declaredPaths.Count != requiredOutputPaths.Count ||
+            requiredOutputPaths.Any(path => !declaredPaths.Contains(path)))
+        {
+            return false;
+        }
+        if (!CanReach(workflow, workflow.Start, branches[0].Id))
+            return false;
+
+        for (var i = 0; i < branches.Count - 1; i++)
+        {
+            if (!workflow.Edges.Any(edge =>
+                    string.Equals(edge.From, branches[i].Id, StringComparison.Ordinal) &&
+                    string.Equals(edge.To, branches[i + 1].Id, StringComparison.Ordinal) &&
+                    string.IsNullOrWhiteSpace(edge.When)))
+            {
+                return false;
+            }
+        }
+
+        var firstIncoming = workflow.Edges
+            .Where(edge => string.Equals(edge.To, branches[0].Id, StringComparison.Ordinal))
+            .ToArray();
+        var lastOutgoing = workflow.Edges
+            .Where(edge => string.Equals(edge.From, branches[^1].Id, StringComparison.Ordinal))
+            .ToArray();
+        if ((string.Equals(workflow.Start, branches[0].Id, StringComparison.Ordinal)
+                ? firstIncoming.Length != 0
+                : firstIncoming.Length != 1 || !string.IsNullOrWhiteSpace(firstIncoming[0].When)) ||
+            lastOutgoing.Length != 1 ||
+            !string.IsNullOrWhiteSpace(lastOutgoing[0].When) ||
+            branchIds.Contains(lastOutgoing[0].To))
+        {
+            return false;
+        }
+        if (branches.Any(branch => CanReach(workflow, lastOutgoing[0].To, branch.Id)))
+            return false;
+
+        foreach (var branch in branches)
+        {
+            var incoming = workflow.Edges
+                .Where(edge => string.Equals(edge.To, branch.Id, StringComparison.Ordinal))
+                .ToArray();
+            var outgoing = workflow.Edges
+                .Where(edge => string.Equals(edge.From, branch.Id, StringComparison.Ordinal))
+                .ToArray();
+            var expectedIncoming = ReferenceEquals(branch, branches[0]) ? firstIncoming.Length : 1;
+            if (incoming.Length != expectedIncoming || outgoing.Length != 1)
+                return false;
+        }
+
+        var fanOutId = UniqueNodeId(workflow, "generated-fan-out");
+        var fanInId = UniqueNodeId(workflow, "generated-fan-in");
+        var fanOut = new WorkflowNode
+        {
+            Id = fanOutId,
+            Type = WorkflowNodeType.FanOut,
+            Label = "Parallel work",
+        };
+        var fanIn = new WorkflowNode
+        {
+            Id = fanInId,
+            Type = WorkflowNodeType.FanIn,
+            Label = "Join parallel work",
+            Target = fanOutId,
+        };
+        var replacedEdges = workflow.Edges
+            .Where(edge => !branchIds.Contains(edge.From) && !branchIds.Contains(edge.To))
+            .ToList();
+        if (firstIncoming.Length == 1)
+        {
+            replacedEdges.Add(new WorkflowEdge
+            {
+                From = firstIncoming[0].From,
+                To = fanOutId,
+            });
+        }
+        foreach (var branch in branches)
+        {
+            replacedEdges.Add(new WorkflowEdge { From = fanOutId, To = branch.Id });
+            replacedEdges.Add(new WorkflowEdge { From = branch.Id, To = fanInId });
+        }
+        replacedEdges.Add(new WorkflowEdge { From = fanInId, To = lastOutgoing[0].To });
+
+        var nodes = workflow.Nodes
+            .Select(node => branchIds.Contains(node.Id) ? node with { Independent = true } : node)
+            .ToList();
+        var firstIndex = nodes.FindIndex(node =>
+            string.Equals(node.Id, branches[0].Id, StringComparison.Ordinal));
+        var lastIndex = nodes.FindIndex(node =>
+            string.Equals(node.Id, branches[^1].Id, StringComparison.Ordinal));
+        nodes.Insert(firstIndex, fanOut);
+        nodes.Insert(lastIndex + 2, fanIn);
+        promoted = workflow with
+        {
+            Start = string.Equals(workflow.Start, branches[0].Id, StringComparison.Ordinal)
+                ? fanOutId
+                : workflow.Start,
+            Nodes = nodes,
+            Edges = replacedEdges,
+        };
+        return true;
+    }
+
     public static bool TryApply(
         WorkflowDefinition workflow,
         out ConservativeWorkflowFanResult result,
@@ -417,6 +549,35 @@ internal static partial class ConservativeWorkflowFanPolicy
         string.Equals(left, right, StringComparison.OrdinalIgnoreCase) ||
         left.StartsWith(right + "/", StringComparison.OrdinalIgnoreCase) ||
         right.StartsWith(left + "/", StringComparison.OrdinalIgnoreCase);
+
+    private static string UniqueNodeId(WorkflowDefinition workflow, string prefix)
+    {
+        var id = prefix;
+        var suffix = 2;
+        while (workflow.Nodes.Any(node => string.Equals(node.Id, id, StringComparison.Ordinal)))
+            id = $"{prefix}-{suffix++}";
+        return id;
+    }
+
+    private static bool CanReach(WorkflowDefinition workflow, string start, string target)
+    {
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Queue<string>([start]);
+        while (pending.TryDequeue(out var current))
+        {
+            if (!visited.Add(current))
+                continue;
+            if (string.Equals(current, target, StringComparison.Ordinal))
+                return true;
+            foreach (var edge in workflow.Edges.Where(edge =>
+                         string.Equals(edge.From, current, StringComparison.Ordinal)))
+            {
+                pending.Enqueue(edge.To);
+            }
+        }
+
+        return false;
+    }
 
     private static bool ReferencesSiblingBranch(WorkflowNode branch, WorkflowNode sibling)
     {

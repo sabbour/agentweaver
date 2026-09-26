@@ -392,8 +392,10 @@ prefix checks. Missing, dynamic, broad, shared, or overlapping scopes stay seque
 The supported starting point is independent research, analysis, and documentation with exact
 disjoint output files. When a request explicitly says the tasks run independently and gives at least
 two disjoint `write only <path>` content contracts, Agentweaver uses its single correction pass if the
-first model draft omits the requested fan. The corrected graph must still pass every branch-level
-safety check and cover the exact requested output paths. Ambiguous, negated, dependency-bearing,
+first model draft omits the requested fan. A sequential draft can be promoted without another model
+call only when the requested prompt nodes already form one contiguous unconditional chain and declare
+exactly those output files; the promoted graph must then pass every branch-level safety check.
+Otherwise the correction pass must return a valid fan covering the requested paths. Ambiguous, negated, dependency-bearing,
 unknown-scope, overlapping, or code-writing requests remain sequential; Agentweaver does not claim
 generic implementation or refactoring is safe to parallelize. If a model returns a structurally valid
 but insufficiently proven non-dependent fan, the server deterministically keeps branch declaration

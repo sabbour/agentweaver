@@ -556,10 +556,14 @@ public sealed class WorkflowGeneratorTests
             type: prompt
             label: Customer Research
             prompt: "Research customer signals and write only reports/customer-signals.md."
+            declared_output_paths:
+              - reports/customer-signals.md
           - id: technical-research
             type: prompt
             label: Technical Research
             prompt: "Research technical feasibility and write only reports/technical-feasibility.md."
+            declared_output_paths:
+              - reports/technical-feasibility.md
           - id: synthesis
             type: prompt
             label: Synthesis
@@ -745,9 +749,9 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
-    public async Task ExplicitIndependentDisjointContentRequest_CorrectsSequentialDraftToFan()
+    public async Task ExplicitIndependentDisjointContentRequest_PromotesProvenSequentialDraftToFan()
     {
-        var runner = new ScriptedAgentRunner(SequentialResearchYaml, SafeResearchFanYaml);
+        var runner = new ScriptedAgentRunner(SequentialResearchYaml);
         var generator = CreateGenerator(runner);
 
         var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
@@ -761,9 +765,13 @@ public sealed class WorkflowGeneratorTests
         result.Workflow.Nodes.Should().ContainSingle(node => node.Type == WorkflowNodeType.FanOut);
         result.Workflow.Nodes.Should().ContainSingle(node => node.Type == WorkflowNodeType.FanIn);
         RunWorkflowGraphBinder.GetBindabilityErrors(result.Workflow).Should().BeEmpty();
-        runner.CallCount.Should().Be(2);
-        runner.LastTask.Should().Contain(
-            "Generate one policy-valid fan_out/fan_in region whose branches write only:");
+        result.Workflow.Edges.Should().Contain(edge =>
+            edge.From == "generated-fan-out" && edge.To == "customer-research");
+        result.Workflow.Edges.Should().Contain(edge =>
+            edge.From == "generated-fan-out" && edge.To == "technical-research");
+        result.Workflow.Edges.Should().Contain(edge =>
+            edge.From == "generated-fan-in" && edge.To == "synthesis");
+        runner.CallCount.Should().Be(1);
     }
 
     [Fact]
@@ -822,6 +830,68 @@ public sealed class WorkflowGeneratorTests
             .Should().BeEquivalentTo(
                 "reports/customer-signals.md",
                 "reports/technical-feasibility.md");
+        runner.CallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ExplicitIndependentRequest_DoesNotPromoteNonContiguousPromptTasks()
+    {
+        var nonContiguous = SequentialResearchYaml.ReplaceLineEndings("\n").Replace(
+            "  - from: customer-research\n    to: technical-research",
+            "  - from: customer-research\n    to: synthesis",
+            StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(nonContiguous, SafeResearchFanYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research two topics independently. " +
+            "Write only reports/customer-signals.md for customer evidence. " +
+            "Write only reports/technical-feasibility.md for technical evidence.",
+            ContentOnly: true));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Nodes.Should().Contain(node => node.Type == WorkflowNodeType.FanOut);
+        runner.CallCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ExplicitIndependentRequest_DoesNotAcceptStandaloneIndependentFlags()
+    {
+        var sequentialIndependent = SequentialResearchYaml
+            .Replace(
+                "    declared_output_paths:",
+                "    independent: true\n    declared_output_paths:",
+                StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(sequentialIndependent, SafeResearchFanYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research two topics independently. " +
+            "Write only reports/customer-signals.md for customer evidence. " +
+            "Write only reports/technical-feasibility.md for technical evidence.",
+            ContentOnly: true));
+
+        result.Workflow.Nodes.Should().Contain(node => node.Type == WorkflowNodeType.FanOut);
+        runner.CallCount.Should().Be(1, "the proven sequential chain is promoted instead of accepted as-is");
+    }
+
+    [Fact]
+    public async Task UnsafePromotedFan_UsesCorrectionPassInsteadOfReturningSequential()
+    {
+        var unsafeSequential = SequentialResearchYaml.Replace(
+            "Research customer signals and write only reports/customer-signals.md.",
+            "Implement customer research code and write only reports/customer-signals.md.",
+            StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(unsafeSequential, SafeResearchFanYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research two topics independently. " +
+            "Write only reports/customer-signals.md for customer evidence. " +
+            "Write only reports/technical-feasibility.md for technical evidence.",
+            ContentOnly: true));
+
+        result.Workflow.Nodes.Should().Contain(node => node.Type == WorkflowNodeType.FanOut);
         runner.CallCount.Should().Be(2);
     }
 
