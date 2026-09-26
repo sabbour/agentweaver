@@ -135,6 +135,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     INNER JOIN pg_class AS target_table
                         ON target_table.oid = constraint_record.confrelid
                     WHERE constraint_record.contype = 'f'
+                      AND constraint_record.connamespace = current_schema()::regnamespace
                       AND source_table.relname = 'automation_activations'
                       AND target_table.relname = 'github_repository_grants'
                     LIMIT 1;
@@ -159,6 +160,7 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     INNER JOIN pg_class AS source_table
                         ON source_table.oid = constraint_record.conrelid
                     WHERE constraint_record.contype = 'p'
+                      AND constraint_record.connamespace = current_schema()::regnamespace
                       AND source_table.relname = 'github_repository_grants'
                     LIMIT 1;
 
