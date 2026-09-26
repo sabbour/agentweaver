@@ -294,6 +294,50 @@ public sealed class GitReferenceTransactionTests : IDisposable
     }
 
     [Fact]
+    public void PreparedMerge_WorktreeAppearsAfterPreparation_ParksWithoutMovingRef()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-worktree-race", 1).Intent!;
+        intent.CheckedOutState.Should().BeNull();
+        var linkedPath = AddLinkedWorktree(repoPath, "main");
+
+        var result = manager.ApplyPreparedMerge(repoPath, intent);
+
+        result.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.Unknown);
+        result.Reason.Should().Be("checked_out_worktree_appeared_after_prepare");
+        Resolve(repoPath, intent.TargetRef).Should().Be(oldOid);
+        Resolve(linkedPath, "HEAD").Should().Be(oldOid);
+    }
+
+    [Fact]
+    public void PreparedMerge_WorktreeAppearsAfterRefUpdate_RecoveryParksUnknown()
+    {
+        var repoPath = CreateRepository();
+        var oldOid = Resolve(repoPath, "refs/heads/main");
+        var sourceOid = CreateCommit(repoPath, oldOid, "source.txt", "source");
+        CreateBranch(repoPath, "integration", sourceOid);
+        var manager = CreateManager();
+        var intent = manager.PrepareMerge(
+            repoPath, "main", "integration", ResolveTree(repoPath, sourceOid), "effect-worktree-crash", 1).Intent!;
+        intent.CheckedOutState.Should().BeNull();
+        GitReferenceTransaction.CompareExchange(
+                repoPath, intent.TargetRef, intent.IntendedCommit, intent.ExpectedTargetCommit)
+            .Kind.Should().Be(GitReferenceUpdateKind.Applied);
+        var linkedPath = AddLinkedWorktree(repoPath, "main");
+
+        var result = manager.InspectPreparedMerge(repoPath, intent);
+
+        result.Outcome.Should().Be(ApplyPreparedGitMergeOutcome.Unknown);
+        result.Reason.Should().Be("checked_out_convergence_unknown");
+        Resolve(linkedPath, "HEAD").Should().Be(intent.IntendedCommit);
+    }
+
+    [Fact]
     public async Task PreparedMerge_ConcurrentRecoverers_OneAppliesAndOneObservesApplied()
     {
         var repoPath = CreateRepository();

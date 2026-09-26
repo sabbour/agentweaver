@@ -2088,6 +2088,21 @@ public sealed class WorktreeManager
         if (inspected.Outcome != ApplyPreparedGitMergeOutcome.NotApplied)
             return inspected;
 
+        if (intent.CheckedOutState is null)
+        {
+            var checkout = GitReferenceTransaction.VerifyNotCheckedOut(
+                repositoryPath,
+                intent.TargetRef);
+            if (checkout.Kind != GitCheckoutConvergenceKind.NotCheckedOut)
+            {
+                return new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    intent.ExpectedTargetCommit,
+                    "checked_out_worktree_appeared_after_prepare",
+                    checkout.Error ?? checkout.Kind.ToString());
+            }
+        }
+
         var update = GitReferenceTransaction.CompareExchange(
             repositoryPath,
             intent.TargetRef,
@@ -2096,10 +2111,12 @@ public sealed class WorktreeManager
         if (update.Kind != GitReferenceUpdateKind.Applied)
             return InspectPreparedMerge(repositoryPath, intent);
 
-        var convergence = GitReferenceTransaction.ConvergeCheckedOut(
-            repositoryPath,
-            ToCheckoutPreState(intent.CheckedOutState),
-            intent.IntendedCommit);
+        var convergence = intent.CheckedOutState is null
+            ? GitReferenceTransaction.VerifyNotCheckedOut(repositoryPath, intent.TargetRef)
+            : GitReferenceTransaction.ConvergeCheckedOut(
+                repositoryPath,
+                ToCheckoutPreState(intent.CheckedOutState),
+                intent.IntendedCommit);
         if (convergence.Kind is not (GitCheckoutConvergenceKind.Converged
             or GitCheckoutConvergenceKind.NotCheckedOut))
         {
@@ -2189,6 +2206,23 @@ public sealed class WorktreeManager
         string currentTarget,
         bool exactIntended)
     {
+        if (intent.CheckedOutState is null)
+        {
+            var absent = GitReferenceTransaction.VerifyNotCheckedOut(
+                repositoryPath,
+                intent.TargetRef);
+            return absent.Kind == GitCheckoutConvergenceKind.NotCheckedOut
+                ? new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.RecoveredApplied,
+                    currentTarget,
+                    CheckoutOutcome: absent.Kind.ToString())
+                : new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    currentTarget,
+                    "checked_out_convergence_unknown",
+                    absent.Error ?? absent.Kind.ToString());
+        }
+
         var preState = ToCheckoutPreState(intent.CheckedOutState);
         var checkout = GitReferenceTransaction.VerifyCheckedOut(
             repositoryPath,

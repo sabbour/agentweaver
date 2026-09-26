@@ -174,6 +174,18 @@ internal static class GitReferenceTransaction
             indexTree.Stdout.Trim());
     }
 
+    internal static GitCheckoutConvergenceResult VerifyNotCheckedOut(
+        string repositoryPath,
+        string fullRef)
+    {
+        var worktree = FindCheckedOutWorktree(repositoryPath, fullRef, out var error);
+        return worktree is null && error is null
+            ? new GitCheckoutConvergenceResult(GitCheckoutConvergenceKind.NotCheckedOut)
+            : new GitCheckoutConvergenceResult(
+                GitCheckoutConvergenceKind.PreStateMismatch,
+                error ?? "checked_out_worktree_appeared");
+    }
+
     internal static GitCheckoutConvergenceResult ConvergeCheckedOut(
         string repositoryPath,
         GitCheckoutPreState? preState,
