@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Agentweaver.Api.Migrations
 {
     [DbContext(typeof(MemoryDbContext))]
-    partial class MemoryDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260926182128_AddChildCancellationProvenance")]
+    partial class AddChildCancellationProvenance
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.10");
@@ -2527,33 +2530,6 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("IsolationSummary")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset?>("MergeAppliedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MergeEffectId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MergeEffectState")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MergeEvidenceJson")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MergeIntentJson")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int?>("MergeLifecycleGeneration")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTimeOffset?>("MergeObservedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset?>("MergePreparedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MergeRecoveryAction")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("OutcomeSpecId")

@@ -125,7 +125,7 @@ internal interface IWorkflowChildWorkRuntime
         string parentWorkflowNodeId,
         string childCoordinatorRunId,
         CancellationToken ct);
-    Task CancelRunAsync(DomainRun run, CancellationToken ct);
+    Task CancelRunAsync(DomainRun run, string requestedByRunId, CancellationToken ct);
 }
 
 internal sealed class WorkflowChildWorkRuntime(
@@ -213,7 +213,7 @@ internal sealed class WorkflowChildWorkRuntime(
         entry.RecordNext(EventTypes.WorkflowGraph, descriptor with { Nodes = nodes });
     }
 
-    public Task CancelRunAsync(DomainRun run, CancellationToken ct) =>
+    public Task CancelRunAsync(DomainRun run, string requestedByRunId, CancellationToken ct) =>
         EndpointHelpers.CancelRunWorkAsync(
             run,
             runStore,
@@ -227,7 +227,7 @@ internal sealed class WorkflowChildWorkRuntime(
             services.GetService<IRunEventStream>(),
             terminalOutcomeProjector,
             reason: "parent_cancelled",
-            requestedByRunId: run.ParentRunId);
+            requestedByRunId: requestedByRunId);
 }
 
 /// <summary>
@@ -1054,10 +1054,42 @@ internal sealed class WorkflowChildWorkService
         var now = DateTimeOffset.UtcNow;
         var staleBefore = now - DeliveryClaimStaleAfter;
         var isTopLevelPlan = plan.ParentRunId is null;
+        var requestedByRunId = plan.ParentRunId ?? plan.CoordinatorRunId;
+        DomainRun? activeCoordinator = null;
+        if (!isTopLevelPlan
+            && RunId.TryParse(plan.CoordinatorRunId, out var coordinatorRunId)
+            && await _runStore.GetAsync(coordinatorRunId, ct).ConfigureAwait(false) is { } coordinator
+            && !TerminalRunOutcome.IsTerminal(coordinator.Status))
+        {
+            activeCoordinator = coordinator;
+        }
+
+        var activeBranchRunIds = new HashSet<string>(StringComparer.Ordinal);
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var childRunIds = await db.Subtasks.AsNoTracking()
+                .Where(subtask => subtask.WorkPlanId == plan.Id
+                    && subtask.ChildRunId != null
+                    && subtask.CancellationRequestedAt == null)
+                .Select(subtask => subtask.ChildRunId!)
+                .ToListAsync(ct).ConfigureAwait(false);
+            foreach (var childRunId in childRunIds)
+            {
+                if (RunId.TryParse(childRunId, out var parsed)
+                    && await _runStore.GetAsync(parsed, ct).ConfigureAwait(false) is { } child
+                    && !TerminalRunOutcome.IsTerminal(child.Status))
+                {
+                    activeBranchRunIds.Add(childRunId);
+                }
+            }
+        }
+
         int suppressed;
         using (var scope = _scopeFactory.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await using var transaction = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
             suppressed = await db.WorkPlans
                 .Where(candidate => candidate.Id == plan.Id
                     && (candidate.ParentResumeState == WorkflowChildWorkResumeStates.Committed
@@ -1097,6 +1129,34 @@ internal sealed class WorkflowChildWorkService
                     .SetProperty(candidate => candidate.UpdatedAt, now), ct)
                 .ConfigureAwait(false);
             }
+
+            if (activeBranchRunIds.Count > 0)
+            {
+                await db.Subtasks
+                    .Where(subtask => subtask.WorkPlanId == plan.Id
+                        && subtask.ChildRunId != null
+                        && activeBranchRunIds.Contains(subtask.ChildRunId)
+                        && subtask.CancellationRequestedAt == null)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(subtask => subtask.CancellationRequestedAt, now)
+                        .SetProperty(subtask => subtask.CancellationRequestedByRunId, requestedByRunId)
+                        .SetProperty(subtask => subtask.UpdatedAt, now), ct)
+                    .ConfigureAwait(false);
+            }
+
+            if (activeCoordinator is not null)
+            {
+                await db.WorkPlans
+                    .Where(candidate => candidate.Id == plan.Id
+                        && candidate.CoordinatorCancellationRequestedAt == null)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(candidate => candidate.CoordinatorCancellationRequestedAt, now)
+                        .SetProperty(candidate => candidate.CoordinatorCancellationRequestedByRunId, requestedByRunId)
+                        .SetProperty(candidate => candidate.UpdatedAt, now), ct)
+                    .ConfigureAwait(false);
+            }
+
+            await transaction.CommitAsync(ct).ConfigureAwait(false);
         }
 
         if (suppressed == 1
@@ -1109,34 +1169,45 @@ internal sealed class WorkflowChildWorkService
                 ct).ConfigureAwait(false);
         }
 
-        var runs = new List<DomainRun>();
-        if (!isTopLevelPlan
-            && RunId.TryParse(plan.CoordinatorRunId, out var childCoordinatorId)
-            && await _runStore.GetAsync(childCoordinatorId, ct).ConfigureAwait(false) is { } coordinator)
-            runs.Add(coordinator);
-        runs.AddRange(await _runStore.GetRunsByParentAsync(plan.CoordinatorRunId, ct).ConfigureAwait(false));
-
+        var runs = new List<(DomainRun Run, string RequestedByRunId)>();
         using (var scope = _scopeFactory.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-            var reservedChildRunIds = await db.Subtasks.AsNoTracking()
-                .Where(subtask => subtask.WorkPlanId == plan.Id && subtask.ChildRunId != null)
-                .Select(subtask => subtask.ChildRunId!)
-                .ToListAsync(ct).ConfigureAwait(false);
-            foreach (var reservedChildRunId in reservedChildRunIds)
+            var cancellationPlan = await db.WorkPlans.AsNoTracking()
+                .SingleAsync(candidate => candidate.Id == plan.Id, ct)
+                .ConfigureAwait(false);
+            if (cancellationPlan.CoordinatorCancellationRequestedAt is not null
+                && cancellationPlan.CoordinatorCancellationRequestedByRunId is not null
+                && RunId.TryParse(cancellationPlan.CoordinatorRunId, out var childCoordinatorId)
+                && await _runStore.GetAsync(childCoordinatorId, ct).ConfigureAwait(false) is { } persistedCoordinator)
             {
-                if (RunId.TryParse(reservedChildRunId, out var childRunId)
+                runs.Add((persistedCoordinator, cancellationPlan.CoordinatorCancellationRequestedByRunId));
+            }
+
+            var reservedChildRunIds = await db.Subtasks.AsNoTracking()
+                .Where(subtask => subtask.WorkPlanId == plan.Id
+                    && subtask.ChildRunId != null
+                    && subtask.CancellationRequestedAt != null
+                    && subtask.CancellationRequestedByRunId != null)
+                .Select(subtask => new
+                {
+                    ChildRunId = subtask.ChildRunId!,
+                    RequestedByRunId = subtask.CancellationRequestedByRunId!,
+                })
+                .ToListAsync(ct).ConfigureAwait(false);
+            foreach (var reservedChild in reservedChildRunIds)
+            {
+                if (RunId.TryParse(reservedChild.ChildRunId, out var childRunId)
                     && await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false) is { } child)
-                    runs.Add(child);
+                    runs.Add((child, reservedChild.RequestedByRunId));
             }
         }
 
         foreach (var run in runs
-            .Where(run => !TerminalRunOutcome.IsTerminal(run.Status))
-            .GroupBy(run => run.Id)
+            .GroupBy(candidate => candidate.Run.Id)
             .Select(group => group.First()))
         {
-            await _runtime.CancelRunAsync(run, ct).ConfigureAwait(false);
+            await _runtime.CancelRunAsync(run.Run, run.RequestedByRunId, ct).ConfigureAwait(false);
         }
     }
 

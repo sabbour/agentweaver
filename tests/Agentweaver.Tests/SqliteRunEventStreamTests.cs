@@ -133,6 +133,27 @@ public sealed class SqliteRunEventStreamTests : IDisposable
     }
 
     [Fact]
+    public async Task AppendIdentifiedAsync_AcrossRestart_PersistsOneLogicalEvent()
+    {
+        const string runId = "run-parent-cancellation";
+        const string eventIdentity = "parent-cancelled:0:parent-run";
+        var producer = new SqliteRunEventStream(_config);
+        var first = await producer.AppendIdentifiedAsync(
+            runId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.RunCancelled, new { reason = "parent_cancelled", requested = true }));
+
+        var afterRestart = new SqliteRunEventStream(_config);
+        var duplicate = await afterRestart.AppendIdentifiedAsync(
+            runId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.RunCancelled, new { reason = "parent_cancelled", requested = true }));
+
+        duplicate.Sequence.Should().Be(first.Sequence);
+        (await afterRestart.GetPersistedEventsAsync(runId)).Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task AppendWorkflowChildWorkReadyAsync_SuppressedPlan_DoesNotPersistEvent()
     {
         const string runId = "run-suppressed-ready";

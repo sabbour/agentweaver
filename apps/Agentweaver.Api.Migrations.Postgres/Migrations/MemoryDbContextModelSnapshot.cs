@@ -3266,6 +3266,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTimeOffset?>("CancellationRequestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CancellationRequestedByRunId")
+                        .HasColumnType("text");
+
                     b.Property<string>("ChildRunId")
                         .HasColumnType("text");
 
@@ -3558,6 +3564,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("AssemblyTerminalStage")
+                        .HasColumnType("text");
+
+                    b.Property<DateTimeOffset?>("CoordinatorCancellationRequestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CoordinatorCancellationRequestedByRunId")
                         .HasColumnType("text");
 
                     b.Property<string>("CoordinatorPodId")
