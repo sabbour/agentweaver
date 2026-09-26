@@ -15,11 +15,54 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  analyzeConservativeFan,
   isReservedRole,
   findReservedRoleLeaks,
   validateWorkflowYaml,
   workflowNodeRoles,
 } from '../lib/generation-checks.mjs';
+
+const SAFE_FAN_YAML = `
+id: generated-research
+name: Generated research
+start: fan
+nodes:
+  - id: fan
+    type: fan_out
+  - id: customers
+    type: prompt
+    prompt: Research customer signals and write only reports/customer-signals.md.
+    independent: true
+    declared_output_paths:
+      - reports/customer-signals.md
+  - id: technical
+    type: prompt
+    prompt: Research technical feasibility and write only reports/technical-feasibility.md.
+    independent: true
+    declared_output_paths:
+      - reports/technical-feasibility.md
+  - id: join
+    type: fan_in
+    target: fan
+  - id: synthesis
+    type: prompt
+    prompt: Synthesize the ordered research.
+  - id: done
+    type: terminal
+edges:
+  - from: fan
+    to: customers
+  - from: fan
+    to: technical
+  - from: customers
+    to: join
+  - from: technical
+    to: join
+  - from: join
+    to: synthesis
+  - from: synthesis
+    to: done
+`;
 
 // ── Reserved-role denylist (mirror of ReservedRoles.cs) ─────────────────────────
 
@@ -212,4 +255,80 @@ edges: [{ from: a, to: b }]
   assert.deepEqual(roles.sort(), ['Scribe', 'backend-engineer']);
   const leaks = findReservedRoleLeaks({ workflowRoles: roles });
   assert.deepEqual(leaks.offenders, ['Scribe']);
+});
+
+test('analyzeConservativeFan accepts explicit independent disjoint research outputs', () => {
+  const result = analyzeConservativeFan(SAFE_FAN_YAML);
+
+  assert.equal(result.mode, 'fan');
+  assert.equal(result.safe, true);
+  assert.deepEqual(result.branchIds, ['customers', 'technical']);
+  assert.deepEqual(result.outputPaths, [
+    'reports/customer-signals.md',
+    'reports/technical-feasibility.md',
+  ]);
+});
+
+test('analyzeConservativeFan accepts ordinary sequential generation', () => {
+  const result = analyzeConservativeFan(VALID_WORKFLOW);
+
+  assert.equal(result.mode, 'sequential');
+  assert.equal(result.safe, true);
+});
+
+for (const [name, transform, expected] of [
+  ['unknown scope', (yaml) => yaml.replace(/    declared_output_paths:\n      - reports\/technical-feasibility\.md\n/, ''), 'no declared_output_paths'],
+  ['case-normalized overlap', (yaml) => yaml.replace('- reports/technical-feasibility.md', '- REPORTS/CUSTOMER-SIGNALS.MD'), 'overlapping output paths'],
+  ['file-directory prefix overlap', (yaml) => yaml.replace('- reports/technical-feasibility.md', '- reports/customer-signals.md/source.md'), 'overlapping output paths'],
+  ['broad scope', (yaml) => yaml.replace('- reports/technical-feasibility.md', '- docs'), 'unknown, dynamic, broad, or shared'],
+  ['shared manifest', (yaml) => yaml.replace('- reports/technical-feasibility.md', '- package.json'), 'unknown, dynamic, broad, or shared'],
+  ['generated artifact', (yaml) => yaml.replace('- reports/technical-feasibility.md', '- generated/report.md'), 'unknown, dynamic, broad, or shared'],
+  ['hidden shared output', (yaml) => yaml.replaceAll('reports/technical-feasibility.md', '.shared/technical-feasibility.md'), 'unknown, dynamic, broad, or shared'],
+  ['code output', (yaml) => yaml.replaceAll('reports/technical-feasibility.md', 'reports/technical-feasibility.ts'), 'unknown, dynamic, broad, or shared'],
+  ['dynamic scope', (yaml) => yaml.replace('- reports/technical-feasibility.md', '- reports/${topic}.md'), 'unknown, dynamic, broad, or shared'],
+  ['basename reference', (yaml) => yaml.replace('Research technical feasibility', 'Incorporate findings from customer-signals.md while researching technical feasibility'), 'appears to depend on a sibling'],
+  ['sibling id reference', (yaml) => yaml.replace('Research technical feasibility', 'Use results from customers while researching technical feasibility'), 'appears to depend on a sibling'],
+  ['undeclared prompt target', (yaml) => yaml.replace('and write only reports/technical-feasibility.md.', 'and write only reports/technical-feasibility.md. Also write reports/shared-summary.md.'), 'references undeclared output paths'],
+]) {
+  test(`analyzeConservativeFan rejects ${name}`, () => {
+    const result = analyzeConservativeFan(transform(SAFE_FAN_YAML));
+
+    assert.equal(result.mode, 'fan');
+    assert.equal(result.safe, false);
+    assert.ok(result.errors.some((error) => error.includes(expected)), result.errors.join('; '));
+  });
+}
+
+for (const [name, transform, expected] of [
+  ['malformed continuation', (yaml) => yaml.replace(
+    '  - from: join\n    to: synthesis',
+    '  - from: join\n    to: synthesis\n  - from: join\n    to: done',
+  ), 'exactly one unconditional continuation'],
+  ['extra join input', (yaml) => yaml.replace(
+    '  - from: join\n    to: synthesis',
+    '  - from: synthesis\n    to: join\n  - from: join\n    to: synthesis',
+  ), 'inputs must exactly match'],
+  ['conditional fan edge', (yaml) => yaml.replace(
+    '  - from: fan\n    to: technical',
+    '  - from: fan\n    to: technical\n    when: approved',
+  ), 'unconditional branches'],
+  ['cyclic continuation', (yaml) => yaml.replace(
+    '  - from: synthesis\n    to: done',
+    '  - from: synthesis\n    to: done\n  - from: synthesis\n    to: synthesis',
+  ), 'contains a cycle'],
+]) {
+  test(`analyzeConservativeFan rejects ${name}`, () => {
+    const result = analyzeConservativeFan(transform(SAFE_FAN_YAML));
+
+    assert.equal(result.mode, 'invalid');
+    assert.equal(result.safe, false);
+    assert.ok(result.errors.some((error) => error.includes(expected)), result.errors.join('; '));
+  });
+}
+
+test('analyzeConservativeFan rejects prohibited generated orchestration nodes', () => {
+  const result = analyzeConservativeFan(SAFE_FAN_YAML.replace('type: prompt', 'type: coordinator_composed'));
+
+  assert.equal(result.mode, 'invalid');
+  assert.equal(result.safe, false);
 });

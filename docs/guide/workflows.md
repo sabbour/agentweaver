@@ -161,12 +161,18 @@ nodes:
     type: prompt
     label: API research
     agent: researcher
-    prompt: Investigate the API behavior.
+    prompt: Investigate the API behavior and write only reports/api-research.md.
+    independent: true
+    declared_output_paths:
+      - reports/api-research.md
   - id: ui-research
     type: prompt
     label: UI research
     agent: researcher
-    prompt: Investigate the UI behavior.
+    prompt: Investigate the UI behavior and write only reports/ui-research.md.
+    independent: true
+    declared_output_paths:
+      - reports/ui-research.md
   - id: join-research
     type: fan_in
     label: Join research
@@ -373,6 +379,27 @@ trigger shapes, and a few-shot set of natural-language → trigger examples, the
 with the same loader the runtime uses. If the first draft is malformed, the server allows exactly one
 correction pass before failing closed.
 
+Generated workflows may use one prompt-only static `fan_out` / `fan_in` region, but only when every
+branch explicitly declares `independent: true`, one or more exact `declared_output_paths`, and an
+explicit content-output instruction such as `Write only reports/customer-signals.md`. Every path
+named in the prompt must be declared. Until general parallel writing support is available, generated
+fan outputs are limited to content artifacts (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`, `.csv`,
+and `.tsv`); source files, hidden paths, package manifests, lockfiles, project/solution files,
+migrations, and generated build artifacts are not eligible even when their paths are disjoint.
+Agentweaver normalizes path separators and compares scopes case-insensitively with file/directory
+prefix checks. Missing, dynamic, broad, shared, or overlapping scopes stay sequential.
+
+The supported starting point is independent research, analysis, and documentation with exact
+disjoint output files. Agentweaver does not infer independence from prose and does not claim generic
+code implementation or refactoring is safe to parallelize. If a model returns a structurally valid
+but insufficiently proven non-dependent fan, the server deterministically keeps branch declaration
+order and returns a sequential draft. A branch that consumes a sibling by node id, label, output path,
+basename, findings, or results is rejected for model correction instead of being reordered
+speculatively. Malformed fan topology is also rejected rather than guessed. This policy and the
+content-only intent exemption apply equally to direct workflow generation and custom workflows
+generated while creating a research, discovery, documentation, or other clearly non-software
+blueprint.
+
 Review edges are constrained by the runtime binder's transition contract. A software release-readiness
 chain can run `RAI → Build & Test → peer review → human review`; approval/pass advances to the next
 gate, request-changes/revise returns to an agent step, and decline routes to a terminal. Unsupported
@@ -384,6 +411,10 @@ If the project was created from GitHub — or your prompt includes a GitHub repo
 generation keeps that target repository in the prompt context so the draft acts against the intended repo.
 
 The generated workflow is preview-first: Agentweaver opens the YAML draft in the editor and does not write it to `.agentweaver/workflows/` until you save. If validation fails after the server's correction pass, the API returns an error instead of saving a broken workflow.
+
+The built-in **PM Discovery** workflow uses this conservative topology for two ordered independent
+branches: customer-signal research writes `customer-signals.md`, technical-feasibility research
+writes `technical-feasibility.md`, and both join before synthesis and review.
 
 ::: warning Workflows affect team composition
 A workflow references specific roles by name. If your project's cast doesn't include a role referenced in the workflow, the run will fail validation before it starts. Make sure the workflow's required roles match the agents in your team.
