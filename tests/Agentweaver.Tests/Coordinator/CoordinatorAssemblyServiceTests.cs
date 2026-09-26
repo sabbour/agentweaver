@@ -2009,29 +2009,6 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task RunAssembly_InterruptedUnknownPark_RepairsStatusWithoutReplay()
-    {
-        var coordinatorRunId = RunId.New().ToString();
-        var (workPlanId, _) = await SeedPlanAsync(
-            coordinatorRunId,
-            new[] { SubtaskStatus.AssembleReady });
-        await SeedCoordinatorRunAsync(coordinatorRunId);
-        _streamStore.Create(coordinatorRunId, "alice");
-        await SeedPreparedMergeAsync(
-            workPlanId,
-            coordinatorRunId,
-            effectState: MergeEffectState.Unknown);
-
-        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
-
-        _pipeline.Merges.Should().Be(0);
-        _pipeline.Scribes.Should().Be(0);
-        var state = await _assemblyStore.GetAsync(workPlanId, default);
-        state!.Status.Should().Be(WorkPlanStatus.AssemblyUnknown);
-        state.MergeEffectState.Should().Be(MergeEffectState.Unknown);
-    }
-
-    [Fact]
     public async Task RunAssembly_AppliedReceiptButTargetRewound_ParksUnknownWithoutReapplying()
     {
         var coordinatorRunId = RunId.New().ToString();

@@ -437,26 +437,6 @@ public sealed class CoordinatorAssemblyStore
         return updated == 1;
     }
 
-    public async Task<bool> TryRepairUnknownMergeParkAsync(int workPlanId, CancellationToken ct)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var now = DateTimeOffset.UtcNow;
-        var rows = await db.WorkPlans
-            .Where(w => w.Id == workPlanId
-                     && w.Status == WorkPlanStatus.Assembling
-                     && w.MergeEffectState == MergeEffectState.Unknown)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(w => w.Status, WorkPlanStatus.AssemblyUnknown)
-                .SetProperty(w => w.AssemblyTerminalStage, w => w.AssemblyStage)
-                .SetProperty(
-                    w => w.AssemblyStatusReason,
-                    w => w.AssemblyStatusReason ?? "assembly_merge_unknown: interrupted_unknown_park")
-                .SetProperty(w => w.UpdatedAt, now), ct)
-            .ConfigureAwait(false);
-        return rows == 1;
-    }
-
     /// <summary>
     /// UNIFIED AUTONOMOUS STEERING (Fix-B, change #3) — GUARDED escalation of an exhausted steering
     /// budget to the human-review gate. Atomically transitions the plan from the

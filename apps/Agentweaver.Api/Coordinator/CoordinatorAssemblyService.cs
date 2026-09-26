@@ -783,12 +783,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 var mergeEffect = await _assemblyStore.GetAsync(workPlanId, ct).ConfigureAwait(false);
                 if (mergeEffect?.MergeEffectId is not null)
                 {
-                    if (mergeEffect.MergeEffectState == MergeEffectState.Unknown)
-                    {
-                        await _assemblyStore.TryRepairUnknownMergeParkAsync(workPlanId, ct).ConfigureAwait(false);
-                        return;
-                    }
-
                     var mergeStaleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
                     if (!await _assemblyStore.TryClaimMergeRecoveryAsync(
                             workPlanId, _myPodId, mergeStaleBefore, ct).ConfigureAwait(false))

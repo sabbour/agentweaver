@@ -16,11 +16,3 @@ public sealed record CoordinatorMergeEvidence(
     string? Reason,
     string? CheckoutOutcome,
     DateTimeOffset ObservedAt);
-
-public sealed record CoordinatorMergeEffect(
-    string EffectId,
-    int LifecycleGeneration,
-    PreparedGitMergeIntent Intent,
-    string State,
-    CoordinatorMergeEvidence? Evidence,
-    string? RecoveryAction);
