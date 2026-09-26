@@ -135,19 +135,35 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                 request.Description,
                 out var requiredFanOutputPaths))
         {
-            var generatedFanOutputPaths = fanResult.Workflow.Nodes
-                .Where(node => node.Independent is true)
-                .SelectMany(node => node.DeclaredOutputPaths)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (!requiredFanOutputPaths.All(generatedFanOutputPaths.Contains))
+            if (!HasExactRequiredFanOutputs(fanResult.Workflow, requiredFanOutputPaths))
             {
-                return (
-                    yaml,
-                    null,
-                    "The request explicitly declares independent work with exact, disjoint content outputs. " +
-                    $"Generate one policy-valid fan_out/fan_in region whose branches write only: " +
-                    $"{string.Join(", ", requiredFanOutputPaths)}.",
-                    null);
+                if (ConservativeWorkflowFanPolicy.TryPromoteSequentialRequiredFan(
+                        fanResult.Workflow,
+                        requiredFanOutputPaths,
+                        out var promoted) &&
+                    ConservativeWorkflowFanPolicy.TryApply(
+                        promoted,
+                        out var promotedResult,
+                        out _) &&
+                    HasExactRequiredFanOutputs(promotedResult.Workflow, requiredFanOutputPaths))
+                {
+                    fanResult = promotedResult with
+                    {
+                        WasNormalized = true,
+                        NormalizationReason =
+                            "Promoted a mechanically proven independent prompt chain to a static fan region.",
+                    };
+                }
+                else
+                {
+                    return (
+                        yaml,
+                        null,
+                        "The request explicitly declares independent work with exact, disjoint content outputs. " +
+                        $"Generate one policy-valid fan_out/fan_in region whose branches write only: " +
+                        $"{string.Join(", ", requiredFanOutputPaths)}.",
+                        null);
+                }
             }
         }
 
@@ -159,6 +175,26 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             ? WorkflowDefinitionYamlSerializer.Serialize(fanResult.Workflow)
             : yaml;
         return (safeYaml, fanResult.Workflow, null, fanResult.NormalizationReason);
+    }
+
+    private static bool HasExactRequiredFanOutputs(
+        WorkflowDefinition workflow,
+        IReadOnlyList<string> requiredOutputPaths)
+    {
+        var fanOut = workflow.Nodes.SingleOrDefault(node => node.Type == WorkflowNodeType.FanOut);
+        if (fanOut is null)
+            return false;
+
+        var branchIds = workflow.Edges
+            .Where(edge => string.Equals(edge.From, fanOut.Id, StringComparison.Ordinal))
+            .Select(edge => edge.To)
+            .ToHashSet(StringComparer.Ordinal);
+        var fanOutputPaths = workflow.Nodes
+            .Where(node => branchIds.Contains(node.Id))
+            .SelectMany(node => node.DeclaredOutputPaths)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return fanOutputPaths.Count == requiredOutputPaths.Count &&
+               requiredOutputPaths.All(fanOutputPaths.Contains);
     }
 
     private static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(string yaml)
