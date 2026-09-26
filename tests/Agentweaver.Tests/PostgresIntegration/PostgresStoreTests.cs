@@ -235,7 +235,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
             RunId = runId,
             RepositoryPath = "/r",
             OriginatingBranch = "main",
-            ModelSource = "github_copilot",
+            ModelSource = "github-copilot",
             Task = "t",
             SubmittingUser = "u",
             Status = "in_progress",
