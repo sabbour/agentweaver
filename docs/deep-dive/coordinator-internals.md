@@ -112,6 +112,13 @@ Important details:
 - Drafting streams onto the coordinator run timeline so the UI does not show an empty run while planning happens.
 - The parser tolerates extra prose by extracting the first JSON object, but required fields must exist.
 - If the model is unavailable or the draft is unparseable, the coordinator run fails visibly. It does **not** fabricate a boilerplate spec.
+- Drafting has a coordinator-level deadline and a durable run lease. If a provider stream stops,
+  the run becomes the retryable terminal `coordinator_outcome_spec_draft_stalled` instead of
+  remaining in `drafting`. After a worker restart, a lease winner may replay the draft only when no
+  model output, tool call, or prior recovery retry was persisted. Partial output stays in the run
+  trace and prevents replay, avoiding duplicate effects across replicas. On PostgreSQL, draft event
+  appends and terminal transitions validate the owner, fencing token, unexpired lease, and lifecycle
+  generation while holding the run row lock, so a paused former owner cannot publish after takeover.
 - Revision overwrites the existing draft in place and re-arms it for confirmation.
 
 ### Confirmation paths
@@ -636,6 +643,7 @@ Do not infer a universal provider from historical class names. Child dispatch re
 | Failure mode | Coordinator behavior |
 |---|---|
 | Draft model unavailable or unparseable | Fail visibly; do not invent an OutcomeSpec. |
+| Draft stream stalls or its worker restarts | Preserve partial trace evidence; retry once only before observable output, otherwise terminalize with `coordinator_outcome_spec_draft_stalled`. |
 | Decomposition model unavailable or malformed | Fall back to one deterministic subtask. |
 | Model creates dependency cycle | Drop cycle-closing edges deterministically and note it. |
 | Workflow selection fails | Fall back to project default workflow. |

@@ -54,4 +54,5 @@ public sealed record TerminalRunMutation(
     string? MergedCommitHash = null,
     string? TreeHash = null,
     string? WorktreeBranch = null,
-    string? Diff = null);
+    string? Diff = null,
+    RunLeaseFence? RequiredLease = null);

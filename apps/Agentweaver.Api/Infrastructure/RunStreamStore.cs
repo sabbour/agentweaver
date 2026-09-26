@@ -271,6 +271,37 @@ public sealed class RunStreamEntry
         return recorded.Sequence;
     }
 
+    internal int RecordNextIfLeaseOwned(
+        string type,
+        object payload,
+        IRunStore runStore,
+        RunLeaseFence lease,
+        CancellationToken ct)
+    {
+        if (!HasDurableSequenceAuthority)
+            return RecordNext(type, payload);
+
+        var candidate = StructuredRunFailureTerminal.NormalizeFailure(
+            new RunEvent(0, type, payload, DateTimeOffset.UtcNow));
+        var recorded = _eventStream!
+            .AppendWhileRunLeaseOwnedAsync(_runId, [candidate], runStore, lease, ct)
+            .GetAwaiter().GetResult()
+            .SingleOrDefault();
+        if (recorded is null)
+            return 0;
+
+        TaskCompletionSource? previous = null;
+        lock (_lock)
+        {
+            if (TryInsertOrValidateLocked(recorded))
+                previous = Interlocked.Exchange(
+                    ref _eventSignal,
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        }
+        previous?.TrySetResult();
+        return recorded.Sequence;
+    }
+
     /// <summary>
     /// Records an event into the history and wakes all clients currently blocked in
     /// <see cref="WaitForChangeAsync"/>. Called by the orchestrator's recording writer.

@@ -108,6 +108,131 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         events[0].EventType.Should().Be("run.failed");
     }
 
+    [Fact]
+    public async Task RecoverInterruptedRunsAsync_PartialDraftOutput_TerminalizesWithoutReplay()
+    {
+        var runId = RunId.New();
+        await _runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            AgentName = "Coordinator",
+            ParentRunId = null,
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "test partial draft recovery",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            Origin = RunOrigin.Interactive,
+        });
+
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = "project-partial-draft",
+                CoordinatorRunId = runId.ToString(),
+                Goal = "test partial draft recovery",
+                DesiredOutcome = string.Empty,
+                Scope = string.Empty,
+                Assumptions = string.Empty,
+                Status = "drafting",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            });
+            db.RunEvents.AddRange(
+                new RunEventRecord
+                {
+                    RunId = runId.ToString(),
+                    Sequence = 1,
+                    EventType = EventTypes.CoordinatorOutcomeSpecDrafting,
+                    PayloadJson = "{}",
+                    CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                },
+                new RunEventRecord
+                {
+                    RunId = runId.ToString(),
+                    Sequence = 2,
+                    EventType = EventTypes.AgentMessageDelta,
+                    PayloadJson = """{"text":"{\"desired_outcome\":\"partial"}""",
+                    CreatedAt = DateTime.UtcNow.AddMinutes(-9),
+                });
+            await db.SaveChangesAsync();
+        }
+
+        var streamStore = new RunStreamStore();
+        var svc = BuildCoordinatorRunService(_runStore, streamStore);
+
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        await Task.Delay(200);
+
+        var updated = await _runStore.GetAsync(runId);
+        updated!.Status.Should().Be(RunStatus.Failed);
+        updated.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+
+        using var assertScope = _scopeFactory.CreateScope();
+        var assertDb = assertScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await assertDb.RunEvents.AnyAsync(
+            e => e.RunId == runId.ToString()
+                 && e.EventType == EventTypes.AgentMessageDelta))
+            .Should().BeTrue("the partial model output remains durable diagnostic evidence");
+        (await assertDb.RunEvents.AnyAsync(
+            e => e.RunId == runId.ToString()
+                 && e.EventType == EventTypes.CoordinatorOutcomeSpecDraftRetrying))
+            .Should().BeFalse("partial observable output makes replay unsafe");
+    }
+
+    [Fact]
+    public async Task RecoverInterruptedRunsAsync_PeerOwnsDraftLease_DoesNotReplayOrTerminalize()
+    {
+        var runId = RunId.New();
+        await _runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            AgentName = "Coordinator",
+            ParentRunId = null,
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "test replica lease fencing",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            Origin = RunOrigin.Interactive,
+        });
+
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = "project-peer-lease",
+                CoordinatorRunId = runId.ToString(),
+                Goal = "test replica lease fencing",
+                DesiredOutcome = string.Empty,
+                Scope = string.Empty,
+                Assumptions = string.Empty,
+                Status = "drafting",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var leaseStore = new DenyingRunLeaseStore();
+        var service = BuildCoordinatorRunService(
+            _runStore,
+            new RunStreamStore(),
+            leaseStore: leaseStore);
+
+        await service.RecoverInterruptedRunsAsync(CancellationToken.None);
+
+        (await _runStore.GetAsync(runId))!.Status.Should().Be(RunStatus.InProgress);
+        leaseStore.ClaimedRunIds.Should().Equal(runId.ToString());
+    }
+
     // =========================================================================
     // Test 2 (RC-2 fix): Loser pod — TrySetTerminalStatusAsync no-op → must
     // NOT write any RunEvents and must NOT add events to the stream entry.
@@ -683,7 +808,8 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         RunStreamStore streamStore,
         ICoordinatorAssembly? assembly = null,
         IConfiguration? configuration = null,
-        TerminalOutcomeProjector? terminalOutcomeProjector = null)
+        TerminalOutcomeProjector? terminalOutcomeProjector = null,
+        IRunLeaseStore? leaseStore = null)
     {
         var config = configuration ?? BuildConfiguration();
 
@@ -746,7 +872,45 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             lifetime: new TestHostApplicationLifetime(),
             configuration: config,
             logger: NullLogger<CoordinatorRunService>.Instance,
-            terminalOutcomeProjector: terminalOutcomeProjector);
+            terminalOutcomeProjector: terminalOutcomeProjector,
+            leaseStore: leaseStore);
+    }
+
+    private sealed class DenyingRunLeaseStore : IRunLeaseStore
+    {
+        public List<string> ClaimedRunIds { get; } = [];
+
+        public Task<(bool Claimed, long FencingToken)> TryClaimAsync(
+            string runId,
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default)
+        {
+            ClaimedRunIds.Add(runId);
+            return Task.FromResult((false, 0L));
+        }
+
+        public Task<bool> TryRenewAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task ReleaseAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<bool> IsLeaseOwnerAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
     }
 
     private static void CreateRunEventsTable(string memoryDbPath)

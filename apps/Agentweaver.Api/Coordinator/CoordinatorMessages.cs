@@ -1,3 +1,5 @@
+using Agentweaver.Domain;
+
 namespace Agentweaver.Api.Coordinator;
 
 /// <summary>
@@ -65,11 +67,15 @@ public sealed record CoordinatorOutcome(string RunId, int SpecId, string Status)
 /// </summary>
 public sealed class CoordinatorOutcomeSpecDraftTimeoutException(
     string runId,
+    ModelSource modelSource,
     TimeSpan timeout,
     Exception? innerException = null)
     : TimeoutException(
         $"Coordinator outcome-spec drafting for run '{runId}' exceeded {timeout.TotalSeconds:n0} seconds.",
-        innerException);
+        innerException)
+{
+    public ModelSource ModelSource { get; } = modelSource;
+}
 
 public static class CoordinatorFailureCodes
 {
@@ -81,6 +87,9 @@ public static class CoordinatorFailureCodes
 
     /// <summary>The outcome-spec model returned unusable structured output after one correction attempt.</summary>
     public const string OutcomeSpecInvalidResponse = "coordinator_outcome_spec_invalid_response";
+
+    /// <summary>The outcome-spec model stream stopped before a complete response was available.</summary>
+    public const string OutcomeSpecDraftStalled = "coordinator_outcome_spec_draft_stalled";
 
     /// <summary>The persisted coordinator run could not activate its workflow.</summary>
     public const string StartupFailed = "coordinator_startup_failed";

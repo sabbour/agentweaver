@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -57,6 +58,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private readonly IModelInvocationGuard? _modelInvocationGuard;
     private readonly RunModelProviderSnapshotStore? _providerSnapshots;
+    private readonly IRunStore? _runStore;
+    private readonly RunLeaseFenceRegistry? _leaseFences;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
     private readonly string _outcomeSpecModel;
@@ -74,7 +77,9 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         IOptions<GenerationModelOptions>? generationOptions = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
         IModelInvocationGuard? modelInvocationGuard = null,
-        RunModelProviderSnapshotStore? providerSnapshots = null)
+        RunModelProviderSnapshotStore? providerSnapshots = null,
+        IRunStore? runStore = null,
+        RunLeaseFenceRegistry? leaseFences = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
@@ -87,6 +92,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         _byokProviderConfiguration = byokProviderConfiguration;
         _modelInvocationGuard = modelInvocationGuard;
         _providerSnapshots = providerSnapshots;
+        _runStore = runStore;
+        _leaseFences = leaseFences;
         _apiBaseUrl = configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000";
         _apiKey = configuration["Auth:ApiKey"]
             ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
@@ -142,7 +149,10 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
             // the coordinator entry; the agent emits no run.completed (only agent.turn.end), so the
             // coordinator timeline is not prematurely terminated.
             var coordEntry = _streamStore.Get(input.RunId);
-            var streamWriter = coordEntry is null ? null : new RecordingChannelWriter(coordEntry);
+            var leaseFence = _leaseFences?.Get(input.RunId);
+            var streamWriter = coordEntry is null
+                ? null
+                : new CoordinatorDraftChannelWriter(coordEntry, _runStore, leaseFence, ct);
 
             await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,
@@ -177,20 +187,80 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                         reason,
                         attempt + 1,
                         MaxDraftAttempts);
-                    coordEntry?.RecordNext(EventTypes.CoordinatorOutcomeSpecDraftRetrying, new
-                    {
-                        attempt = attempt + 1,
-                        maxAttempts = MaxDraftAttempts,
-                        reason,
-                    });
+                    RecordDraftEvent(
+                        coordEntry,
+                        leaseFence,
+                        EventTypes.CoordinatorOutcomeSpecDraftRetrying,
+                        new
+                        {
+                            attempt = attempt + 1,
+                            maxAttempts = MaxDraftAttempts,
+                            reason,
+                        },
+                        ct);
                 },
                 ct).ConfigureAwait(false);
         }
+
         finally
         {
             if (agent is not null)
                 await agent.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    private sealed class CoordinatorDraftChannelWriter(
+        RunStreamEntry entry,
+        IRunStore? runStore,
+        RunLeaseFence? leaseFence,
+        CancellationToken draftCancellation) : ChannelWriter<RunEvent>
+    {
+        public override bool TryWrite(RunEvent item)
+        {
+            if (draftCancellation.IsCancellationRequested)
+                return false;
+            if (item.Type != EventTypes.RunFailed)
+            {
+                var sequence = runStore is not null && leaseFence is not null
+                    ? entry.RecordNextIfLeaseOwned(
+                        item.Type,
+                        item.Payload,
+                        runStore,
+                        leaseFence,
+                        draftCancellation)
+                    : entry.RecordNext(item.Type, item.Payload);
+                if (sequence == 0)
+                    return false;
+            }
+            return true;
+        }
+
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(!draftCancellation.IsCancellationRequested);
+
+        public override bool TryComplete(Exception? error = null) => true;
+    }
+
+    private void RecordDraftEvent(
+        RunStreamEntry? entry,
+        RunLeaseFence? leaseFence,
+        string eventType,
+        object payload,
+        CancellationToken ct)
+    {
+        if (entry is null)
+            return;
+        if (_runStore is not null && leaseFence is not null)
+        {
+            entry.RecordNextIfLeaseOwned(
+                eventType,
+                payload,
+                _runStore,
+                leaseFence,
+                ct);
+            return;
+        }
+        entry.RecordNext(eventType, payload);
     }
 
     private string ResolveOutcomeSpecModel(string? projectModel) =>

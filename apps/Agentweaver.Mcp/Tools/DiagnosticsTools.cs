@@ -55,6 +55,7 @@ public sealed class DiagnosticsTools(AgentweaverApiClient api)
         "assembly_failed",
         "coordinator_execution_failed",
         "coordinator_direct_execution_failed",
+        "coordinator_outcome_spec_draft_stalled",
         "coordinator_outcome_spec_invalid_response",
         "coordinator_outcome_spec_model_refused",
         "github_copilot_auth_required",
@@ -126,6 +127,8 @@ public sealed class DiagnosticsTools(AgentweaverApiClient api)
         var safeCode = SafeCodes.Contains(code) ? code : "agent_turn_internal_error";
         if (safeCode == "coordinator_outcome_spec_model_refused")
             return "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.";
+        if (safeCode == "coordinator_outcome_spec_draft_stalled")
+            return "Outcome-spec drafting stalled before a complete response was available. Partial output was retained when available. Retry the run or choose another model.";
         if (safeCode == "coordinator_outcome_spec_invalid_response")
             return "The model returned an invalid outcome-spec response after one correction attempt. Retry the run or choose another model.";
 

@@ -74,6 +74,18 @@ public interface IRunEventStream
         throw new NotSupportedException($"{GetType().Name} does not support conditional event batches.");
 
     /// <summary>
+    /// Appends events only while the exact coordinator lease and lifecycle generation remain current.
+    /// PostgreSQL implementations fence the lease check and append in one transaction.
+    /// </summary>
+    Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedAsync(
+        string runId,
+        IReadOnlyList<RunEvent> events,
+        IRunStore runStore,
+        RunLeaseFence lease,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support lease-fenced event batches.");
+
+    /// <summary>
     /// Subscribes to a run's event stream. Replays persisted events from <paramref name="fromSequence"/>,
     /// then tails the live channel for new events. Handoff is gapless and duplicate-free at the
     /// cursor boundary. Returns an <see cref="IAsyncEnumerable{T}"/> that completes when a terminal

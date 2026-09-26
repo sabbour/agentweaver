@@ -254,6 +254,21 @@ public sealed class EfRunEventStream : IRunEventStream
 
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
+        => await AppendConditionalAsync(runId, events, requiredLease: null, ct).ConfigureAwait(false);
+
+    public async Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedAsync(
+        string runId,
+        IReadOnlyList<RunEvent> events,
+        IRunStore runStore,
+        RunLeaseFence lease,
+        CancellationToken ct = default)
+        => await AppendConditionalAsync(runId, events, lease, ct).ConfigureAwait(false);
+
+    private async Task<IReadOnlyList<RunEvent>> AppendConditionalAsync(
+        string runId,
+        IReadOnlyList<RunEvent> events,
+        RunLeaseFence? requiredLease,
+        CancellationToken ct)
     {
         var terminalStatuses = Endpoints.EndpointHelpers.TerminalRunStatuses
             .Append(RunStatus.AssembleReady).Select(s => s.ToApiString()).ToArray();
@@ -268,8 +283,18 @@ public sealed class EfRunEventStream : IRunEventStream
                 // A conditional no-op UPDATE takes the same row lock as every status UPDATE/DELETE.
                 // PostgreSQL re-evaluates this predicate after waiting for a concurrent writer.
                 // Keep that lock and both ready events in ONE transaction until commit.
-                var active = await db.Runs
-                    .Where(r => r.RunId == runId && !terminalStatuses.Contains(r.Status))
+                var activeRuns = db.Runs
+                    .Where(r => r.RunId == runId && !terminalStatuses.Contains(r.Status));
+                if (requiredLease is not null)
+                {
+                    var now = DateTimeOffset.UtcNow;
+                    activeRuns = activeRuns.Where(r =>
+                        r.OwnerId == requiredLease.OwnerId
+                        && r.FencingToken == requiredLease.FencingToken
+                        && r.LifecycleGeneration == requiredLease.LifecycleGeneration
+                        && r.LeaseExpiresAt > now);
+                }
+                var active = await activeRuns
                     .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, r => r.Status), ct)
                     .ConfigureAwait(false);
                 if (active == 0)

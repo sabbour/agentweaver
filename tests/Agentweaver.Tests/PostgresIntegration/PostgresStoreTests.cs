@@ -1,3 +1,4 @@
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
@@ -187,6 +188,99 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         var (claimed2, token2) = await store.TryClaimAsync(runId, "worker-B", TimeSpan.FromSeconds(30));
         claimed2.Should().BeTrue("worker-B should reclaim the expired lease");
         token2.Should().BeGreaterThan(token1, "fencing token must be strictly increasing");
+    }
+
+    [PostgresFact]
+    public async Task Lease_ExpiredLease_CannotBeRenewedByStaleOwner()
+    {
+        var runId = "run-stale-renew-" + Guid.NewGuid().ToString("N")[..8];
+        await using var db = await pg.CreateDbContextAsync();
+        db.Runs.Add(new Agentweaver.Api.Memory.RunRecord
+        {
+            RunId = runId,
+            RepositoryPath = "/r",
+            OriginatingBranch = "main",
+            ModelSource = "github_copilot",
+            Task = "t",
+            SubmittingUser = "u",
+            Status = "in_progress",
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var store = new PostgresRunLeaseStore(pg.Factory);
+        var (claimed, token) = await store.TryClaimAsync(
+            runId,
+            "worker-A",
+            TimeSpan.FromMilliseconds(100));
+        claimed.Should().BeTrue();
+
+        await Task.Delay(TimeSpan.FromMilliseconds(250));
+
+        var renewed = await store.TryRenewAsync(
+            runId,
+            "worker-A",
+            token,
+            TimeSpan.FromSeconds(30));
+        renewed.Should().BeFalse("an expired fencing claim must not be resurrected");
+    }
+
+    [PostgresFact]
+    public async Task Lease_Takeover_FencesStaleTerminalAndEventWrites()
+    {
+        var runId = "run-fenced-write-" + Guid.NewGuid().ToString("N")[..8];
+        await using var db = await pg.CreateDbContextAsync();
+        db.Runs.Add(new Agentweaver.Api.Memory.RunRecord
+        {
+            RunId = runId,
+            RepositoryPath = "/r",
+            OriginatingBranch = "main",
+            ModelSource = "github_copilot",
+            Task = "t",
+            SubmittingUser = "u",
+            Status = "in_progress",
+            StartedAt = DateTimeOffset.UtcNow,
+            LifecycleGeneration = 1,
+        });
+        await db.SaveChangesAsync();
+
+        var leaseStore = new PostgresRunLeaseStore(pg.Factory);
+        var runStore = new EfRunStore(pg.Factory);
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var (claimedA, tokenA) = await leaseStore.TryClaimAsync(
+            runId,
+            "worker-A",
+            TimeSpan.FromMilliseconds(100));
+        claimedA.Should().BeTrue();
+        await Task.Delay(TimeSpan.FromMilliseconds(250));
+        var (claimedB, _) = await leaseStore.TryClaimAsync(
+            runId,
+            "worker-B",
+            TimeSpan.FromSeconds(30));
+        claimedB.Should().BeTrue();
+
+        var staleFence = new RunLeaseFence("worker-A", tokenA, 1);
+        var terminalized = await runStore.TryMutateTerminalOutcomeAsync(
+            RunId.Parse(runId),
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(
+                    RunStatus.Failed,
+                    EventTypes.RunFailed,
+                    new { reason = "stale" },
+                    DateTimeOffset.UtcNow,
+                    1),
+                "stale",
+                RequiredLease: staleFence));
+        var events = await eventStream.AppendWhileRunLeaseOwnedAsync(
+            runId,
+            [new RunEvent(0, EventTypes.AgentMessageDelta, new { text = "stale" })],
+            runStore,
+            staleFence);
+
+        terminalized.Should().BeFalse();
+        events.Should().BeEmpty();
+        (await runStore.GetAsync(RunId.Parse(runId)))!.Status.Should().Be(RunStatus.InProgress);
+        (await eventStream.GetPersistedEventsAsync(runId)).Should().BeEmpty();
     }
 }
 

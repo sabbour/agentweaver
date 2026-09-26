@@ -416,6 +416,14 @@ public sealed class SqliteRunEventStream : IRunEventStream
         return recorded;
     }
 
+    public Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedAsync(
+        string runId,
+        IReadOnlyList<RunEvent> events,
+        IRunStore runStore,
+        RunLeaseFence lease,
+        CancellationToken ct = default) =>
+        AppendWhileRunActiveAsync(runId, events, runStore, ct);
+
     /// <inheritdoc />
     public async IAsyncEnumerable<RunEvent> SubscribeAsync(
         string runId, int fromSequence = 0, [EnumeratorCancellation] CancellationToken ct = default)

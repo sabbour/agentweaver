@@ -10,6 +10,7 @@ public sealed class StructuredRunFailureTerminalTests
     [Theory]
     [InlineData("model_provider_snapshot_unavailable")]
     [InlineData("github_copilot_capability_snapshot_unavailable")]
+    [InlineData("coordinator_outcome_spec_draft_stalled")]
     [InlineData("coordinator_outcome_spec_invalid_response")]
     [InlineData("coordinator_outcome_spec_model_refused")]
     public void NormalizeErrorCode_PreservesRunSnapshotFailures(string errorCode)
@@ -28,6 +29,9 @@ public sealed class StructuredRunFailureTerminalTests
     [InlineData(
         "coordinator_outcome_spec_model_refused",
         "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.")]
+    [InlineData(
+        "coordinator_outcome_spec_draft_stalled",
+        "Outcome-spec drafting stalled before a complete response was available. Partial output was retained when available. Retry the run or choose another model.")]
     [InlineData(
         "coordinator_outcome_spec_invalid_response",
         "The model returned an invalid outcome-spec response after one correction attempt. Retry the run or choose another model.")]
