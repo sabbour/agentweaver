@@ -786,12 +786,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.RevokedAt).HasColumnName("revoked_at");
-            ConfigureProjectForeignKey(e, "FK_github_installations_projects_project_id");
         });
 
         model.Entity<GitHubRepositoryGrantRecord>(e =>
         {
-            e.ToTable("github_repository_grants").HasKey(x => new { x.InstallationId, x.RepositoryId });
+            e.ToTable("github_repository_grants").HasKey(x => new { x.InstallationId, x.RepositoryId, x.ProjectId });
             e.Property(x => x.InstallationId).HasColumnName("installation_id");
             e.Property(x => x.RepositoryId).HasColumnName("repository_id");
             e.Property(x => x.ProjectId).HasColumnName("project_id");
@@ -799,7 +798,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.PermissionDigest).HasColumnName("permission_digest");
             e.Property(x => x.GrantedAt).HasColumnName("granted_at");
             e.Property(x => x.RevokedAt).HasColumnName("revoked_at");
-            e.HasIndex(x => new { x.InstallationId, x.RepositoryId }).IsUnique();
+            e.HasIndex(x => new { x.InstallationId, x.RepositoryId, x.ProjectId }).IsUnique();
             e.HasOne<GitHubInstallationRecord>().WithMany().HasForeignKey(x => x.InstallationId)
                 .OnDelete(DeleteBehavior.Cascade).HasConstraintName("FK_github_repository_grants_installations_installation_id");
             ConfigureProjectForeignKey(e, "FK_github_repository_grants_projects_project_id");
@@ -811,6 +810,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.CodeHash).HasColumnName("code_hash");
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
             e.Property(x => x.RepoAppAuthorizationId).HasColumnName("repo_app_authorization_id");
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
             e.Property(x => x.RepositoryId).HasColumnName("repository_id");
             e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
             e.Property(x => x.ConsumedAtUnixMilliseconds).HasColumnName("consumed_at_unix_ms");
@@ -923,7 +923,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(x => x.ProjectId).IsUnique().HasFilter("status = 0")
                 .HasDatabaseName("UX_automation_activations_active_project");
             e.HasOne<GitHubRepositoryGrantRecord>().WithMany()
-                .HasForeignKey(x => new { x.InstallationId, x.RepositoryId })
+                .HasForeignKey(x => new { x.InstallationId, x.RepositoryId, x.ProjectId })
                 .IsRequired(false)
                 .OnDelete(DeleteBehavior.Cascade)
                 .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");

@@ -38,6 +38,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             JsonSerializer.Serialize(persisted).Should().NotContain(issued.Code!);
             persisted.EntraObjectId.Should().Be("entra-one");
             persisted.RepoAppAuthorizationId.Should().NotBeNullOrWhiteSpace();
+            persisted.InstallationId.Should().Be(72);
             persisted.RepositoryId.Should().Be(42);
         }
 
@@ -50,6 +51,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
         first.Should().BeEquivalentTo(new
         {
             EntraObjectId = "entra-one",
+            InstallationId = 72L,
             RepositoryId = 42L,
         });
 
@@ -86,6 +88,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
         retry.Should().NotBeNull();
         retry!.IsRetry.Should().BeTrue();
         retry.ProjectId.Should().Be(first.ProjectId);
+        retry.InstallationId.Should().Be(72);
         retry.FullName.Should().Be(first.FullName);
         wrongCaller.Should().BeNull();
         (await broker.TryConsumeAndResolveAsync(
@@ -93,6 +96,44 @@ public sealed class GitHubRepositorySelectionBrokerTests
             new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
             CancellationToken.None)).Should().BeNull(
             "repository attachment must retain strict single-use selection semantics");
+    }
+
+    [Fact]
+    public async Task ProjectCreationClaim_RejectsRepositoryMovedToAnotherInstallation()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var issued = await CreateBroker(options, secrets, RepositoriesAndInstallations(42, 72))
+            .IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+
+        var resolved = await CreateBroker(options, secrets, RepositoriesAndInstallations(42, 73))
+            .TryClaimForProjectCreationAndResolveAsync(
+                issued.Code!,
+                new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+                CancellationToken.None);
+
+        resolved.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectCreationClaim_RejectsRepositoryRemovedAfterSelection()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var issued = await CreateBroker(options, secrets, Repositories(42))
+            .IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+
+        var resolved = await CreateBroker(options, secrets, RepositoriesAndInstallations(null, 72))
+            .TryClaimForProjectCreationAndResolveAsync(
+                issued.Code!,
+                new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+                CancellationToken.None);
+
+        resolved.Should().BeNull();
     }
 
     [Fact]
@@ -169,7 +210,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             .ListAsync("entra-one", CancellationToken.None);
         listed.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
         listed.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(new GitHubRepositorySelectionCandidate(
-            42, "octo/secure-repo", "octo", true, "main",
+            72, 42, "octo/secure-repo", "octo", true, "main",
             "https://github.com/octo/secure-repo", "https://github.com/octo/secure-repo.git", null));
     }
 
@@ -271,7 +312,13 @@ public sealed class GitHubRepositorySelectionBrokerTests
             new GitHubConnectionsCredentialVault(secrets),
             new GitHubRepositorySelectionClient(
                 new StubHttpClientFactory(handler),
-                Config()));
+                Config()),
+            new RepoAppInstallationTokenService(
+                Config(),
+                new MemoryDbContext(options),
+                secrets,
+                new StubHttpClientFactory(handler)),
+            new MemoryDbContext(options));
 
     private static async Task SeedLiveAuthorizationAsync(
         DbContextOptions<MemoryDbContext> options,
@@ -305,15 +352,51 @@ public sealed class GitHubRepositorySelectionBrokerTests
         ["Auth:RepoApp:ApiUrl"] = "https://api.github.test",
     }).Build();
 
-    private static HttpMessageHandler Repositories(long id) => RepositoriesAndInstallations(id);
+    private static HttpMessageHandler Repositories(long id) => RepositoriesAndInstallations(id, 72);
 
-    private static HttpMessageHandler RepositoriesAndInstallations(long id) => new RouteHttpHandler(request =>
+    private static HttpMessageHandler RepositoriesAndInstallations(long? id, long installationId = 72) =>
+        new RouteHttpHandler(request =>
         request.RequestUri!.AbsolutePath switch
         {
-            "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repository_selection":"selected","html_url":"https://github.com/settings/installations/72","permissions":{"administration":"write"}}]}""",
-            "/user/installations/72/repositories" => $$"""{"repositories":[{"id":{{id}},"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+            "/user/installations" => InstallationPayload(installationId),
+            var path when path == $"/user/installations/{installationId}/repositories" =>
+                id is null
+                    ? """{"repositories":[]}"""
+                    : RepositoryPayload(id.Value),
             _ => "{}",
         });
+
+    private static string InstallationPayload(long installationId) => JsonSerializer.Serialize(new
+    {
+        installations = new[]
+        {
+            new
+            {
+                id = installationId,
+                account = new { login = "octo" },
+                target_type = "User",
+                repository_selection = "selected",
+                html_url = $"https://github.com/settings/installations/{installationId}",
+                permissions = new { administration = "write" },
+            },
+        },
+    });
+
+    private static string RepositoryPayload(long repositoryId) => JsonSerializer.Serialize(new
+    {
+        repositories = new[]
+        {
+            new
+            {
+                id = repositoryId,
+                full_name = "octo/secure-repo",
+                owner = new { login = "octo" },
+                @private = true,
+                default_branch = "main",
+                clone_url = "https://github.com/octo/secure-repo.git",
+            },
+        },
+    });
 
     private static async Task<SqliteConnection> OpenDatabaseAsync()
     {

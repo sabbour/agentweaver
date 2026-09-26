@@ -202,6 +202,12 @@ public class ProjectGitInitializer
         return defaultBranch;
     }
 
+    public virtual string GetCurrentBranch(string workingDirectory)
+    {
+        using var repo = new Repository(workingDirectory);
+        return repo.Head?.FriendlyName ?? repo.Head?.CanonicalName ?? "main";
+    }
+
     private static string NormalizeCloneTarget(string sourceRepository)
     {
         // Normalize owner/repo and GitHub tree/blob URLs to a cloneable repository URL.

@@ -107,11 +107,13 @@ internal sealed record FencedMarketplaceCopilotCapability(
 /// </summary>
 internal sealed record ConsumedGitHubRepositorySelection(
     string EntraObjectId,
+    long InstallationId,
     long RepositoryId,
     string RepoAppAuthorizationId);
 
 internal sealed record ClaimedGitHubRepositorySelection(
     string EntraObjectId,
+    long InstallationId,
     long RepositoryId,
     string RepoAppAuthorizationId,
     bool AlreadyConsumed);
@@ -257,6 +259,7 @@ public sealed class GitHubConnectionsPersistenceStore(
         if (string.IsNullOrWhiteSpace(selection.CodeHash) ||
             string.IsNullOrWhiteSpace(selection.EntraObjectId) ||
             string.IsNullOrWhiteSpace(selection.RepoAppAuthorizationId) ||
+            selection.InstallationId <= 0 ||
             selection.RepositoryId <= 0 ||
             selection.ExpiresAtUnixMilliseconds <= selection.CreatedAt.ToUnixTimeMilliseconds())
             throw new ArgumentException("Repository selection codes must have valid, bounded scope.");
@@ -314,6 +317,7 @@ public sealed class GitHubConnectionsPersistenceStore(
                             x.EntraObjectId == entraObjectId)
                 .Select(x => new ConsumedGitHubRepositorySelection(
                     x.EntraObjectId,
+                    x.InstallationId,
                     x.RepositoryId,
                     x.RepoAppAuthorizationId))
                 .SingleAsync(ct).ConfigureAwait(false);
@@ -382,6 +386,7 @@ public sealed class GitHubConnectionsPersistenceStore(
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             return new ClaimedGitHubRepositorySelection(
                 selection.EntraObjectId,
+                selection.InstallationId,
                 selection.RepositoryId,
                 selection.RepoAppAuthorizationId,
                 AlreadyConsumed: changed == 0);
@@ -1279,7 +1284,6 @@ public sealed class GitHubConnectionsPersistenceStore(
                         db.GitHubInstallations.Any(installation =>
                             installation.InstallationId == grant.InstallationId &&
                             installation.AppKind == GitHubAppKind.Repo &&
-                            installation.ProjectId == projectId &&
                             installation.RevokedAt == null))
                     .Select(grant => new { grant.InstallationId, grant.RepositoryId, grant.PermissionDigest })
                     .ToListAsync(ct).ConfigureAwait(false)
@@ -1407,7 +1411,6 @@ public sealed class GitHubConnectionsPersistenceStore(
                 db.GitHubInstallations.Any(installation =>
                     installation.InstallationId == activation.InstallationId &&
                     installation.AppKind == GitHubAppKind.Repo &&
-                    installation.ProjectId == activation.ProjectId &&
                     installation.RevokedAt == null), ct).ConfigureAwait(false);
             if (!repositoryGrantIsLive)
                 return null;
@@ -1678,7 +1681,6 @@ public sealed class GitHubConnectionsPersistenceStore(
                                db.GitHubInstallations.Any(installation =>
                                    installation.InstallationId == snapshot.InstallationId &&
                                    installation.AppKind == GitHubAppKind.Repo &&
-                                   installation.ProjectId == snapshot.ProjectId &&
                                    installation.RevokedAt == null), ct).ConfigureAwait(false),
             GitHubCapabilitySnapshotSourceKind.CopilotBinding => string.Equals(
                 snapshot.SourceBindingId,
@@ -2454,7 +2456,6 @@ public sealed class GitHubConnectionsPersistenceStore(
                         db.GitHubInstallations.Any(installation =>
                             installation.InstallationId == x.InstallationId &&
                             installation.AppKind == GitHubAppKind.Repo &&
-                            installation.ProjectId == projectId &&
                             installation.RevokedAt == null))
             .ToListAsync(ct).ConfigureAwait(false);
         var grant = grants.OrderByDescending(x => x.GrantedAt).FirstOrDefault();
@@ -2885,7 +2886,6 @@ public sealed class GitHubConnectionsPersistenceStore(
             db.GitHubInstallations.Any(installation =>
                 installation.InstallationId == grant.InstallationId &&
                 installation.AppKind == GitHubAppKind.Repo &&
-                installation.ProjectId == projectId &&
                 installation.RevokedAt == null), ct);
 
     private async Task<RunGitHubCapabilitySnapshotRecord?> CreateCopilotBindingSnapshotAsync(

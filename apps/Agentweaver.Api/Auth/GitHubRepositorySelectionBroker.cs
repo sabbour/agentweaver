@@ -4,6 +4,8 @@ using System.Text.Json;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Agentweaver.Api.Webhooks;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Auth;
@@ -24,6 +26,7 @@ internal enum GitHubRepositorySelectionOutcome
 }
 
 internal sealed record GitHubRepositorySelectionCandidate(
+    long InstallationId,
     long RepositoryId,
     string FullName,
     string OwnerLogin,
@@ -54,6 +57,10 @@ internal sealed record GitHubRepositoryCredentialUseResult<T>(
 internal sealed record ResolvedGitHubRepositorySelection(
     ProjectId ProjectId,
     bool IsRetry,
+    string EntraObjectId,
+    string RepoAppAuthorizationId,
+    long InstallationId,
+    long RepositoryId,
     string FullName,
     string SourceRepository,
     string CloneUrl,
@@ -68,6 +75,8 @@ internal sealed class GitHubRepositorySelectionBroker(
     GitHubConnectionsPersistenceStore persistence,
     IGitHubConnectionsCredentialVault vault,
     GitHubRepositorySelectionClient repositories,
+    RepoAppInstallationTokenService installationTokens,
+    MemoryDbContext db,
     ILogger<GitHubRepositorySelectionBroker>? logger = null)
 {
     internal static readonly TimeSpan SelectionCodeLifetime = TimeSpan.FromMinutes(5);
@@ -115,6 +124,7 @@ internal sealed class GitHubRepositorySelectionBroker(
                 CodeHash = HashCode(code),
                 EntraObjectId = GetCallerSubject(caller),
                 RepoAppAuthorizationId = result.Credential.Id,
+                InstallationId = repository.InstallationId,
                 RepositoryId = repository.RepositoryId,
                 CreatedAt = now,
                 ExpiresAtUnixMilliseconds = expiresAt.ToUnixTimeMilliseconds(),
@@ -255,6 +265,7 @@ internal sealed class GitHubRepositorySelectionBroker(
             callerSubject,
             new ConsumedGitHubRepositorySelection(
                 consumed.EntraObjectId,
+                consumed.InstallationId,
                 consumed.RepositoryId,
                 consumed.RepoAppAuthorizationId),
             consumed.AlreadyConsumed,
@@ -302,16 +313,120 @@ internal sealed class GitHubRepositorySelectionBroker(
         }
 
         var repository = candidates?.SingleOrDefault(candidate => candidate.RepositoryId == consumed.RepositoryId);
-        if (repository is null || !await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false))
+        if (repository is null ||
+            repository.InstallationId != consumed.InstallationId ||
+            !await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false))
             return null;
 
         return new ResolvedGitHubRepositorySelection(
             ProjectIdFromCodeHash(codeHash),
             isRetry,
+            consumed.EntraObjectId,
+            consumed.RepoAppAuthorizationId,
+            consumed.InstallationId,
+            consumed.RepositoryId,
             repository.FullName,
             repository.SourceUrl,
             repository.CloneUrl,
             accessToken);
+    }
+
+    internal async Task<bool> BindProjectAuthorizationAsync(
+        Project project,
+        ResolvedGitHubRepositorySelection selection,
+        CancellationToken ct)
+    {
+        var authority = await installationTokens.GetRepositoryAuthorityAsync(
+            selection.InstallationId, selection.RepositoryId, ct).ConfigureAwait(false);
+        if (authority is null ||
+            !string.Equals(authority.FullNameDisplay, selection.FullName, StringComparison.OrdinalIgnoreCase))
+        {
+            logger?.LogWarning(
+                "Repo App project binding verification failed for project {ProjectId}.",
+                selection.ProjectId);
+            return false;
+        }
+
+        if (!await db.Projects.AnyAsync(
+                record => record.ProjectId == project.Id.ToString(),
+                ct).ConfigureAwait(false))
+        {
+            db.Projects.Add(new ProjectRecord
+            {
+                ProjectId = project.Id.ToString(),
+                Name = project.Name,
+                OriginKind = "github",
+                SourceRepository = project.Origin.SourceRepository,
+                WorkingDirectory = project.WorkingDirectory,
+                DefaultBranch = project.DefaultBranch,
+                Owner = project.Owner,
+                DefaultProvider = project.ProviderSettings.DefaultProvider.ToApiString(),
+                DefaultModelCopilot = project.ProviderSettings.GitHubCopilotModel,
+                DefaultModelFoundry = project.ProviderSettings.MicrosoftFoundryModel,
+                State = "creating",
+                CreatedAt = project.CreatedAt,
+                UpdatedAt = project.UpdatedAt,
+            });
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+
+        var outcome = await new RepoAppInstallationLifecycleService(db)
+            .BindSelectedRepositoryAsync(
+                selection.ProjectId.ToString(),
+                selection.EntraObjectId,
+                selection.RepoAppAuthorizationId,
+                authority,
+                ct)
+            .ConfigureAwait(false);
+        if (outcome != RepoAppInstallationBindingOutcome.Bound)
+        {
+            logger?.LogWarning(
+                "Repo App project binding failed for project {ProjectId} with outcome {Outcome}.",
+                selection.ProjectId,
+                outcome);
+            return false;
+        }
+
+        logger?.LogInformation(
+            "Repo App project binding completed for project {ProjectId}.",
+            selection.ProjectId);
+        return true;
+    }
+
+    internal Task RevokeProjectAuthorizationAsync(
+        ResolvedGitHubRepositorySelection selection,
+        CancellationToken ct) =>
+        new RepoAppInstallationLifecycleService(db).RevokeProjectBindingAsync(
+            selection.ProjectId.ToString(),
+            selection.InstallationId,
+            selection.RepositoryId,
+            ct);
+
+    internal async Task<bool> RevalidateExistingProjectAuthorizationAsync(
+        Project project,
+        ResolvedGitHubRepositorySelection selection,
+        CancellationToken ct)
+    {
+        var projectId = project.Id.ToString();
+        var hasExactLiveBinding = await db.GitHubRepositoryGrants
+            .AsNoTracking()
+            .AnyAsync(
+                grant =>
+                    grant.ProjectId == projectId &&
+                    grant.InstallationId == selection.InstallationId &&
+                    grant.RepositoryId == selection.RepositoryId &&
+                    grant.RevokedAt == null &&
+                    grant.FullNameDisplay == selection.FullName &&
+                    db.GitHubInstallations.Any(
+                        installation =>
+                            installation.InstallationId == grant.InstallationId &&
+                            installation.AppKind == GitHubAppKind.Repo &&
+                            installation.RevokedAt == null),
+                ct)
+            .ConfigureAwait(false);
+
+        return hasExactLiveBinding &&
+               await BindProjectAuthorizationAsync(project, selection, ct).ConfigureAwait(false);
     }
 
     private async Task<(

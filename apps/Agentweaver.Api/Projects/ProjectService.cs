@@ -133,6 +133,8 @@ public sealed class ProjectService
         string owner,
         string accessToken,
         Func<Project, CancellationToken, Task>? onReserved = null,
+        Func<Project, CancellationToken, Task>? onPrepared = null,
+        Func<Project, CancellationToken, Task>? onCreationFailed = null,
         CancellationToken ct = default)
     {
         ValidateName(name);
@@ -209,6 +211,10 @@ public sealed class ProjectService
             TryMaterializeAgentDefinition(workingDir);
             _gitInit.CommitAllUntracked(workingDir, "Add scaffold files");
 
+            phase = "authorization";
+            if (onPrepared is not null)
+                await onPrepared(project, CancellationToken.None).ConfigureAwait(false);
+
             phase = "activate";
             var completedAt = DateTimeOffset.UtcNow;
             await _store.UpdateCreationStateAsync(
@@ -226,6 +232,20 @@ public sealed class ProjectService
         catch (Exception ex)
         {
             TryDeleteDirectory(workingDir);
+            if (onCreationFailed is not null)
+            {
+                try
+                {
+                    await onCreationFailed(project, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception cleanupEx)
+                {
+                    _logger.LogError(
+                        cleanupEx,
+                        "Failed to revoke GitHub project authorization after creation failure for project {ProjectId}",
+                        id);
+                }
+            }
             var failedAt = DateTimeOffset.UtcNow;
             try
             {
@@ -249,6 +269,34 @@ public sealed class ProjectService
                 phase);
             throw new ProjectCreationFailedException(id, phase, ex);
         }
+    }
+
+    public async Task<Project> ResumePreparedGitHubCreationAsync(
+        Project project,
+        CancellationToken ct = default)
+    {
+        if (project.State != ProjectState.Creating ||
+            project.Origin.Kind != ProjectOriginKind.FromGitHub ||
+            !_workspace.IsAvailable(project.WorkingDirectory))
+            return project;
+
+        var defaultBranch = _gitInit.GetCurrentBranch(project.WorkingDirectory);
+        var completedAt = DateTimeOffset.UtcNow;
+        await _store.UpdateCreationStateAsync(
+            project.Id,
+            ProjectState.Active,
+            defaultBranch,
+            completedAt,
+            ct).ConfigureAwait(false);
+        _logger.LogInformation(
+            "Recovered prepared GitHub project creation for project {ProjectId}.",
+            project.Id);
+        return project with
+        {
+            DefaultBranch = defaultBranch,
+            State = ProjectState.Active,
+            UpdatedAt = completedAt,
+        };
     }
 
     public async Task<Project> ConnectCreatedRepositoryAsync(
