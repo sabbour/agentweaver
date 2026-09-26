@@ -18,6 +18,29 @@ public sealed class RunEffectivePermissionBindingProvider(
         EffectivePermissionBinding? ceiling = null,
         CancellationToken ct = default)
     {
+        var binding = await ResolveAsync(
+            runId,
+            repositoryPath,
+            establishLaunchCeiling: true,
+            ct).ConfigureAwait(false);
+        if (ceiling is not null)
+            binding = EffectivePermissionBinding.Intersect(binding, ceiling);
+        binding.Validate(runId, binding.Attempt);
+        return binding;
+    }
+
+    public Task<EffectivePermissionBinding> ResolveForInspectionAsync(
+        string runId,
+        string repositoryPath,
+        CancellationToken ct = default) =>
+        ResolveAsync(runId, repositoryPath, establishLaunchCeiling: false, ct);
+
+    private async Task<EffectivePermissionBinding> ResolveAsync(
+        string runId,
+        string repositoryPath,
+        bool establishLaunchCeiling,
+        CancellationToken ct)
+    {
         if (!RunId.TryParse(runId, out var parsedRunId))
             throw new EffectivePermissionBindingException("Effective permission binding requires a valid run id.");
 
@@ -27,10 +50,8 @@ public sealed class RunEffectivePermissionBindingProvider(
             repositoryPath,
             visited,
             depth: 0,
+            establishLaunchCeiling,
             ct).ConfigureAwait(false);
-
-        if (ceiling is not null)
-            binding = EffectivePermissionBinding.Intersect(binding, ceiling);
         binding.Validate(runId, binding.Attempt);
         return binding;
     }
@@ -40,6 +61,7 @@ public sealed class RunEffectivePermissionBindingProvider(
         string repositoryPath,
         HashSet<string> visited,
         int depth,
+        bool establishLaunchCeiling,
         CancellationToken ct)
     {
         var id = runId.ToString();
@@ -61,6 +83,7 @@ public sealed class RunEffectivePermissionBindingProvider(
                 run.RepositoryPath,
                 visited,
                 depth + 1,
+                establishLaunchCeiling,
                 ct).ConfigureAwait(false);
         }
 
@@ -78,13 +101,25 @@ public sealed class RunEffectivePermissionBindingProvider(
             scope,
             policy,
             parent);
-        var launchCeiling = await GetOrCreateLaunchCeilingAsync(
-            run,
-            current,
-            ct).ConfigureAwait(false);
-        var binding = EffectivePermissionBinding.Intersect(current, launchCeiling);
+        var launchCeiling = establishLaunchCeiling
+            ? await GetOrCreateLaunchCeilingAsync(run, current, ct).ConfigureAwait(false)
+            : await GetLaunchCeilingAsync(run, ct).ConfigureAwait(false);
+        var binding = launchCeiling is null
+            ? current
+            : EffectivePermissionBinding.Intersect(current, launchCeiling);
         binding.Validate(id, run.LifecycleGeneration);
         return binding;
+    }
+
+    private async Task<EffectivePermissionBinding?> GetLaunchCeilingAsync(
+        Run run,
+        CancellationToken ct)
+    {
+        var runId = run.Id.ToString();
+        var events = await eventStream
+            .GetPersistedEventsAsync(runId, 0, ct)
+            .ConfigureAwait(false);
+        return FindLaunchCeiling(events, runId, run.LifecycleGeneration);
     }
 
     private async Task<EffectivePermissionBinding> GetOrCreateLaunchCeilingAsync(

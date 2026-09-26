@@ -145,6 +145,8 @@ parent, permissions revoked since launch, fixed operation-family enforcement cov
 and the latest permission denial. Denial evidence is normalized to a reason code,
 operation, safe tool name, binding provenance, sequence, and timestamp; tool arguments,
 commands, URLs, arbitrary event payloads, and credentials are not returned.
+Inspection is read-only: viewing an unstarted or legacy run does not create its durable
+launch ceiling.
 The first binding for each run lifecycle is also recorded as
 `permission.binding.bound`; current policy is always intersected with that durable
 launch ceiling. This keeps restored executions and newly delegated children from
