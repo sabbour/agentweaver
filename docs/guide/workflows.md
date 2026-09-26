@@ -144,10 +144,12 @@ fencing under the same Run row and run id; no replacement branch Run is created.
 
 Cancelling the parent durably suppresses both its top-level fan work plan and any nested fan
 continuations before the parent becomes terminal. Pending branches remain pending, active branch
-runs receive an attributable `run.cancelled` terminal event, and neither the fan join nor the parent
-continuation resumes. Repeated cancellation requests and restart recovery reapply the same
-idempotent cancellation boundary so a branch that crosses the launch race cannot continue detached
-from its cancelled parent.
+runs receive an attributable `run.cancelled` event with `reason: parent_cancelled`,
+`requested: true`, and the parent run ID, and neither the fan join nor the parent continuation
+resumes. That cancellation provenance remains durable even when a concurrent worker failure wins
+the child's terminal-status transition. Repeated cancellation requests and restart recovery reapply
+the same idempotent cancellation boundary without duplicating the event, so a branch that crosses
+the launch race cannot continue detached from its cancelled parent.
 
 `fan_out` / `fan_in` is an execution primitive, not coordinator assembly. It does not create or
 update an integration Git branch, merge branch output, open or review a pull request, publish

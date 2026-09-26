@@ -413,6 +413,44 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RestartRecovery_ReissuesCancellationForChildrenThatTerminalizedAfterSnapshot()
+    {
+        var firstChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var secondChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var (planId, activeSubtaskIds, pendingSubtaskId) = await SeedTopLevelFanPlanAsync(
+            firstChild,
+            secondChild);
+
+        await _service.CancelForParentAsync(_parent.Id.ToString());
+        (await _runStore.TerminalizeForTestAsync(firstChild.Id, DomainRunStatus.Failed)).Should().BeTrue();
+        (await _runStore.TerminalizeForTestAsync(secondChild.Id, DomainRunStatus.Failed)).Should().BeTrue();
+        _runtime.Cancelled.Clear();
+
+        await _service.PrepareRestartRecoveryAsync();
+
+        _runtime.Cancelled.Select(run => run.Id).Should().BeEquivalentTo([firstChild.Id, secondChild.Id]);
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var activeSubtasks = await db.Subtasks.AsNoTracking()
+            .Where(subtask => activeSubtaskIds.Contains(subtask.Id))
+            .ToListAsync();
+        activeSubtasks.Should().OnlyContain(subtask =>
+            subtask.CancellationRequestedAt != null
+            && subtask.CancellationRequestedByRunId == _parent.Id.ToString());
+        var pendingSubtask = await db.Subtasks.AsNoTracking().SingleAsync(row => row.Id == pendingSubtaskId);
+        pendingSubtask.CancellationRequestedAt.Should().BeNull(
+            "a child that was not active at the cancellation snapshot must not gain false provenance");
+        (await GetPlanAsync(planId)).ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Suppressed);
+        _runtime.Deliveries.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RestartRecovery_ReissuesCancellationForLateActiveChild()
     {
         var attached = await CreateAsync(Request());
@@ -440,6 +478,26 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RestartRecovery_ReissuesCancellationForCoordinatorThatTerminalizedAfterSnapshot()
+    {
+        var attached = await CreateAsync(Request());
+
+        await _service.CancelForParentAsync(_parent.Id.ToString());
+        (await _runStore.TerminalizeForTestAsync(
+            RunId.Parse(attached.ChildCoordinatorRunId),
+            DomainRunStatus.Failed)).Should().BeTrue();
+        _runtime.Cancelled.Clear();
+
+        await _service.PrepareRestartRecoveryAsync();
+
+        _runtime.Cancelled.Select(run => run.Id.ToString()).Should().Contain(attached.ChildCoordinatorRunId);
+        var plan = await GetPlanAsync(attached.WorkPlanId);
+        plan.CoordinatorCancellationRequestedAt.Should().NotBeNull();
+        plan.CoordinatorCancellationRequestedByRunId.Should().Be(_parent.Id.ToString());
+        plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Suppressed);
+    }
+
+    [Fact]
     public async Task ParentCancellation_DoesNotRecancelAlreadyTerminalChild()
     {
         var attached = await CreateAsync(Request());
@@ -463,6 +521,11 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
 
         _runtime.Cancelled.Select(run => run.Id).Should().NotContain(completedChild.Id);
         _runtime.Cancelled.Select(run => run.Id.ToString()).Should().Contain(attached.ChildCoordinatorRunId);
+        using var scope = _provider.CreateScope();
+        var subtask = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+            .Subtasks.AsNoTracking().SingleAsync(row => row.Id == attached.Branches[0].SubtaskId);
+        subtask.CancellationRequestedAt.Should().BeNull();
+        subtask.CancellationRequestedByRunId.Should().BeNull();
     }
 
     [Fact]
@@ -901,7 +964,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             return Task.FromResult(DeliverResult);
         }
 
-        public Task CancelRunAsync(DomainRun run, CancellationToken ct)
+        public Task CancelRunAsync(DomainRun run, string requestedByRunId, CancellationToken ct)
         {
             Cancelled.Add(run);
             return Task.CompletedTask;
