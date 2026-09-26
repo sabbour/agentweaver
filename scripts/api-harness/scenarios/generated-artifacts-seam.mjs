@@ -30,7 +30,7 @@ export default {
   projectPrefix: 'seam-genart',
 
   // Base blueprint for the throwaway project that hosts project-scoped workflow generation.
-  baseBlueprintId: 'blueprint-software-development',
+  baseBlueprintId: 'blueprint-pm-and-software-development',
 
   // A realistic new-team idea to make the generator mint a domain roster + workflow.
   // Deliberately does NOT ask for logging/monitoring/safety roles — if the generator
@@ -48,6 +48,52 @@ export default {
     'Design → implement → peer review → build and test → if tests pass, deploy; if they',
     'fail, loop back to implement. End with a human review gate before the deploy step.',
   ].join(' '),
+
+  // Provider-backed conservative-generation probes. These are retained as ordinary
+  // workflows when --keep is supplied, so post-merge acceptance can inspect or run
+  // the exact generated artifacts rather than relying on synthetic completion.
+  conservativeFanCases: [
+    {
+      id: 'independent-disjoint-research',
+      expectedMode: 'fan',
+      startRetainedRun: true,
+      description: [
+        'Research customer adoption signals and technical feasibility independently.',
+        'The customer branch must write only reports/customer-signals.md. The technical',
+        'branch must write only reports/technical-feasibility.md. Join both branches,',
+        'then synthesize their ordered findings. This is documentation-only work.',
+      ].join(' '),
+    },
+    {
+      id: 'overlapping-output-scope',
+      expectedMode: 'sequential',
+      description: [
+        'Research customer adoption signals and technical feasibility. Both tasks need',
+        'to update reports/discovery.md, then synthesize the result. Keep dependent or',
+        'overlapping work sequential.',
+      ].join(' '),
+    },
+    {
+      id: 'unknown-output-scope',
+      expectedMode: 'sequential',
+      description: [
+        'Research two aspects of this product and synthesize the result, but no exact',
+        'output files are known yet. Keep work sequential when write scope is unknown.',
+      ].join(' '),
+    },
+  ],
+
+  // Runtime acceptance matrix prepared for retained post-merge proof. The seam does
+  // not fake provider execution; these labels travel with the evidence so operators
+  // can retain the generated workflows/runs and prove each lifecycle outcome live.
+  retainedRuntimeProofs: [
+    'fan-success-overlap-and-declaration-order',
+    'one-branch-failure',
+    'cancellation-propagation',
+    'restart-and-retry-without-duplicate-branches',
+    'pm-discovery-branches-before-synthesis',
+  ],
+  verifyPmDiscovery: true,
 
   // A generated team should be more than a single generalist.
   minRosterSize: 3,

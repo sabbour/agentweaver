@@ -779,6 +779,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                         Scope: string.IsNullOrWhiteSpace(node.Prompt) ? node.Label : node.Prompt!,
                         AssignedAgent: node.Agent ?? input.AgentName ?? "agent",
                         SelectedModelId: input.ModelId ?? parentRun.ModelId ?? string.Empty,
+                        DeclaredOutputPaths: node.DeclaredOutputPaths,
                         AgentCharter: node.Charter)).ToArray();
 
                     await using var scope = _scopeFactory.CreateAsyncScope();

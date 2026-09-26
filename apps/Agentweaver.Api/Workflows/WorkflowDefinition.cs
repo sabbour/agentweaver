@@ -74,6 +74,20 @@ public sealed record WorkflowNode
     public string? Prompt { get; init; }
 
     /// <summary>
+    /// Explicit author assertion used by generated static fan branches. A generated branch is not
+    /// eligible for parallel execution unless this is <see langword="true"/> and the conservative
+    /// generation policy can prove its declared output paths are exact and disjoint.
+    /// </summary>
+    public bool? Independent { get; init; }
+
+    /// <summary>
+    /// Exact repository-relative files this node may create or update. Generated static fan branches
+    /// must declare at least one path; broad directories, dynamic paths, and shared artifacts are not
+    /// accepted as proof of a safe parallel write scope.
+    /// </summary>
+    public IReadOnlyList<string> DeclaredOutputPaths { get; init; } = [];
+
+    /// <summary>
     /// Optional inline charter for a bespoke (non-catalog) agent role. Set ONLY when the node's
     /// <see cref="Role"/> is a bespoke id that no catalog role covers; defines the agent's persona,
     /// domain expertise, and approach (2-4 sentences). Null when the node uses a catalog role id, in

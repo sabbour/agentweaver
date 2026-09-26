@@ -26,12 +26,17 @@ cancellation, and restart reconciliation.
 - Runtime binding through the real MAF graph and request-port suspension
 - Concurrent child-run dispatch with ordered wait-all join
 - Existing API, events, diagnostics, MCP, and web topology projections
+- Conservative direct and blueprint custom-workflow generation for prompt-only static fans
+- Explicit generated-branch independence and declared-output metadata
+- PM Discovery customer-signal and technical-feasibility branches before synthesis
+- Provider-backed acceptance scenarios that can retain generated artifacts for post-merge proof
 
 ### Out
 
-- Workflow generation or visual-editor exposure
+- Visual-editor authoring controls for fan metadata
 - Dynamic branches, nested fans, quorum or partial joins
 - Coordinator-composed work, integration merge, review, Scribe, or publication
+- Generic code-writing parallelism before repository write-scope isolation is implemented
 
 ## Acceptance criteria
 
@@ -61,6 +66,18 @@ cancellation, and restart reconciliation.
   and their graph omits collective assembly stages.
 - [x] Child-work suspension is classified as `workflow_child_work`; REST rejects `/review` and MCP/UI
   do not advertise human-review actions for that wait.
+- [x] Direct and blueprint custom-workflow generation share one mechanical fan-safety policy.
+- [x] Generated fan branches require `independent: true` plus exact, pairwise-disjoint
+  `declared_output_paths`; unknown, dynamic, broad, shared, dependent, or overlapping scopes are
+  deterministically linearized in declaration order.
+- [x] Windows-style path normalization is case-insensitive and rejects exact and file/directory
+  prefix overlap, manifests, migrations, and generated shared artifacts.
+- [x] Generated prompt-only fans remain runtime-bindable, while `serial` and
+  `coordinator_composed` remain unsupported.
+- [x] PM Discovery runs customer-signal and technical-feasibility research as two ordered branches,
+  joins them, then continues through synthesis and review.
+- [x] The API harness can distinguish safe generated fans from conservative sequential output and
+  retain provider-generated workflows for post-merge runtime evidence without simulating completion.
 
 ## Notable edge cases
 

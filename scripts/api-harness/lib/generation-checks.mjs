@@ -264,3 +264,235 @@ export function workflowNodeRoles(yamlText) {
   }
   return [...new Set(roles)];
 }
+
+const BROAD_OUTPUT_SCOPES = new Set([
+  '.', 'repo', 'repository', 'workspace', 'source', 'src', 'docs', 'documentation',
+  'apps', 'packages', 'tests',
+]);
+
+const SHARED_OUTPUT_NAMES = new Set([
+  'package.json', 'package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock',
+  'packages.lock.json', 'nuget.config', 'requirements.txt', 'pyproject.toml', 'poetry.lock',
+  'go.mod', 'go.sum', 'cargo.toml', 'cargo.lock', 'composer.json', 'composer.lock',
+  'gemfile', 'gemfile.lock', 'global.json', 'directory.build.props',
+  'directory.build.targets', 'directory.packages.props',
+]);
+
+const CONTENT_OUTPUT_EXTENSIONS = new Set(['.adoc', '.csv', '.markdown', '.md', '.rst', '.tsv', '.txt']);
+const CODE_OUTPUT_EXTENSIONS = new Set([
+  '.cs', '.fs', '.go', '.java', '.js', '.jsx', '.kt', '.kts', '.mjs', '.py', '.rb',
+  '.rs', '.sql', '.ts', '.tsx', '.vb', '.vue',
+]);
+const STRONG_DEPENDENCY_LANGUAGE = /\b(after|before|then|once|based\s+on|depends?\s+on|wait(?:ing)?\s+for|builds?\s+on|requires?\s+(?:the\s+)?(?:output|result|artifact|report|analysis|findings)|from\s+(?:the\s+)?(?:other|previous|prior|sibling|branch))\b/i;
+const CONSUMPTION_LANGUAGE = /\b(consume|consumes|use|uses|using|incorporate|incorporates|integrate|combine|merge|based\s+on|derive(?:d)?\s+from|findings|results?|outputs?|artifacts?|from\s+(?:the\s+)?branch)\b/i;
+const SOURCE_MUTATION_LANGUAGE = /\b(?:implement|refactor|modify|update|edit|patch|rewrite|change|generate|build|compile)\b[\s\S]{0,80}\b(?:code|source|project|solution|package|manifest|migration|schema|api|class|module|component|service|repository|repo)\b/i;
+
+function normalizeDeclaredOutputPath(rawPath) {
+  const value = String(rawPath ?? '').trim().replaceAll('\\', '/').replace(/\/+/g, '/');
+  if (!value || value.startsWith('/') || value.startsWith('~/') || value.includes(':')) return null;
+  if (/[?*[\]{}$%<>]/.test(value)) return null;
+  const segments = value.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return null;
+  if (BROAD_OUTPUT_SCOPES.has(value.toLowerCase())) return null;
+  if (value.endsWith('/')) return null;
+  const fileName = segments.at(-1).toLowerCase();
+  if (SHARED_OUTPUT_NAMES.has(fileName)) return null;
+  const extensionIndex = fileName.lastIndexOf('.');
+  const extension = extensionIndex >= 0 ? fileName.slice(extensionIndex) : '';
+  if (segments.some((segment) => segment.startsWith('.'))) return null;
+  if (CODE_OUTPUT_EXTENSIONS.has(extension) || /\.(sln|csproj|fsproj|vbproj|lock)$/i.test(fileName)) return null;
+  if (segments.some((segment) => /^(src|source|app|apps|lib|libs|packages|migrations?|generated|dist|build|obj|bin)$/i.test(segment))) return null;
+  if (!fileName.includes('.')) return null;
+  if (!CONTENT_OUTPUT_EXTENSIONS.has(extension)) return null;
+  return value;
+}
+
+function outputPathsOverlap(left, right) {
+  const a = left.toLowerCase();
+  const b = right.toLowerCase();
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
+function promptPathReferences(prompt) {
+  const matches = String(prompt).matchAll(
+    /(?<![A-Za-z0-9_])(?:\.?[\\/])?[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)*\.[A-Za-z0-9]{1,16}(?![A-Za-z0-9_])/g,
+  );
+  return [...matches].map((match) => String(match[0]).replaceAll('\\', '/').replace(/^\.\/+/, '').toLowerCase());
+}
+
+function hasExplicitContentOutputContract(prompt, declaredPaths) {
+  const normalizedPrompt = String(prompt).replaceAll('\\', '/');
+  return declaredPaths.every((path) => {
+    const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(
+      `\\b(?:write|save|create|produce|publish|export|record|capture)\\s+only\\s+(?:to\\s+)?[\\\`'"]?${escaped}[\\\`'"]?\\b`,
+      'i',
+    ).test(normalizedPrompt);
+  });
+}
+
+function graphHasCycle(nodes, edges) {
+  const nodeIds = new Set(nodes.map((node) => node?.id).filter(Boolean));
+  const outgoing = new Map();
+  for (const edge of edges) {
+    if (!nodeIds.has(edge?.from) || !nodeIds.has(edge?.to)) continue;
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
+  }
+  const visiting = new Set();
+  const visited = new Set();
+  function visit(nodeId) {
+    if (visiting.has(nodeId)) return true;
+    if (visited.has(nodeId)) return false;
+    visiting.add(nodeId);
+    if ((outgoing.get(nodeId) ?? []).some(visit)) return true;
+    visiting.delete(nodeId);
+    visited.add(nodeId);
+    return false;
+  }
+  return [...nodeIds].some(visit);
+}
+
+/**
+ * Classify generated workflow fan topology using the same fail-closed contract as
+ * ConservativeWorkflowFanPolicy. This is an acceptance assertion, not a provider
+ * substitute: provider-backed generation must still produce the artifact under test.
+ *
+ * @param {string} yamlText
+ * @returns {{ mode: 'fan'|'sequential'|'invalid', safe: boolean, errors: string[], branchIds: string[], outputPaths: string[] }}
+ */
+export function analyzeConservativeFan(yamlText) {
+  let dto;
+  try {
+    dto = parseYaml(yamlText);
+  } catch (ex) {
+    return { mode: 'invalid', safe: false, errors: [`malformed YAML — ${ex.message}`], branchIds: [], outputPaths: [] };
+  }
+
+  const nodes = Array.isArray(dto?.nodes) ? dto.nodes : [];
+  const edges = Array.isArray(dto?.edges) ? dto.edges : [];
+  const fanOuts = nodes.filter((node) => normalizeType(node?.type ?? '') === 'fan_out');
+  const fanIns = nodes.filter((node) => normalizeType(node?.type ?? '') === 'fan_in');
+  if (nodes.some((node) => ['serial', 'coordinator_composed'].includes(normalizeType(node?.type ?? '')))) {
+    return { mode: 'invalid', safe: false, errors: ['generated workflow contains a prohibited orchestration node type.'], branchIds: [], outputPaths: [] };
+  }
+  if (fanOuts.length === 0 && fanIns.length === 0) {
+    return { mode: 'sequential', safe: true, errors: [], branchIds: [], outputPaths: [] };
+  }
+  if (fanOuts.length !== 1 || fanIns.length !== 1) {
+    return { mode: 'invalid', safe: false, errors: ['generated fan topology must contain exactly one fan_out and one fan_in.'], branchIds: [], outputPaths: [] };
+  }
+
+  const fanOut = fanOuts[0];
+  const fanIn = fanIns[0];
+  const nodeById = new Map(nodes.map((node) => [node?.id, node]));
+  const fanOutIncoming = edges.filter((edge) => edge?.to === fanOut.id);
+  const fanOutOutgoing = edges.filter((edge) => edge?.from === fanOut.id);
+  if (fanOutOutgoing.length < 2 || fanOutOutgoing.some((edge) => edge?.when)) {
+    return { mode: 'invalid', safe: false, errors: ['fan_out must declare at least two distinct unconditional branches.'], branchIds: [], outputPaths: [] };
+  }
+  if ((dto?.start === fanOut.id && fanOutIncoming.length !== 0)
+    || (dto?.start !== fanOut.id
+      && (fanOutIncoming.length !== 1
+        || fanOutIncoming[0]?.when
+        || normalizeType(nodeById.get(fanOutIncoming[0]?.from)?.type ?? '') !== 'prompt'))) {
+    return { mode: 'invalid', safe: false, errors: ['fan_out must be the start or have exactly one unconditional prompt input.'], branchIds: [], outputPaths: [] };
+  }
+  const branchIds = fanOutOutgoing.map((edge) => edge.to);
+  if (branchIds.length < 2 || new Set(branchIds).size !== branchIds.length) {
+    return { mode: 'invalid', safe: false, errors: ['fan_out must declare at least two distinct unconditional branches.'], branchIds, outputPaths: [] };
+  }
+  if (fanIn.target !== fanOut.id) {
+    return { mode: 'invalid', safe: false, errors: ['fan_in target must reference the fan_out node.'], branchIds, outputPaths: [] };
+  }
+
+  const errors = [];
+  const normalizedByBranch = [];
+  for (const branchId of branchIds) {
+    const branch = nodeById.get(branchId);
+    if (!branch || normalizeType(branch.type ?? '') !== 'prompt') {
+      return { mode: 'invalid', safe: false, errors: [`fan branch '${branchId}' must be a prompt node.`], branchIds, outputPaths: [] };
+    }
+    const incoming = edges.filter((edge) => edge?.to === branchId);
+    const outgoing = edges.filter((edge) => edge?.from === branchId);
+    if (incoming.length !== 1 || incoming[0].from !== fanOut.id || incoming[0].when
+      || outgoing.length !== 1 || outgoing[0].to !== fanIn.id || outgoing[0].when) {
+      return { mode: 'invalid', safe: false, errors: [`fan branch '${branchId}' must connect only from fan_out to fan_in.`], branchIds, outputPaths: [] };
+    }
+    if (branch.independent !== true) errors.push(`branch '${branchId}' does not declare independent: true.`);
+    const rawPaths = Array.isArray(branch.declared_output_paths) ? branch.declared_output_paths : [];
+    if (rawPaths.length === 0) errors.push(`branch '${branchId}' has no declared_output_paths.`);
+    const normalizedPaths = rawPaths.map(normalizeDeclaredOutputPath);
+    if (normalizedPaths.some((path) => path === null)) {
+      errors.push(`branch '${branchId}' declares an unknown, dynamic, broad, or shared output scope.`);
+    }
+    const prompt = String(branch.prompt ?? '');
+    const validPaths = normalizedPaths.filter(Boolean);
+    const undeclaredReferences = promptPathReferences(prompt)
+      .filter((path) => !validPaths.some((declaredPath) => declaredPath.toLowerCase() === path));
+    if (undeclaredReferences.length > 0) {
+      errors.push(`branch '${branchId}' references undeclared output paths: ${undeclaredReferences.join(', ')}.`);
+    }
+    if (!hasExplicitContentOutputContract(prompt, validPaths)) {
+      errors.push(`branch '${branchId}' lacks an explicit content-only output contract.`);
+    }
+    if (SOURCE_MUTATION_LANGUAGE.test(prompt)) {
+      errors.push(`branch '${branchId}' contains source mutation language.`);
+    }
+    if (STRONG_DEPENDENCY_LANGUAGE.test(prompt)) {
+      errors.push(`branch '${branchId}' contains dependency language.`);
+    }
+    normalizedByBranch.push({
+      id: branchId,
+      label: String(branch.label ?? ''),
+      prompt: prompt.toLowerCase(),
+      paths: validPaths,
+    });
+  }
+
+  const fanInIncoming = edges.filter((edge) => edge?.to === fanIn.id);
+  if (fanInIncoming.length !== branchIds.length
+    || fanInIncoming.some((edge) => edge?.when)
+    || new Set(fanInIncoming.map((edge) => edge?.from)).size !== branchIds.length
+    || fanInIncoming.some((edge) => !branchIds.includes(edge?.from))) {
+    return { mode: 'invalid', safe: false, errors: ['fan_in inputs must exactly match the fan branch set.'], branchIds, outputPaths: [] };
+  }
+  const continuationEdges = edges.filter((edge) => edge?.from === fanIn.id);
+  const continuation = continuationEdges[0];
+  const continuationNode = continuation ? nodeById.get(continuation.to) : null;
+  if (continuationEdges.length !== 1 || continuation?.when || !continuationNode
+    || !['prompt', 'terminal'].includes(normalizeType(continuationNode.type ?? ''))
+    || [fanOut.id, fanIn.id, ...branchIds].includes(continuation?.to)) {
+    return { mode: 'invalid', safe: false, errors: ['fan_in must have exactly one unconditional continuation outside the fan region.'], branchIds, outputPaths: [] };
+  }
+  if (graphHasCycle(nodes, edges)) {
+    return { mode: 'invalid', safe: false, errors: ['workflow graph contains a cycle.'], branchIds, outputPaths: [] };
+  }
+
+  for (let i = 0; i < normalizedByBranch.length; i += 1) {
+    const left = normalizedByBranch[i];
+    const siblingIdentifiers = normalizedByBranch
+      .filter((_, siblingIndex) => siblingIndex !== i)
+      .flatMap((branch) => [
+        branch.id,
+        branch.label,
+        ...branch.paths.flatMap((path) => [path, path.split('/').at(-1)]),
+      ])
+      .filter(Boolean)
+      .map((identifier) => identifier.toLowerCase());
+    if (CONSUMPTION_LANGUAGE.test(left.prompt)
+      && siblingIdentifiers.some((identifier) => left.prompt.includes(identifier))) {
+      errors.push(`branch '${left.id}' appears to depend on a sibling branch.`);
+    }
+    for (let j = i + 1; j < normalizedByBranch.length; j += 1) {
+      const right = normalizedByBranch[j];
+      if (left.paths.some((a) => right.paths.some((b) => outputPathsOverlap(a, b)))) {
+        errors.push(`branches '${left.id}' and '${right.id}' declare overlapping output paths.`);
+      }
+    }
+  }
+
+  const outputPaths = normalizedByBranch.flatMap((branch) => branch.paths);
+  return errors.length === 0
+    ? { mode: 'fan', safe: true, errors: [], branchIds, outputPaths }
+    : { mode: 'fan', safe: false, errors, branchIds, outputPaths };
+}

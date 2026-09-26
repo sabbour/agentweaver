@@ -1,6 +1,10 @@
 using FluentAssertions;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Workflows;
+using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
+using Agentweaver.Squad.Model;
+using Agentweaver.Squad.Squad;
 
 namespace Agentweaver.Tests.Workflows;
 
@@ -64,6 +68,98 @@ public sealed class CatalogWorkflowBindingTests
         buildTest.Label.Should().Be("Build & Test");
         buildTest.Agent.Should().Be("qa-engineer");
         buildTest.Prompt.Should().BeNull();
+    }
+
+    [Fact]
+    public void PmDiscovery_UsesExactOrderedFanBeforeSynthesis()
+    {
+        var definition = LoadCatalogWorkflow("pm-discovery");
+
+        definition.Start.Should().Be("discovery-fan-out");
+        var fanOut = definition.Nodes.Single(node => node.Type == WorkflowNodeType.FanOut);
+        var fanIn = definition.Nodes.Single(node => node.Type == WorkflowNodeType.FanIn);
+        fanIn.Target.Should().Be(fanOut.Id);
+        var branches = definition.Edges
+            .Where(edge => edge.From == fanOut.Id)
+            .Select(edge => definition.Nodes.Single(node => node.Id == edge.To))
+            .ToArray();
+
+        branches.Select(node => node.Id).Should().Equal(
+            "customer-signal-research",
+            "technical-feasibility-research");
+        branches.Should().OnlyContain(node => node.Type == WorkflowNodeType.Prompt);
+        branches.Should().OnlyContain(node => node.Independent == true);
+        branches.SelectMany(node => node.DeclaredOutputPaths).Should().Equal(
+            "customer-signals.md",
+            "technical-feasibility.md");
+        branches.Should().OnlyContain(branch => definition.Edges.Any(edge =>
+            edge.From == branch.Id && edge.To == fanIn.Id && edge.When == null));
+        definition.Edges.Should().ContainSingle(edge =>
+            edge.From == fanIn.Id && edge.To == "synthesis" && edge.When == null);
+        definition.Nodes.Should().NotContain(node => node.Type == WorkflowNodeType.CoordinatorComposed);
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void PmDiscovery_BindsAgainstEveryBlueprintThatExposesIt()
+    {
+        var catalog = new CatalogReader();
+        var workflow = LoadCatalogWorkflow("pm-discovery");
+        var blueprints = catalog.LoadAllBlueprints()
+            .Where(blueprint => blueprint.Workflows.Contains("pm-discovery", StringComparer.Ordinal))
+            .ToArray();
+        blueprints.Should().NotBeEmpty();
+
+        foreach (var blueprint in blueprints)
+        {
+            var root = Path.Combine(
+                Path.GetTempPath(),
+                "agentweaver-pm-discovery-binding",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var members = blueprint.Roster
+                    .Select((roleId, index) => new CastMember(
+                        $"Member-{index + 1}",
+                        catalog.LoadRole(roleId)
+                            ?? throw new InvalidOperationException($"Catalog role '{roleId}' was not found."),
+                        $".squad/agents/member-{index + 1}/charter.md",
+                        CastMemberStatus.Active,
+                        true))
+                    .ToArray();
+                new SquadWriter(root).WriteTeam(
+                    new Team(blueprint.Name, "test", members),
+                    "test",
+                    DateTimeOffset.UtcNow);
+                var project = new Project
+                {
+                    Id = ProjectId.New(),
+                    Name = blueprint.Name,
+                    Origin = ProjectOrigin.Blank(),
+                    WorkingDirectory = root,
+                    DefaultBranch = "main",
+                    Owner = "test",
+                    ProviderSettings = new ProjectProviderSettings
+                    {
+                        DefaultProvider = ModelSource.GitHubCopilot,
+                    },
+                    State = ProjectState.Active,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                };
+
+                var binding = WorkflowTeamBinding.Bind(project, workflow);
+
+                binding.IsResolved.Should().BeTrue(
+                    $"blueprint '{blueprint.Id}' exposes pm-discovery but lacks roles for: " +
+                    string.Join(", ", binding.UnresolvedRoles.Select(role => role.Role ?? role.Agent)));
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     private static WorkflowDefinition LoadCatalogWorkflow(string workflowId)

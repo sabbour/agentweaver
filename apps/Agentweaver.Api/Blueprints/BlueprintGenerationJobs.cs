@@ -665,7 +665,7 @@ public sealed class BlueprintGenerationJobWorker(
         if (isWorkflow)
         {
             var generator = services.GetRequiredService<IWorkflowGenerator>();
-            var result = await generator.GenerateAsync(
+            var result = ConservativeWorkflowFanPolicy.Enforce(await generator.GenerateAsync(
                 new WorkflowGenerationRequest(
                     workflowRequest!.Description,
                     workflowRequest.ProjectId,
@@ -677,7 +677,7 @@ public sealed class BlueprintGenerationJobWorker(
                     workflowRequest.BaseWorkflowIsBuiltIn,
                     workflowRequest.GenerationModel,
                     workflowRequest.ContentOnly),
-                ct).ConfigureAwait(false);
+                ct).ConfigureAwait(false));
             var projects = services.GetRequiredService<IProjectStore>();
             var project = projectId is null
                 ? null

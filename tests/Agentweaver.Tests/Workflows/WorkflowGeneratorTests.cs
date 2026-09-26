@@ -495,6 +495,87 @@ public sealed class WorkflowGeneratorTests
             to: done
         """;
 
+    private const string SafeResearchFanYaml = """
+        id: parallel-research
+        name: Parallel Research
+        description: Independently research customer signals and technical feasibility before synthesis.
+        version: "1.0"
+        start: discovery-fan-out
+        nodes:
+          - id: discovery-fan-out
+            type: fan_out
+            label: Parallel Discovery
+          - id: customer-research
+            type: prompt
+            label: Customer Research
+            prompt: "Research customer signals and write only reports/customer-signals.md."
+            independent: true
+            declared_output_paths:
+              - reports/customer-signals.md
+          - id: technical-research
+            type: prompt
+            label: Technical Research
+            prompt: "Research technical feasibility and write only reports/technical-feasibility.md."
+            independent: true
+            declared_output_paths:
+              - reports/technical-feasibility.md
+          - id: discovery-fan-in
+            type: fan_in
+            label: Discovery Join
+            target: discovery-fan-out
+          - id: synthesis
+            type: prompt
+            label: Synthesis
+            prompt: "Synthesize the ordered research results."
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: discovery-fan-out
+            to: customer-research
+          - from: discovery-fan-out
+            to: technical-research
+          - from: customer-research
+            to: discovery-fan-in
+          - from: technical-research
+            to: discovery-fan-in
+          - from: discovery-fan-in
+            to: synthesis
+          - from: synthesis
+            to: done
+        """;
+
+    private const string SequentialResearchYaml = """
+        id: sequential-research
+        name: Sequential Research
+        description: Research customer and technical evidence sequentially.
+        version: "1.0"
+        start: customer-research
+        nodes:
+          - id: customer-research
+            type: prompt
+            label: Customer Research
+            prompt: "Research customer signals and write only reports/customer-signals.md."
+          - id: technical-research
+            type: prompt
+            label: Technical Research
+            prompt: "Research technical feasibility and write only reports/technical-feasibility.md."
+          - id: synthesis
+            type: prompt
+            label: Synthesis
+            prompt: "Synthesize the ordered research results."
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: customer-research
+            to: technical-research
+          - from: technical-research
+            to: synthesis
+          - from: synthesis
+            to: done
+        """;
+
     private static CopilotWorkflowGenerator CreateGenerator(
         IAgentRunner runner,
         IDictionary<string, string?>? overrides = null)
@@ -548,7 +629,13 @@ public sealed class WorkflowGeneratorTests
         await generator.GenerateAsync(new WorkflowGenerationRequest("A simple manual workflow."));
 
         var prompt = runner.LastTask!;
-        CountOccurrences(prompt, "fan_out").Should().Be(1);
+        prompt.Should().Contain("fan_out / fan_in");
+        prompt.Should().Contain("independent: true");
+        prompt.Should().Contain("declared_output_paths");
+        prompt.Should().Contain("Never guess a write scope");
+        prompt.Should().Contain("Do not use fan topology for generic implementation/refactoring");
+        prompt.Should().Contain("Do NOT use coordinator_composed");
+        prompt.Should().NotContain("Do NOT use fan_out, fan_in");
         CountOccurrences(prompt, "merge-and-scribe tail").Should().Be(1);
         CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
         CountOccurrences(prompt, "`from`/`to` MUST reference existing node ids").Should().Be(1);
@@ -632,6 +719,189 @@ public sealed class WorkflowGeneratorTests
         result.GeneratedYaml.Should().NotContain("```");
         result.Workflow.Id.Should().Be("generated-flow");
     }
+
+    [Fact]
+    public async Task IndependentDisjointResearchOutputs_KeepBindableFanTopology()
+    {
+        var runner = new ScriptedAgentRunner(SafeResearchFanYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research customer signals and technical feasibility independently, write separate reports, then synthesize.",
+            ContentOnly: true));
+
+        result.WasCorrected.Should().BeFalse();
+        result.Workflow.Nodes.Should().ContainSingle(node => node.Type == WorkflowNodeType.FanOut);
+        result.Workflow.Nodes.Should().ContainSingle(node => node.Type == WorkflowNodeType.FanIn);
+        result.Workflow.Nodes.Where(node => node.Independent is true).Should().HaveCount(2);
+        result.GeneratedYaml.Should().Contain("independent: true");
+        result.GeneratedYaml.Should().Contain("declared_output_paths:");
+        RunWorkflowGraphBinder.GetBindabilityErrors(result.Workflow).Should().BeEmpty();
+        var reloaded = WorkflowDefinitionLoader.Load(result.GeneratedYaml, "safe-generated-fan");
+        reloaded.IsValid.Should().BeTrue(reloaded.Error);
+        reloaded.Definition!.Nodes.Single(node => node.Id == "customer-research")
+            .DeclaredOutputPaths.Should().Equal("reports/customer-signals.md");
+        runner.CallCount.Should().Be(1);
+    }
+
+    [Theory]
+    [MemberData(nameof(UnsafeFanCandidates))]
+    public async Task UnsafeGeneratedFan_IsDeterministicallyLinearized(
+        string unsafeYaml,
+        string expectedFirst,
+        string expectedSecond)
+    {
+        var runner = new ScriptedAgentRunner(unsafeYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research two topics and synthesize the results.",
+            ContentOnly: true));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Nodes.Should().NotContain(node =>
+            node.Type == WorkflowNodeType.FanOut || node.Type == WorkflowNodeType.FanIn);
+        result.Workflow.Start.Should().Be(expectedFirst);
+        result.Workflow.Edges.Should().Contain(edge =>
+            edge.From == expectedFirst && edge.To == expectedSecond && edge.When == null);
+        result.Workflow.Edges.Should().Contain(edge =>
+            edge.From == expectedSecond && edge.To == "synthesis" && edge.When == null);
+        RunWorkflowGraphBinder.GetBindabilityErrors(result.Workflow).Should().BeEmpty();
+        runner.CallCount.Should().Be(1, "safe sequential normalization does not require another model call");
+    }
+
+    public static TheoryData<string, string, string> UnsafeFanCandidates => new()
+    {
+        {
+            SafeResearchFanYaml.ReplaceLineEndings("\n").Replace(
+                "    independent: true\n    declared_output_paths:\n      - reports/customer-signals.md\n",
+                string.Empty,
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                "reports/customer-signals.md",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                "REPORTS/CUSTOMER-SIGNALS.MD",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                "reports/customer-signals.md/source.md",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                "docs",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                "package.json",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                "generated/technical-feasibility.md",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                "reports/{topic}.md",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                ".shared/technical-feasibility.md",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "reports/technical-feasibility.md",
+                "reports/technical-feasibility.ts",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "Research technical feasibility and write only reports/technical-feasibility.md.",
+                "Research technical feasibility and write only reports/technical-feasibility.md. Also write reports/shared-summary.md.",
+                StringComparison.Ordinal),
+            "customer-research",
+            "technical-research"
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(DependencyFanCandidates))]
+    public async Task DependencyBearingGeneratedFan_RequiresCorrectionInsteadOfUnsafeLinearization(
+        string dependencyFan)
+    {
+        var runner = new ScriptedAgentRunner(dependencyFan, SequentialResearchYaml);
+        var generator = CreateGenerator(runner);
+
+        var result = await generator.GenerateAsync(new WorkflowGenerationRequest(
+            "Research two topics and synthesize the results.",
+            ContentOnly: true));
+
+        result.WasCorrected.Should().BeTrue();
+        result.Workflow.Id.Should().Be("sequential-research");
+        result.Workflow.Nodes.Should().NotContain(node =>
+            node.Type == WorkflowNodeType.FanOut || node.Type == WorkflowNodeType.FanIn);
+        runner.CallCount.Should().Be(2, "dependency-bearing fans must return to the correction path");
+    }
+
+    public static TheoryData<string> DependencyFanCandidates => new()
+    {
+        {
+            SafeResearchFanYaml.Replace(
+                "Research customer signals and write only reports/customer-signals.md.",
+                "Use findings from technical-research, then write only reports/customer-signals.md.",
+                StringComparison.Ordinal)
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "Research technical feasibility and write only reports/technical-feasibility.md.",
+                "Incorporate findings from Customer Research and write only reports/technical-feasibility.md.",
+                StringComparison.Ordinal)
+        },
+        {
+            SafeResearchFanYaml.Replace(
+                "Research technical feasibility and write only reports/technical-feasibility.md.",
+                "Consume results from customer-signals.md and write only reports/technical-feasibility.md.",
+                StringComparison.Ordinal)
+        },
+    };
 
     [Fact]
     public async Task PeerReviewApprovalThenAgentTurn_GeneratesRunnableWorkflow()
@@ -1074,6 +1344,10 @@ public sealed class WorkflowGeneratorTests
         runner.LastTask.Should().Contain("BASE WORKFLOW YAML");
         runner.LastTask.Should().Contain("SELF-CHECK BEFORE RETURNING");
         runner.LastTask.Should().Contain("MANDATORY BUILD & TEST STEP (software workflows)");
+        runner.LastTask.Should().Contain("independent: true");
+        runner.LastTask.Should().Contain("declared_output_paths");
+        runner.LastTask.Should().Contain("Never guess independence");
+        runner.LastTask.Should().Contain("Do NOT use coordinator_composed");
     }
 
     [Fact]
@@ -1543,6 +1817,78 @@ public sealed class WorkflowGeneratorTests
         generator.LastRequest.Should().NotBeNull();
         generator.LastRequest!.Description.Should().Be("A manual review-and-merge workflow.");
         generator.LastRequest.GenerationModel.Should().Be(GenerationModelOptions.DefaultModel);
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_EnforcesConservativeFanPolicyForStubbedGenerator()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, _) = await CreateProjectAsync(factory, client, "WfGen Fan Policy Test");
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.ResponseFactory = _ => SafeResearchFanYaml.Replace(
+            "reports/technical-feasibility.md",
+            "REPORTS/CUSTOMER-SIGNALS.MD",
+            StringComparison.Ordinal);
+
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+        var (_, result) = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
+            new
+            {
+                description = "Research customer and technical evidence.",
+                content_only = true,
+            });
+
+        var yaml = result.GetProperty("yaml").GetString()!;
+        yaml.Should().NotContain("type: fan_out");
+        yaml.Should().NotContain("type: fan_in");
+        yaml.Should().Contain("from: customer-research");
+        yaml.Should().Contain("to: technical-research");
+        result.GetProperty("was_corrected").GetBoolean().Should().BeTrue();
+        var loaded = WorkflowDefinitionLoader.Load(
+            yaml,
+            "endpoint-generated",
+            validationMode: WorkflowDefinitionValidationMode.Authoring);
+        loaded.IsValid.Should().BeTrue(loaded.Error);
+        RunWorkflowGraphBinder.GetBindabilityErrors(loaded.Definition!).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GenerateEndpoint_PreservesProvablyDisjointBindableFan()
+    {
+        await using var factory = new StubWorkflowGeneratorFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, _) = await CreateProjectAsync(factory, client, "WfGen Safe Fan Test");
+        var generator = factory.Services.GetRequiredService<IWorkflowGenerator>()
+            .Should().BeOfType<StubWorkflowGenerator>().Subject;
+        generator.ResponseFactory = _ => SafeResearchFanYaml;
+
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+        var (_, result) = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
+            new
+            {
+                description = "Research independent customer and technical evidence in separate reports.",
+                content_only = true,
+            });
+
+        var yaml = result.GetProperty("yaml").GetString()!;
+        yaml.Should().Contain("type: fan_out");
+        yaml.Should().Contain("type: fan_in");
+        yaml.Should().Contain("declared_output_paths:");
+        result.GetProperty("was_corrected").GetBoolean().Should().BeFalse();
+        var loaded = WorkflowDefinitionLoader.Load(
+            yaml,
+            "endpoint-generated-safe-fan",
+            validationMode: WorkflowDefinitionValidationMode.Authoring);
+        loaded.IsValid.Should().BeTrue(loaded.Error);
+        RunWorkflowGraphBinder.GetBindabilityErrors(loaded.Definition!).Should().BeEmpty();
     }
 
     [Fact]

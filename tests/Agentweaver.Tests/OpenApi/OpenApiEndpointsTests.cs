@@ -148,6 +148,14 @@ public sealed class OpenApiEndpointsTests : IDisposable
         grammar.GetProperty("node_types").EnumerateArray()
             .Select(node => node.GetProperty("yaml_type").GetString())
             .Should().Equal(WorkflowGrammarContract.NodeTypes.Select(node => node.YamlType));
+        var nodeTypes = grammar.GetProperty("node_types").EnumerateArray().ToArray();
+        nodeTypes.Single(node => node.GetProperty("yaml_type").GetString() == "fan_out")
+            .GetProperty("runtime_bindable").GetBoolean().Should().BeTrue();
+        nodeTypes.Single(node => node.GetProperty("yaml_type").GetString() == "fan_in")
+            .GetProperty("runtime_bindable").GetBoolean().Should().BeTrue();
+        grammar.GetProperty("node_fields").GetProperty("optional_fields").EnumerateArray()
+            .Select(field => field.GetString())
+            .Should().Contain(["independent", "declared_output_paths"]);
 
         var bindable = WorkflowDefinitionLoader.Load("""
             id: contract-client

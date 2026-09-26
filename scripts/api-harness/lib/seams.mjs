@@ -13,11 +13,13 @@
 // or a generated workflow with dangling edges / unrouted check branches that would only
 // blow up at run time.
 //
-// Bounded + safe: it only calls generation endpoints (which return UNSAVED drafts) and a
-// throwaway project for project-scoped workflow generation, then cleans up. Nothing is
-// deployed, merged, saved to a catalog, or run.
+// Bounded + safe by default: it calls generation endpoints (which return UNSAVED drafts) and a
+// throwaway project, then cleans up. With --keep, explicitly selected generated workflows may be
+// saved and queued for real provider-backed execution so post-merge acceptance can inspect the
+// durable project/run; the harness never fabricates completion.
 
 import {
+  analyzeConservativeFan,
   findReservedRoleLeaks,
   validateWorkflowYaml,
   workflowNodeRoles,
@@ -242,6 +244,32 @@ async function exerciseCancelRetry(client, {
  * @param {Object} opts
  * @param {boolean} [opts.keep]
  */
+export function verifyPmDiscovery(response) {
+  const workflow = response.responseBody ?? {};
+  const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
+  const edges = Array.isArray(workflow.edges) ? workflow.edges : [];
+  const branchIds = edges
+    .filter((edge) => edge.from === 'discovery-fan-out')
+    .map((edge) => edge.to);
+  const customer = nodes.find((node) => node.id === 'customer-signal-research');
+  const technical = nodes.find((node) => node.id === 'technical-feasibility-research');
+  const valid = response.ok
+    && branchIds.join(',') === 'customer-signal-research,technical-feasibility-research'
+    && customer?.independent === true
+    && technical?.independent === true
+    && customer?.declared_output_paths?.join(',') === 'customer-signals.md'
+    && technical?.declared_output_paths?.join(',') === 'technical-feasibility.md'
+    && edges.some((edge) => edge.from === 'customer-signal-research' && edge.to === 'discovery-fan-in')
+    && edges.some((edge) => edge.from === 'technical-feasibility-research' && edge.to === 'discovery-fan-in')
+    && edges.some((edge) => edge.from === 'discovery-fan-in' && edge.to === 'synthesis');
+  return {
+    valid,
+    branchIds,
+    customerOutputPaths: customer?.declared_output_paths ?? [],
+    technicalOutputPaths: technical?.declared_output_paths ?? [],
+  };
+}
+
 export async function runGenerationSeams(client, scenario, opts = {}) {
   const lifecycle = { projectId: null, cleanupAttempted: false };
   const cleanup = async () => {
@@ -282,6 +310,11 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     generatedBlueprintWorkflowValid: null,
     generatedWorkflow: null,
     generatedWorkflowValidation: null,
+    conservativeFanCases: [],
+    retainedWorkflowIds: [],
+    retainedRunTriggers: [],
+    retainedRuntimeProofs: scenario.retainedRuntimeProofs ?? [],
+    pmDiscovery: null,
   };
   /** @type {{name:string, pass:boolean, detail:string, category:string, skipped?:boolean}[]} */
   const checks = [];
@@ -291,6 +324,7 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
   const add = (name, pass, detail = '', category = 'P0') =>
     checks.push({ name, pass: !!pass, detail, category, skipped: category === 'CANNOT_DETERMINE' });
   let inconclusive = false;
+  let blueprintGeneratedWorkflowYaml = null;
 
   const time = async (key, fn) => {
     const t0 = Date.now();
@@ -459,6 +493,7 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
   } else {
     const bp = genBp?.responseBody?.blueprint ?? {};
     const genWfYaml = genBp?.responseBody?.generated_workflow_yaml ?? null;
+    blueprintGeneratedWorkflowYaml = genWfYaml;
     evidence.generatedBlueprint = {
       id: bp.id,
       name: bp.name,
@@ -498,11 +533,22 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     // If the generator produced a custom workflow inline, it must pass structural validation.
     if (genWfYaml) {
       const v = validateWorkflowYaml(genWfYaml);
-      evidence.generatedBlueprintWorkflowValid = { valid: v.valid, errors: v.errors, nodeCount: v.nodeCount };
+      const fan = analyzeConservativeFan(genWfYaml);
+      evidence.generatedBlueprintWorkflowValid = {
+        valid: v.valid,
+        errors: v.errors,
+        nodeCount: v.nodeCount,
+        conservativeFan: fan,
+      };
       add(
         "Blueprint's inline generated workflow passes backend structural validation",
         v.valid,
         v.valid ? `${v.nodeCount} nodes, structurally valid` : `${v.errors.length} error(s): ${v.errors.slice(0, 3).join('; ')}`,
+      );
+      add(
+        "Blueprint's inline generated workflow obeys conservative fan safety",
+        fan.safe,
+        fan.safe ? `mode=${fan.mode}` : fan.errors.slice(0, 3).join('; '),
       );
     }
   }
@@ -528,6 +574,20 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
   );
 
   if (evidence.projectId) {
+    if (scenario.verifyPmDiscovery) {
+      await inspectPmDiscovery(client, evidence.projectId, evidence, add);
+    }
+    if (opts.keep && blueprintGeneratedWorkflowYaml) {
+      await retainGeneratedWorkflow(
+        client,
+        evidence.projectId,
+        blueprintGeneratedWorkflowYaml,
+        'blueprint custom workflow',
+        evidence,
+        add,
+      );
+    }
+
     const workflowContext = await time('workflowExecutionContextMs', () =>
       prepareAiExecutionContext(client, 'workflow_generation', evidence.projectId),
     );
@@ -669,7 +729,14 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
       const yamlDocumentId = v.documentId;
       const nodeRoles = workflowNodeRoles(yaml);
       const roleLeaks = findReservedRoleLeaks({ workflowRoles: nodeRoles });
-      evidence.generatedWorkflow = { workflowId, yamlDocumentId, wasCorrected: genWf.responseBody?.wasCorrected, nodeRoles };
+      const fan = analyzeConservativeFan(yaml);
+      evidence.generatedWorkflow = {
+        workflowId,
+        yamlDocumentId,
+        wasCorrected: genWf.responseBody?.wasCorrected,
+        nodeRoles,
+        conservativeFan: fan,
+      };
       evidence.generatedWorkflowValidation = { valid: v.valid, errors: v.errors, warnings: v.warnings, nodeCount: v.nodeCount };
 
       add(
@@ -687,6 +754,52 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
         roleLeaks.offenders.length === 0,
         roleLeaks.offenders.length === 0 ? `roles: ${nodeRoles.join(', ') || '(none declared)'}` : `LEAKED: ${roleLeaks.offenders.join(', ')}`,
       );
+      add(
+        'Generated workflow obeys conservative fan safety',
+        fan.safe,
+        fan.safe ? `mode=${fan.mode}` : fan.errors.slice(0, 3).join('; '),
+      );
+      if (opts.keep && v.valid && fan.safe) {
+        await retainGeneratedWorkflow(client, evidence.projectId, yaml, 'primary generated workflow', evidence, add);
+      }
+    }
+
+    for (const fanCase of scenario.conservativeFanCases ?? []) {
+      const fanResult = await runConservativeFanGenerationCase(
+        client,
+        evidence.projectId,
+        fanCase,
+        opts,
+        time,
+      );
+      evidence.conservativeFanCases.push(fanResult.evidence);
+      if (fanResult.inconclusive) inconclusive = true;
+      add(
+        `Conservative generation case '${fanCase.id}' returns ${fanCase.expectedMode}`,
+        fanResult.pass,
+        fanResult.detail,
+        fanResult.inconclusive ? 'CANNOT_DETERMINE' : 'P0',
+      );
+      if (opts.keep && fanResult.yaml && fanResult.analysis?.safe) {
+        const retainedWorkflowId = await retainGeneratedWorkflow(
+          client,
+          evidence.projectId,
+          fanResult.yaml,
+          `conservative generation case '${fanCase.id}'`,
+          evidence,
+          add,
+        );
+        if (retainedWorkflowId && fanCase.startRetainedRun) {
+          await queueRetainedWorkflowRun(
+            client,
+            evidence.projectId,
+            retainedWorkflowId,
+            fanCase.id,
+            evidence,
+            add,
+          );
+        }
+      }
     }
 
     // ── SEAM 3: backend round-trip — prove our local validator mirror agrees with
@@ -695,6 +808,156 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     // outgoing edge for it) via PUT and assert the backend rejects it with a 4xx;
     // then save a VALID one as a positive control and assert it is accepted.
     await runBackendGuardRoundTrip(client, evidence.projectId, add, time);
+  }
+
+  async function runConservativeFanGenerationCase(client, projectId, fanCase, opts, time) {
+    const timingKey = `conservativeFan-${fanCase.id.replace(/[^a-z0-9]+/gi, '-')}`;
+    const context = await time(`${timingKey}ContextMs`, () =>
+      prepareAiExecutionContext(client, 'workflow_generation', projectId),
+    );
+    if (!context.ready) {
+      return {
+        pass: false,
+        inconclusive: context.inconclusive,
+        detail: `AI execution context unavailable (status ${context.evidence.status})`,
+        yaml: null,
+        analysis: null,
+        evidence: { id: fanCase.id, expectedMode: fanCase.expectedMode, context: context.evidence },
+      };
+    }
+
+    const path = `/api/projects/${projectId}/workflows/generate`;
+    const idempotencyKey = durableIdempotencyKey(`api-harness-${fanCase.id}`);
+    const request = await submitDurableJob(client, {
+      path,
+      body: { description: fanCase.description, content_only: true },
+      headers: context.headers,
+      idempotencyKey,
+      time,
+      timingKey,
+      timeoutMs: opts.timeoutMs,
+    });
+    const result = request.durable === false
+      ? await retryWithReplacementContext(client, {
+        response: request.accepted,
+        operation: 'workflow_generation',
+        path,
+        body: { description: fanCase.description, content_only: true },
+        time,
+        timingKey,
+        extraHeaders: { 'Idempotency-Key': idempotencyKey },
+      })
+      : { response: request.result ?? request.final, replacement: null };
+    const response = result.response;
+    if (!response || response.status !== 200) {
+      const status = response?.status ?? request.accepted?.status ?? 0;
+      const providerFailure = PROVIDER_FAIL_STATUS.has(status);
+      return {
+        pass: false,
+        inconclusive: providerFailure,
+        detail: providerFailure
+          ? `provider unavailable (status ${status})`
+          : `generation failed with status ${status}`,
+        yaml: null,
+        analysis: null,
+        evidence: {
+          id: fanCase.id,
+          expectedMode: fanCase.expectedMode,
+          status,
+          jobId: jobId(request.accepted),
+          terminalStatus: jobStatus(request.final),
+        },
+      };
+    }
+
+    const yaml = response.responseBody?.yaml ?? '';
+    const validation = validateWorkflowYaml(yaml);
+    const analysis = analyzeConservativeFan(yaml);
+    const pass = validation.valid && analysis.safe && analysis.mode === fanCase.expectedMode;
+    return {
+      pass,
+      inconclusive: false,
+      detail: pass
+        ? `mode=${analysis.mode}; ${validation.nodeCount} nodes`
+        : `mode=${analysis.mode}; expected=${fanCase.expectedMode}; ${[...validation.errors, ...analysis.errors].slice(0, 3).join('; ')}`,
+      yaml,
+      analysis,
+      evidence: {
+        id: fanCase.id,
+        expectedMode: fanCase.expectedMode,
+        status: response.status,
+        jobId: jobId(request.accepted),
+        terminalStatus: jobStatus(request.final),
+        workflowId: response.responseBody?.workflow_id ?? response.responseBody?.workflowId ?? null,
+        validation,
+        analysis,
+      },
+    };
+  }
+
+  async function retainGeneratedWorkflow(client, projectId, yaml, label, evidence, add) {
+    const validation = validateWorkflowYaml(yaml);
+    const workflowId = validation.documentId;
+    if (!validation.valid || !workflowId) {
+      add(`Retain ${label}`, false, 'generated YAML is not valid enough to save');
+      return null;
+    }
+    const response = await client.put(
+      `/api/projects/${projectId}/workflows/${encodeURIComponent(workflowId)}`,
+      { yaml },
+    );
+    if (response.ok) evidence.retainedWorkflowIds.push(workflowId);
+    add(
+      `Retain ${label}`,
+      response.ok,
+      response.ok ? `saved workflow ${workflowId}` : `save status ${response.status}`,
+    );
+    return response.ok ? workflowId : null;
+  }
+
+  async function queueRetainedWorkflowRun(client, projectId, workflowId, caseId, evidence, add) {
+    const context = await prepareAiExecutionContext(client, 'orchestration', projectId);
+    if (!context.ready) {
+      add(
+        `Queue retained run for '${caseId}'`,
+        false,
+        `orchestration context unavailable (status ${context.evidence.status})`,
+        context.inconclusive ? 'CANNOT_DETERMINE' : 'P0',
+      );
+      return;
+    }
+    const response = await client.post(
+      `/api/projects/${projectId}/workflows/${encodeURIComponent(workflowId)}/run`,
+      {},
+      { headers: context.headers },
+    );
+    const taskId = response.responseBody?.task_id ?? null;
+    if (response.ok && taskId) {
+      evidence.retainedRunTriggers.push({ caseId, workflowId, taskId });
+    }
+    add(
+      `Queue retained run for '${caseId}'`,
+      response.status === 201 && !!taskId,
+      taskId ? `task ${taskId} will execute against retained workflow ${workflowId}` : `status ${response.status}`,
+    );
+  }
+
+  async function inspectPmDiscovery(client, projectId, evidence, add) {
+    const response = await client.get(`/api/projects/${projectId}/workflows/pm-discovery`);
+    const verification = verifyPmDiscovery(response);
+    evidence.pmDiscovery = {
+      status: response.status,
+      branchIds: verification.branchIds,
+      customerOutputPaths: verification.customerOutputPaths,
+      technicalOutputPaths: verification.technicalOutputPaths,
+    };
+    add(
+      'PM Discovery exposes two ordered independent research branches before synthesis',
+      verification.valid,
+      verification.valid
+        ? `${verification.branchIds.join(' -> join, ')} -> join -> synthesis`
+        : `status ${response.status}; branches=${verification.branchIds.join(',')}`,
+    );
   }
 
   return finalize();

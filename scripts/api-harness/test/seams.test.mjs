@@ -1,8 +1,59 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runGenerationSeams } from '../lib/seams.mjs';
+import { runGenerationSeams, verifyPmDiscovery } from '../lib/seams.mjs';
 import { redact } from '../../harness-shared/redaction.mjs';
+
+const SAFE_FAN_WORKFLOW = `id: retained-safe-fan
+name: Retained Safe Fan
+start: fan
+nodes:
+  - { id: fan, type: fan_out }
+  - id: customers
+    type: prompt
+    role: backend-engineer
+    prompt: Write only reports/customer-signals.md.
+    independent: true
+    declared_output_paths: [reports/customer-signals.md]
+  - id: technical
+    type: prompt
+    role: backend-engineer
+    prompt: Write only reports/technical-feasibility.md.
+    independent: true
+    declared_output_paths: [reports/technical-feasibility.md]
+  - { id: join, type: fan_in, target: fan }
+  - { id: done, type: terminal }
+edges:
+  - { from: fan, to: customers }
+  - { from: fan, to: technical }
+  - { from: customers, to: join }
+  - { from: technical, to: join }
+  - { from: join, to: done }
+`;
+
+test('verifyPmDiscovery requires the ordered two-branch fan before synthesis', () => {
+  const response = {
+    ok: true,
+    status: 200,
+    responseBody: {
+      nodes: [
+        { id: 'customer-signal-research', independent: true, declared_output_paths: ['customer-signals.md'] },
+        { id: 'technical-feasibility-research', independent: true, declared_output_paths: ['technical-feasibility.md'] },
+      ],
+      edges: [
+        { from: 'discovery-fan-out', to: 'customer-signal-research' },
+        { from: 'discovery-fan-out', to: 'technical-feasibility-research' },
+        { from: 'customer-signal-research', to: 'discovery-fan-in' },
+        { from: 'technical-feasibility-research', to: 'discovery-fan-in' },
+        { from: 'discovery-fan-in', to: 'synthesis' },
+      ],
+    },
+  };
+
+  assert.equal(verifyPmDiscovery(response).valid, true);
+  response.responseBody.edges.at(-1).to = 'synthesize';
+  assert.equal(verifyPmDiscovery(response).valid, false);
+});
 
 test('Entra session preflight identifies the required bearer type without retaining config', async () => {
   const config = { ok: true, status: 200, responseBody: { mode: 'Entra', client_id: 'public-client-id' } };
@@ -385,6 +436,21 @@ edges:
             was_corrected: false,
           },
         };
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-fan-job')
+        return completedResponse('wf-fan-job', path, { artifact_id: 'wf-fan-artifact', workflow_id: 'retained-safe-fan', version: 1 });
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-fan-job/result')
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            job_id: 'wf-fan-job',
+            artifact_id: 'wf-fan-artifact',
+            workflow_id: 'retained-safe-fan',
+            version: 1,
+            yaml: SAFE_FAN_WORKFLOW,
+            was_corrected: false,
+          },
+        };
       throw new Error(`unexpected GET ${path}`);
     },
     async post(path, body, options) {
@@ -410,7 +476,9 @@ edges:
       if (path === '/api/projects/owned-project/workflows/generate') {
         return body.description.includes('Cancellation/retry probe.')
           ? jobResponse('wf-cancel-job', '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job')
-          : jobResponse('wf-job', '/api/projects/owned-project/workflows/generation-jobs/wf-job');
+          : body.description === 'generate safe fan'
+            ? jobResponse('wf-fan-job', '/api/projects/owned-project/workflows/generation-jobs/wf-fan-job')
+            : jobResponse('wf-job', '/api/projects/owned-project/workflows/generation-jobs/wf-job');
       }
       if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job/cancel') {
         return {
@@ -426,9 +494,13 @@ edges:
       if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job/retry') {
         return { ok: true, status: 202, responseBody: { job_id: 'wf-cancel-job', status: 'Queued' } };
       }
+      if (path === '/api/projects/owned-project/workflows/retained-safe-fan/run') {
+        return { ok: true, status: 201, responseBody: { task_id: 'retained-run-task' } };
+      }
       throw new Error(`unexpected POST ${path}`);
     },
-    async put(_path, body) {
+    async put(path, body) {
+      calls.push(['PUT', path]);
       return body.yaml.includes('branches: [pass, fail]')
         ? { ok: false, status: 400, responseBody: { error: 'invalid_workflow' } }
         : { ok: true, status: 204, responseBody: null };
@@ -443,7 +515,10 @@ edges:
     baseBlueprintId: 'base-blueprint',
     blueprintDescription: 'generate blueprint',
     workflowDescription: 'generate advanced workflow',
-  });
+    conservativeFanCases: [
+      { id: 'safe-fan', expectedMode: 'fan', description: 'generate safe fan', startRetainedRun: true },
+    ],
+  }, { keep: true });
 
   assert.equal(result.pass, true);
   for (const name of [
@@ -462,8 +537,16 @@ edges:
   }
   assert.equal(result.evidence.aiExecutionContexts.blueprintGeneration.job.terminalStatus, 'completed');
   assert.equal(result.evidence.aiExecutionContexts.workflowGeneration.cancelRetry.cancelledJobStatus, 'cancelled');
+  assert.equal(result.evidence.conservativeFanCases[0].analysis.mode, 'fan');
+  assert.deepEqual(result.evidence.retainedWorkflowIds.sort(), ['advanced-workflow', 'retained-safe-fan']);
+  assert.deepEqual(result.evidence.retainedRunTriggers, [{
+    caseId: 'safe-fan',
+    workflowId: 'retained-safe-fan',
+    taskId: 'retained-run-task',
+  }]);
   assert.doesNotMatch(JSON.stringify(result.evidence), /key-canary/);
   assert.ok(calls.some(([method, path]) => method === 'GET' && path.endsWith('/result')));
+  assert.ok(calls.some(([method, path]) => method === 'PUT' && path.endsWith('/workflows/retained-safe-fan')));
   await result.cleanup();
 });
 

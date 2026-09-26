@@ -1791,6 +1791,8 @@ export interface WorkflowNodeDto {
   target?: string | null;
   steps?: string[] | null;
   branches?: string[] | null;
+  independent?: boolean | null;
+  declared_output_paths?: string[] | null;
 }
 
 // An edge in a workflow detail response.
