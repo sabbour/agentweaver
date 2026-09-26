@@ -222,6 +222,7 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
         try
         {
             var coordinatorRunService = sp.GetRequiredService<CoordinatorRunService>();
+            await coordinatorRunService.RecoverStalledOutcomeDraftsAsync(stoppingToken).ConfigureAwait(false);
             await coordinatorRunService.DrainOrphanedSpecDeferralsAsync(stoppingToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

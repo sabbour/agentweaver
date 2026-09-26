@@ -208,6 +208,7 @@ builder.Services.AddSingleton<Func<Agentweaver.Api.Infrastructure.IRevisionEffec
 // a DEFERRED accessor avoids a ctor DI cycle (decider -> index -> RunWorkflowFactory -> confirmer -> decider).
 builder.Services.AddSingleton<Func<Agentweaver.Api.Infrastructure.IRevisionCheckpointIndex?>>(
     sp => () => sp.GetService<RunWorkflowFactory>());
+builder.Services.AddSingleton<Agentweaver.Api.Infrastructure.RunLeaseFenceRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter,
     Agentweaver.Api.Coordinator.CopilotCoordinatorSpecDrafter>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IWorkflowSelectionModel,

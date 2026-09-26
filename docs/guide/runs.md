@@ -331,6 +331,9 @@ Agentweaver does not replace more specific outcomes with this fallback:
   the transport failure;
 - a clean A2A stream end without `agent.turn.end` becomes the retryable
   `agent_host_turn_incomplete`.
+- a coordinator outcome-spec stream that stops before a complete draft becomes
+  `coordinator_outcome_spec_draft_stalled`. Agentweaver retains any partial timeline evidence and
+  does not replay a draft after model output or tool activity has become observable.
 
 Before a remote A2A failure reaches the durable event stream, Agentweaver keeps only a
 bounded allowlisted error code and retryability. It derives the one-line diagnostic

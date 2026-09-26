@@ -9,7 +9,7 @@ namespace Agentweaver.Api.Infrastructure.Ef;
 /// Claim: UPDATE runs SET owner_id=@me, lease_expires_at=@deadline, fencing_token=fencing_token+1, attempt=attempt+1
 ///        WHERE run_id=@runId AND (owner_id IS NULL OR lease_expires_at < now())
 /// Renew: UPDATE runs SET lease_expires_at=@deadline, heartbeat_at=now()
-///        WHERE run_id=@runId AND owner_id=@me AND fencing_token=@token
+///        WHERE run_id=@runId AND owner_id=@me AND fencing_token=@token AND lease_expires_at>now()
 /// Release: UPDATE runs SET owner_id=NULL, lease_expires_at=NULL
 ///          WHERE run_id=@runId AND owner_id=@me AND fencing_token=@token
 /// </summary>
@@ -59,7 +59,10 @@ public sealed class PostgresRunLeaseStore : IRunLeaseStore
         var now = DateTimeOffset.UtcNow;
 
         var rows = await db.Runs
-            .Where(r => r.RunId == runId && r.OwnerId == ownerId && r.FencingToken == fencingToken)
+            .Where(r => r.RunId == runId &&
+                        r.OwnerId == ownerId &&
+                        r.FencingToken == fencingToken &&
+                        r.LeaseExpiresAt > now)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.LeaseExpiresAt, deadline)
                 .SetProperty(r => r.HeartbeatAt, now),

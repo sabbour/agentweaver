@@ -1,6 +1,22 @@
+using System.Collections.Concurrent;
+
 namespace Agentweaver.Api.Infrastructure;
 
 public sealed record RunLeaseClaim(string OwnerId, long FencingToken);
+public sealed record RunLeaseFence(string OwnerId, long FencingToken, int LifecycleGeneration);
+
+public sealed class RunLeaseFenceRegistry
+{
+    private readonly ConcurrentDictionary<string, RunLeaseFence> _fences = new(StringComparer.Ordinal);
+
+    public void Set(string runId, RunLeaseFence fence) => _fences[runId] = fence;
+
+    public RunLeaseFence? Get(string runId) =>
+        _fences.TryGetValue(runId, out var fence) ? fence : null;
+
+    public void RemoveIfCurrent(string runId, RunLeaseFence fence) =>
+        _fences.TryRemove(new KeyValuePair<string, RunLeaseFence>(runId, fence));
+}
 
 /// <summary>
 /// Durable, multi-replica-safe run lease store.

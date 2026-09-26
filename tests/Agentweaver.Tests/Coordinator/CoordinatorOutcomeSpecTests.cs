@@ -292,14 +292,15 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
-            .Should().Be("coordinator_execution_failed");
+            .Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        failedEvent.GetProperty("payload").GetProperty("retryable").GetBoolean().Should().BeTrue();
 
         var diagnostic = await _owner.GetFromJsonAsync<RunTerminalDiagnosticResponse>(
             $"/api/runs/{runId}/terminal-diagnostic");
         diagnostic.Should().NotBeNull();
-        diagnostic!.Code.Should().Be("coordinator_execution_failed");
-        diagnostic.Retryable.Should().BeFalse();
-        diagnostic.Message.Should().Be("Run failed with code 'coordinator_execution_failed'. Retry is not available.");
+        diagnostic!.Code.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        diagnostic.Retryable.Should().BeTrue();
+        diagnostic.Message.Should().Contain("stalled");
         diagnostic.CauseChain.Should().Contain("phase:coordinator-draft:failed");
         diagnostic.CauseChain.Should().Contain("reason:outcome_spec_draft_timeout");
         diagnostic.ExecutionDescriptorId.Should().StartWith("execution-");
@@ -369,7 +370,8 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             .Subject;
         var payload = JsonSerializer.Deserialize<JsonElement>(failedEvent.PayloadJson);
         payload.GetProperty("errorCode").GetString()
-            .Should().Be("coordinator_execution_failed");
+            .Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
@@ -427,6 +429,49 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             "Run failed with code 'github_copilot_models_unavailable'. Retry is not available.");
         payload.TryGetProperty("category", out _).Should().BeFalse();
         payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Start_DraftProviderStreamStall_MapsToSingleRetryableCoordinatorTerminal()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ExceptionToThrow = new AgentProviderException(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.ProviderUnavailable,
+            "github_copilot_turn_stalled",
+            "The provider stream stopped producing output.",
+            isRetryable: true);
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A disconnected outcome-spec stream must become a typed terminal");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        run.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var durableFailures = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+            .ToListAsync();
+        var payload = JsonSerializer.Deserialize<JsonElement>(
+            durableFailures.Should().ContainSingle().Subject.PayloadJson);
+        payload.GetProperty("errorCode").GetString()
+            .Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

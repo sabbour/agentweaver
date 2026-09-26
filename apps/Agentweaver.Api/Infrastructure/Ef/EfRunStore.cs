@@ -345,6 +345,22 @@ public sealed class EfRunStore : IRunStore
         // in this transaction, so two API instances cannot each write a terminal winner.
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock(hashtextextended({runId.ToString()}, 0));", ct);
+        if (mutation.RequiredLease is { } requiredLease)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var fenced = await db.Runs
+                .Where(r => r.RunId == runId.ToString()
+                            && r.OwnerId == requiredLease.OwnerId
+                            && r.FencingToken == requiredLease.FencingToken
+                            && r.LifecycleGeneration == requiredLease.LifecycleGeneration
+                            && r.LeaseExpiresAt > now)
+                .ExecuteUpdateAsync(
+                    updates => updates.SetProperty(r => r.Status, r => r.Status),
+                    ct)
+                .ConfigureAwait(false);
+            if (fenced == 0)
+                return false;
+        }
         var record = await db.Runs.SingleOrDefaultAsync(r => r.RunId == runId.ToString(), ct);
         if (record is null)
             return false;

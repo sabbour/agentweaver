@@ -406,6 +406,7 @@ public sealed class CoordinatorWorkflowFactory
                 input.RunId);
             throw new CoordinatorOutcomeSpecDraftTimeoutException(
                 input.RunId,
+                ModelSourceExtensions.FromApiString(input.ModelSource),
                 _outcomeSpecDraftTimeout);
         }
         finally

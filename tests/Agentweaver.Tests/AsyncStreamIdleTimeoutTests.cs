@@ -47,6 +47,26 @@ public sealed class AsyncStreamIdleTimeoutTests
     }
 
     [Fact]
+    public async Task ThrowsRetryableProviderException_WhenSourceStallsAfterInitialChunk()
+    {
+        var collected = new List<int>();
+
+        var act = async () =>
+        {
+            await foreach (var item in EmitsThenHangs<int>(42)
+                               .WithIdleTimeout(TimeSpan.FromMilliseconds(80), "run-partial", Logger))
+            {
+                collected.Add(item);
+            }
+        };
+
+        var ex = await act.Should().ThrowAsync<AgentProviderException>();
+        collected.Should().Equal(42);
+        ex.Which.ErrorCode.Should().Be("github_copilot_turn_stalled");
+        ex.Which.IsRetryable.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ResetsWindowOnEachChunk_SoSlowButProgressingStreamSucceeds()
     {
         // Each chunk arrives after a delay shorter than the idle window; cumulative time exceeds
@@ -251,6 +271,14 @@ public sealed class AsyncStreamIdleTimeoutTests
     {
         await Task.Delay(Timeout.Infinite, ct);
         yield break;
+    }
+
+    private static async IAsyncEnumerable<T> EmitsThenHangs<T>(
+        T item,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        yield return item;
+        await Task.Delay(Timeout.Infinite, ct);
     }
 
     private sealed class CancellationIgnoringSource : IAsyncEnumerable<int>, IAsyncEnumerator<int>
