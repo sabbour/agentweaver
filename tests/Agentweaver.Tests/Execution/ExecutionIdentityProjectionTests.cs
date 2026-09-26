@@ -93,12 +93,47 @@ public sealed class ExecutionIdentityProjectionTests
         projection.Decisions.Should().ContainSingle(item =>
             item.ToolCallId == "call-safe" && item.Outcome == "denied");
         projection.Decisions.Should().ContainSingle(item =>
-            item.ToolCallId == "missing-call" && item.CorrelationState == "missing_tool_call");
+            item.ToolCallId == "missing-call" && item.CorrelationState == "unmatched");
 
         var json = JsonSerializer.Serialize(projection);
         json.Should().NotContain("do-not-leak");
         json.Should().NotContain("customer-repository");
         json.Should().NotContain("private-user");
+    }
+
+    [Fact]
+    public void Project_preserves_the_binding_recorded_with_a_permission_denial()
+    {
+        var run = CreateRun("00000000-0000-0000-0000-000000001413", "Tank");
+        var descriptor = ExecutionIdentityDescriptor.Create(run);
+        var launch = EffectivePermissionBinding.Create(
+            run.Id.ToString(), 1, "launch-policy", $"project:{run.ProjectId}",
+            new SandboxPolicy { RepositoryPath = run.RepositoryPath });
+        var denied = launch with
+        {
+            BindingId = "epb-denial",
+            Version = "sha256:denial",
+            Source = "effective-policy",
+        };
+        var events = new[]
+        {
+            new RunEvent(1, EventTypes.PermissionBindingBound, launch),
+            new RunEvent(2, EventTypes.RunDegraded, new
+            {
+                reason = $"Operation denied: '{EffectivePermissionOperations.WorkspaceWrite}'",
+                callId = "call-denied",
+                permissionBindingId = denied.BindingId,
+                permissionBindingVersion = denied.Version,
+                permissionSource = denied.Source,
+            }),
+        };
+
+        var projection = ExecutionIdentityProjector.Project(run, descriptor, events, launch);
+
+        projection.Decisions.Should().ContainSingle();
+        projection.Decisions[0].PermissionBindingId.Should().Be(denied.BindingId);
+        projection.Decisions[0].PermissionBindingVersion.Should().Be(denied.Version);
+        projection.Decisions[0].PermissionBindingSource.Should().Be(denied.Source);
     }
 
     [Fact]
@@ -124,13 +159,19 @@ public sealed class ExecutionIdentityProjectionTests
         var descriptor = ExecutionIdentityDescriptor.Create(run);
         var events = new[]
         {
+            new RunEvent(3, EventTypes.PermissionBindingBound, EffectivePermissionBinding.Create(
+                run.Id.ToString(),
+                2,
+                "current-project-sandbox-policy",
+                $"project:{run.ProjectId}",
+                new SandboxPolicy { RepositoryPath = run.RepositoryPath })),
             new RunEvent(1, EventTypes.ToolCall, new { callId = "shared", name = "old_tool" },
                 descriptor.CreatedAt.AddMinutes(-1)),
             new RunEvent(2, EventTypes.ToolError, new { callId = "shared" },
                 descriptor.CreatedAt.AddSeconds(-30)),
-            new RunEvent(3, EventTypes.ToolCall, new { callId = "shared", name = "new_tool" },
+            new RunEvent(4, EventTypes.ToolCall, new { callId = "shared", name = "new_tool" },
                 descriptor.CreatedAt.AddSeconds(1)),
-            new RunEvent(4, EventTypes.ToolResult, new { callId = "shared" },
+            new RunEvent(5, EventTypes.ToolResult, new { callId = "shared" },
                 descriptor.CreatedAt.AddSeconds(2)),
         };
 
@@ -139,6 +180,49 @@ public sealed class ExecutionIdentityProjectionTests
         projection.Decisions.Should().ContainSingle();
         projection.Decisions.Single().ToolName.Should().Be("new_tool");
         projection.Decisions.Single().Outcome.Should().Be("succeeded");
+    }
+
+    [Fact]
+    public void Project_uses_sequence_attempt_boundary_when_timestamps_are_out_of_order()
+    {
+        var run = CreateRun("00000000-0000-0000-0000-000000001411", "Tank") with
+        {
+            LifecycleGeneration = 2,
+        };
+        var descriptor = ExecutionIdentityDescriptor.Create(run);
+        var binding = EffectivePermissionBinding.Create(
+            run.Id.ToString(), 2, "current-project-sandbox-policy",
+            $"project:{run.ProjectId}", new SandboxPolicy { RepositoryPath = run.RepositoryPath });
+        var events = new[]
+        {
+            new RunEvent(1, EventTypes.ToolCall, new { callId = "old", name = "old_tool" },
+                descriptor.CreatedAt.AddHours(1)),
+            new RunEvent(2, EventTypes.PermissionBindingBound, binding,
+                descriptor.CreatedAt.AddHours(-1)),
+            new RunEvent(3, EventTypes.ToolCall, new { callId = "new", name = "new_tool" },
+                descriptor.CreatedAt.AddHours(-2)),
+            new RunEvent(4, EventTypes.ToolError, new { callId = "new" },
+                descriptor.CreatedAt.AddHours(-3)),
+        };
+
+        var projection = ExecutionIdentityProjector.Project(run, descriptor, events);
+
+        projection.Decisions.Should().ContainSingle();
+        projection.Decisions[0].ToolCallId.Should().Be("new");
+    }
+
+    [Fact]
+    public void Project_labels_missing_call_ids_as_synthetic()
+    {
+        var run = CreateRun("00000000-0000-0000-0000-000000001412", "Tank");
+        var descriptor = ExecutionIdentityDescriptor.Create(run);
+        var events = new[] { new RunEvent(7, EventTypes.ToolError, new { error = "hidden" }) };
+
+        var projection = ExecutionIdentityProjector.Project(run, descriptor, events);
+
+        projection.Decisions.Should().ContainSingle();
+        projection.Decisions[0].ToolCallId.Should().Be("event-7");
+        projection.Decisions[0].CorrelationState.Should().Be("synthetic");
     }
 
     private static Run CreateRun(

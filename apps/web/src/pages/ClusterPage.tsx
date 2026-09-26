@@ -360,6 +360,16 @@ export function ClusterPage() {
 
       {data && (
         <>
+          {(data.inventory_sources ?? []).some(source => !source.complete) && (
+            <MessageBar intent="warning" data-testid="inventory-collection-warning">
+              <MessageBarBody>
+                Inventory is incomplete. {(data.inventory_sources ?? [])
+                  .filter(source => !source.complete)
+                  .map(source => `${source.name}: ${source.outcome}`)
+                  .join('; ')}.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <PageSection
             title="Cluster overview"
             description="Live diagnostics, capacity queues, and sandbox resource state."

@@ -234,6 +234,26 @@ public sealed class StructuredRunFailureTerminalTests
             .Should().Equal("AgentProviderException", "tool:start_preview:failed:3", "step:preview:started");
     }
 
+    [Theory]
+    [InlineData("call-safe_123", true)]
+    [InlineData("https://example.test/?token=secret", false)]
+    public void NormalizeFailure_PreservesOnlySafeToolCallReferences(string toolCallId, bool expected)
+    {
+        var inbound = new RunEvent(1, EventTypes.RunFailed, new
+        {
+            errorCode = "coordinator_execution_failed",
+            retryable = false,
+            toolCallId,
+        });
+
+        var normalized = StructuredRunFailureTerminal.NormalizeFailure(inbound);
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(normalized.Payload));
+
+        document.RootElement.TryGetProperty("toolCallId", out var value).Should().Be(expected);
+        if (expected)
+            value.GetString().Should().Be(toolCallId);
+    }
+
     [Fact]
     public void CreateInternalError_ReplacesAzureSasDiagnosticWithSafeServerAuthoredText()
     {

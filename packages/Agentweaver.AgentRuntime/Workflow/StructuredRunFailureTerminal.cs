@@ -141,6 +141,7 @@ public static class StructuredRunFailureTerminal
 
         string? errorCode = null;
         bool? retryable = null;
+        string? toolCallId = null;
         IReadOnlyList<string>? causeChain = null;
         try
         {
@@ -157,6 +158,10 @@ public static class StructuredRunFailureTerminal
                     else if (property.Name.Equals("retryable", StringComparison.OrdinalIgnoreCase) &&
                              property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
                         retryable = property.Value.GetBoolean();
+                    else if ((property.Name.Equals("toolCallId", StringComparison.OrdinalIgnoreCase)
+                              || property.Name.Equals("callId", StringComparison.OrdinalIgnoreCase)) &&
+                             property.Value.ValueKind == JsonValueKind.String)
+                        toolCallId = property.Value.GetString();
                     else if (property.Name.Equals("causeChain", StringComparison.OrdinalIgnoreCase) &&
                              property.Value.ValueKind == JsonValueKind.Array)
                         causeChain = ReadCauseChain(property.Value);
@@ -173,7 +178,15 @@ public static class StructuredRunFailureTerminal
         return new RunEvent(
             runEvent.Sequence,
             EventTypes.RunFailed,
-            CreatePayload(normalizedCode, CreateDiagnosticMessage(errorCode, retryable), null, retryable, null, null, causeChain),
+            CreatePayload(
+                normalizedCode,
+                CreateDiagnosticMessage(errorCode, retryable),
+                null,
+                retryable,
+                null,
+                null,
+                causeChain,
+                toolCallId),
             runEvent.TimestampUtc);
     }
 
@@ -273,7 +286,7 @@ public static class StructuredRunFailureTerminal
     }
 
     private static object CreatePayload(string? errorCode, string? message, string? diagnostic, bool? retryable)
-        => CreatePayload(errorCode, message, diagnostic, retryable, null, null, null);
+        => CreatePayload(errorCode, message, diagnostic, retryable, null, null, null, null);
 
     private static object CreatePayload(
         string? errorCode,
@@ -282,7 +295,8 @@ public static class StructuredRunFailureTerminal
         bool? retryable,
         string? correlationId,
         string? traceId,
-        IReadOnlyList<string>? causeChain)
+        IReadOnlyList<string>? causeChain,
+        string? toolCallId = null)
     {
         var normalizedCode = NormalizeErrorCode(errorCode);
         var normalizedMessage = NormalizeTrustedMessage(message, normalizedCode);
@@ -298,6 +312,8 @@ public static class StructuredRunFailureTerminal
             payload["correlationId"] = correlationId;
         if (IsServerGeneratedId(traceId))
             payload["traceId"] = traceId;
+        if (IsSafeEvidenceId(toolCallId))
+            payload["toolCallId"] = toolCallId;
         if (causeChain is { Count: > 0 })
         {
             var safeCauseChain = NormalizeCauseChain(causeChain);
@@ -354,6 +370,11 @@ public static class StructuredRunFailureTerminal
 
     private static bool IsServerGeneratedId(string? value) =>
         value is { Length: 32 } && value.All(Uri.IsHexDigit);
+
+    private static bool IsSafeEvidenceId(string? value) =>
+        value is { Length: > 0 and <= 128 }
+        && value.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.' or ':');
 
     private static string NormalizeTrustedMessage(string? message, string errorCode)
     {

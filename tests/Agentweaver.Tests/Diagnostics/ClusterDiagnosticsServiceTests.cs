@@ -116,6 +116,54 @@ public sealed class ClusterDiagnosticsServiceTests
     }
 
     [Fact]
+    public async Task GetClusterDiagnosticsAsync_DistinguishesNoResourcesFromUnavailableInventory()
+    {
+        var handler = QuotaHandler(150, 200, 150, 200);
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxwarmpools",
+            """{"items":[]}""");
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxclaims",
+            """{"items":[]}""");
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods", """{"items":[]}""");
+
+        var dto = await NewClusterService(BuildConfiguration(), ClientFor(handler))
+            .GetClusterDiagnosticsAsync();
+
+        dto.InventorySources.Single(source => source.Name == "warm_pool_objects")
+            .Outcome.Should().Be("no_resources");
+        dto.InventorySources.Single(source => source.Name == "sandbox_claims")
+            .Outcome.Should().Be("no_resources");
+        dto.InventorySources.Where(source => source.Outcome == "no_resources")
+            .Should().OnlyContain(source => source.Complete);
+    }
+
+    [Fact]
+    public async Task GetClusterDiagnosticsAsync_ReportsForbiddenAndMalformedInventoriesAsIncomplete()
+    {
+        var handler = QuotaHandler(150, 200, 150, 200);
+        handler.OnStatus(
+            "GET",
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxwarmpools",
+            System.Net.HttpStatusCode.Forbidden,
+            """{"kind":"Status","code":403}""");
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxclaims",
+            """{"items":""");
+
+        var dto = await NewClusterService(BuildConfiguration(), ClientFor(handler))
+            .GetClusterDiagnosticsAsync();
+
+        dto.InventorySources.Single(source => source.Name == "warm_pool_objects")
+            .Should().Match<InventoryCollectionStatusDto>(source =>
+                source.Outcome == "forbidden" && !source.Complete);
+        dto.InventorySources.Single(source => source.Name == "sandbox_claims")
+            .Should().Match<InventoryCollectionStatusDto>(source =>
+                source.Outcome == "malformed" && !source.Complete);
+        dto.Details!.Status.Should().NotBe("healthy");
+    }
+
+    [Fact]
     public async Task GetClusterDiagnosticsAsync_MarksPendingClaimForAttention_WithBoundedReason()
     {
         var service = NewClusterService(

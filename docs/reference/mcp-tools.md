@@ -84,7 +84,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | --- | --- |
 | `diagnostics_get` | Get a real-time system diagnostics snapshot: API version, process uptime, project/run counts, heartbeat state, and checkpoint GC state. |
 | `heartbeat_status` | Get the current coordinator heartbeat service status: enabled flag, interval, last tick time, and service state (running / waiting_first_tick / disabled). |
-| `run_failure_diagnostic` | Get the bounded, redacted terminal diagnostic for a failed run. This never returns raw logs, stacks, prompts, headers, credentials, or tool payloads. |
+| `run_failure_diagnostic` | Explain a failed run with bounded observed facts, attributable interpretations, unknowns, evidence completeness, the effective denial gate when recorded, and safe non-mutating next actions. |
 
 ## GitHub Auth
 

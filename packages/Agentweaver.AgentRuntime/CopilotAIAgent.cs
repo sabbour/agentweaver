@@ -197,6 +197,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private volatile bool _degradedFlagged;
     private string? _degradedToolName;
     private string? _degradedReason;
+    private string? _degradedCallId;
     private int _runDegradedEmitted;
     private int _shellTimeoutFailureEmitted;
     private int _nativeShellDenyAttempts;
@@ -408,6 +409,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _degradedFlagged = false;
         _degradedToolName = null;
         _degradedReason = null;
+        _degradedCallId = null;
         _runDegradedEmitted = 0;
         _turnInputTokens = 0;
         _turnOutputTokens = 0;
@@ -1081,7 +1083,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         // live clients can stop reading on `done` and miss the event, showing green live while a
         // later refresh (full-history replay) shows the amber "Incomplete" badge.
         if (_degradedFlagged)
-            EmitRunDegradedOnce(_degradedToolName ?? "unknown", _degradedReason ?? "Sandbox denied a tool call.");
+            EmitRunDegradedOnce(
+                _degradedCallId,
+                _degradedToolName ?? "unknown",
+                _degradedReason ?? "Sandbox denied a tool call.");
 
         Emit(EventTypes.AgentTurnUsage, new
         {
@@ -1608,14 +1613,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// guarantees the event is in history BEFORE agent.turn.end and the run's completion
     /// events, so live SSE clients always receive it ahead of the `done` sentinel.
     /// </summary>
-    private void EmitRunDegradedOnce(string toolName, string reason)
+    private void EmitRunDegradedOnce(string? callId, string toolName, string reason)
     {
         _degradedFlagged = true;
+        _degradedCallId ??= callId;
         _degradedToolName ??= toolName;
         _degradedReason ??= reason;
         if (Interlocked.Exchange(ref _runDegradedEmitted, 1) == 0)
             Emit(EventTypes.RunDegraded, new
             {
+                callId,
                 toolName,
                 reason,
                 permissionBindingId = _effectivePermissionBinding?.BindingId,
@@ -1974,7 +1981,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 RecordDeniedToolSpan(shellCallId, "run_command", "policy_denied", shellArgs);
                 emitToolCallOnce(shellCallId, "run_command", shellArgs);
                 emitToolErrorOnce(shellCallId, denyReason);
-                EmitRunDegradedOnce("run_command", denyReason);
+                EmitRunDegradedOnce(shellCallId, "run_command", denyReason);
                 return Task.FromResult<PermissionDecision>(
                     PermissionDecision.Reject(denyReason));
             }
@@ -2000,7 +2007,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 {
                     RecordDeniedToolSpan(urlCallId, "web_fetch", "effective_permission_denied");
                     emitToolErrorOnce(urlCallId, urlPermission.Reason);
-                    EmitRunDegradedOnce("web_fetch", urlPermission.Reason);
+                    EmitRunDegradedOnce(urlCallId, "web_fetch", urlPermission.Reason);
                     return Task.FromResult(PermissionDecision.Reject(urlPermission.Reason));
                 }
 
@@ -2110,7 +2117,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                             "effective_permission_denied");
                         emitToolCallOnce(customCallId, toolName, null);
                         emitToolErrorOnce(customCallId, effectivePermission.Reason);
-                        EmitRunDegradedOnce(toolName, effectivePermission.Reason);
+                        EmitRunDegradedOnce(customCallId, toolName, effectivePermission.Reason);
                         return Task.FromResult(
                             PermissionDecision.Reject(effectivePermission.Reason));
                     }
@@ -2212,7 +2219,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         emitToolCallOnce(customCallId, toolName, args);
                         var denyReason = reason ?? "Operation denied by sandbox policy.";
                         emitToolErrorOnce(customCallId, denyReason);
-                        EmitRunDegradedOnce(toolName, denyReason);
+                        EmitRunDegradedOnce(customCallId, toolName, denyReason);
                         return Task.FromResult(PermissionDecision.Reject(denyReason));
                     }
 
@@ -2229,7 +2236,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     emitToolCallOnce(customCallId, toolName, null);
                     var failReason = "Operation denied: internal error evaluating sandbox policy.";
                     emitToolErrorOnce(customCallId, failReason);
-                    EmitRunDegradedOnce(toolName, failReason);
+                    EmitRunDegradedOnce(customCallId, toolName, failReason);
                     return Task.FromResult(PermissionDecision.Reject(failReason));
                 }
             }
@@ -2265,7 +2272,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         args);
                     emitToolCallOnce(callId, toolName, args);
                     emitToolErrorOnce(callId, effectivePermission.Reason);
-                    EmitRunDegradedOnce(toolName, effectivePermission.Reason);
+                    EmitRunDegradedOnce(callId, toolName, effectivePermission.Reason);
                     return Task.FromResult(
                         PermissionDecision.Reject(effectivePermission.Reason));
                 }
@@ -2285,7 +2292,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     RecordDeniedToolSpan(callId, toolName, "policy_denied", args);
                     emitToolCallOnce(callId, toolName, args);
                     emitToolErrorOnce(callId, denyReason2);
-                    EmitRunDegradedOnce(toolName, denyReason2);
+                    EmitRunDegradedOnce(callId, toolName, denyReason2);
                     return Task.FromResult(PermissionDecision.Reject(denyReason2));
                 }
                 else if (request is PermissionRequestShell shell && realCallId is not null)
@@ -2305,7 +2312,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 RecordDeniedToolSpan(callId, request.Kind ?? "unknown", "policy_evaluation_failed");
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
                 emitToolErrorOnce(callId, failReason2);
-                EmitRunDegradedOnce(request.Kind ?? "unknown", failReason2);
+                EmitRunDegradedOnce(callId, request.Kind ?? "unknown", failReason2);
                 return Task.FromResult(PermissionDecision.Reject(failReason2));
             }
         };

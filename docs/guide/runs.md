@@ -354,6 +354,27 @@ to that trace's focused view; they are navigation handles, not raw telemetry pay
 The Coordinator diagnostic includes a **View trace** action and tells you whether retry is
 available without repeating the provider or error code in separate status fragments.
 
+The response separates `observed_facts`, `supported_interpretations`, and `unknowns`.
+Facts are durable observations such as the terminal event or a tool error. An
+interpretation is emitted only when the terminal event directly references the matching
+tool call or policy decision; sequence proximity and repeated errors are not treated as
+proof of root cause. A recovered tool error remains a fact and is labeled as recovered.
+
+`attempt`, `observed_at`, `evidence_sources`, `evidence_references`, and `completeness`
+show which execution attempt was examined and whether each source was available. Durable
+terminal evidence remains usable when telemetry or execution-identity collection is
+missing. `partial` never means healthy; inspect the accompanying `unknowns`.
+
+When a terminal event directly identifies a denied tool call, `denial_gate` reports the
+recorded gate, effective capability, and permission-binding references. A run merely
+waiting for human approval is not reported as denied. `next_actions` are structured,
+non-mutating guidance: a safe fresh retry, authorization/configuration repair, or
+investigation of an unknown result. Diagnostics never change policy or retry a run.
+
+All evidence references obey the run's existing project-viewer authorization and contain
+only bounded identifiers. They exclude principals, prompts, arguments, repository paths,
+Kubernetes identities, credentials, and raw exception text.
+
 ### Execution bottleneck evidence
 
 Select a span and open **Attributes** to inspect **Execution diagnostics**. Agentweaver
@@ -385,12 +406,11 @@ Those breadcrumbs may include exception type names plus server-authored `step:*`
 `phase:*`, `reason:*`, and `tool:*` labels; they never include prompts, tool payloads,
 headers, credentials, raw paths, or stack traces. AgentHost-generated internal failures
 and pre-launch provider failures include a server-generated correlation ID, the active
-trace ID when available, and a bounded exception-type chain. When a terminal failure
-has no direct exception chain, the diagnostic reader inspects recent persisted step and
-tool-error events so repeated tool failures are surfaced instead of misattributing the
-failure to the component that timed out last. If an earlier
-best-effort agent operation failed but the Coordinator later terminalized for another
-reason, the projection uses the latest terminal failure instead of the earlier recovered
+trace ID when available, and a bounded exception-type chain. When a terminal failure has no direct attribution, nearby step and tool errors are shown
+only as observations with unknown causality. If an earlier best-effort agent operation
+failed but later recovered, or the Coordinator terminalized for another reason, the
+projection uses the latest terminal failure and does not promote the earlier error into a
+root-cause claim.
 failure.
 It does not expose raw pod logs, stack traces, prompts, tool payloads, HTTP headers,
 credentials, tokens, or keys. Project Viewers can read diagnostics for their project.

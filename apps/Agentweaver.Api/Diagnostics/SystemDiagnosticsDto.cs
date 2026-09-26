@@ -108,6 +108,7 @@ public sealed record ClusterDiagnosticsDto
     [JsonPropertyName("generated_utc")]     public required DateTimeOffset                        GeneratedUtc        { get; init; }
     [JsonPropertyName("total_duration_ms")] public required double                                TotalDurationMs     { get; init; }
     [JsonPropertyName("checks")]            public required IReadOnlyList<DetailedHealthCheckDto>  Checks              { get; init; }
+    [JsonPropertyName("inventory_sources")] public IReadOnlyList<InventoryCollectionStatusDto> InventorySources { get; init; } = [];
 
     /// <summary>Running <c>agent-*</c> pods that belong to a currently active run.</summary>
     [JsonPropertyName("active_agent_pods")]    public required IReadOnlyList<AgentPodInfoDto>      ActiveAgentPods    { get; init; }
@@ -131,6 +132,15 @@ public sealed record ClusterDiagnosticsDto
     /// <summary>Concise, expandable-card metadata for the cluster root resource.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("details")]            public TopologyResourceDetailsDto? Details           { get; init; }
+}
+
+public sealed record InventoryCollectionStatusDto
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("complete")] public required bool Complete { get; init; }
+    [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
+    [JsonPropertyName("detail")] public required string Detail { get; init; }
 }
 
 public sealed record WorkflowChildWorkDiagnosticDto

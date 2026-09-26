@@ -450,6 +450,26 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       retryable: false,
       correlation_ids: {},
       cause_chain: ['step:preview:started', 'tool:start_preview:failed:3', '******example.test/trace'],
+      attempt: 2,
+      completeness: 'partial',
+      observed_facts: [{
+        code: 'tool_error_recovered',
+        summary: 'A tool error was followed by a success for the same call.',
+        evidence_reference_ids: ['event-3'],
+      }],
+      supported_interpretations: [],
+      unknowns: [{
+        code: 'root_cause_not_attributable',
+        summary: 'No recorded gate is directly referenced by the terminal failure.',
+        evidence_reference_ids: ['event-7'],
+      }],
+      next_actions: [{
+        kind: 'investigate_unknown',
+        label: 'Inspect the referenced durable events.',
+        preconditions: ['Viewer access remains authorized.'],
+        expected_effect: 'Narrows the unknown evidence without mutating the run.',
+        mutating: false,
+      }],
     });
 
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
@@ -479,6 +499,10 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain(
       'Cause chain: step:preview:started -> tool:start_preview:failed:3.',
     );
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain('Evidence: partial · attempt 2.');
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain('Observed: A tool error was followed by a success');
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain('Unknown: No recorded gate is directly referenced');
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain('Next action: Inspect the referenced durable events.');
     expect(screen.getByText('Used GitHub Copilot. Model: gpt-5.')).toBeTruthy();
     expect(screen.getByTestId('run-header').textContent).not.toContain('Expected provider: GitHub Copilot');
     expect(getComputedStyle(screen.getByTestId('run-header-actions')).flexWrap).toBe('wrap');

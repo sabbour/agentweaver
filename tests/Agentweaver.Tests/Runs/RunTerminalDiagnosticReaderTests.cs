@@ -215,7 +215,7 @@ public sealed class RunTerminalDiagnosticReaderTests
     }
 
     [Fact]
-    public async Task GetAsync_EnrichesProviderTimeoutWithSafeStepAndToolFailureCauses()
+    public async Task GetAsync_DoesNotPromoteNearbyRepeatedToolErrorsToCause()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -288,9 +288,9 @@ public sealed class RunTerminalDiagnosticReaderTests
 
         diagnostic.Should().NotBeNull();
         diagnostic!.Code.Should().Be("github_copilot_turn_timeout");
-        diagnostic.Component.Should().Be("agent_tool");
+        diagnostic.Component.Should().Be("model_provider");
         diagnostic.Message.Should().Be("Run failed with code 'github_copilot_turn_timeout'. Retry is available.");
-        diagnostic.CauseChain.Should().Equal("step:preview:started", "tool:start_preview:failed:3");
+        diagnostic.CauseChain.Should().BeEmpty();
         System.Text.Json.JsonSerializer.Serialize(diagnostic).Should().NotContain("must-not-escape")
             .And.NotContain("registration timed out");
     }

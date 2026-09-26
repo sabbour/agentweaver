@@ -34,6 +34,7 @@ import { AgentSessionPanel } from '../components/AgentSessionPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
 import { EffectivePermissionsPanel } from '../components/EffectivePermissionsPanel';
 import { ExecutionIdentityPanel } from '../components/ExecutionIdentityPanel';
+import { FailureDiagnosticDetails } from '../components/FailureDiagnosticDetails';
 import { AiCredits } from '../components/AiCredits';
 import {
   AiExecutionProviderHint,
@@ -4783,6 +4784,7 @@ export function CoordinatorRunPage() {
                 Failure in {terminalDiagnostic.component}. {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
                 {terminalDiagnostic.cause_chain.length > 0 ? ` Cause chain: ${terminalDiagnostic.cause_chain.join(' -> ')}.` : ''}
                 {' '}{terminalDiagnosticAction}
+                <FailureDiagnosticDetails diagnostic={terminalDiagnostic} />
               </MessageBarBody>
               <MessageBarActions>
                 <Button
