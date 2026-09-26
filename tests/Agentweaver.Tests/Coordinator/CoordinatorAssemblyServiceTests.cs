@@ -2163,6 +2163,27 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunAssembly_CancellationDuringScribe_DoesNotOverwriteCancelledPlanAsComplete()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId,
+            new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        await SeedPreparedMergeAsync(workPlanId, coordinatorRunId);
+        _pipeline.OnScribe = async (_, _) => await CancelRunAsync(coordinatorRunId);
+
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+
+        _pipeline.Scribes.Should().Be(1);
+        var state = await _assemblyStore.GetAsync(workPlanId, default);
+        state!.Status.Should().Be(WorkPlanStatus.Cancelled);
+        state.MergeEffectState.Should().Be(MergeEffectState.Applied);
+        EventTypes_(coordinatorRunId).Should().NotContain(EventTypes.CoordinatorAssemblyCompleted);
+    }
+
+    [Fact]
     public async Task RunAssembly_CancellationBeforeCas_LeavesPreparedEffectWithoutScribe()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -4339,7 +4360,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                 return CollectiveMergeResult.Unauthorized("old-commit", "merge_authorization_lost");
             if (AfterAuthorize is not null)
                 await AfterAuthorize();
-            return MergeOverride ?? CollectiveMergeResult.Merged("merge-commit");
+            return MergeOverride ?? CollectiveMergeResult.AppliedNow("merge-commit");
         }
 
         public Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct)

@@ -219,8 +219,6 @@ public sealed record CollectiveMergeResult
             CheckoutOutcome = checkoutOutcome,
         };
 
-    public static CollectiveMergeResult Merged(string? commitHash) => AppliedNow(commitHash);
-
     public static CollectiveMergeResult RecoveredApplied(
         string? commitHash,
         string? currentTargetCommit,

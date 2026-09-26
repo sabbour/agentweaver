@@ -1996,9 +1996,31 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 ct).ConfigureAwait(false);
         }
 
+        run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (run?.LifecycleGeneration == intent.LifecycleGeneration
+            && run.Status == RunStatus.Completed)
+            return;
+        if (run is null
+            || run.LifecycleGeneration != intent.LifecycleGeneration
+            || run.Status != RunStatus.InProgress)
+        {
+            await _assemblyStore.TrySetCancelledAfterAppliedMergeAsync(
+                workPlanId,
+                intent.EffectId,
+                intent.LifecycleGeneration,
+                "merge_applied_but_lifecycle_authorization_ended",
+                ct).ConfigureAwait(false);
+            return;
+        }
+
         // ── Complete ─────────────────────────────────────────────────────────────────────────────
-        await _assemblyStore.SetStatusAndStageAsync(
-            workPlanId, WorkPlanStatus.Complete, AssemblyStage.Done, ct).ConfigureAwait(false);
+        if (!await _assemblyStore.TryCompleteAfterAppliedMergeAsync(
+                workPlanId,
+                _myPodId,
+                intent.EffectId,
+                intent.LifecycleGeneration,
+                ct).ConfigureAwait(false))
+            return;
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyCompleted, new
         {

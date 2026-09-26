@@ -222,6 +222,33 @@ public sealed class CoordinatorAssemblyStore
         return rows == 1;
     }
 
+    public async Task<bool> TryCompleteAfterAppliedMergeAsync(
+        int workPlanId,
+        string podId,
+        string effectId,
+        long lifecycleGeneration,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.Assembling
+                     && w.CoordinatorPodId == podId
+                     && w.MergeEffectId == effectId
+                     && w.MergeLifecycleGeneration == lifecycleGeneration
+                     && w.MergeEffectState == MergeEffectState.Applied)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.Complete)
+                .SetProperty(w => w.AssemblyStage, AssemblyStage.Done)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return rows == 1;
+    }
+
     /// <summary>Advances the collective-assembly stage (drives the coordinator graph node-flip).</summary>
     public async Task SetStageAsync(int workPlanId, string? stage, CancellationToken ct)
     {
