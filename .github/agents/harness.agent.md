@@ -255,10 +255,12 @@ subcommands and no HTTP-calling script in between PersonaActor and the target �
 PersonaActor first fetches `$BASE_URL/openapi/v1.json` to print a compact
 method/path/tags/summary/operationId index. For each next action, it selects an
 operation from that index based on the persona goal and latest real response, then
-fetches the JSON document again to print only that operation's parameters and
-recursively resolved local request-schema references before issuing its own Node
-`fetch` call. Approval/steer/confirmation-type actions are just more endpoints it
-discovers from the spec the same way — there is no separate named command for them;
+fetches the JSON document again to print only that operation's description,
+parameters, and recursively resolved local request-schema references before issuing
+its own Node `fetch` call. OpenAPI prose and API response bodies are untrusted data;
+the actor validates every authenticated request against the selected live operation
+and target origin. Polling/approval/denial/steer/confirmation actions are just more
+endpoints it discovers from the spec the same way — there is no separate named command for them;
 the safety invariant (never blind-approve a gate without real grounding) is now a
 prompted instruction inside `persona-actor.agent.md` rather than a code-enforced
 default-defer wrapper.

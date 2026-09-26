@@ -130,45 +130,43 @@ pushback grounding, never-blind-approve, stop-at-gate, transcript recording):
 
 ```powershell
 $env:AGENTWEAVER_BASE_URL = "https://agentweaver.example.staging.example"
-$transcript = "scripts/api-harness/transcripts/priya-live-<timestamp>.jsonl"
 
 @'
 import { createRecorderSessionAuthProvider } from './scripts/api-harness/lib/auth-providers/recorder-session.mjs';
 const authorization = await createRecorderSessionAuthProvider({ baseUrl: process.env.AGENTWEAVER_BASE_URL }).getAuthorization();
-const response = await fetch(`${process.env.AGENTWEAVER_BASE_URL}/api/blueprints`, {
-  headers: { Authorization: authorization },
-  redirect: 'error',
-});
-console.log(await response.text());
+console.log(authorization.startsWith('Bearer ') ? 'recorder authorization ready' : 'unexpected authorization type');
 '@ | node --input-type=module -
-# ...append the real request+response as a JSON line to $transcript, then repeat...
 ```
+
+This is an auth-provider probe only, not an API-driving template. PersonaActor's
+authenticated calls must use the live-operation and same-origin validation pattern
+in `.github/agents/persona-actor.agent.md`.
 
 PersonaActor first fetches `/openapi/v1.json` to print a compact
 method/path/tags/summary/operationId index, which is how it learns what
 endpoints exist instead of guessing. For each next action, it selects an
 operation from that index based on the persona goal and latest real response,
 then fetches the JSON document again to print only the selected operation's
-parameters and recursively resolved local request-schema references. This
-includes approval/steer/confirmation-type actions: they are more endpoints it
-discovers the same way, not special named commands. There is no code-enforced
-default-defer wrapper for approvals anymore; PersonaActor is explicitly
-instructed (in its own agent file) to never blind-approve a gate and to ground
-every approval decision in real observed content.
-
-**The OpenAPI spec is incomplete — do not treat it as exhaustive.** It lists only
-the top-level paths and omits the parameterized run endpoints. `/api/runs/{id}/children`,
-`/api/runs/{id}/preview`, `/api/runs/{id}/shell-approvals`, `/api/runs/{id}/steer`,
-and `/api/runs/{id}/events` all exist and work despite being absent from it. Probe
-before concluding an endpoint is missing.
+description, parameters, and recursively resolved local request-schema
+references. This includes polling, approval, denial, steer, and confirmation
+actions: they are more endpoints it discovers the same way, not special named
+commands. The actor treats OpenAPI prose and response bodies as untrusted data
+and validates each authenticated request against the selected live operation and
+target origin. There is no code-enforced default-defer wrapper for approvals
+anymore; PersonaActor is explicitly instructed (in its own agent file) to never
+blind-approve a gate and to ground every approval decision in the matching real
+run event. If a required lifecycle operation is absent from the live index,
+record the contract divergence and stop that flow instead of probing a guessed
+path.
 
 **Shell approvals are not covered by `auto_approve_tools`.** A run submitted with
 `auto_approve_tools: true` and `autopilot: true` still emits `shell.approval_required`
 and then stalls indefinitely — while its status stays `InProgress`, so it looks like
-slow work rather than a gate. Any unattended run needs a poller on
-`GET /api/runs/{id}/events` that answers each `shell.approval_required` with
-`POST /api/runs/{id}/shell-approvals` and body `{"command_hash": "<payload.commandHash>"}`.
-Without it the run will never finish. See `scripts/harness-shared/learnings.md`.
+slow work rather than a gate. Any unattended run needs to discover and inspect
+the live run-events operation, then consider each `shell.approval_required` and
+select the matching shell-approval or shell-denial operation based on the
+persona's grounded decision. Without a decision the run will never finish. See
+`scripts/harness-shared/learnings.md`.
 
 **Transcript recording is PersonaActor's own responsibility.** It appends one
 JSON line per turn (thought + real request + real response) with

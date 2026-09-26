@@ -129,6 +129,14 @@ public sealed class OpenApiEndpointsTests : IDisposable
         eventParameters["limit"].GetProperty("schema").GetProperty("minimum").GetInt32().Should().Be(1);
         eventParameters["limit"].GetProperty("schema").GetProperty("maximum").GetInt32().Should().Be(1000);
 
+        paths.GetProperty("/api/runs/{coordinatorRunId}/children").GetProperty("get")
+            .GetProperty("operationId").GetString().Should().Be("GetCoordinatorChildren");
+        paths.GetProperty("/api/runs/{coordinatorRunId}/steer").GetProperty("post")
+            .GetProperty("operationId").GetString().Should().Be("SteerCoordinator");
+        paths.GetProperty("/api/runs/{id}/shell-approvals").GetProperty("post");
+        paths.GetProperty("/api/runs/{id}/shell-denials").GetProperty("post");
+        paths.GetProperty("/api/runs/{runId}/sandbox/preview").GetProperty("post");
+
         var securitySchemes = root.GetProperty("components").GetProperty("securitySchemes");
         var bearer = securitySchemes.GetProperty("Bearer");
         bearer.GetProperty("type").GetString().Should().Be("http");
