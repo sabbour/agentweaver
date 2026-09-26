@@ -128,8 +128,29 @@ public sealed class EfRunEventStreamTests : IDisposable
         duplicate!.Sequence.Should().Be(first!.Sequence);
         var persisted = await secondReplica.GetPersistedEventsAsync(runId);
         persisted.Should().ContainSingle();
-        persisted[0].Sequence.Should().Be(first!.Sequence);
+        persisted[0].Sequence.Should().Be(first.Sequence);
         System.Text.Json.JsonSerializer.Serialize(persisted[0].Payload).Should().Contain("\"attempt\":1");
+    }
+
+    [Fact]
+    public async Task AppendIdentifiedAsync_AcrossReplicaInstances_PersistsOneLogicalEvent()
+    {
+        const string runId = "run-parent-cancellation-cross-replica";
+        const string eventIdentity = "parent-cancelled:0:parent-run";
+        var firstReplica = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var secondReplica = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+
+        var first = await firstReplica.AppendIdentifiedAsync(
+            runId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.RunCancelled, new { reason = "parent_cancelled", requested = true }));
+        var duplicate = await secondReplica.AppendIdentifiedAsync(
+            runId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.RunCancelled, new { reason = "parent_cancelled", requested = true }));
+
+        duplicate.Sequence.Should().Be(first.Sequence);
+        (await secondReplica.GetPersistedEventsAsync(runId)).Should().ContainSingle();
     }
 
     [Fact]

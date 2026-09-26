@@ -2246,6 +2246,12 @@ namespace Agentweaver.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTimeOffset?>("CancellationRequestedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CancellationRequestedByRunId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ChildRunId")
                         .HasColumnType("TEXT");
 
@@ -2493,6 +2499,12 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("AssemblyTerminalStage")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("CoordinatorCancellationRequestedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CoordinatorCancellationRequestedByRunId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("CoordinatorPodId")

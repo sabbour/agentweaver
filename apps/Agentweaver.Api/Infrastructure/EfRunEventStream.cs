@@ -88,6 +88,78 @@ public sealed class EfRunEventStream : IRunEventStream
         return sequence;
     }
 
+    public async Task<RunEvent> AppendIdentifiedAsync(
+        string runId,
+        string eventIdentity,
+        RunEvent evt,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventIdentity);
+        evt = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(evt));
+        var payloadJson = JsonSerializer.Serialize(evt.Payload);
+
+        for (var attempt = 1; attempt <= MaxWriteAttempts; attempt++)
+        {
+            await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+            await using var tx = await db.Database.BeginTransactionAsync(
+                System.Data.IsolationLevel.ReadCommitted, ct).ConfigureAwait(false);
+            try
+            {
+                await AcquireRunWriteLockAsync(db, runId, ct).ConfigureAwait(false);
+                var existing = await db.RunEvents.AsNoTracking()
+                    .Where(row => row.RunId == runId && row.EventIdentity == eventIdentity)
+                    .Select(row => new { row.Sequence, row.EventType, row.PayloadJson, row.CreatedAt })
+                    .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+                if (existing is not null)
+                {
+                    if (!string.Equals(existing.EventType, evt.Type, StringComparison.Ordinal))
+                        throw new InvalidOperationException(
+                            $"Run event identity '{eventIdentity}' for run '{runId}' is already bound to event type '{existing.EventType}'.");
+                    await tx.CommitAsync(ct).ConfigureAwait(false);
+                    return new RunEvent(
+                        existing.Sequence,
+                        existing.EventType,
+                        DeserializePayload(runId, existing.Sequence, existing.EventType, existing.PayloadJson),
+                        new DateTimeOffset(DateTime.SpecifyKind(existing.CreatedAt, DateTimeKind.Utc)));
+                }
+
+                var sequence = (await db.RunEvents
+                    .Where(row => row.RunId == runId)
+                    .Select(row => (int?)row.Sequence)
+                    .MaxAsync(ct).ConfigureAwait(false) ?? 0) + 1;
+                db.RunEvents.Add(new RunEventRecord
+                {
+                    RunId = runId,
+                    Sequence = sequence,
+                    EventIdentity = eventIdentity,
+                    EventType = evt.Type,
+                    PayloadJson = payloadJson,
+                    CreatedAt = evt.TimestampUtc.UtcDateTime,
+                });
+                await db.SaveChangesAsync(ct).ConfigureAwait(false);
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+                return evt with { Sequence = sequence };
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ShouldRetryWrite(ex, attempt, out var sqlState))
+            {
+                await tx.RollbackAsync(ct).ConfigureAwait(false);
+                var delay = ComputeRetryDelay(attempt);
+                _logger?.LogWarning(
+                    "Retrying identified RunEvent append for run {RunId} after SQLSTATE {SqlState} " +
+                    "(attempt {Attempt}/{MaxAttempts}, delay {DelayMs}ms)",
+                    runId, sqlState, attempt, MaxWriteAttempts, (int)delay.TotalMilliseconds);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Failed to durably append identified RunEvent for run '{runId}' after {MaxWriteAttempts} attempts.");
+    }
+
     public async Task<RunEvent?> AppendWorkflowChildWorkReadyAsync(
         int workPlanId,
         string runId,
