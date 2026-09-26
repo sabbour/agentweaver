@@ -1,4 +1,5 @@
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 
@@ -55,6 +56,26 @@ public sealed class WorkflowChildWorkModelTests
             source.Should().Contain("unique: true");
             source.Should().Contain("\\\"ParentRunId\\\" IS NOT NULL AND \\\"ParentWorkflowNodeId\\\" IS NOT NULL");
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunEventIdentity_IsUniquePerRun_ForBothProviders(bool postgres)
+    {
+        var options = new DbContextOptionsBuilder<MemoryDbContext>();
+        if (postgres)
+            options.UseNpgsql("Host=localhost;Database=model;Username=model;******");
+        else
+            options.UseSqlite("Data Source=:memory:");
+
+        using var db = new MemoryDbContext(options.Options);
+        var runEvent = db.Model.FindEntityType(typeof(RunEventRecord))!;
+        var identity = runEvent.GetIndexes().Single(index =>
+            index.Properties.Select(property => property.Name)
+                .SequenceEqual(new[] { nameof(RunEventRecord.RunId), nameof(RunEventRecord.EventIdentity) }));
+        identity.IsUnique.Should().BeTrue();
+        identity.GetFilter().Should().Contain("\"EventIdentity\" IS NOT NULL");
     }
 
     private static string RepositoryRoot()

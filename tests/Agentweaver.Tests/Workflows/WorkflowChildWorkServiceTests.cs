@@ -141,6 +141,9 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         await _service.SweepAsync();
 
         _runtime.Deliveries.Should().ContainSingle();
+        _runtime.DurableParentSteps.Should().ContainSingle();
+        _runtime.DurableParentSteps[0].Payload.GetProperty("status").GetString()
+            .Should().Be("child_work_ready");
         var state = await _pendingRequests.GetDeliveryStateAsync(
             _parent.Id.ToString(),
             PendingRequestDeliveryKinds.WorkflowChildWork);
@@ -235,6 +238,8 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         var result = _runtime.Deliveries.Should().ContainSingle().Subject;
         result.Succeeded.Should().BeFalse();
         result.Branches.Should().Contain(branch => branch.Status == branchStatus);
+        _runtime.DurableParentSteps.Should().BeEmpty(
+            "failed or cancelled branch work must not emit a success-ready event");
     }
 
     [Fact]
@@ -830,6 +835,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         public List<DomainRun> Cancelled { get; } = [];
         public List<WorkflowChildWorkResult> Deliveries { get; } = [];
         public List<(string RunId, string OwnerUser)> EnsuredStreams { get; } = [];
+        public List<(string RunId, string EventIdentity, JsonElement Payload)> DurableParentSteps { get; } = [];
         public bool DeliverResult { get; set; }
 
         public bool DispatchEnabled
@@ -859,6 +865,19 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
 
         public void RecordParentStep(string parentRunId, object payload)
         {
+        }
+
+        public Task<bool> RecordParentReadyStepAsync(
+            int workPlanId,
+            string parentRunId,
+            string eventIdentity,
+            object payload,
+            CancellationToken ct)
+        {
+            var element = JsonSerializer.SerializeToElement(payload, JsonDefaults.Options);
+            if (DurableParentSteps.All(item => item.EventIdentity != eventIdentity))
+                DurableParentSteps.Add((parentRunId, eventIdentity, element));
+            return Task.FromResult(true);
         }
 
         public void EnsureRunStream(string runId, string ownerUser)

@@ -48,6 +48,16 @@ public sealed class SqliteRunEventStreamTests : IDisposable
                 "CreatedAt" TEXT NOT NULL
             );
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_RunEvents_RunId_Sequence" ON "RunEvents" ("RunId", "Sequence");
+            CREATE TABLE IF NOT EXISTS "WorkPlans" (
+                "Id" INTEGER NOT NULL PRIMARY KEY,
+                "Status" TEXT NOT NULL,
+                "ParentResumeState" TEXT NULL,
+                "ParentResumeResultJson" TEXT NULL,
+                "UpdatedAt" TEXT NOT NULL
+            );
+            INSERT OR REPLACE INTO "WorkPlans"
+                ("Id", "Status", "ParentResumeState", "ParentResumeResultJson", "UpdatedAt")
+            VALUES (1, 'complete', 'ready', '{}', '2026-09-26 00:00:00');
             """;
         cmd.ExecuteNonQuery();
     }
@@ -72,6 +82,82 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         replayed[^1].Type.Should().Be(EventTypes.RunCompleted);
         replayed.Should().OnlyContain(e => e.TimestampUtc != default && e.TimestampUtc.Offset == TimeSpan.Zero,
             "direct durable appends must stamp every event with a UTC capture time");
+    }
+
+    [Fact]
+    public async Task AppendIdempotentAsync_AcrossRestart_PersistsOneLogicalEvent()
+    {
+        const string runId = "run-idempotent";
+        const string eventIdentity = "workflow-child-work-ready:request:hash";
+        var producer = new SqliteRunEventStream(_config);
+        var first = await producer.AppendWorkflowChildWorkReadyAsync(
+            1,
+            runId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.WorkflowStep, new { status = "child_work_ready", attempt = 1 }));
+
+        var afterRestart = new SqliteRunEventStream(_config);
+        var duplicate = await afterRestart.AppendWorkflowChildWorkReadyAsync(
+            1,
+            runId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.WorkflowStep, new { status = "child_work_ready", attempt = 2 }));
+
+        duplicate.Should().NotBeNull();
+        first.Should().NotBeNull();
+        duplicate!.Sequence.Should().Be(first!.Sequence);
+        var persisted = await afterRestart.GetPersistedEventsAsync(runId);
+        persisted.Should().ContainSingle();
+        persisted[0].Sequence.Should().Be(first.Sequence);
+        System.Text.Json.JsonSerializer.Serialize(persisted[0].Payload).Should().Contain("\"attempt\":1");
+    }
+
+    [Fact]
+    public async Task AppendIdempotentAsync_ConcurrentDuplicateCalls_PersistOneLogicalEvent()
+    {
+        const string runId = "run-idempotent-concurrent";
+        const string eventIdentity = "workflow-child-work-ready:request:concurrent";
+        var stream = new SqliteRunEventStream(_config);
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(attempt =>
+            Task.Run(() => stream.AppendWorkflowChildWorkReadyAsync(
+                1,
+                runId,
+                eventIdentity,
+                new RunEvent(0, EventTypes.WorkflowStep, new { status = "child_work_ready", attempt })))));
+
+        results.Should().NotContainNulls();
+        results.Select(result => result!.Sequence).Should()
+            .OnlyContain(sequence => sequence == results[0]!.Sequence);
+        (await stream.GetPersistedEventsAsync(runId)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task AppendWorkflowChildWorkReadyAsync_SuppressedPlan_DoesNotPersistEvent()
+    {
+        const string runId = "run-suppressed-ready";
+        using (var connection = new SqliteConnection($"Data Source={Path.Combine(_dir, "memory.db")}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                UPDATE "WorkPlans"
+                SET "Status" = 'cancelled', "ParentResumeState" = 'suppressed'
+                WHERE "Id" = 1;
+                """;
+            command.ExecuteNonQuery();
+        }
+        var stream = new SqliteRunEventStream(_config);
+
+        var appended = await stream.AppendWorkflowChildWorkReadyAsync(
+            1,
+            runId,
+            "workflow-child-work-ready:cancelled",
+            new RunEvent(0, EventTypes.WorkflowStep, new { status = "child_work_ready" }));
+
+        appended.Should().BeNull();
+        (await stream.GetPersistedEventsAsync(runId)).Should().BeEmpty();
     }
 
     [Fact]

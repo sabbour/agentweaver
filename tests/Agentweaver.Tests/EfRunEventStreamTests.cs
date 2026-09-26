@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -68,6 +70,114 @@ public sealed class EfRunEventStreamTests : IDisposable
 
         received.Select(e => e.Sequence).Should().Equal(1, 2);
         received[0].Type.Should().Be(EventTypes.CoordinatorOutcomeSpec);
+    }
+
+    [Fact]
+    public async Task AppendIdempotentAsync_AcrossReplicaInstances_PersistsOneLogicalEvent()
+    {
+        const string runId = "run-idempotent-cross-replica";
+        const string eventIdentity = "workflow-child-work-ready:request:hash";
+        int workPlanId;
+        await using (var db = new MemoryDbContext(_options))
+        {
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project",
+                CoordinatorRunId = "child",
+                Goal = "goal",
+                DesiredOutcome = "outcome",
+                Scope = "scope",
+                Assumptions = "none",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "project",
+                CoordinatorRunId = "child",
+                Status = WorkPlanStatus.Complete,
+                ParentResumeState = WorkflowChildWorkResumeStates.Ready,
+                ParentResumeResultJson = "{}",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            workPlanId = plan.Id;
+        }
+        var firstReplica = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var secondReplica = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+
+        var first = await firstReplica.AppendWorkflowChildWorkReadyAsync(
+            workPlanId,
+            runId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.WorkflowStep, new { status = "child_work_ready", attempt = 1 }));
+        var duplicate = await secondReplica.AppendWorkflowChildWorkReadyAsync(
+            workPlanId,
+            runId,
+            eventIdentity,
+            new RunEvent(0, EventTypes.WorkflowStep, new { status = "child_work_ready", attempt = 2 }));
+
+        duplicate.Should().NotBeNull();
+        first.Should().NotBeNull();
+        duplicate!.Sequence.Should().Be(first!.Sequence);
+        var persisted = await secondReplica.GetPersistedEventsAsync(runId);
+        persisted.Should().ContainSingle();
+        persisted[0].Sequence.Should().Be(first!.Sequence);
+        System.Text.Json.JsonSerializer.Serialize(persisted[0].Payload).Should().Contain("\"attempt\":1");
+    }
+
+    [Fact]
+    public async Task AppendWorkflowChildWorkReadyAsync_SuppressedPlan_DoesNotPersistEvent()
+    {
+        const string runId = "run-suppressed-ready";
+        int workPlanId;
+        await using (var db = new MemoryDbContext(_options))
+        {
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project",
+                CoordinatorRunId = "cancelled-child",
+                Goal = "goal",
+                DesiredOutcome = "outcome",
+                Scope = "scope",
+                Assumptions = "none",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "project",
+                CoordinatorRunId = "cancelled-child",
+                Status = WorkPlanStatus.Cancelled,
+                ParentResumeState = WorkflowChildWorkResumeStates.Suppressed,
+                ParentResumeResultJson = "{}",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            workPlanId = plan.Id;
+        }
+
+        var stream = new EfRunEventStream(new TestMemoryDbContextFactory(_options));
+        var appended = await stream.AppendWorkflowChildWorkReadyAsync(
+            workPlanId,
+            runId,
+            "workflow-child-work-ready:cancelled",
+            new RunEvent(0, EventTypes.WorkflowStep, new { status = "child_work_ready" }));
+
+        appended.Should().BeNull();
+        (await stream.GetPersistedEventsAsync(runId)).Should().BeEmpty();
     }
 
     [Fact]

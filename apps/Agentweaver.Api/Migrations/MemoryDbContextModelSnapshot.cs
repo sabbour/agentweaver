@@ -2682,6 +2682,9 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EventIdentity")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("EventType")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -2700,6 +2703,10 @@ namespace Agentweaver.Api.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("RunId");
+
+                    b.HasIndex("RunId", "EventIdentity")
+                        .IsUnique()
+                        .HasFilter("\"EventIdentity\" IS NOT NULL");
 
                     b.HasIndex("RunId", "Sequence")
                         .IsUnique();

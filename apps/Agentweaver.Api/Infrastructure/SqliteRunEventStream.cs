@@ -4,6 +4,8 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
@@ -82,6 +84,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
             Pooling = true,
         }.ToString();
         EnsureTerminalOutcomeProjectionTable();
+        EnsureRunEventIdentityColumn();
     }
 
     /// <inheritdoc />
@@ -126,6 +129,127 @@ public sealed class SqliteRunEventStream : IRunEventStream
         }
 
         return ValueTask.FromResult(sequence);
+    }
+
+    public Task<RunEvent?> AppendWorkflowChildWorkReadyAsync(
+        int workPlanId,
+        string runId,
+        string eventIdentity,
+        RunEvent evt,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventIdentity);
+        ct.ThrowIfCancellationRequested();
+        evt = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(evt));
+
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var tx = connection.BeginTransaction();
+        using var claim = connection.CreateCommand();
+        claim.Transaction = tx;
+        claim.CommandText =
+            """
+            UPDATE "WorkPlans"
+            SET "UpdatedAt" = "UpdatedAt"
+            WHERE "Id" = $workPlanId
+              AND "Status" = $complete
+              AND "ParentResumeState" = $ready
+              AND "ParentResumeResultJson" IS NOT NULL;
+            """;
+        claim.Parameters.AddWithValue("$workPlanId", workPlanId);
+        claim.Parameters.AddWithValue("$complete", WorkPlanStatus.Complete);
+        claim.Parameters.AddWithValue("$ready", Workflows.WorkflowChildWorkResumeStates.Ready);
+        var eligible = claim.ExecuteNonQuery();
+
+        using var prior = connection.CreateCommand();
+        prior.Transaction = tx;
+        prior.CommandText =
+            """
+            SELECT "Sequence", "EventType", "PayloadJson", "CreatedAt"
+            FROM "RunEvents"
+            WHERE "RunId" = $runId AND "EventIdentity" = $eventIdentity;
+            """;
+        prior.Parameters.AddWithValue("$runId", runId);
+        prior.Parameters.AddWithValue("$eventIdentity", eventIdentity);
+        using (var priorReader = prior.ExecuteReader())
+        {
+            if (priorReader.Read())
+            {
+                var priorSequence = priorReader.GetInt32(0);
+                var priorEventType = priorReader.GetString(1);
+                if (!string.Equals(priorEventType, evt.Type, StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        $"Run event identity '{eventIdentity}' for run '{runId}' is already bound to event type '{priorEventType}'.");
+                var priorEvent = new RunEvent(
+                    priorSequence,
+                    priorEventType,
+                    DeserializePayload(runId, priorSequence, priorEventType, priorReader.GetString(2)),
+                    DateTimeOffset.Parse(priorReader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+                priorReader.Dispose();
+                tx.Commit();
+                return Task.FromResult<RunEvent?>(priorEvent);
+            }
+        }
+
+        if (eligible == 0)
+        {
+            tx.Commit();
+            return Task.FromResult<RunEvent?>(null);
+        }
+
+        using var append = connection.CreateCommand();
+        append.Transaction = tx;
+        append.CommandText =
+            """
+            INSERT OR IGNORE INTO "RunEvents"
+                ("RunId", "Sequence", "EventIdentity", "EventType", "PayloadJson", "CreatedAt")
+            SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $eventIdentity, $type, $payload, $createdAt
+            FROM "RunEvents" WHERE "RunId" = $runId
+            RETURNING "Sequence";
+            """;
+        append.Parameters.AddWithValue("$runId", runId);
+        append.Parameters.AddWithValue("$eventIdentity", eventIdentity);
+        append.Parameters.AddWithValue("$type", evt.Type);
+        append.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(evt.Payload));
+        append.Parameters.AddWithValue("$createdAt",
+            evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+        var inserted = append.ExecuteScalar();
+        if (inserted is not null)
+        {
+            var assignedSequence = Convert.ToInt32(inserted, CultureInfo.InvariantCulture);
+            tx.Commit();
+            var recorded = evt with { Sequence = assignedSequence };
+            PublishDurableEvent(runId, recorded);
+            return Task.FromResult<RunEvent?>(recorded);
+        }
+
+        using var existing = connection.CreateCommand();
+        existing.Transaction = tx;
+        existing.CommandText =
+            """
+            SELECT "Sequence", "EventType", "PayloadJson", "CreatedAt"
+            FROM "RunEvents"
+            WHERE "RunId" = $runId AND "EventIdentity" = $eventIdentity;
+            """;
+        existing.Parameters.AddWithValue("$runId", runId);
+        existing.Parameters.AddWithValue("$eventIdentity", eventIdentity);
+        using var reader = existing.ExecuteReader();
+        if (!reader.Read())
+            throw new InvalidOperationException(
+                $"Run event identity '{eventIdentity}' for run '{runId}' was not persisted after a duplicate append.");
+        var sequence = reader.GetInt32(0);
+        var eventType = reader.GetString(1);
+        if (!string.Equals(eventType, evt.Type, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Run event identity '{eventIdentity}' for run '{runId}' is already bound to event type '{eventType}'.");
+        var persisted = new RunEvent(
+            sequence,
+            eventType,
+            DeserializePayload(runId, sequence, eventType, reader.GetString(2)),
+            DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+        reader.Dispose();
+        tx.Commit();
+        return Task.FromResult<RunEvent?>(persisted);
     }
 
     public Task<RunEvent> AppendTerminalOutcomeAsync(
@@ -459,6 +583,23 @@ public sealed class SqliteRunEventStream : IRunEventStream
             "ALTER TABLE terminal_run_outcome_projections ADD COLUMN event_sequence INTEGER NOT NULL DEFAULT 0;";
         try { command.ExecuteNonQuery(); }
         catch (SqliteException) { }
+    }
+
+    private void EnsureRunEventIdentityColumn()
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "ALTER TABLE \"RunEvents\" ADD COLUMN \"EventIdentity\" TEXT NULL;";
+        try { command.ExecuteNonQuery(); }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1) { }
+        command.CommandText =
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_RunEvents_RunId_EventIdentity"
+            ON "RunEvents" ("RunId", "EventIdentity")
+            WHERE "EventIdentity" IS NOT NULL;
+            """;
+        command.ExecuteNonQuery();
     }
 
     private CurrentLifecycleTerminalProjection? GetCurrentLifecycleTerminalProjection(string runId)
