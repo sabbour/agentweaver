@@ -298,6 +298,47 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task TopLevelParentCancellation_SelectsCoordinatorPlan_AndCancelsEveryActiveChild()
+    {
+        var firstChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var secondChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var (planId, activeSubtaskIds, pendingSubtaskId) = await SeedTopLevelFanPlanAsync(
+            firstChild,
+            secondChild);
+
+        (await _service.CancelForParentAsync(_parent.Id.ToString())).Should().Be(1);
+
+        var plan = await GetPlanAsync(planId);
+        plan.Status.Should().Be(WorkPlanStatus.Cancelled);
+        plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Suppressed);
+        _runtime.Cancelled.Select(run => run.Id.ToString()).Should().BeEquivalentTo(
+            firstChild.Id.ToString(),
+            secondChild.Id.ToString());
+        _runtime.Cancelled.Select(run => run.Id).Should().NotContain(_parent.Id);
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var activeSubtasks = await db.Subtasks.AsNoTracking()
+            .Where(subtask => activeSubtaskIds.Contains(subtask.Id))
+            .ToListAsync();
+        activeSubtasks.Should().OnlyContain(subtask => subtask.Status == SubtaskStatus.Running);
+        var pendingSubtask = await db.Subtasks.AsNoTracking().SingleAsync(row => row.Id == pendingSubtaskId);
+        pendingSubtask.Status.Should().Be(SubtaskStatus.Pending);
+        pendingSubtask.ChildRunId.Should().BeNull();
+
+        (await _service.TryStartDispatchAsync(planId)).Should().BeFalse();
+        (await _service.TryPrepareResumeAsync(planId)).Should().BeFalse();
+        _runtime.Started.Should().BeEmpty();
+        _runtime.Deliveries.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task RepeatedParentCancellation_CancelsChildThatBecameActiveAfterSuppression()
     {
         var attached = await CreateAsync(Request());
@@ -326,6 +367,44 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             .Should().Be(WorkflowChildWorkResumeStates.Suppressed);
         (await _service.TryPrepareResumeAsync(attached.WorkPlanId)).Should().BeFalse();
         _runtime.Deliveries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RestartRecovery_ReissuesTopLevelCancellationForLateActiveChild()
+    {
+        var firstChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var secondChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var (planId, _, pendingSubtaskId) = await SeedTopLevelFanPlanAsync(firstChild, secondChild);
+        await _service.CancelForParentAsync(_parent.Id.ToString());
+
+        var lateChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+            SubtaskId = pendingSubtaskId.ToString(),
+        };
+        await _runStore.InsertAsync(lateChild);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var pendingSubtask = await db.Subtasks.SingleAsync(row => row.Id == pendingSubtaskId);
+            pendingSubtask.ChildRunId = lateChild.Id.ToString();
+            pendingSubtask.Status = SubtaskStatus.Running;
+            await db.SaveChangesAsync();
+        }
+        _runtime.Cancelled.Clear();
+
+        await _service.PrepareRestartRecoveryAsync();
+
+        _runtime.Cancelled.Select(run => run.Id).Should().Contain(lateChild.Id);
+        var plan = await GetPlanAsync(planId);
+        plan.Status.Should().Be(WorkPlanStatus.Cancelled);
+        plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Suppressed);
     }
 
     [Fact]
@@ -567,6 +646,98 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         foreach (var branch in await db.Subtasks.Where(row => row.WorkPlanId == planId).ToListAsync())
             branch.Status = branchStatus;
         await db.SaveChangesAsync();
+    }
+
+    private async Task<(int PlanId, int[] ActiveSubtaskIds, int PendingSubtaskId)> SeedTopLevelFanPlanAsync(
+        DomainRun firstChild,
+        DomainRun secondChild)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var outcomeSpec = new OutcomeSpec
+        {
+            ProjectId = _parent.ProjectId!.Value.ToString(),
+            CoordinatorRunId = _parent.Id.ToString(),
+            Goal = "Validate top-level fan cancellation",
+            DesiredOutcome = "Cancel every active fan child without dispatching pending work",
+            Scope = "Top-level static fan",
+            Assumptions = "Two branches are active and downstream work is pending",
+            Status = "confirmed",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(outcomeSpec);
+        await db.SaveChangesAsync();
+
+        var plan = new WorkPlan
+        {
+            OutcomeSpecId = outcomeSpec.Id,
+            ProjectId = outcomeSpec.ProjectId,
+            CoordinatorRunId = _parent.Id.ToString(),
+            WorkflowId = "pm-discovery",
+            Status = WorkPlanStatus.Dispatching,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        var subtasks = new[]
+        {
+            new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = "Customer signal research",
+                Scope = "Research customer signals",
+                AssignedAgent = "researcher",
+                SelectedModelId = "test-model",
+                Phase = "planning",
+                IsolationStrategy = "worktree",
+                Status = SubtaskStatus.Running,
+                ChildRunId = firstChild.Id.ToString(),
+                WorkflowBranchNodeId = "customer-signal-research",
+                WorkflowBranchOrdinal = 0,
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = "Technical feasibility research",
+                Scope = "Research technical feasibility",
+                AssignedAgent = "researcher",
+                SelectedModelId = "test-model",
+                Phase = "planning",
+                IsolationStrategy = "worktree",
+                Status = SubtaskStatus.Running,
+                ChildRunId = secondChild.Id.ToString(),
+                WorkflowBranchNodeId = "technical-feasibility-research",
+                WorkflowBranchOrdinal = 1,
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = "Synthesis",
+                Scope = "Join branch outputs",
+                AssignedAgent = "lead",
+                SelectedModelId = "test-model",
+                Phase = "planning",
+                IsolationStrategy = "worktree",
+                Status = SubtaskStatus.Pending,
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+        };
+        db.Subtasks.AddRange(subtasks);
+        await db.SaveChangesAsync();
+
+        await _runStore.InsertAsync(firstChild with { SubtaskId = subtasks[0].Id.ToString() });
+        await _runStore.InsertAsync(secondChild with { SubtaskId = subtasks[1].Id.ToString() });
+
+        return (plan.Id, [subtasks[0].Id, subtasks[1].Id], subtasks[2].Id);
     }
 
     private async Task SetBranchRunsAsync(

@@ -97,6 +97,70 @@ public sealed class EndpointHelpersCancelPodReleaseTests
     }
 
     [Fact]
+    public async Task CancelRunWorkAsync_ParentCancellation_PersistsAttributableCancelledEvent()
+    {
+        var runId = RunId.New();
+        var parentRunId = RunId.New().ToString();
+        var run = MakeRun(runId) with { ParentRunId = parentRunId };
+        var streamStore = new RunStreamStore();
+        streamStore.Create(runId.ToString(), "alice");
+        var runStore = new NoOpRunStore();
+
+        await EndpointHelpers.CancelRunWorkAsync(
+            run,
+            runStore,
+            streamStore,
+            new RunWorkflowRegistry(),
+            new NoOpWorktreeOperations(),
+            NullLogger.Instance,
+            CancellationToken.None,
+            eventStream: null,
+            terminalOutcomeProjector: null,
+            reason: "parent_cancelled",
+            requestedByRunId: parentRunId);
+
+        runStore.TerminalOutcome.Should().Match<TerminalRunOutcome>(outcome =>
+            outcome.Status == RunStatus.Failed
+            && outcome.EventType == EventTypes.RunCancelled
+            && outcome.Payload.GetProperty("reason").GetString() == "parent_cancelled"
+            && outcome.Payload.GetProperty("requested").GetBoolean()
+            && outcome.Payload.GetProperty("requestedByRunId").GetString() == parentRunId);
+    }
+
+    [Fact]
+    public async Task CancelRunWorkAsync_WhenTerminalTransitionLoses_DoesNotDestroyCompletedWork()
+    {
+        var lifecycle = new TrackingPodLifecycle();
+        var worktree = new TrackingWorktreeOperations();
+        var runId = RunId.New();
+        var run = MakeRun(runId) with
+        {
+            WorktreePath = "C:\\repo\\.agentweaver\\worktrees\\child",
+        };
+        var streamStore = new RunStreamStore();
+        streamStore.Create(runId.ToString(), "alice");
+
+        await EndpointHelpers.CancelRunWorkAsync(
+            run,
+            new NoOpRunStore(terminalizationResult: false),
+            streamStore,
+            new RunWorkflowRegistry(),
+            worktree,
+            NullLogger.Instance,
+            CancellationToken.None,
+            podLifecycle: lifecycle,
+            sandboxRuntime: new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" },
+            reason: "parent_cancelled",
+            requestedByRunId: RunId.New().ToString());
+
+        worktree.Removed.Should().BeFalse(
+            "a concurrent successful terminal transition owns the completed child worktree");
+        lifecycle.ReleasedRunIds.Should().Contain(runId.ToString(),
+            "the cancellation attempt must still stop any remote execution after losing the terminal CAS");
+        streamStore.Get(runId.ToString())!.GetSnapshotSince(0).Events.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task CancelRunWorkAsync_WhenPodLifecycleIsNull_DoesNotThrow()
     {
         var runId = RunId.New();
@@ -153,6 +217,13 @@ public sealed class EndpointHelpersCancelPodReleaseTests
     /// exercised by <see cref="EndpointHelpers.CancelRunWorkAsync"/>; every other member throws.</summary>
     private sealed class NoOpRunStore : IRunStore
     {
+        private readonly bool _terminalizationResult;
+
+        public NoOpRunStore(bool terminalizationResult = true)
+        {
+            _terminalizationResult = terminalizationResult;
+        }
+
         public TerminalRunOutcome? TerminalOutcome { get; private set; }
 
         public Task<bool> TrySetTerminalStatusAsync(
@@ -163,7 +234,7 @@ public sealed class EndpointHelpersCancelPodReleaseTests
             RunId runId, TerminalRunOutcome outcome, string? result, CancellationToken ct = default)
         {
             TerminalOutcome = outcome;
-            return Task.FromResult(true);
+            return Task.FromResult(_terminalizationResult);
         }
 
         public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
@@ -206,6 +277,19 @@ public sealed class EndpointHelpersCancelPodReleaseTests
         public int GetStepCount(string runId) => throw new NotImplementedException();
         public MergeResult MergeWorktree(string repositoryPath, string originatingBranch, string worktreeBranch, string expectedTreeHash) => throw new NotImplementedException();
         public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) => throw new NotImplementedException();
+        public string? GetTreeHash(string worktreePath) => null;
+    }
+
+    private sealed class TrackingWorktreeOperations : IWorktreeOperations
+    {
+        public bool Removed { get; private set; }
+
+        public bool WorktreeExists(string worktreePath) => true;
+        public string CommitChanges(string worktreePath, string runId) => throw new NotImplementedException();
+        public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch) => throw new NotImplementedException();
+        public int GetStepCount(string runId) => throw new NotImplementedException();
+        public MergeResult MergeWorktree(string repositoryPath, string originatingBranch, string worktreeBranch, string expectedTreeHash) => throw new NotImplementedException();
+        public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) => Removed = true;
         public string? GetTreeHash(string worktreePath) => null;
     }
 }

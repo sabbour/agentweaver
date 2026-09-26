@@ -763,6 +763,43 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         _assembly.Started.Should().Be(0);
     }
 
+    [Fact]
+    public async Task RunDispatchLoop_TopLevelChildStartedDuringCancellation_IsImmediatelyCancelled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
+        var (planId, ids) = await SeedPlanAsync(
+            coord,
+            [(SubtaskStatus.Pending, null), (SubtaskStatus.Pending, null)]);
+
+        _streamStore.Create(coord, "owner");
+        var sut = BuildDispatch(stream);
+        Run? launched = null;
+        sut.StartChildRunOverride = async (child, ct) =>
+        {
+            launched = child;
+            await _runStore.InsertAsync(child, ct);
+            _streamStore.Create(child.Id.ToString(), child.SubmittingUser);
+            await using var scope = _provider.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId, ct);
+            plan.Status = WorkPlanStatus.Cancelled;
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Suppressed;
+            await db.SaveChangesAsync(ct);
+        };
+
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        launched.Should().NotBeNull();
+        (await _runStore.GetAsync(launched!.Id))!.Status.Should().Be(RunStatus.Failed);
+        _streamStore.Get(launched.Id.ToString())!.GetSnapshotSince(0).Events.Should().Contain(evt =>
+            evt.Type == EventTypes.RunCancelled);
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Cancelled);
+        (await GetSubtaskAsync(ids[1])).Status.Should().Be(SubtaskStatus.Pending);
+        _assembly.Started.Should().Be(0);
+    }
+
     // -----------------------------------------------------------------------
     // MID-RUN STEERING drain (Feature 008 Phase 2; #226 mid-run counterpart).
     //
