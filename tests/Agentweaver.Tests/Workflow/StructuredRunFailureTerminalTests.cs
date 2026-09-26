@@ -10,6 +10,8 @@ public sealed class StructuredRunFailureTerminalTests
     [Theory]
     [InlineData("model_provider_snapshot_unavailable")]
     [InlineData("github_copilot_capability_snapshot_unavailable")]
+    [InlineData("coordinator_outcome_spec_invalid_response")]
+    [InlineData("coordinator_outcome_spec_model_refused")]
     public void NormalizeErrorCode_PreservesRunSnapshotFailures(string errorCode)
     {
         StructuredRunFailureTerminal.NormalizeErrorCode(errorCode).Should().Be(errorCode);
@@ -20,6 +22,21 @@ public sealed class StructuredRunFailureTerminalTests
     {
         StructuredRunFailureTerminal.NormalizeErrorCode("mandatory_context_budget_exceeded")
         .Should().Be("mandatory_context_budget_exceeded");
+    }
+
+    [Theory]
+    [InlineData(
+        "coordinator_outcome_spec_model_refused",
+        "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.")]
+    [InlineData(
+        "coordinator_outcome_spec_invalid_response",
+        "The model returned an invalid outcome-spec response after one correction attempt. Retry the run or choose another model.")]
+    public void CreateDiagnosticMessage_ProvidesActionableOutcomeSpecGuidance(
+        string errorCode,
+        string expected)
+    {
+        StructuredRunFailureTerminal.CreateDiagnosticMessage(errorCode, retryable: true)
+            .Should().Be(expected);
     }
 
     [Theory]

@@ -75,6 +75,34 @@ public sealed class AgentHostModelInvocationGuardTests
     }
 
     [Fact]
+    public async Task Reused_agent_returns_only_the_current_turn_text()
+    {
+        var configuration = new ByokProviderConfiguration(
+            "byok", "Provider", "openai", "https://provider.test", "model", "private-key");
+        var policyStore = new StubPolicyStore();
+        var executor = SandboxExecutorFactory.CreatePassthrough();
+        await using var agent = new CopilotAIAgent(
+            new GitHubCopilotClientFactory(new ConfigurationBuilder().Build(), new NoCopilotCredential()),
+            executor, policyStore, new InMemoryShellApprovalStore(), new InMemoryToolApprovalGate(),
+            NullLogger<CopilotAIAgent>.Instance,
+            byokProviderConfiguration: new ByokConfiguration(configuration));
+        agent.ConfigureProviderBoundary(ModelSource.Byok, configuration.ExecutionFingerprint());
+        var model = new SequentialModelAgent();
+        SetField(agent, "_runId", "run-host");
+        SetField(agent, "_acceptedModelSource", ModelSource.Byok);
+        SetField(agent, "_acceptedByokProviderFingerprint", configuration.ExecutionFingerprint());
+        SetField(agent, "_inner", model);
+        SetField(agent, "_activeExecutor", executor);
+        SetField(agent, "_sandboxPolicy", await policyStore.GetPolicyAsync(".", CancellationToken.None));
+
+        var first = await agent.ExecuteStreamingLoopAsync("first", null!, CancellationToken.None);
+        var second = await agent.ExecuteStreamingLoopAsync("second", null!, CancellationToken.None);
+
+        first.Should().Be("response-1");
+        second.Should().Be("response-2");
+    }
+
+    [Fact]
     public async Task Operator_host_rejects_unvalidated_execution_before_MCP_or_model_access()
     {
         var handler = new ValidationHandler();
@@ -150,5 +178,46 @@ public sealed class AgentHostModelInvocationGuardTests
         protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
             JsonElement serializedState, JsonSerializerOptions? jsonSerializerOptions,
             CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
+
+    private sealed class SequentialModelAgent : AIAgent
+    {
+        private int _calls;
+
+        protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        protected override Task<AgentResponse> RunCoreAsync(
+            IEnumerable<ChatMessage> messages,
+            AgentSession? session,
+            AgentRunOptions? options,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
+            IEnumerable<ChatMessage> messages,
+            AgentSession? session,
+            AgentRunOptions? options,
+            [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            yield return new AgentResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextContent($"response-{Interlocked.Increment(ref _calls)}")],
+            };
+        }
+
+        protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
+            AgentSession? session,
+            JsonSerializerOptions? jsonSerializerOptions,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
+            JsonElement serializedState,
+            JsonSerializerOptions? jsonSerializerOptions,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

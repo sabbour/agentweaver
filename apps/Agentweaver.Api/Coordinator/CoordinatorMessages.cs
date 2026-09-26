@@ -76,6 +76,12 @@ public static class CoordinatorFailureCodes
     /// <summary>The coordinator failed while drafting before workflow selection began.</summary>
     public const string OutcomeSpecDraftFailed = "coordinator_outcome_spec_draft_failed";
 
+    /// <summary>The outcome-spec model declined the planning request after one correction attempt.</summary>
+    public const string OutcomeSpecModelRefused = "coordinator_outcome_spec_model_refused";
+
+    /// <summary>The outcome-spec model returned unusable structured output after one correction attempt.</summary>
+    public const string OutcomeSpecInvalidResponse = "coordinator_outcome_spec_invalid_response";
+
     /// <summary>The persisted coordinator run could not activate its workflow.</summary>
     public const string StartupFailed = "coordinator_startup_failed";
 }

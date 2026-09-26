@@ -928,6 +928,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (_inner is null || _activeExecutor is null || _sandboxPolicy is null)
             throw new InvalidOperationException("SetupAsync must be called before ExecuteStreamingLoopAsync.");
 
+        _sb = new StringBuilder();
+        _deltaCount = 0;
+        _streamedMessageIds.Clear();
+        _anyDeltaEmittedForNullId = false;
+        _turnInputTokens = 0;
+        _turnOutputTokens = 0;
+        _turnNanoAiu = 0;
+        _turnModelId = null;
+        _turnTimeToFirstTokenMs = null;
+
         var executor = _activeExecutor;
         var sandboxPolicy = _sandboxPolicy;
 

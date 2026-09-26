@@ -90,6 +90,7 @@ serialization.
 | `merge.failed` | After an approved run cannot merge back cleanly | `reason` |
 | `coordinator.started` | When a coordinator run begins drafting an OutcomeSpec from the user's goal | `goal` |
 | `coordinator.recovered` | When an interrupted coordinator run is resumed after a process restart and its dispatch / collective-assembly engine is re-armed from the persisted work plan | `status` (the work-plan status it resumed from) |
+| `coordinator.outcome_spec.draft_retrying` | When the first outcome-spec model response is a refusal or does not satisfy the required schema and the coordinator starts its single bounded correction turn | `attempt`, `maxAttempts`, `reason` (`model_refusal` or `invalid_response`) |
 | `coordinator.outcome_spec` | When the coordinator has drafted an OutcomeSpec and suspended at the await-confirmation gate | `specId`, `status`, `desiredOutcome`, `scope`, `assumptions`, `clarifyingQuestions` |
 | `coordinator.outcome_spec.confirmed` | When the drafted OutcomeSpec is confirmed through the normal seam, interactively or by launch Autopilot | `specId`, `confirmedBy` |
 | `coordinator.work_plan` | When the coordinator has decomposed the confirmed spec into a persisted work plan | `workPlanId`, `status`, `subtasks`, `dependencies` |
