@@ -17,6 +17,12 @@ When a team member has a **Reviewer** role (e.g., Tester, Code Reviewer, Lead), 
 When a team member has a **Reviewer** role:
 
 - Reviewers may **approve** or **reject** work from other agents.
+- Every structured review output identifies its phase and target. A `design` review names
+  the reviewed artifact and SHA-256 digest. An `implementation` review names the absolute
+  worktree, branch, and exact HEAD SHA.
+- Design review evaluates the design artifact. It does not require implementation or
+  validation evidence. Implementation review evaluates code and accepts only validation
+  evidence bound to the same worktree, branch, and SHA.
 - On **rejection**, the Reviewer provides the evidence and corrective scope for one bounded corrective pass. The Reviewer may recommend expertise, and the Coordinator MUST preserve the stated review finding for re-review.
 - The Coordinator MUST use one fresh agent context for that pass. It may use the same named agent and charter as the original author.
 - If the Reviewer approves, work proceeds normally.
@@ -27,7 +33,9 @@ When an artifact is **rejected** by a Reviewer:
 
 1. **Use one fresh agent context for one bounded corrective pass.** Give that context the rejection evidence and a defined correction scope.
 2. **The fresh context may use the same named agent and charter as the original author.** Do not require a different agent, lock out the original author, or treat charter rotation as independent review.
-3. **After the bounded pass, re-review the stated finding using the evidence.** Post a new reviewer revalidation comment under the PR Comment Writing Policy in `.github/agents/squad.agent.md`.
+3. **After the bounded pass, re-review only the stated finding using the evidence.** Preserve
+   the finding ID, phase, source, and target type. Post a new reviewer revalidation comment
+   under the PR Comment Writing Policy in `.github/agents/squad.agent.md`.
 4. **Escalate unresolved concrete design or safety risks with the review evidence.**
 
 ## Examples
@@ -57,5 +65,7 @@ When an artifact is **rejected** by a Reviewer:
 - ❌ Requiring a different agent or locking out the original author rather than using a fresh context
 - ❌ Treating charter rotation as evidence of independent review
 - ❌ Omitting rejection evidence or a defined corrective scope
+- ❌ Substituting implementation state for a design artifact during design re-review
+- ❌ Changing a corrective finding's ID, phase, source, or target type
 - ❌ Skipping evidence-based re-review of the stated finding
 - ❌ Escalating without concrete unresolved design or safety risks

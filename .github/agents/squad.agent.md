@@ -377,6 +377,14 @@ or crosses domains or subsystems. A small, isolated, low-risk change gets one fo
 review selected by its risk or domain; it does not skip review. Keep documentation and
 validation prerequisites proportional to the change.
 
+**Structured review output contract:** Every review emits
+`agentweaver.squad-review/v2`. Set `phase` to `design` or `implementation`. A design
+target identifies the artifact path and SHA-256 digest. An implementation target
+identifies the absolute worktree, branch, and exact HEAD SHA. A corrective re-review
+preserves the original finding ID, phase, source, and target type and evaluates only that
+finding. Design review evaluates the design artifact and never requires implementation
+validation evidence.
+
 **Implementation lifecycle gates:**
 - During design, identify the appropriate GitHub milestone for each feature or fix and
   record it for the draft PR. If no suitable milestone exists, record that outcome
@@ -390,22 +398,52 @@ validation prerequisites proportional to the change.
   preserve normal approval, admission, and secret-handling gates regardless of the
   evidence. Do not require live diagnostics for feature work.
 - Create implementation PRs as drafts and apply the recorded milestone when the draft
-  is created. Run `gh pr ready` only after implementation, required documentation and
-  validation, and independent review/admission checks are complete with no unresolved
-  blockers.
-- **Milestone PR checkpoint:** when a draft has passed that gate, run `gh pr ready <number>`,
-  run the coordinator-owned external-state admission preflight before ready and again
-  before `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph
-  fetches `origin/dev`, gets the live PR head SHA, and runs
-  `node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number>
-  --head-sha <live-head-sha>`. The preflight resolves declared external state with the
-  pinned Squad SDK and requires the coordinator-owned findings ledger to resolve every
-  required finding with an owner, correction or waiver, fresh validation/review, and a
-  resolved transition. Coordinator/Ralph and authoritative external Squad state are
-  trusted operational components; GitHub is evidence and CI only, and repository code
-  does not provide an adversarially immutable execution boundary. PR comments preserve
+  is created. Keep the PR draft while exact validations and reviews run.
+- Run each implementation validation with `scripts/ci/squad-validation-evidence.mjs`.
+  The helper runs one exact argv command only when the current absolute CWD, git top-level,
+  branch, and HEAD match the assigned worktree and candidate SHA before and after execution.
+  It never switches or repairs repository state.
+- Candidate repository bytes are evidence only. After all candidate validation commands
+  finish, materialize `agentweaver.squad-admission-findings/v3` only through launcher and
+  policy bytes extracted by Git object ID from a freshly fetched exact `origin/dev`
+  commit, using structured exact-head review outputs and validation
+  evidence. Never infer an approval, finding, correction, or missing evidence. Write
+  atomically, then read and validate through the same configured state backend. Non-local
+  state requires its runtime adapter and never falls back to filesystem writes.
+- **Milestone PR checkpoint:** after materialization, Ralph runs the coordinator-owned
+  external-state admission preflight while the PR is still draft. Missing, v1, incomplete,
+  or provenance-mismatched evidence blocks `gh pr ready <number>`. Ralph runs a fresh
+  preflight again immediately before
+  `gh pr merge <number> --squash --match-head-commit <validated-sha>`. Ralph fetches
+  `origin/dev`, gets the live PR head and base SHAs, extracts
+  `scripts/ci/squad-admission-launcher.mjs` from that base commit into a private temporary
+  directory, and runs the exact PowerShell 7 `materialize`/`preflight` procedure documented
+  in `CONTRIBUTING.md`. Never execute the candidate checkout's admission launcher, policy,
+  ledger, or preflight modules. The launcher refetches and binds the base, verifies its
+  fetched blob, extracts and verifies the policy modules by Git object ID, records all
+  object IDs/digests plus the aggregate digest and exact source ref/commit/base SHA, and
+  removes ephemeral files on success or failure.
+  The preflight resolves the authoritative root and backend
+  from the primary-checkout Squad configuration and rejects mismatched, unconfigured, or
+  non-canonical caller values. It derives the applicable post-implementation reviewer
+  classes and reviewer/waiver identities from installed trusted policy and the complete exact
+  candidate diff rather than ledger-declared requirements
+  and requires the coordinator-owned v3 findings ledger to contain every
+  declared review source, exact-head validation, and resolved required finding or explicit
+  waiver. For non-local backends, call the exported functions with the runtime-owned
+  adapter; never fall back to filesystem state. Coordinator/Ralph and authoritative
+  external Squad   state, the host, Git, and the configured remote are trusted operational components;
+  GitHub is evidence and CI only, and repository code does not provide an adversarially
+  immutable execution boundary. Concurrent same-user modification of Git objects or
+  trusted temporary files is a compromised host outside this claim. PR comments preserve
   evidence but do not enforce admission. Confirm the PR is actually merged before
   dependents proceed.
+- **V3 bootstrap:** PR #1504 may use only the pre-existing v1/manual exact-head admission
+  procedure because its candidate source cannot approve itself. After its squash merge is
+  on an exact fetched `origin/dev` commit, every materialize/preflight invocation extracts
+  and uses those trusted base bytes. There is no install step or persistent runtime
+  authorization directory. Every later PR must use this path; v1/manual fallback and
+  candidate execution are forbidden.
 - **Merged-work cleanup checkpoint:** after the merge is confirmed, use the non-destructive
   cleanup procedure in the `git-workflow` skill for that issue worktree and branch. First
   verify the PR merged and that no unmerged or blocked dependent still needs the worktree;
@@ -465,6 +503,9 @@ Record the reviewer revalidation:
 
 - PR head: `<head-sha>`.
 - Finding: `<finding-id>`.
+- Phase: `<design-or-implementation>`.
+- Source: `<review-source>`.
+- Target: `<artifact-digest-or-worktree-and-sha>`.
 - Correction: `<correction-fact>`.
 - Validation: `<command-and-result>`.
 - Decision: `<revalidation-decision>`.
