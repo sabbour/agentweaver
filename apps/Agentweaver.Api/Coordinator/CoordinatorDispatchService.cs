@@ -284,8 +284,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 "Coordinator dispatch: no work plan for run {RunId}; nothing to dispatch", context.CoordinatorRunId);
             return;
         }
-        edges = await SerializeDeclaredOutputConflictsAsync(workPlanId.Value, subtasks, edges, ct)
-            .ConfigureAwait(false);
+        if (!context.StaticWorkflowChild)
+        {
+            edges = await SerializeDeclaredOutputConflictsAsync(workPlanId.Value, subtasks, edges, ct)
+                .ConfigureAwait(false);
+        }
 
         var entry = _streamStore.Get(context.CoordinatorRunId);
         var statusById = subtasks.ToDictionary(s => s.Id, s => s.Status);
@@ -408,7 +411,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 // If any in-flight subtask conflicts with this one (overlapping or undeclared file
                 // paths), defer it: running them concurrently on the shared worktree would clobber
                 // each other's files. It will be dispatched in the next iteration after a slot frees.
-                if (inFlight.Count > 0 && ConflictsWithAnyInFlight(subtaskId, inFlight.Keys, subtasksById))
+                if (!context.StaticWorkflowChild
+                    && inFlight.Count > 0
+                    && ConflictsWithAnyInFlight(subtaskId, inFlight.Keys, subtasksById))
                     continue;
 
                 if ((stoppedWorkPlanStatus = await GetStoppedCoordinatorWorkPlanStatusAsync(context.CoordinatorRunId, ct)
@@ -467,7 +472,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 // subtask's bounded recovery budget — reset it to Pending so the frontier redispatches
                 // a fresh child (on a fresh pod) next iteration. Only when the budget is exhausted
                 // (RecoveryAttempts >= MaxRecoveryAttempts) does the stall become a genuine terminal.
-                if (!coordinatorStopped
+                if (!context.StaticWorkflowChild
+                    && !coordinatorStopped
                     && await TryRedispatchStalledSubtaskAsync(
                         context, workPlanId.Value, result.SubtaskId, result.ChildRunId, statusById, seq, ct)
                         .ConfigureAwait(false))
@@ -486,7 +492,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // Detach the failed child and let the frontier launch a fresh child, bounded by a separate
             // per-subtask budget so repeated infrastructure failures still reach the existing terminal
             // failed/assembly-blocked behavior.
-            if (!coordinatorStopped
+            if (!context.StaticWorkflowChild
+                && !coordinatorStopped
                 && result.Outcome == ChildOutcome.Failed
                 && result.Retryable
                 && await TryRedispatchRetryableFailureAsync(
@@ -507,7 +514,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // turn (no mid-turn interrupt). Only a child that reached a clean boundary
             // (assemble_ready / completed) can carry a revised turn; a failed/cancelled child falls
             // through to normal finalization.
-            if (!coordinatorStopped && result.Outcome is (ChildOutcome.AssembleReady or ChildOutcome.Completed))
+            if (!context.StaticWorkflowChild
+                && !coordinatorStopped
+                && result.Outcome is (ChildOutcome.AssembleReady or ChildOutcome.Completed))
             {
                 var directive = await _steering.TryTakeForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
                     .ConfigureAwait(false);
@@ -530,7 +539,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // by the steering service to unblock a stuck child. This cancellation is a steering control
             // signal, not child failure: never let it fall through to ApplyChildResultAsync, because that
             // would mark the subtask failed and cascade dependency failures to unrelated children.
-            else if (!coordinatorStopped && result.Outcome == ChildOutcome.Redirected)
+            else if (!context.StaticWorkflowChild
+                && !coordinatorStopped
+                && result.Outcome == ChildOutcome.Redirected)
             {
                 var redirect = await _steering.TryTakeRedirectForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
                     .ConfigureAwait(false);
@@ -564,7 +575,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 return;
             }
             // Amend is not applied on failure — it is additive and requires a clean boundary.
-            else if (!coordinatorStopped && result.Outcome == ChildOutcome.Failed)
+            else if (!context.StaticWorkflowChild
+                && !coordinatorStopped
+                && result.Outcome == ChildOutcome.Failed)
             {
                 var redirect = await _steering.TryTakeRedirectForChildAsync(context.CoordinatorRunId, result.ChildRunId, ct)
                     .ConfigureAwait(false);
@@ -768,6 +781,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         SeqCounter seq,
         CancellationToken ct)
     {
+        if (context.StaticWorkflowChild)
+        {
+            await FinalizeStaticWorkflowChildAsync(
+                context, workPlanId, statusById, edges, seq, ct).ConfigureAwait(false);
+            return;
+        }
+
         var terminalCounts = statusById.Values
             .GroupBy(s => s)
             .ToDictionary(g => g.Key, g => g.Count());
@@ -850,6 +870,108 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _assembly.StartAssembly(context);
     }
 
+    private async Task FinalizeStaticWorkflowChildAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        IReadOnlyDictionary<int, string> statusById,
+        IReadOnlyCollection<(int, int)> edges,
+        SeqCounter seq,
+        CancellationToken ct)
+    {
+        var allEligible = AssemblyPlanning.AllEligible(statusById);
+        var terminalStatus = allEligible
+            ? WorkPlanStatus.Complete
+            : statusById.Values.Any(status => status == SubtaskStatus.RaiFlagged)
+                ? WorkPlanStatus.RaiBlocked
+                : statusById.Values.Any(status => status == SubtaskStatus.Cancelled)
+                    ? WorkPlanStatus.Cancelled
+                    : statusById.Values.Any(status => status == SubtaskStatus.Blocked)
+                        ? WorkPlanStatus.AssemblyBlocked
+                        : WorkPlanStatus.AssemblyFailed;
+        var failureReason = allEligible
+            ? null
+            : string.Join(
+                ", ",
+                statusById
+                    .Where(pair => !AssemblyPlanning.IsEligible(pair.Value))
+                    .OrderBy(pair => pair.Key)
+                    .Select(pair => $"{pair.Key}:{pair.Value}"));
+
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var now = DateTimeOffset.UtcNow;
+            await db.WorkPlans
+                .Where(plan => plan.Id == workPlanId
+                    && plan.Status == WorkPlanStatus.Dispatching)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(plan => plan.Status, terminalStatus)
+                    .SetProperty(plan => plan.AssemblyStatusReason, failureReason)
+                    .SetProperty(plan => plan.AssemblyStage, (string?)null)
+                    .SetProperty(plan => plan.AssemblyTerminalStage, (string?)null)
+                    .SetProperty(plan => plan.CoordinatorPodId, (string?)null)
+                    .SetProperty(plan => plan.UpdatedAt, now), ct)
+                .ConfigureAwait(false);
+        }
+
+        if (_runStore is not null && RunId.TryParse(context.CoordinatorRunId, out var coordinatorRunId))
+        {
+            var coordinator = await _runStore.GetAsync(coordinatorRunId, ct).ConfigureAwait(false);
+            if (coordinator is not null)
+            {
+                var runStatus = allEligible ? RunStatus.Completed : RunStatus.Failed;
+                var eventType = allEligible ? EventTypes.RunCompleted : EventTypes.RunFailed;
+                var result = allEligible ? "workflow_child_work_complete" : $"workflow_child_work_failed:{failureReason}";
+                await _runStore.TrySetTerminalOutcomeAsync(
+                    coordinatorRunId,
+                    TerminalRunOutcome.Create(
+                        runStatus,
+                        eventType,
+                        new { reason = result, workPlanId },
+                        DateTimeOffset.UtcNow,
+                        coordinator.LifecycleGeneration),
+                    result,
+                    ct).ConfigureAwait(false);
+            }
+        }
+
+        var finalEntry = _streamStore.Get(context.CoordinatorRunId);
+        if (finalEntry is not null)
+        {
+            finalEntry.RecordNext(EventTypes.CoordinatorChildrenComplete, new
+            {
+                workPlanId,
+                completed = statusById.Values.Count(status => status == SubtaskStatus.Completed),
+                assembleReady = statusById.Values.Count(status => status == SubtaskStatus.AssembleReady),
+                failed = statusById.Values.Count(status => !AssemblyPlanning.IsEligible(status)),
+                total = statusById.Count,
+                joined = allEligible,
+            });
+            var finalSubtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+            finalEntry.RecordNext(EventTypes.CoordinatorTopology, CoordinatorTopology.BuildSnapshot(
+                context.CoordinatorRunId,
+                workPlanId,
+                terminalStatus,
+                finalSubtasks,
+                edges,
+                seq.Next(),
+                _podRegistry,
+                _k8sEnv?.PodName));
+            await EmitCoordinatorGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
+        }
+
+        using var resumeScope = _scopeFactory.CreateScope();
+        var childWork = resumeScope.ServiceProvider.GetService<Agentweaver.Api.Workflows.WorkflowChildWorkService>();
+        if (childWork is not null)
+        {
+            await childWork.TryPrepareResumeAsync(workPlanId, ct).ConfigureAwait(false);
+            await childWork.TryDeliverResumeAsync(
+                workPlanId,
+                $"workflow-static-child:{_myPodId}",
+                ct: ct).ConfigureAwait(false);
+        }
+    }
+
     internal async Task<string?> DispatchOneAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
@@ -885,12 +1007,45 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var subtask = await GetSubtaskAsync(subtaskId, ct).ConfigureAwait(false);
         if (subtask is null) return null;
 
-        var childRunId = RunId.New();
+        Run? existingStaticChild = null;
+        if (context.StaticWorkflowChild)
+        {
+            if (RunId.TryParse(subtask.ChildRunId, out var linkedChildRunId))
+                existingStaticChild = await _runStore.GetAsync(linkedChildRunId, ct).ConfigureAwait(false);
+            existingStaticChild ??= await _runStore.FindChildAsync(
+                context.CoordinatorRunId, subtaskId.ToString(), ct).ConfigureAwait(false);
+            if (existingStaticChild is not null)
+            {
+                var reattached = await UpdateSubtaskAsync(
+                    subtaskId, SubtaskStatus.Running, existingStaticChild.Id.ToString(), ct).ConfigureAwait(false);
+                statusById[subtaskId] = SubtaskStatus.Running;
+                if (reattached is not null)
+                    EmitSubtask(context, workPlanId, reattached, EventTypes.SubtaskRunning, seq.Next());
+                return existingStaticChild.Id.ToString();
+            }
+        }
+
+        var childRunId = context.StaticWorkflowChild
+            ? await ReserveStaticChildRunIdAsync(subtaskId, subtask.ChildRunId, ct).ConfigureAwait(false)
+            : RunId.New();
+
+        if (context.StaticWorkflowChild
+            && await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false) is { } reservedExisting)
+        {
+            var reattached = await UpdateSubtaskAsync(
+                subtaskId, SubtaskStatus.Running, reservedExisting.Id.ToString(), ct).ConfigureAwait(false);
+            statusById[subtaskId] = SubtaskStatus.Running;
+            if (reattached is not null)
+                EmitSubtask(context, workPlanId, reattached, EventTypes.SubtaskRunning, seq.Next());
+            return reservedExisting.Id.ToString();
+        }
 
         var childTask = await ComposeChildTaskAsync(context, workPlanId, subtask, ct).ConfigureAwait(false);
 
-        var childBaseBranch = await ResolveChildBaseBranchAsync(context, workPlanId, subtaskId, statusById, edges, ct)
-            .ConfigureAwait(false);
+        var childBaseBranch = context.StaticWorkflowChild
+            ? context.OriginatingBranch
+            : await ResolveChildBaseBranchAsync(
+                context, workPlanId, subtaskId, statusById, edges, ct).ConfigureAwait(false);
 
         // A null base branch is the dispatch-BLOCKING sentinel (BLOCKING #3/#4): the integration branch
         // exists but is still missing a required upstream head after a repair. Do NOT dispatch the
@@ -1007,6 +1162,37 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         return childRunId.ToString();
     }
 
+    private async Task<RunId> ReserveStaticChildRunIdAsync(
+        int subtaskId,
+        string? currentChildRunId,
+        CancellationToken ct)
+    {
+        if (RunId.TryParse(currentChildRunId, out var current))
+            return current;
+
+        var proposed = RunId.New();
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var reserved = await db.Subtasks
+            .Where(candidate => candidate.Id == subtaskId && candidate.ChildRunId == null)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(candidate => candidate.ChildRunId, proposed.ToString())
+                .SetProperty(candidate => candidate.UpdatedAt, DateTimeOffset.UtcNow), ct)
+            .ConfigureAwait(false);
+        if (reserved == 1)
+            return proposed;
+
+        var winner = await db.Subtasks.AsNoTracking()
+            .Where(candidate => candidate.Id == subtaskId)
+            .Select(candidate => candidate.ChildRunId)
+            .SingleAsync(ct)
+            .ConfigureAwait(false);
+        if (!RunId.TryParse(winner, out var winnerId))
+            throw new InvalidOperationException(
+                $"Static workflow subtask {subtaskId} lost its child-run reservation without a valid winner.");
+        return winnerId;
+    }
+
     private async Task ApplyChildResultAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
@@ -1021,6 +1207,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             ChildOutcome.AssembleReady => (SubtaskStatus.AssembleReady, EventTypes.SubtaskAssembleReady),
             ChildOutcome.RaiFlagged => (SubtaskStatus.RaiFlagged, EventTypes.SubtaskRaiFlagged),
             ChildOutcome.Completed => (SubtaskStatus.Completed, EventTypes.SubtaskCompleted),
+            ChildOutcome.Cancelled when context.StaticWorkflowChild =>
+                (SubtaskStatus.Cancelled, EventTypes.SubtaskFailed),
             _ => (SubtaskStatus.Failed, EventTypes.SubtaskFailed),
         };
 
@@ -1029,7 +1217,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (subtask is not null)
             EmitSubtask(context, workPlanId, subtask, eventType, seq.Next());
 
-        if (status is SubtaskStatus.AssembleReady or SubtaskStatus.Completed)
+        if (!context.StaticWorkflowChild
+            && status is (SubtaskStatus.AssembleReady or SubtaskStatus.Completed))
             await RebuildDependencyBaseBranchAsync(context, workPlanId, statusById, edges, ct).ConfigureAwait(false);
 
         if (status is SubtaskStatus.Failed or SubtaskStatus.RaiFlagged)
@@ -2467,7 +2656,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 terminal = new ChildTerminal(
                     string.Equals(cancelReason, "steering_redirect", StringComparison.Ordinal)
                         ? ChildOutcome.Redirected
-                        : ChildOutcome.Failed);
+                        : ChildOutcome.Cancelled);
                 return true;
             case EventTypes.RunCompleted:
                 terminal = new ChildTerminal(ChildOutcome.Completed);
@@ -2781,6 +2970,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             childRunId = subtask.ChildRunId,
             assignedAgent = subtask.AssignedAgent,
             selectedModelId = subtask.SelectedModelId,
+            workflowBranchNodeId = subtask.WorkflowBranchNodeId,
+            workflowBranchOrdinal = subtask.WorkflowBranchOrdinal,
             status = subtask.Status,
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         });
@@ -2852,6 +3043,17 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         CancellationToken ct)
     {
         var baseTask = BuildCanonicalSubtaskTask(subtask);
+        if (context.StaticWorkflowChild && !string.IsNullOrWhiteSpace(context.StaticParentTask))
+        {
+            baseTask =
+                $"""
+                ## Parent workflow context
+                {context.StaticParentTask}
+
+                ## Branch task
+                {baseTask}
+                """;
+        }
 
         if (!string.IsNullOrWhiteSpace(subtask.RecoveryGuidance))
             baseTask = $"{baseTask}\n\n{subtask.RecoveryGuidance}";
@@ -2866,7 +3068,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // subtasks' committed files are already on disk. The API captures the child's changes and
         // merges them into the integration branch automatically — the agent must NOT run git
         // commands (doing so previously stranded output; see BuildIntegrationBranchContract).
-        sb.Append(BuildIntegrationBranchContract(context, subtask));
+        sb.Append(context.StaticWorkflowChild
+            ? BuildStaticWorkflowBranchContract()
+            : BuildIntegrationBranchContract(context, subtask));
         sb.AppendLine();
 
         sb.AppendLine("## Coordinator context");
@@ -2941,6 +3145,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         return sb.ToString();
     }
+
+    internal static string BuildStaticWorkflowBranchContract() =>
+        """
+        ## Static workflow branch
+        This run is one independent branch of a workflow fan-out. Complete only the assigned branch
+        task and return its durable result. Do not integrate sibling branches, merge to the parent
+        branch, open or publish a pull request, request final review, or invoke Scribe. The parent
+        workflow joins branch results in declared order after every branch settles.
+        """;
 
     /// <summary>
     /// Builds the guidance-free task text shared by initial dispatch and lockout handoff. Planning
@@ -3065,7 +3278,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             : null;
     }
 
-    private enum ChildOutcome { AssembleReady, RaiFlagged, Completed, Failed, Stalled, Redirected }
+    private enum ChildOutcome { AssembleReady, RaiFlagged, Completed, Failed, Cancelled, Stalled, Redirected }
 
     private sealed record ChildTerminal(
         ChildOutcome Outcome,
@@ -3200,4 +3413,6 @@ public sealed record CoordinatorDispatchContext(
     string RepositoryPath,
     string OriginatingBranch,
     string SubmittingUser,
-    ProjectId? ProjectId);
+    ProjectId? ProjectId,
+    bool StaticWorkflowChild = false,
+    string? StaticParentTask = null);

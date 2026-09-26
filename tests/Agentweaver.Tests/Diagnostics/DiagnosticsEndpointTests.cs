@@ -1,9 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Agentweaver.Api.Coordinator;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Diagnostics;
+using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Diagnostics;
@@ -207,9 +210,93 @@ public sealed class DiagnosticsEndpointTests : IClassFixture<ProjectsWebApplicat
         body.TryGetProperty("truncated", out _).Should().BeTrue();
     }
 
+    [Fact]
+    public async Task ClusterDiagnostics_ProjectsDurableWorkflowChildWork()
+    {
+        var now = DateTimeOffset.UtcNow;
+        int planId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "diagnostics-fan",
+                CoordinatorRunId = "22222222-2222-2222-2222-222222222222",
+                Goal = "run branches",
+                DesiredOutcome = "join",
+                Scope = "static fan",
+                Assumptions = "none",
+                Status = "confirmed",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = spec.ProjectId,
+                CoordinatorRunId = spec.CoordinatorRunId,
+                Status = WorkPlanStatus.Dispatching,
+                ParentRunId = "11111111-1111-1111-1111-111111111111",
+                ParentWorkflowId = "fan-workflow",
+                ParentWorkflowNodeId = "fan",
+                ParentJoinNodeId = "join",
+                ParentResumeState = "waiting",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            planId = plan.Id;
+            db.Subtasks.AddRange(
+                NewDiagnosticBranch(plan.Id, "branch-a", 0, SubtaskStatus.Completed, now),
+                NewDiagnosticBranch(plan.Id, "branch-b", 1, SubtaskStatus.Running, now));
+            await db.SaveChangesAsync();
+        }
+
+        var response = await _client.GetAsync("/api/diagnostics/cluster");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var fan = body.GetProperty("workflow_child_work")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("work_plan_id").GetInt32() == planId);
+
+        fan.GetProperty("parent_run_id").GetString()
+            .Should().Be("11111111-1111-1111-1111-111111111111");
+        fan.GetProperty("workflow_id").GetString().Should().Be("fan-workflow");
+        fan.GetProperty("fan_out_node_id").GetString().Should().Be("fan");
+        fan.GetProperty("fan_in_node_id").GetString().Should().Be("join");
+        fan.GetProperty("resume_state").GetString().Should().Be("waiting");
+        fan.GetProperty("branch_count").GetInt32().Should().Be(2);
+        fan.GetProperty("terminal_branch_count").GetInt32().Should().Be(1);
+    }
+
     // -------------------------------------------------------------------------
     // GET /api/diagnostics/heartbeat
     // -------------------------------------------------------------------------
+
+    private static Subtask NewDiagnosticBranch(
+        int workPlanId,
+        string nodeId,
+        int ordinal,
+        string status,
+        DateTimeOffset now) =>
+        new()
+        {
+            WorkPlanId = workPlanId,
+            Title = nodeId,
+            Scope = nodeId,
+            AssignedAgent = "morpheus",
+            SelectedModelId = "gpt",
+            Phase = "execution",
+            IsolationStrategy = "worktree",
+            Status = status,
+            WorkflowBranchNodeId = nodeId,
+            WorkflowBranchOrdinal = ordinal,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
 
     [Fact]
     public async Task Heartbeat_Returns200WithRequiredFields()
@@ -487,4 +574,3 @@ public sealed class HeartbeatStatusStoreRingBufferTests
         snapshot.Should().HaveCount(1, "the snapshot must not be mutated by subsequent writes");
     }
 }
-

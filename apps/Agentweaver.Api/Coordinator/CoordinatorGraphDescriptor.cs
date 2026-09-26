@@ -128,6 +128,9 @@ public static class CoordinatorGraphDescriptor
         IReadOnlyList<AssemblyGateNode>? assemblyGates = null,
         string? coordinatorModel = null)
     {
+        if (plan.ParentRunId is not null)
+            return BuildStaticWorkflowChild(plan, podRegistry, coordinatorModel);
+
         var projected = plan.Subtasks
             .Select(s => new SubtaskNode(
                 s.SubtaskId, s.Title, s.AssignedAgent, s.SelectedModelId, s.Phase, s.Isolation, s.ChildRunId))
@@ -146,6 +149,69 @@ public static class CoordinatorGraphDescriptor
             podRegistry,
             assemblyGates,
             coordinatorModel);
+    }
+
+    private static GraphDescriptor BuildStaticWorkflowChild(
+        CoordinatorWorkPlanView plan,
+        IPodNameRegistry? podRegistry,
+        string? coordinatorModel)
+    {
+        const string joinNodeId = "workflow:fan-in";
+        var nodes = new List<GraphNode>(plan.Subtasks.Count + 2)
+        {
+            new(
+                CoordinatorNodeId,
+                plan.ParentWorkflowNodeId ?? "Fan-out",
+                "coordinator",
+                "live",
+                "agent",
+                ChildGraphRef: null,
+                Model: coordinatorModel,
+                Status: plan.Status,
+                StatusReason: plan.StatusReason),
+        };
+        nodes.AddRange(plan.Subtasks.Select(subtask => new GraphNode(
+            SubtaskNodeId(subtask.SubtaskId),
+            string.IsNullOrWhiteSpace(subtask.Title) ? subtask.WorkflowBranchNodeId ?? "Branch" : subtask.Title,
+            "subtask",
+            "live",
+            "subtask",
+            ChildGraphRef: string.IsNullOrWhiteSpace(subtask.ChildRunId) ? null : $"run:{subtask.ChildRunId}",
+            Agent: subtask.AssignedAgent,
+            Model: subtask.SelectedModelId,
+            Phase: subtask.Phase,
+            Isolation: subtask.Isolation,
+            ChildRunId: subtask.ChildRunId,
+            ExecutionPodName: string.IsNullOrWhiteSpace(subtask.ChildRunId)
+                ? null
+                : podRegistry?.TryGet(subtask.ChildRunId))));
+        nodes.Add(new GraphNode(
+            joinNodeId,
+            plan.ParentJoinNodeId ?? "Join",
+            "join",
+            "live",
+            "action",
+            ChildGraphRef: null,
+            Status: plan.Status,
+            StatusReason: plan.StatusReason));
+
+        var edges = new List<GraphEdge>();
+        foreach (var subtask in plan.Subtasks)
+        {
+            var subtaskNodeId = SubtaskNodeId(subtask.SubtaskId);
+            edges.Add(new GraphEdge(CoordinatorNodeId, subtaskNodeId, "fanout", Loopback: false));
+            edges.Add(new GraphEdge(subtaskNodeId, joinNodeId, "fanin", Loopback: false));
+        }
+
+        if (plan.Subtasks.Count == 0)
+            edges.Add(new GraphEdge(CoordinatorNodeId, joinNodeId, "direct", Loopback: false));
+
+        return new GraphDescriptor(
+            GraphId(plan.CoordinatorRunId),
+            Variant,
+            CoordinatorNodeId,
+            nodes.ToArray(),
+            edges.ToArray());
     }
 
     private static GraphDescriptor BuildCore(

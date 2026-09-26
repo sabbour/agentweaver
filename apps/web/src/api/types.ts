@@ -117,6 +117,8 @@ export interface RunDetail {
   // dispatched CHILD of a coordinator (trimmed agent → RAI → assemble-ready pipeline).
   parent_run_id?: string | null;
   subtask_id?: string | null;
+  is_coordinator_plan?: boolean;
+  pending_request_kind?: string | null;
   // GET /api/runs/{id} also carries the cast agent name for a child run (the list
   // endpoint omits child runs entirely). Optional — absent on plain runs.
   agent_name?: string | null;
@@ -1021,6 +1023,8 @@ export type SubtaskStatus =
   | 'rai_flagged'
   | 'completed'
   | 'failed'
+  | 'blocked'
+  | 'cancelled'
   | 'pending_capacity';
 
 // coordinator.work_plan event payload.
@@ -1052,6 +1056,8 @@ export interface TopologyNode {
   assignedAgent?: string;
   selectedModelId?: string;
   childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
   /** Pod name for the execution environment of this specific node (spec-018). Null today — all agents share the API pod; set per-node after distributed phases. */
   executionPodName?: string | null;
 }
@@ -1081,6 +1087,8 @@ export interface TopologyDelta {
 export interface SubtaskEvent {
   subtaskId: string;
   childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
   assignedAgent?: string;
   selectedModelId?: string;
   status: SubtaskStatus;
@@ -1098,6 +1106,8 @@ export interface WorkPlanSubtaskResponse {
   isolation: string;
   status: string;
   childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
 }
 
 export interface WorkPlanDependencyResponse {
@@ -1110,6 +1120,12 @@ export interface WorkPlanResponse {
   coordinatorRunId: string;
   outcomeSpecId: number;
   status: string;
+  parentRunId?: string | null;
+  parentWorkflowId?: string | null;
+  parentWorkflowNodeId?: string | null;
+  parentJoinNodeId?: string | null;
+  parentResumeRequestId?: string | null;
+  parentResumeState?: string | null;
   statusReason?: string | null;
   assemblyStage?: string | null;
   assemblyTerminalStage?: string | null;
@@ -1129,6 +1145,8 @@ export interface CoordinatorChildResponse {
   worktreeBranch?: string;
   treeHash?: string;
   stepCount: number;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
 }
 
 export type SteerKind = 'send' | 'redirect' | 'amend' | 'stop';

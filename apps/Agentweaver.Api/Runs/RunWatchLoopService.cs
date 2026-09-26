@@ -8,6 +8,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 using RunStatus = Agentweaver.Domain.RunStatus;
@@ -405,6 +406,22 @@ public sealed class RunWatchLoopService
                     break;
 
                 case RequestInfoEvent rie:
+                    if (rie.Request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out var childWorkPause))
+                    {
+                        await using var scope = _scopeFactory.CreateAsyncScope();
+                        await scope.ServiceProvider.GetRequiredService<WorkflowChildWorkService>()
+                            .ArmContinuationAsync(
+                                childWorkPause.WorkPlanId,
+                                rie.Request,
+                                ownerUser,
+                                ct)
+                            .ConfigureAwait(false);
+                        entry.MarkAwaitingReview();
+                        await ReleasePodOnSuspendSafeAsync(runId).ConfigureAwait(false);
+                        watchdog.Pause();
+                        break;
+                    }
+
                     // Guard: if PendingRequestStore already has this run (e.g., restored by
                     // WorkflowRestartService before this consumer reads the event), skip to
                     // avoid double-processing. WatchStreamAsync is single-consumer per run;
@@ -732,6 +749,36 @@ public sealed class RunWatchLoopService
             return true;
         }
 
+        if (woe.Is<WorkflowFanCompletedOutput>(out var fanCompleted))
+        {
+            var changed = await SetTerminalOutcomeAsync(
+                parsedRunId,
+                currentRun,
+                RunStatus.Completed,
+                EventTypes.RunCompleted,
+                new
+                {
+                    result = fanCompleted.JoinedOutput,
+                    workPlanId = fanCompleted.WorkPlanId,
+                    childCoordinatorRunId = fanCompleted.ChildCoordinatorRunId,
+                },
+                fanCompleted.JoinedOutput,
+                now).ConfigureAwait(false);
+            EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
+            await CompleteTerminalOutcomeAsync(
+                changed,
+                runId,
+                entry,
+                EventTypes.RunCompleted,
+                new
+                {
+                    result = fanCompleted.JoinedOutput,
+                    workPlanId = fanCompleted.WorkPlanId,
+                    childCoordinatorRunId = fanCompleted.ChildCoordinatorRunId,
+                }).ConfigureAwait(false);
+            return true;
+        }
+
         // Coordinator CHILD run (ParentRunId != null) assemble-ready terminal (B1).
         // The child completed its agent turn; it does NOT run its own RAI, review gate, merge, or scribe.
         // Persist the produced tree hash + worktree branch (the coordinator's hand-off contract),
@@ -860,10 +907,14 @@ public sealed class RunWatchLoopService
     {
         try
         {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            if (await scope.ServiceProvider.GetRequiredService<WorkflowChildWorkService>()
+                .IsCorrelatedRunAsync(runId, CancellationToken.None).ConfigureAwait(false))
+                return;
+
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
             if (run is null) return;
 
-            await using var scope = _scopeFactory.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
             await service.RunAsync(run).ConfigureAwait(false);
         }

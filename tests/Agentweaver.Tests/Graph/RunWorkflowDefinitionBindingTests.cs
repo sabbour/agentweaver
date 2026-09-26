@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
@@ -131,6 +132,173 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
                 new EdgeShape("agent", "assemble-ready", "fanout", false),
                 new EdgeShape("agent", "child-turn-failed", "fanout", false),
             ]);
+    }
+
+    [Fact]
+    public void FullVariant_StaticFanDefinition_UsesProductionFanExecutors()
+    {
+        var definition = new WorkflowDefinition
+        {
+            Id = "static-fan",
+            Name = "Static fan",
+            Version = "1",
+            Start = "fan",
+            Nodes =
+            [
+                new WorkflowNode { Id = "fan", Type = WorkflowNodeType.FanOut, Label = "Parallel work" },
+                new WorkflowNode
+                {
+                    Id = "branch-a",
+                    Type = WorkflowNodeType.Prompt,
+                    Label = "First branch",
+                    Prompt = "Produce the first result.",
+                },
+                new WorkflowNode
+                {
+                    Id = "branch-b",
+                    Type = WorkflowNodeType.Prompt,
+                    Label = "Second branch",
+                    Prompt = "Produce the second result.",
+                },
+                new WorkflowNode
+                {
+                    Id = "join",
+                    Type = WorkflowNodeType.FanIn,
+                    Label = "Join",
+                    Target = "fan",
+                },
+                new WorkflowNode { Id = "done", Type = WorkflowNodeType.Terminal, Label = "Done" },
+            ],
+            Edges =
+            [
+                new WorkflowEdge { From = "fan", To = "branch-a" },
+                new WorkflowEdge { From = "fan", To = "branch-b" },
+                new WorkflowEdge { From = "branch-a", To = "join" },
+                new WorkflowEdge { From = "branch-b", To = "join" },
+                new WorkflowEdge { From = "join", To = "done" },
+            ],
+        };
+
+        var (_, descriptor) = Factory.BuildWorkflowForTest(isChild: false, definition);
+
+        descriptor.StartNodeId.Should().Be("fan");
+        descriptor.Nodes.Select(node => node.Id).Should().Contain(["fan", "join"]);
+        descriptor.Nodes.Select(node => node.Id).Should().NotContain(["branch-a", "branch-b"]);
+        descriptor.Edges.Should().Contain(edge => edge.From == "fan" && edge.To == "join");
+    }
+
+    [Fact]
+    public async Task StartAsync_StaticFan_SuspendsAtChildWorkPort_AndReturnsJoinedOutput()
+    {
+        using var baseFactory = new WorkflowWebApplicationFactory();
+        using var testFactory = baseFactory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IGitHubCopilotCapabilityCredentialProvider>();
+                services.AddSingleton<IGitHubCopilotCapabilityCredentialProvider>(
+                    new FixedGitHubCopilotCapabilityCredentialProvider());
+            }));
+        var services = testFactory.Services;
+        var workflowFactory = services.GetRequiredService<RunWorkflowFactory>();
+        var workingDirectory = Path.Combine(Path.GetTempPath(), $"agentweaver-fan-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(workingDirectory, ".agentweaver", "workflows"));
+        await File.WriteAllTextAsync(
+            Path.Combine(workingDirectory, ".agentweaver", "workflows", "fan.yaml"),
+            FanWorkflowYaml());
+        Repository.Init(workingDirectory);
+        using (var repository = new Repository(workingDirectory))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial commit", signature, signature);
+            if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+                repository.Branches.Rename(repository.Head, "main");
+        }
+
+        var project = new Project
+        {
+            Id = ProjectId.New(),
+            Name = "Fan workflow project",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = workingDirectory,
+            DefaultBranch = "main",
+            Owner = CoordinatorWebApplicationFactory.OwnerUser,
+            ProviderSettings = new ProjectProviderSettings
+            {
+                DefaultProvider = ModelSource.GitHubCopilot,
+            },
+            State = ProjectState.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            DefaultWorkflowId = "fan",
+        };
+        await services.GetRequiredService<IProjectStore>().InsertAsync(project);
+
+        var runId = RunId.New();
+        var worktree = services.GetRequiredService<WorktreeManager>()
+            .AddWorktree(workingDirectory, "main", runId);
+        var run = new DomainRun
+        {
+            Id = runId,
+            RepositoryPath = workingDirectory,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "run parallel branches",
+            SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = DomainRunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = project.Id,
+            WorktreePath = worktree.WorktreePath,
+            WorktreeBranch = worktree.BranchName,
+        };
+        await services.GetRequiredService<IRunStore>().InsertAsync(run);
+
+        var input = new AgentTurnInput(
+            run.Id.ToString(),
+            run.Task,
+            worktree.WorktreePath,
+            worktree.BranchName,
+            workingDirectory,
+            "main",
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser,
+            ProjectId: project.Id.ToString());
+        var started = await workflowFactory.StartAsync(input, run.Id.ToString(), CancellationToken.None);
+        WorkflowFanCompletedOutput? terminal = null;
+
+        await foreach (var evt in started.WatchStreamAsync(CancellationToken.None))
+        {
+            if (evt is RequestInfoEvent request
+                && request.Request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out var pause))
+            {
+                pause.ParentRunId.Should().Be(run.Id.ToString());
+                var result = new WorkflowChildWorkResult(
+                    pause.WorkPlanId,
+                    pause.ChildCoordinatorRunId,
+                    "fan",
+                    pause.ParentWorkflowNodeId,
+                    pause.ParentJoinNodeId,
+                    true,
+                    WorkPlanStatus.Complete,
+                    null,
+                    [
+                        new WorkflowChildWorkBranch(2, "branch-b", 1, SubtaskStatus.Completed, "child-b", "second"),
+                        new WorkflowChildWorkBranch(1, "branch-a", 0, SubtaskStatus.Completed, "child-a", "first"),
+                    ],
+                    "[1. branch-a]\nfirst\n\n[2. branch-b]\nsecond");
+                await started.SendResponseAsync(request.Request.CreateResponse(result));
+            }
+            else if (evt is WorkflowOutputEvent output
+                     && output.Is<WorkflowFanCompletedOutput>(out var completed))
+            {
+                terminal = completed;
+                break;
+            }
+        }
+
+        terminal.Should().NotBeNull();
+        terminal!.JoinedOutput.Should().Be("[1. branch-a]\nfirst\n\n[2. branch-b]\nsecond");
     }
 
     [Fact]
@@ -405,6 +573,46 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
           - from: review
             to: declined
             when: declined
+        """;
+
+    private static string FanWorkflowYaml() =>
+        """
+        id: fan
+        name: Static Fan
+        version: "1"
+        start: fan
+        nodes:
+          - id: fan
+            type: fan_out
+            label: Parallel work
+          - id: branch-a
+            type: prompt
+            label: First branch
+            agent: researcher
+            prompt: Produce the first result.
+          - id: branch-b
+            type: prompt
+            label: Second branch
+            agent: researcher
+            prompt: Produce the second result.
+          - id: join
+            type: fan_in
+            label: Join
+            target: fan
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: fan
+            to: branch-a
+          - from: fan
+            to: branch-b
+          - from: branch-a
+            to: join
+          - from: branch-b
+            to: join
+          - from: join
+            to: done
         """;
 
 }

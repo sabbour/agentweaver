@@ -90,6 +90,14 @@ internal interface IRunWorkflowWiringSupport
     /// <summary><c>MergeOutput → AgentTurnInput</c>: re-enter a producer agent after a blocked merge.</summary>
     ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge);
 
+    /// <summary><c>WorkflowFanInOutput → AgentTurnInput</c>: append the ordered joined branch result
+    /// to the parent task before the next supported prompt node executes.</summary>
+    ExecutorBinding FanInToAgentAdapter(WorkflowEdge edge);
+
+    /// <summary><c>WorkflowFanInOutput → NoChangesOutput</c>: complete a fan workflow whose joined
+    /// result is the authored terminal output.</summary>
+    ExecutorBinding FanInToTerminalAdapter(WorkflowEdge edge);
+
     /// <summary>A direct <c>Agent → Scribe</c> completion sub-path: an input adapter
     /// (<c>AgentTurnOutput → ScribeTurnInput</c>), a dedicated scribe executor, and the scribe-output
     /// executor that becomes a graph output. For workflows that record an outcome without a merge.</summary>

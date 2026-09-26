@@ -2283,6 +2283,9 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ExecutionBaseTreeHash")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("HumanReviewRoundTrips")
                         .HasColumnType("INTEGER");
 
@@ -2317,6 +2320,9 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ParentRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParentTurnInputJson")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ParentWorkflowId")

@@ -104,6 +104,68 @@ public sealed class McpRunTaskTests
     }
 
     [Fact]
+    public async Task RunTask_WorkflowChildWait_DoesNotAdvertiseHumanReview()
+    {
+        var statusCalls = 0;
+        var tools = CreateRunTools((request, _) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (request.Method == HttpMethod.Post && path == "/api/projects/proj-1/orchestrations")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = JsonContent.Create(new { runId = "run-child-wait" })
+                });
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/api/runs/run-child-wait")
+            {
+                statusCalls++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = statusCalls == 1
+                        ? JsonContent.Create(new
+                        {
+                            run_id = "run-child-wait",
+                            status = "awaiting_review",
+                            pending_request_kind = "workflow_child_work",
+                        })
+                        : JsonContent.Create(new
+                        {
+                            run_id = "run-child-wait",
+                            status = "merged",
+                            result = "joined",
+                        })
+                });
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/api/runs/run-child-wait/files")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(Array.Empty<object>())
+                });
+            }
+
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
+        });
+
+        var result = await tools.RunTaskAsync(
+            "proj-1",
+            "Run branches",
+            workflow_id: null,
+            model_id: null,
+            start_mode: "direct",
+            timeout_seconds: 5,
+            poll_interval_seconds: 1,
+            ct: CancellationToken.None);
+
+        statusCalls.Should().BeGreaterThan(1);
+        result.Status.Should().Be("merged");
+        result.ReviewPrompt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task RunTask_Timeout_ReturnsPartialState()
     {
         var tools = CreateRunTools((request, _) =>

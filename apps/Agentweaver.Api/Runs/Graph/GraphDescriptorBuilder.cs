@@ -122,6 +122,12 @@ public sealed class GraphDescriptorBuilder
             return new RawMeta(logicalId, "Human review", "review", "gate", "live", Hidden: false);
         }
 
+        // Non-review request ports are suspension plumbing rather than logical workflow nodes.
+        // Keep them hidden so their visible predecessor/successor are stitched together in the
+        // rendered descriptor while the raw MAF graph retains the durable request boundary.
+        if (b.RawValue is RequestPort)
+            return new RawMeta(b.Id, b.Id, "plumbing", "action", "plumbing", Hidden: true);
+
         throw new InvalidOperationException(
             $"Executor '{b.Id}' does not implement IWorkflowNodeMeta and is not the known " +
             $"'{ReviewGatePortId}' port. Wrap it in VisualFunctionExecutor (or implement the " +

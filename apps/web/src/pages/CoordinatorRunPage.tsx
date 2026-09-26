@@ -1070,6 +1070,8 @@ interface SubtaskNodeData extends Record<string, unknown> {
   agentRole: string | undefined;
   model: string | undefined;
   phase: string | undefined;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
   projectId: string;
   startedAt?: number;
   completedAt?: number;
@@ -1132,6 +1134,9 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
     ...(agentName ? [{ label: 'Agent', value: agentName }] : []),
     ...(d.model ? [{ label: 'Model', value: formatModelLabel(d.model as string), mono: true }] : []),
     ...(d.phase ? [{ label: 'Phase', value: d.phase as string }] : []),
+    ...(d.workflowBranchNodeId
+      ? [{ label: 'Workflow branch', value: `${(d.workflowBranchOrdinal ?? 0) + 1}. ${d.workflowBranchNodeId}`, mono: true }]
+      : []),
     ...(d.startedAt !== undefined
       ? [{ label: 'Duration', value: <ElapsedTimer startedAt={d.startedAt as number} completedAt={d.completedAt as number | undefined} /> }]
       : []),
@@ -2330,6 +2335,7 @@ export function CoordinatorRunPage() {
   const setRunLevelStatus = useCallback((status: RunStatus | undefined) => {
     setRunLevelStatusState({ runId: runId ?? '', status });
   }, [runId]);
+  const [pendingRequestKind, setPendingRequestKind] = useState<string | null>(null);
   const [runProviderState, setRunProviderState] = useState<{
     runId: string;
     provider: EffectiveModelProvider | null;
@@ -2566,6 +2572,7 @@ export function CoordinatorRunPage() {
       setWorkPlanError(null);
       setNoWorkPlan(false);
       setRunLevelStatus(undefined);
+      setPendingRequestKind(null);
       setRunProviderState({ runId: runId ?? '', provider: null });
       setRunTimingState({ runId: runId ?? '', startedAt: undefined, endedAt: undefined });
       setCoordStatusField(undefined);
@@ -2593,7 +2600,7 @@ export function CoordinatorRunPage() {
       setRunLoadError(null);
       // Child runs (parent_run_id non-null) are not coordinator runs and will never have a
       // work-plan or outcome-plan. Skip coordinator-only artifact fetches to avoid 404 noise.
-      const childRun = detail?.parent_run_id != null;
+      const childRun = detail?.parent_run_id != null && detail?.is_coordinator_plan !== true;
       setIsChildRun(childRun);
       let wp: WorkPlanResponse | null = null;
       let workPlanFailed = false;
@@ -2634,6 +2641,7 @@ export function CoordinatorRunPage() {
       setCoordinatorSteerable(typeof detail?.coordinator_steerable === 'boolean' ? detail.coordinator_steerable : undefined);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
+      setPendingRequestKind(detail?.pending_request_kind ?? null);
       setRunProviderState({
         runId,
         provider: detail?.effective_model_provider ?? null,
@@ -3118,6 +3126,8 @@ export function CoordinatorRunPage() {
             agentRole:     agentField ? roleByAgent[agentField] : undefined,
             model:         modelField,
             phase:         phaseField,
+            workflowBranchNodeId: topoNode?.workflowBranchNodeId,
+            workflowBranchOrdinal: topoNode?.workflowBranchOrdinal,
             projectId:     projectId ?? '',
             startedAt:     timing?.startedAt,
             completedAt:   timing?.completedAt,
@@ -4052,7 +4062,9 @@ export function CoordinatorRunPage() {
   // the in-memory assembly-review gate is NOT armed, so presenting an actionable review bar would
   // 409. Treat the review as actionable only when the run itself is not terminal.
   const runTerminal = viewState.terminal;
-  const reviewActionable = orch.phase === 'in_review' && !runTerminal;
+  const reviewActionable = orch.phase === 'in_review'
+    && !runTerminal
+    && pendingRequestKind !== 'workflow_child_work';
   const selectedBuildTestNode = selectedSessionItem
     ? isBuildTestNodeIdOrLabel(selectedSessionItem.nodeId, selectedSessionItem.label)
     : false;

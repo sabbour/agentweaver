@@ -2159,7 +2159,8 @@ public sealed class CoordinatorRunService
 
         var subtasks = await db.Subtasks.AsNoTracking()
             .Where(s => s.WorkPlanId == plan.Id)
-            .OrderBy(s => s.Id)
+            .OrderBy(s => s.WorkflowBranchOrdinal ?? int.MaxValue)
+            .ThenBy(s => s.Id)
             .ToListAsync(ct).ConfigureAwait(false);
 
         var ids = subtasks.Select(s => s.Id).ToHashSet();
@@ -2189,11 +2190,18 @@ public sealed class CoordinatorRunService
             plan.IsolationSummary,
             subtasks.Select(s => new CoordinatorSubtaskView(
                 s.Id, s.Title, s.Scope, s.AssignedAgent, s.SelectedModelId,
-                s.Phase, s.IsolationStrategy, s.Status, s.ChildRunId)).ToList(),
+                s.Phase, s.IsolationStrategy, s.Status, s.ChildRunId,
+                s.WorkflowBranchNodeId, s.WorkflowBranchOrdinal)).ToList(),
             edges.Select(e => new CoordinatorDependencyView(e.SubtaskId, e.DependsOnSubtaskId)).ToList(),
             plan.AssemblyStage,
             plan.AssemblyTerminalStage,
-            statusReason);
+            statusReason,
+            plan.ParentRunId,
+            plan.ParentWorkflowId,
+            plan.ParentWorkflowNodeId,
+            plan.ParentJoinNodeId,
+            plan.ParentResumeRequestId,
+            plan.ParentResumeState);
     }
 
     /// <summary>
@@ -2235,7 +2243,8 @@ public sealed class CoordinatorRunService
 
         var subtasks = await db.Subtasks.AsNoTracking()
             .Where(s => s.WorkPlanId == plan.Id && s.ChildRunId != null)
-            .OrderBy(s => s.Id)
+            .OrderBy(s => s.WorkflowBranchOrdinal ?? int.MaxValue)
+            .ThenBy(s => s.Id)
             .ToListAsync(ct).ConfigureAwait(false);
 
         var children = new List<CoordinatorChildView>(subtasks.Count);
@@ -2254,7 +2263,9 @@ public sealed class CoordinatorRunService
                 child?.Status.ToString(),
                 child?.WorktreeBranch,
                 child?.TreeHash,
-                await ResolveStepCountAsync(s.ChildRunId!, child, ct).ConfigureAwait(false)));
+                await ResolveStepCountAsync(s.ChildRunId!, child, ct).ConfigureAwait(false),
+                s.WorkflowBranchNodeId,
+                s.WorkflowBranchOrdinal));
         }
 
         return children;
@@ -2541,7 +2552,13 @@ public sealed record CoordinatorWorkPlanView(
     IReadOnlyList<CoordinatorDependencyView> Dependencies,
     string? AssemblyStage = null,
     string? AssemblyTerminalStage = null,
-    string? StatusReason = null);
+    string? StatusReason = null,
+    string? ParentRunId = null,
+    string? ParentWorkflowId = null,
+    string? ParentWorkflowNodeId = null,
+    string? ParentJoinNodeId = null,
+    string? ParentResumeRequestId = null,
+    string? ParentResumeState = null);
 
 /// <summary>A subtask row in <see cref="CoordinatorWorkPlanView"/>.</summary>
 public sealed record CoordinatorSubtaskView(
@@ -2553,7 +2570,9 @@ public sealed record CoordinatorSubtaskView(
     string Phase,
     string Isolation,
     string Status,
-    string? ChildRunId);
+    string? ChildRunId,
+    string? WorkflowBranchNodeId = null,
+    int? WorkflowBranchOrdinal = null);
 
 /// <summary>A dependency edge: <see cref="SubtaskId"/> depends on <see cref="DependsOnSubtaskId"/>.</summary>
 public sealed record CoordinatorDependencyView(int SubtaskId, int DependsOnSubtaskId);
@@ -2568,4 +2587,6 @@ public sealed record CoordinatorChildView(
     string? ChildRunStatus,
     string? WorktreeBranch,
     string? TreeHash,
-    int StepCount);
+    int StepCount,
+    string? WorkflowBranchNodeId = null,
+    int? WorkflowBranchOrdinal = null);

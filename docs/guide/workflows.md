@@ -119,6 +119,69 @@ Every newly generated or saved `check` node must declare an explicit canonical `
 definitions, it writes the inferred `gate_kind` explicitly so the workflow migrates to the current
 authoring contract.
 
+### Static parallel branches
+
+Project workflows can execute one static `fan_out` / `fan_in` region. The first release requires at
+least two unconditional branches, exactly one `prompt` node per branch, and a single wait-all join.
+`peer_review` and `build_test` are rejected inside a static fan because the static dispatcher does
+not preserve their specialized semantics. Branch declarations are executed as durable child runs
+concurrently; the parent workflow is checkpointed before dispatch and resumes once with the joined
+result after every branch settles.
+
+The join is deterministic: results are emitted in the branch order declared by the persisted
+workflow, not child completion order. A failed, blocked, cancelled, or RAI-flagged branch fails the
+join rather than returning partial success. Editing or deleting the workflow while the parent is
+suspended does not change the resumed graph because execution uses the workflow definition pinned
+when the run started. The fan also persists the immutable incoming task context and the current
+worktree branch/tree at first attachment, so a fan reached after a prompt gives every branch the
+predecessor-composed task and exact execution base. Reattachment never re-resolves edited YAML or
+replaces that persisted context.
+
+Each branch is durably keyed by the embedded coordinator run and subtask id. Its child run id is
+reserved before launch, and recovery adopts an already-created active or terminal run. After a
+process restart, an interrupted active branch is relaunched through the existing retry/recovery
+fencing under the same Run row and run id; no replacement branch Run is created.
+
+`fan_out` / `fan_in` is an execution primitive, not coordinator assembly. It does not create or
+update an integration Git branch, merge branch output, open or review a pull request, publish
+artifacts, or invoke Scribe. Each branch may still use its ordinary isolated child-run worktree.
+While the parent is suspended for branch completion, REST, MCP, and the UI identify the pending
+request as `workflow_child_work`; this automated wait cannot be approved through `/review` or
+`run_review`.
+Nested fans, dynamic branches, quorum/first-success joins, and `coordinator_composed` remain
+unsupported.
+
+```yaml
+start: parallel-research
+nodes:
+  - id: parallel-research
+    type: fan_out
+    label: Parallel research
+  - id: api-research
+    type: prompt
+    label: API research
+    agent: researcher
+    prompt: Investigate the API behavior.
+  - id: ui-research
+    type: prompt
+    label: UI research
+    agent: researcher
+    prompt: Investigate the UI behavior.
+  - id: join-research
+    type: fan_in
+    label: Join research
+    target: parallel-research
+  - id: done
+    type: terminal
+    label: Done
+edges:
+  - { from: parallel-research, to: api-research }
+  - { from: parallel-research, to: ui-research }
+  - { from: api-research, to: join-research }
+  - { from: ui-research, to: join-research }
+  - { from: join-research, to: done }
+```
+
 ### YAML editor
 
 Click **New workflow** to open the visual editor with a YAML-backed template. Use **Edit** on an existing project workflow when you prefer to edit its YAML directly.

@@ -598,6 +598,155 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             "generic restart recovery must not fail an embedded child coordinator as an abandoned child");
     }
 
+    [Fact]
+    public async Task RecoverAsync_TwoActiveWorkflowBranches_RestartsBothOriginalRunIds()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var parentId = RunId.New();
+        var coordinatorId = RunId.New();
+        var firstBranchId = RunId.New();
+        var secondBranchId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "parent workflow",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        (await runStore.TerminalizeForTestAsync(parentId, RunStatus.Failed)).Should().BeTrue();
+        await runStore.InsertAsync(new Run
+        {
+            Id = coordinatorId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "embedded coordinator",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Coordinator",
+            ParentRunId = parentId.ToString(),
+            SubtaskId = WorkflowChildWorkService.ChildCoordinatorSubtaskKey("fan"),
+        });
+
+        var service = BuildService(
+            runStore,
+            streamStore,
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null));
+        int firstSubtaskId;
+        int secondSubtaskId;
+        using (var scope = _memoryServiceProvider!.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project",
+                CoordinatorRunId = coordinatorId.ToString(),
+                Goal = "g",
+                DesiredOutcome = "o",
+                Scope = "s",
+                Assumptions = "a",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "project",
+                CoordinatorRunId = coordinatorId.ToString(),
+                ParentRunId = parentId.ToString(),
+                ParentWorkflowId = "workflow-v1",
+                ParentWorkflowNodeId = "fan",
+                ParentJoinNodeId = "join",
+                ParentResumeState = WorkflowChildWorkResumeStates.Waiting,
+                Status = WorkPlanStatus.Dispatching,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            var first = new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = "first",
+                Scope = "first",
+                AssignedAgent = "morpheus",
+                SelectedModelId = "gpt",
+                Phase = "execution",
+                IsolationStrategy = "shared",
+                Status = SubtaskStatus.Running,
+                ChildRunId = firstBranchId.ToString(),
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            var second = new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = "second",
+                Scope = "second",
+                AssignedAgent = "morpheus",
+                SelectedModelId = "gpt",
+                Phase = "execution",
+                IsolationStrategy = "shared",
+                Status = SubtaskStatus.Running,
+                ChildRunId = null,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Subtasks.AddRange(first, second);
+            await db.SaveChangesAsync();
+            firstSubtaskId = first.Id;
+            secondSubtaskId = second.Id;
+        }
+
+        foreach (var (id, subtaskId) in new[]
+                 {
+                     (firstBranchId, firstSubtaskId),
+                     (secondBranchId, secondSubtaskId),
+                 })
+        {
+            await runStore.InsertAsync(new Run
+            {
+                Id = id,
+                RepositoryPath = _worktreePath,
+                OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot,
+                Task = $"branch {subtaskId}",
+                SubmittingUser = "test-user",
+                Status = RunStatus.InProgress,
+                StartedAt = DateTimeOffset.UtcNow,
+                AgentName = "morpheus",
+                ParentRunId = coordinatorId.ToString(),
+                SubtaskId = subtaskId.ToString(),
+            });
+        }
+
+        var restarted = new List<RunId>();
+        service.RestartChildRunOverride = (run, _) =>
+        {
+            restarted.Add(run.Id);
+            return Task.CompletedTask;
+        };
+
+        await service.RecoverAsync(CancellationToken.None);
+
+        restarted.Should().BeEquivalentTo([firstBranchId, secondBranchId]);
+        (await runStore.GetAsync(firstBranchId))!.Status.Should().Be(RunStatus.InProgress);
+        (await runStore.GetAsync(secondBranchId))!.Status.Should().Be(RunStatus.InProgress);
+        (await runStore.GetRunsByParentAsync(coordinatorId.ToString()))
+            .Select(run => run.Id).Should().BeEquivalentTo([firstBranchId, secondBranchId]);
+        streamStore.Get(firstBranchId.ToString()).Should().BeNull();
+        streamStore.Get(secondBranchId.ToString()).Should().BeNull();
+    }
+
     [Theory]
     [InlineData(RunStatus.InProgress)]
     [InlineData(RunStatus.Committing)]

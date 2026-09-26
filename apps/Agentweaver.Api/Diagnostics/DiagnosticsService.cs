@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using k8s;
@@ -266,6 +267,7 @@ public sealed class DiagnosticsService
 
         var podsTask = GetAgentPodInventoryAsync(ct);
         var pendingTask = GetPendingCapacityRunsAsync(ct);
+        var workflowChildWorkTask = GetWorkflowChildWorkAsync(ct);
         var warmPoolSnapshotsTask = GetWarmPoolSnapshotInventoryAsync(ct);
         var claimsTask = GetSandboxClaimInventoryAsync(ct);
 
@@ -273,12 +275,14 @@ public sealed class DiagnosticsService
             checksTask,
             podsTask,
             pendingTask,
+            workflowChildWorkTask,
             warmPoolSnapshotsTask,
             claimsTask).ConfigureAwait(false);
 
         var checks = await checksTask.ConfigureAwait(false);
         var (activePods, orphanedPods) = await podsTask.ConfigureAwait(false);
         var pending = await pendingTask.ConfigureAwait(false);
+        var workflowChildWork = await workflowChildWorkTask.ConfigureAwait(false);
         var claims = await claimsTask.ConfigureAwait(false);
         var warmPoolSnapshots = await warmPoolSnapshotsTask.ConfigureAwait(false);
         // Warm-pool pod matching depends on the pool names just resolved above (pods are named
@@ -316,6 +320,7 @@ public sealed class DiagnosticsService
             ActiveAgentPods     = active,
             OrphanedAgentPods   = orphaned,
             PendingCapacityRuns = pending,
+            WorkflowChildWork   = workflowChildWork,
             WarmPools           = warmPools,
             SandboxClaims       = claims,
             Details             = new TopologyResourceDetailsDto
@@ -410,6 +415,7 @@ public sealed class DiagnosticsService
                 AgeSeconds = (now - s.UpdatedAt).TotalSeconds,
             }).ToList();
         }
+
         catch (OperationCanceledException)
         {
             throw;
@@ -418,6 +424,49 @@ public sealed class DiagnosticsService
         {
             return Array.Empty<PendingCapacityRunDto>();
         }
+    }
+
+    private async Task<IReadOnlyList<WorkflowChildWorkDiagnosticDto>> GetWorkflowChildWorkAsync(
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plans = await db.WorkPlans.AsNoTracking()
+            .Where(plan => plan.ParentRunId != null && plan.ParentWorkflowNodeId != null)
+            .OrderByDescending(plan => plan.Id)
+            .Take(50)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+        plans = plans.OrderByDescending(plan => plan.UpdatedAt).ToList();
+        if (plans.Count == 0)
+            return [];
+
+        var planIds = plans.Select(plan => plan.Id).ToArray();
+        var branches = await db.Subtasks.AsNoTracking()
+            .Where(subtask => planIds.Contains(subtask.WorkPlanId))
+            .Select(subtask => new { subtask.WorkPlanId, subtask.Status })
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+
+        return plans.Select(plan =>
+        {
+            var planBranches = branches.Where(branch => branch.WorkPlanId == plan.Id).ToArray();
+            return new WorkflowChildWorkDiagnosticDto
+            {
+                WorkPlanId = plan.Id,
+                ParentRunId = plan.ParentRunId!,
+                ChildCoordinatorRunId = plan.CoordinatorRunId,
+                WorkflowId = plan.ParentWorkflowId ?? plan.WorkflowId ?? string.Empty,
+                FanOutNodeId = plan.ParentWorkflowNodeId!,
+                FanInNodeId = plan.ParentJoinNodeId,
+                PlanStatus = plan.Status,
+                ResumeState = plan.ParentResumeState ?? WorkflowChildWorkResumeStates.Committed,
+                BranchCount = planBranches.Length,
+                TerminalBranchCount = planBranches.Count(branch =>
+                    SubtaskStatus.IsTerminal(branch.Status)),
+                UpdatedUtc = plan.UpdatedAt,
+            };
+        }).ToArray();
     }
 
     /// <summary>
