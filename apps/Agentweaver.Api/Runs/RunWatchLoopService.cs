@@ -22,6 +22,7 @@ namespace Agentweaver.Api.Runs;
 /// </summary>
 public sealed class RunWatchLoopService
 {
+    internal Func<Task>? BeforeTerminalMutationOverride { get; set; }
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
@@ -30,12 +31,14 @@ public sealed class RunWatchLoopService
     private readonly IWorktreeOperations _worktreeOps;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunLeaseStore _leaseStore;
+    private readonly IRunEventStream _eventStream;
     private readonly ILogger<RunWatchLoopService> _logger;
     private readonly CancellationToken _appStopping;
     private readonly TimeSpan _watchLoopTimeout;
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromMinutes(5);
+    private const string UnexpectedStreamEndEvent = "watch.stream_closed_without_terminal_event";
+    private const int MaxUnexpectedStreamEnds = 3;
     private readonly string _workerId = $"{Environment.MachineName}/{Guid.NewGuid():N}";
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string OwnerId, long FencingToken)> _activeLeases = new();
     // Pod-per-run lifecycle — null when AgentExecutionMode=in-api or not in Kubernetes.
     private readonly IAgentHostPodLifecycle? _podLifecycle;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
@@ -52,6 +55,7 @@ public sealed class RunWatchLoopService
         IConfiguration configuration,
         IServiceScopeFactory scopeFactory,
         IRunLeaseStore leaseStore,
+        IRunEventStream eventStream,
         ILogger<RunWatchLoopService> logger,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
@@ -65,6 +69,7 @@ public sealed class RunWatchLoopService
         _worktreeOps = worktreeOps;
         _scopeFactory = scopeFactory;
         _leaseStore = leaseStore;
+        _eventStream = eventStream;
         _logger = logger;
         _appStopping = lifetime.ApplicationStopping;
         _watchLoopTimeout = ResolveWatchLoopTimeout(configuration);
@@ -103,8 +108,6 @@ public sealed class RunWatchLoopService
 
                 fencingToken = claim.FencingToken;
             }
-
-            _activeLeases[runId] = (leaseOwnerId, fencingToken);
 
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(runCt, _appStopping);
             using var renewCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
@@ -150,12 +153,13 @@ public sealed class RunWatchLoopService
             // stuck/runaway ACTIVE execution is still caught: while armed, an active span exceeding
             // _watchLoopTimeout cancels linkedCts exactly as before.
             var watchdog = new ExecutionWatchdog(linkedCts, _watchLoopTimeout);
+            var watchLease = new RunLeaseClaim(leaseOwnerId, fencingToken);
             var durableStopMonitor = MonitorDurableSteeringStopAsync(runId, entry, linkedCts.Token);
             try
             {
                 await WatchAsync(
                     runId, streamingRun, entry, ownerUser, watchdog,
-                    new RunLeaseClaim(leaseOwnerId, fencingToken), linkedCts.Token).ConfigureAwait(false);
+                    watchLease, linkedCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
             {
@@ -177,7 +181,7 @@ public sealed class RunWatchLoopService
                     "Watch loop timed out for run {RunId}: an active execution phase exceeded {Timeout} " +
                     "without yielding a terminal event (human-decision-wait time is not counted); transitioning to Failed",
                     runId, _watchLoopTimeout);
-                await FailRunSafeAsync(runId, entry, "watch_loop_timeout").ConfigureAwait(false);
+                await FailRunSafeAsync(runId, entry, "watch_loop_timeout", watchLease, streamingRun).ConfigureAwait(false);
             }
             catch (Exception ex) when (_appStopping.IsCancellationRequested || Volatile.Read(ref leaseLost) != 0)
             {
@@ -188,13 +192,12 @@ public sealed class RunWatchLoopService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Watch loop failed for run {RunId}; transitioning to Failed", runId);
-                await FailRunSafeAsync(runId, entry, "watch_loop_error").ConfigureAwait(false);
+                await FailRunSafeAsync(runId, entry, "watch_loop_error", watchLease, streamingRun).ConfigureAwait(false);
             }
             finally
             {
                 await linkedCts.CancelAsync().ConfigureAwait(false);
-                if (_appStopping.IsCancellationRequested)
-                    _registry.AbandonIfCurrent(runId, streamingRun);
+                _registry.AbandonIfCurrent(runId, streamingRun);
                 try { await durableStopMonitor.ConfigureAwait(false); }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -204,10 +207,6 @@ public sealed class RunWatchLoopService
                 renewCts.Cancel();
                 try { await renewTask.ConfigureAwait(false); }
                 catch (OperationCanceledException) { }
-                ((ICollection<KeyValuePair<string, (string OwnerId, long FencingToken)>>)_activeLeases)
-                    .Remove(new KeyValuePair<string, (string OwnerId, long FencingToken)>(
-                        runId,
-                        (leaseOwnerId, fencingToken)));
                 await _leaseStore.ReleaseAsync(
                     runId, leaseOwnerId, fencingToken, CancellationToken.None).ConfigureAwait(false);
             }
@@ -215,7 +214,7 @@ public sealed class RunWatchLoopService
     }
 
     private async Task PollDeferredReviewDecisionsAsync(
-        string runId, StreamingRun streamingRun, RunStreamEntry entry, CancellationToken ct)
+        string runId, StreamingRun streamingRun, RunStreamEntry entry, RunLeaseClaim watchLease, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -276,7 +275,7 @@ public sealed class RunWatchLoopService
                     runId, delivery.DecisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
                     .ConfigureAwait(false);
                 _logger.LogError(ex, "Deferred review SendResponseAsync failed for run {RunId}; transitioning to failed", runId);
-                await FailRunSafeAsync(runId, entry, "send_response_failed").ConfigureAwait(false);
+                await FailRunSafeAsync(runId, entry, "send_response_failed", watchLease, streamingRun).ConfigureAwait(false);
             }
 
             return;
@@ -413,7 +412,7 @@ public sealed class RunWatchLoopService
                     if (await IsChildRunAsync(runId, ct).ConfigureAwait(false))
                     {
                         await FailRunSafeAsync(
-                            runId, entry, $"child_executor_failed:{failed.ExecutorId}").ConfigureAwait(false);
+                            runId, entry, $"child_executor_failed:{failed.ExecutorId}", watchLease, streamingRun).ConfigureAwait(false);
                         return;
                     }
                     break;
@@ -469,7 +468,7 @@ public sealed class RunWatchLoopService
                         entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "started", label = "Review", timestamp_utc = DateTimeOffset.UtcNow.ToString("O") });
                     }
 
-                    _ = PollDeferredReviewDecisionsAsync(runId, streamingRun, entry, ct);
+                    _ = PollDeferredReviewDecisionsAsync(runId, streamingRun, entry, watchLease, ct);
 
                     // Q3 hybrid: checkpoint-and-release the AgentHost pod when the workflow
                     // suspends at a RequestPort gate, if ReleasePodOnSuspend=true (spec §9/§12.2).
@@ -531,9 +530,50 @@ public sealed class RunWatchLoopService
                 .ConfigureAwait(false))
             return;
 
-        _logger.LogWarning(
-            "Workflow stream ended for run {RunId} without a terminal event; retaining durable state for recovery",
-            runId);
+        if (watchLease is not null && !await _leaseStore.IsLeaseOwnerAsync(
+                runId, watchLease.OwnerId, watchLease.FencingToken, CancellationToken.None).ConfigureAwait(false))
+        {
+            _registry.AbandonIfCurrent(runId, streamingRun);
+            return;
+        }
+
+        var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
+        if (run is not null && !TerminalRunOutcome.IsTerminal(run.Status))
+        {
+            var fence = watchLease is null ? null
+                : new RunLeaseFence(watchLease.OwnerId, watchLease.FencingToken, run.LifecycleGeneration);
+            var attempt = watchLease is null
+                ? entry.RecordNext(UnexpectedStreamEndEvent, new { lifecycleGeneration = run.LifecycleGeneration })
+                : entry.RecordNextIfLeaseOwned(
+                    UnexpectedStreamEndEvent, new { lifecycleGeneration = run.LifecycleGeneration },
+                    _runStore, fence!, CancellationToken.None);
+            if (attempt == 0)
+            {
+                _registry.AbandonIfCurrent(runId, streamingRun);
+                return;
+            }
+            var closures = (await _eventStream.GetPersistedEventsAsync(runId, 0, CancellationToken.None)
+                .ConfigureAwait(false)).Count(evt =>
+                evt.Type == UnexpectedStreamEndEvent
+                && System.Text.Json.JsonSerializer.SerializeToElement(evt.Payload)
+                    .TryGetProperty("lifecycleGeneration", out var generation)
+                && generation.GetInt32() == run.LifecycleGeneration);
+            if (closures >= MaxUnexpectedStreamEnds)
+            {
+                _logger.LogError(
+                    "Run {RunId} exhausted {ClosureCount} unexpected stream completions in lifecycle {Generation}",
+                    runId, closures, run.LifecycleGeneration);
+                await FailRunSafeAsync(
+                    runId, entry, "watch_stream_completed_without_terminal_event",
+                    watchLease, streamingRun, new { closureCount = closures, maxClosures = MaxUnexpectedStreamEnds })
+                    .ConfigureAwait(false);
+                _registry.AbandonIfCurrent(runId, streamingRun);
+                return;
+            }
+            _logger.LogWarning(
+                "Run {RunId} stream closed without a terminal event ({ClosureCount}/{MaxClosures}); retaining durable state for recovery",
+                runId, closures, MaxUnexpectedStreamEnds);
+        }
         _registry.AbandonIfCurrent(runId, streamingRun);
     }
 
@@ -691,14 +731,10 @@ public sealed class RunWatchLoopService
     {
         var parsedRunId = RunId.Parse(runId);
 
-        _activeLeases.TryGetValue(runId, out var registeredLease);
-        if (watchLease is not null || registeredLease.OwnerId is not null)
+        if (watchLease is not null)
         {
-            var activeLease = watchLease is { } captured
-                ? (captured.OwnerId, captured.FencingToken)
-                : registeredLease;
             var isOwner = await _leaseStore.IsLeaseOwnerAsync(
-                runId, activeLease.OwnerId, activeLease.FencingToken, CancellationToken.None).ConfigureAwait(false);
+                runId, watchLease.OwnerId, watchLease.FencingToken, CancellationToken.None).ConfigureAwait(false);
             if (!isOwner)
             {
                 _logger.LogWarning(
@@ -718,7 +754,8 @@ public sealed class RunWatchLoopService
                 var changed = await SetTerminalOutcomeAsync(
                     parsedRunId, currentRun, RunStatus.Merged, EventTypes.MergeCompleted,
                     new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode },
-                    mergeOutput.MergeResult, now).ConfigureAwait(false);
+                    mergeOutput.MergeResult, now, watchLease).ConfigureAwait(false);
+                if (!changed) return false;
 
                 EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
                 entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
@@ -745,7 +782,8 @@ public sealed class RunWatchLoopService
                 var completedResult = mergeOutput.MergeResult ?? "completed";
                 var changed = await SetTerminalOutcomeAsync(
                     parsedRunId, currentRun, RunStatus.Completed, EventTypes.RunCompleted,
-                    new { result = completedResult }, completedResult, now).ConfigureAwait(false);
+                    new { result = completedResult }, completedResult, now, watchLease).ConfigureAwait(false);
+                if (!changed) return false;
 
                 EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
                 await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunCompleted,
@@ -757,7 +795,8 @@ public sealed class RunWatchLoopService
             // merge_failed (conflict, lock failure, internal error)
             var mergeFailedChanged = await SetTerminalOutcomeAsync(
                 parsedRunId, currentRun, RunStatus.MergeFailed, EventTypes.MergeFailed,
-                new { reason = mergeOutput.MergeResult }, mergeOutput.MergeResult, now).ConfigureAwait(false);
+                new { reason = mergeOutput.MergeResult }, mergeOutput.MergeResult, now, watchLease).ConfigureAwait(false);
+            if (!mergeFailedChanged) return false;
 
             EmitTerminalMetrics(currentRun, now, "failed", "merge_failed", mergeFailedChanged);
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
@@ -770,13 +809,11 @@ public sealed class RunWatchLoopService
 
         if (woe.Is<NoChangesOutput>(out _))
         {
-            // No-changes runs must not leak worktrees (Issue 5).
-            // Cleanup before status update ensures pollers see a clean directory.
-            await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
-
             var changed = await SetTerminalOutcomeAsync(
                 parsedRunId, currentRun, RunStatus.Completed, EventTypes.RunCompleted,
-                new { result = "no_changes" }, "no_changes", now).ConfigureAwait(false);
+                new { result = "no_changes" }, "no_changes", now, watchLease).ConfigureAwait(false);
+            if (!changed) return false;
+            await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
             EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
             await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunCompleted,
@@ -799,7 +836,8 @@ public sealed class RunWatchLoopService
                     childCoordinatorRunId = fanCompleted.ChildCoordinatorRunId,
                 },
                 fanCompleted.JoinedOutput,
-                now).ConfigureAwait(false);
+                now, watchLease).ConfigureAwait(false);
+            if (!changed) return false;
             EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
             await CompleteTerminalOutcomeAsync(
                 changed,
@@ -893,7 +931,8 @@ public sealed class RunWatchLoopService
             };
             var changed = await SetTerminalOutcomeAsync(
                 parsedRunId, currentRun, RunStatus.Failed, EventTypes.RunFailed,
-                failedPayload, turnFailed.Reason, now).ConfigureAwait(false);
+                failedPayload, turnFailed.Reason, now, watchLease).ConfigureAwait(false);
+            if (!changed) return false;
 
             EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
             await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, failedPayload).ConfigureAwait(false);
@@ -915,7 +954,8 @@ public sealed class RunWatchLoopService
             };
             var changed = await SetTerminalOutcomeAsync(
                 parsedRunId, currentRun, RunStatus.Failed, EventTypes.RunFailed,
-                failedPayload, childFailed.Reason, now).ConfigureAwait(false);
+                failedPayload, childFailed.Reason, now, watchLease).ConfigureAwait(false);
+            if (!changed) return false;
 
             EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
             await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, failedPayload).ConfigureAwait(false);
@@ -926,7 +966,8 @@ public sealed class RunWatchLoopService
         {
             var changed = await SetTerminalOutcomeAsync(
                 parsedRunId, currentRun, RunStatus.Declined, EventTypes.ReviewDeclined,
-                new { }, null, now).ConfigureAwait(false);
+                new { }, null, now, watchLease).ConfigureAwait(false);
+            if (!changed) return false;
 
             EmitTerminalMetrics(currentRun, now, "failed", "declined", changed);
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "declined", label = "Review", timestamp_utc = now.ToString("O") });
@@ -938,14 +979,11 @@ public sealed class RunWatchLoopService
 
         if (woe.Is<ContentSafetyFailedOutput>())
         {
-            // Content-safety-failed runs must not leak worktrees (Issue 5).
-            // Cleanup must complete BEFORE status is set to "failed" so any poller
-            // that detects the terminal status observes a clean worktree directory.
-            await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
-
             var changed = await SetTerminalOutcomeAsync(
                 parsedRunId, currentRun, RunStatus.Failed, EventTypes.RunFailed,
-                new { reason = "content_safety" }, "content_safety", now).ConfigureAwait(false);
+                new { reason = "content_safety" }, "content_safety", now, watchLease).ConfigureAwait(false);
+            if (!changed) return false;
+            await CleanupWorktreeAsync(parsedRunId, runId).ConfigureAwait(false);
 
             EmitTerminalMetrics(currentRun, now, "failed", "content_safety", changed);
             await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed,
@@ -956,8 +994,8 @@ public sealed class RunWatchLoopService
 
         _logger.LogError(
             "Unrecognized WorkflowOutputEvent type for run {RunId}; transitioning to Failed", runId);
-        await FailRunSafeAsync(runId, entry, "unknown_workflow_output").ConfigureAwait(false);
-        return true;
+        return await FailRunSafeAsync(runId, entry, "unknown_workflow_output", watchLease)
+            .ConfigureAwait(false);
     }
 
     private async Task FirePostRunScribeAsync(string runId)
@@ -1011,50 +1049,57 @@ public sealed class RunWatchLoopService
         }
     }
 
-    private async Task FailRunSafeAsync(string runId, RunStreamEntry entry, string reason)
+    internal async Task<bool> FailRunSafeAsync(
+        string runId, RunStreamEntry entry, string reason,
+        RunLeaseClaim? watchLease = null, StreamingRun? expectedStreamingRun = null,
+        object? diagnostics = null)
     {
-        if (_activeLeases.TryGetValue(runId, out var lease))
+        if (watchLease is not null)
         {
             var isOwner = await _leaseStore.IsLeaseOwnerAsync(
-                runId, lease.OwnerId, lease.FencingToken, CancellationToken.None).ConfigureAwait(false);
+                runId, watchLease.OwnerId, watchLease.FencingToken, CancellationToken.None).ConfigureAwait(false);
             if (!isOwner)
             {
                 _logger.LogWarning(
                     "FailRun skipped for {RunId}: lease no longer owned by this worker (fencing token mismatch)", runId);
-                return;
+                return false;
             }
         }
 
+        var changed = false;
         try
         {
             var failedAt = DateTimeOffset.UtcNow;
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
-            var changed = await SetTerminalOutcomeAsync(
+            var payload = diagnostics is null ? (object)new { reason } : new { reason, diagnostics };
+            changed = await SetTerminalOutcomeAsync(
                 RunId.Parse(runId), run, RunStatus.Failed, EventTypes.RunFailed,
-                new { reason }, reason, failedAt).ConfigureAwait(false);
+                payload, reason, failedAt, watchLease).ConfigureAwait(false);
+            if (!changed)
+                return false;
 
             EmitTerminalMetrics(run, failedAt, "failed", reason, changed);
-            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, new { reason })
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, payload)
                 .ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
+            return true;
         }
 
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to transition run {RunId} to Failed state", runId);
+            return false;
         }
         finally
         {
-            // #350: a run reaching this generic failure path (e.g.
-            // watch_loop_timeout, child_executor_failed) is terminal and
-            // NEVER coming back — StopPortForwardsSafeAsync above only unregisters local bookkeeping
-            // (IPodNameRegistry, port-forward sessions), it does NOT stop the remote AgentHost pod.
-            // Without this the underlying process can keep executing tool calls and emitting
-            // tool.approval_required for a run the system already considers dead.
-            await ReleaseAgentHostPodOnTerminalSafeAsync(runId).ConfigureAwait(false);
-            _registry.Abandon(runId);
-            _factory.ClearRunExecutorMeta(runId);
+            if (expectedStreamingRun is not null)
+                _registry.AbandonIfCurrent(runId, expectedStreamingRun);
+            if (changed)
+            {
+                await ReleaseAgentHostPodOnTerminalSafeAsync(runId).ConfigureAwait(false);
+                _factory.ClearRunExecutorMeta(runId);
+            }
         }
     }
 
@@ -1094,21 +1139,29 @@ public sealed class RunWatchLoopService
         _ = _factory.PersistRunEventsAsync(runId);
     }
 
-    private Task<bool> SetTerminalOutcomeAsync(
+    private async Task<bool> SetTerminalOutcomeAsync(
         RunId runId,
         Agentweaver.Domain.Run? run,
         RunStatus status,
         string eventType,
         object payload,
         string? result,
-        DateTimeOffset occurredAt) =>
-        run is null
-            ? Task.FromResult(false)
-            : _runStore.TrySetTerminalOutcomeAsync(
+        DateTimeOffset occurredAt,
+        RunLeaseClaim? watchLease = null)
+    {
+        if (run is null)
+            return false;
+        if (BeforeTerminalMutationOverride is not null)
+            await BeforeTerminalMutationOverride().ConfigureAwait(false);
+        return await _runStore.TryMutateTerminalOutcomeAsync(
                 runId,
-                TerminalRunOutcome.Create(status, eventType, payload, occurredAt, run.LifecycleGeneration),
-                result,
-                CancellationToken.None);
+                new TerminalRunMutation(
+                    TerminalRunOutcome.Create(status, eventType, payload, occurredAt, run.LifecycleGeneration),
+                    result,
+                    RequiredLease: watchLease is null ? null
+                        : new RunLeaseFence(watchLease.OwnerId, watchLease.FencingToken, run.LifecycleGeneration)),
+                CancellationToken.None).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Releases the AgentHost pod for a run transitioning to a terminal Cancelled/Failed state

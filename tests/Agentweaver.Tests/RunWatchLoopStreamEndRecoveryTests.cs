@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -33,7 +34,7 @@ namespace Agentweaver.Tests.Api;
 /// emitting a terminal WorkflowOutputEvent, the watcher now recovers the run as assemble-ready
 /// instead of failing it. Root/non-child runs (which have additional RAI/review/merge/scribe stages
 /// after the agent turn) are deliberately NOT covered — a successful agent turn there is not
-/// sufficient evidence the run is actually done, so they still fall through to the generic fallback.
+/// sufficient evidence the run is actually done, so they retain durable state for bounded recovery.
 /// </summary>
 [Trait("Category", "ProcessEnvironment")]
 public sealed class RunWatchLoopStreamEndRecoveryTests : IClassFixture<ReviewWebApplicationFactory>
@@ -198,6 +199,95 @@ public sealed class RunWatchLoopStreamEndRecoveryTests : IClassFixture<ReviewWeb
         public CancellationToken ApplicationStopped => _stopping.Token;
         public void StopApplication() => _stopping.Cancel();
         public void Dispose() => _stopping.Dispose();
+    }
+
+    [Fact]
+    public async Task RepeatedRecoveryLeaseClosures_FailAfterThreeDurableMalformedEnds()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var svc = scope.ServiceProvider.GetRequiredService<RunWatchLoopService>();
+        var store = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        var leases = scope.ServiceProvider.GetRequiredService<IRunLeaseStore>();
+        var events = scope.ServiceProvider.GetRequiredService<IRunEventStream>();
+        var id = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = id, RepositoryPath = Path.GetTempPath(), OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot, Task = "recover malformed stream",
+            SubmittingUser = ReviewWebApplicationFactory.OwnerUser,
+            Status = RunStatus.AwaitingReview, StartedAt = DateTimeOffset.UtcNow,
+        });
+        var runId = id.ToString();
+        var entry = scope.ServiceProvider.GetRequiredService<RunStreamStore>()
+            .Create(runId, ReviewWebApplicationFactory.OwnerUser);
+
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            await using var streamingRun = await CreateUnwatchedStreamAsync();
+            var claim = await leases.TryClaimAsync(runId, $"recovery-{attempt}", TimeSpan.FromMinutes(5));
+            claim.Claimed.Should().BeTrue();
+            await svc.HandleStreamEndAsync(
+                runId, streamingRun, entry, null, CancellationToken.None,
+                new RunLeaseClaim($"recovery-{attempt}", claim.FencingToken));
+            if (attempt < 3)
+            {
+                (await store.GetAsync(id))!.Status.Should().Be(RunStatus.AwaitingReview);
+                entry.IsCompleted.Should().BeFalse();
+            }
+            await leases.ReleaseAsync(runId, $"recovery-{attempt}", claim.FencingToken);
+        }
+
+        (await store.GetAsync(id))!.Status.Should().Be(RunStatus.Failed);
+        entry.IsCompleted.Should().BeTrue();
+        var failure = entry.GetSnapshotSince(0).Events.Single(e => e.Type == EventTypes.RunFailed);
+        var payload = JsonSerializer.SerializeToElement(failure.Payload);
+        payload.GetProperty("reason").GetString().Should().Be("watch_stream_completed_without_terminal_event");
+        payload.GetProperty("diagnostics").GetProperty("closureCount").GetInt32().Should().Be(3);
+        (await events.GetPersistedEventsAsync(runId))
+            .Count(e => e.Type == "watch.stream_closed_without_terminal_event").Should().Be(3);
+    }
+
+    [Fact]
+    public async Task LeaseHandoffAndShutdown_DoNotCountAsMalformedClosure()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var svc = scope.ServiceProvider.GetRequiredService<RunWatchLoopService>();
+        var store = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        var leases = scope.ServiceProvider.GetRequiredService<IRunLeaseStore>();
+        var events = scope.ServiceProvider.GetRequiredService<IRunEventStream>();
+        var id = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = id, RepositoryPath = Path.GetTempPath(), OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot, Task = "handoff",
+            SubmittingUser = ReviewWebApplicationFactory.OwnerUser,
+            Status = RunStatus.AwaitingReview, StartedAt = DateTimeOffset.UtcNow,
+        });
+        var runId = id.ToString();
+        var entry = scope.ServiceProvider.GetRequiredService<RunStreamStore>()
+            .Create(runId, ReviewWebApplicationFactory.OwnerUser);
+        var old = await leases.TryClaimAsync(runId, "old", TimeSpan.FromMinutes(5));
+        await leases.ReleaseAsync(runId, "old", old.FencingToken);
+        var next = await leases.TryClaimAsync(runId, "next", TimeSpan.FromMinutes(5));
+        await using var streamingRun = await CreateUnwatchedStreamAsync();
+        await svc.HandleStreamEndAsync(runId, streamingRun, entry, null, CancellationToken.None,
+            new RunLeaseClaim("old", old.FencingToken));
+        using var shutdown = new CancellationTokenSource();
+        shutdown.Cancel();
+        await svc.HandleStreamEndAsync(runId, streamingRun, entry, null, shutdown.Token,
+            new RunLeaseClaim("next", next.FencingToken));
+        (await store.GetAsync(id))!.Status.Should().Be(RunStatus.AwaitingReview);
+        (await events.GetPersistedEventsAsync(runId))
+            .Should().NotContain(e => e.Type == "watch.stream_closed_without_terminal_event");
+        entry.IsCompleted.Should().BeFalse();
+        await leases.ReleaseAsync(runId, "next", next.FencingToken);
+    }
+
+    private static async Task<StreamingRun> CreateUnwatchedStreamAsync()
+    {
+        ExecutorBinding draft = new FunctionExecutor<string, string>("draft", (input, _, _) => input);
+        var workflow = new WorkflowBuilder(draft).Build()!;
+        return await InProcessExecution.RunStreamingAsync(workflow, "recovery");
     }
 
     [Fact]
