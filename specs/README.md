@@ -51,6 +51,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 
 - [Review agent output before merge](./review-merge/review-agent-output.md) — [#17](https://github.com/sabbour/agentweaver/issues/17)
 - [Approve, request changes, or decline a run](./review-merge/approve-request-changes-or-decline.md) — [#18](https://github.com/sabbour/agentweaver/issues/18)
+- [Integrate required child output without hiding parallel conflicts](./review-merge/integrate-required-child-output.md) — [#1401](https://github.com/sabbour/agentweaver/issues/1401)
 
 ## Agent execution & sandbox
 

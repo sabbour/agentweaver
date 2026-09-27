@@ -11,7 +11,7 @@ namespace Agentweaver.Tests.Coordinator;
 /// Tests for the D1 collective integration-branch build
 /// (<see cref="WorktreeManager.BuildIntegrationBranch"/>) against a real temp git repository. Eligible
 /// child branches must merge into the integration branch in dependency order (happy path); a
-/// conflicting pair is auto-resolved by accepting the later child branch's version.
+/// independent conflicting children stop integration without changing the published ref.
 /// </summary>
 public sealed class IntegrationBranchBuilderTests : IDisposable
 {
@@ -90,7 +90,7 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
     }
 
     [Fact]
-    public void BuildIntegrationBranch_ConflictingChildren_AutoResolvesByAcceptingLaterChild()
+    public void BuildIntegrationBranch_ConflictingChildren_PreservesEarlierIntegrationRevision()
     {
         var repoPath = CreateTempGitRepo();
 
@@ -98,20 +98,105 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
         CommitOnNewBranch(repoPath, "agentweaver/child-x", "shared.txt", "from X\n", "child x");
         CommitOnNewBranch(repoPath, "agentweaver/child-y", "shared.txt", "from Y\n", "child y");
 
-        var result = _manager.BuildIntegrationBranch(
-            repoPath, "main", "agentweaver/integration/coord-3",
+        const string integration = "agentweaver/integration/coord-3";
+        _manager.BuildIntegrationBranch(repoPath, "main", integration, new[] { "agentweaver/child-x" })
+            .Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        var previousTip = _manager.GetBranchTipCommitSha(repoPath, integration);
+        var result = _manager.BuildIntegrationBranch(repoPath, "main", integration,
             new[] { "agentweaver/child-x", "agentweaver/child-y" });
 
-        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
-        result.AutoResolutions.Should().ContainSingle();
-        result.AutoResolutions[0].Branch.Should().Be("agentweaver/child-y");
-        result.AutoResolutions[0].Files.Should().Contain("shared.txt");
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Conflict);
+        result.ConflictingBranch.Should().Be("agentweaver/child-y");
+        result.ConflictingFiles.Should().Contain("shared.txt");
+        result.ConflictingInputs.Keys.Should().BeEquivalentTo("agentweaver/child-x", "agentweaver/child-y");
+        result.ConflictingInputs.Values.Should().OnlyContain(sha => sha.Length == 40);
 
         using var repo = new Repository(repoPath);
-        var intTip = repo.Branches["agentweaver/integration/coord-3"].Tip;
-        intTip["shared.txt"].Should().NotBeNull();
-        ReadBlob(repo, intTip["shared.txt"]).Should().Be("from Y\n");
-        intTip.Message.Should().Contain("auto-resolved");
+        repo.Branches[integration].Tip.Sha.Should().Be(previousTip);
+        ReadBlob(repo, repo.Branches[integration].Tip["shared.txt"]).Should().Be("from X\n");
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_MissingChild_BlocksWithoutPublishingPartialRef()
+    {
+        var repoPath = CreateTempGitRepo();
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "alpha.txt", "alpha", "a");
+        var result = _manager.BuildIntegrationBranch(repoPath, "main", "agentweaver/integration/missing",
+            new[] { "agentweaver/child-a", "agentweaver/missing" });
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.MissingInput);
+        result.ConflictingBranch.Should().Be("agentweaver/missing");
+        using var repo = new Repository(repoPath);
+        repo.Branches["agentweaver/integration/missing"].Should().BeNull();
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_DescendantAmendment_KeepsPriorIndependentFiles()
+    {
+        var repoPath = CreateTempGitRepo();
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "shared.txt", "first", "a");
+        CommitOnNewBranch(repoPath, "agentweaver/child-b", "unrelated.txt", "independent", "b");
+        using (var repo = new Repository(repoPath))
+            repo.CreateBranch("agentweaver/child-a-amend", repo.Branches["agentweaver/child-a"].Tip);
+        CommitOnNewBranch(repoPath, "agentweaver/child-a-amend", "shared.txt", "amended", "amend a");
+
+        var result = _manager.BuildIntegrationBranch(repoPath, "main", "agentweaver/integration/amend",
+            new[] { "agentweaver/child-a", "agentweaver/child-b", "agentweaver/child-a-amend" });
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        using var merged = new Repository(repoPath);
+        var tree = merged.Branches["agentweaver/integration/amend"].Tip.Tree;
+        ReadBlob(merged, tree["shared.txt"]).Should().Be("amended");
+        ReadBlob(merged, tree["unrelated.txt"]).Should().Be("independent");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BuildIntegrationBranch_IndependentRenameOrDelete_BlocksExistingEdit(bool delete)
+    {
+        var repoPath = CreateTempGitRepo();
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "readme.txt", "edited", "edit");
+        CommitRemovalOnNewBranch(repoPath, "agentweaver/child-b", "readme.txt",
+            delete ? null : "renamed.txt");
+
+        var result = _manager.BuildIntegrationBranch(repoPath, "main", "agentweaver/integration/remove",
+            new[] { "agentweaver/child-a", "agentweaver/child-b" });
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Conflict);
+        result.ConflictingFiles.Should().Contain("readme.txt");
+        using var repo = new Repository(repoPath);
+        repo.Branches["agentweaver/integration/remove"].Should().BeNull();
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_CleanGitMergeOfIndependentSameFileEdits_StillRequiresResolution()
+    {
+        var repoPath = CreateTempGitRepo();
+        var lines = Enumerable.Range(1, 16).Select(i => $"line {i}").ToArray();
+        using (var repo = new Repository(repoPath))
+        {
+            var main = repo.Branches["main"];
+            var definition = TreeDefinition.From(main.Tip.Tree);
+            var blob = repo.ObjectDatabase.CreateBlob(new MemoryStream(Encoding.UTF8.GetBytes(
+                string.Join("\n", lines) + "\n")));
+            definition.Add("shared.txt", blob, Mode.NonExecutableFile);
+            var sig = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            var commit = repo.ObjectDatabase.CreateCommit(sig, sig, "shared base",
+                repo.ObjectDatabase.CreateTree(definition), new[] { main.Tip }, prettifyMessage: true);
+            repo.Refs.UpdateTarget(repo.Refs["refs/heads/main"], commit.Id);
+        }
+        var first = (string[])lines.Clone();
+        first[0] = "first edit";
+        var last = (string[])lines.Clone();
+        last[^1] = "last edit";
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "shared.txt", string.Join("\n", first) + "\n", "first");
+        CommitOnNewBranch(repoPath, "agentweaver/child-b", "shared.txt", string.Join("\n", last) + "\n", "last");
+
+        var result = _manager.BuildIntegrationBranch(repoPath, "main", "agentweaver/integration/disjoint-hunks",
+            new[] { "agentweaver/child-a", "agentweaver/child-b" });
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Conflict);
+        result.ConflictingFiles.Should().Contain("shared.txt");
     }
 
     // ── helpers (mirrors CommitEndpointMergeTests git setup) ──────────────────────────────────
@@ -172,6 +257,22 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
         using var content = ((Blob)entry!.Target).GetContentStream();
         using var reader = new StreamReader(content, Encoding.UTF8);
         return reader.ReadToEnd();
+    }
+
+    private static void CommitRemovalOnNewBranch(
+        string repositoryPath, string branchName, string oldPath, string? newPath)
+    {
+        using var repo = new Repository(repositoryPath);
+        var branch = repo.CreateBranch(branchName, repo.Branches["main"].Tip);
+        var definition = TreeDefinition.From(branch.Tip.Tree);
+        var oldEntry = branch.Tip.Tree[oldPath];
+        definition.Remove(oldPath);
+        if (newPath is not null)
+            definition.Add(newPath, (Blob)oldEntry.Target, oldEntry.Mode);
+        var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+        var commit = repo.ObjectDatabase.CreateCommit(signature, signature, "remove or rename",
+            repo.ObjectDatabase.CreateTree(definition), new[] { branch.Tip }, prettifyMessage: true);
+        repo.Refs.UpdateTarget(repo.Refs[$"refs/heads/{branchName}"], commit.Id);
     }
 
     public void Dispose()
