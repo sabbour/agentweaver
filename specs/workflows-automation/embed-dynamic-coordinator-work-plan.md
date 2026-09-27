@@ -1,6 +1,7 @@
 # Embed a dynamic coordinator work plan in a workflow
 
-**Issue:** [#1544](https://github.com/sabbour/agentweaver/issues/1544)  
+**Issue:** [#1544](https://github.com/sabbour/agentweaver/issues/1544)
+
 **Area:** Workflows & automation
 
 ## User story
