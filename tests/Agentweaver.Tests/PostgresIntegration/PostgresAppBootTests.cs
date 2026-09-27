@@ -22,8 +22,9 @@ namespace Agentweaver.Tests.PostgresIntegration;
 /// <para>This test boots the REAL application (<see cref="Program"/>) with
 /// <c>Database:Provider=Postgres</c> against a real <c>postgres:16</c> Testcontainer, applies
 /// migrations, and exercises the EXACT crash path: <c>Program.cs</c> calls
-/// <c>WorkflowRestartService.RecoverAsync</c> (→ <c>IRunStore.GetByStatusAsync</c>) at startup,
-/// so a successful boot alone proves the regression is fixed. It additionally asserts that in
+/// <c>StartupRecoveryService</c> calls <c>WorkflowRestartService.RecoverAsync</c>
+/// (→ <c>IRunStore.GetByStatusAsync</c>) after the host starts. The explicit recovery
+/// assertion below proves that path works. It additionally asserts that in
 /// Postgres mode the <see cref="IRunStore"/> chain contains <see cref="EfRunStore"/> and the
 /// concrete <see cref="SqliteRunStore"/> is NOT registered, then runs a full run lifecycle
 /// through the interface.</para>
@@ -34,13 +35,39 @@ namespace Agentweaver.Tests.PostgresIntegration;
 /// change them back to <c>BeOfType</c> — the backing store is what this test protects, not the
 /// identity of the outermost wrapper.</para>
 ///
-/// <para>Skipped automatically when Docker is unavailable (Testcontainers throws on startup).</para>
+/// <para>Requires a running Docker daemon for the Postgres Testcontainer.</para>
 /// </summary>
 [Trait("Category", "PostgresIntegration")]
 public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.AppFixture>
 {
     private readonly AppFixture _fixture;
     public PostgresAppBootTests(AppFixture fixture) => _fixture = fixture;
+
+    [PostgresFact]
+    public async Task PostgresLeader_ExcludesPeers_UntilItReleasesLifetimeLock()
+    {
+        const long isolatedTestLockKey = 0x4157_5243_5652_5901L;
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Database:Provider"] = "postgres",
+                ["ConnectionStrings:Postgres"] = _fixture.ConnectionString,
+            }).Build();
+        await using (var leader = await StartupRecoveryLeader.AcquireAsync(
+            configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
+        {
+            leader.IsLeader.Should().BeTrue();
+            await using var waiter = await StartupRecoveryLeader.AcquireAsync(
+                configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey);
+            waiter.IsLeader.Should().BeFalse("the sweep must never run on two replicas concurrently");
+        }
+
+        await using (var waiter = await StartupRecoveryLeader.AcquireAsync(
+            configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
+        {
+            waiter.IsLeader.Should().BeTrue("the advisory lock is released on leader death");
+        }
+    }
 
     [PostgresFact]
     public void AppBoot_InPostgresMode_ResolvesEfRunStore_AndDoesNotRegisterSqliteRunStore()
@@ -151,14 +178,13 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         private PostgresWebApplicationFactory _factory = null!;
 
         public IServiceProvider Services => _factory.Services;
+        public string ConnectionString => _container.GetConnectionString();
 
         public async Task InitializeAsync()
         {
             await _container.StartAsync();
             _factory = new PostgresWebApplicationFactory(_container.GetConnectionString());
-            // Force the host to build and run startup (which calls WorkflowRestartService.RecoverAsync,
-            // CoordinatorRunService.RecoverInterruptedRunsAsync and CoordinatorReconciler.SweepAsync —
-            // all against Postgres). A throw here is the regression reproducing.
+            // Force the host to build and start; recovery now runs independently of boot.
             using var client = _factory.CreateClient();
         }
 

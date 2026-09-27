@@ -143,6 +143,24 @@ sandboxes normally run with `kata-vm-isolation` and the `agentweaver-exec` sidec
 the Kata node pool, while non-sandbox control-plane workloads run with the default runc
 runtime.
 
+### API restart recovery and health probes
+
+API restart recovery runs after the HTTP listener starts. One Postgres advisory-lock
+leader sweeps interrupted workflow runs, then coordinator runs, then the coordinator
+watchdog; other replicas can answer `/api/ping` without waiting for
+the sweep. The leader keeps its Postgres advisory lock until shutdown after a
+successful sweep; followers retry leadership and only sweep if that process exits.
+A sweep has a five-minute deadline and retries after 30 seconds on timeout
+or failure. Look for `Startup recovery sweep started`, `completed`, `exceeded`, or
+`failed` in API logs when diagnosing a restart. Readiness reflects workspace availability and successful initial static OAuth client
+reconciliation, not completion of the recovery backlog: operators should
+check the sweep log before assuming every interrupted run has been re-armed. `/api/health`,
+`/healthz/workspace`, and `/oauth/*` return 503 until the initial static OAuth client
+reconciliation succeeds; `/api/ping` stays responsive throughout. Failed reconciliations
+are logged and retried every five seconds after a 30-second attempt deadline without
+terminating the host. Database migrations and the bounded Copilot App registration
+validation still precede serving traffic.
+
 ### AgentHost pre-delivery recovery diagnostics
 
 Project agents, Assembly RAI, and Build & Test use warm-pool AgentHost claims. Before

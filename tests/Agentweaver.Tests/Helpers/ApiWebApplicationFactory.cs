@@ -51,6 +51,10 @@ public abstract class ApiWebApplicationFactory : WebApplicationFactory<Program>
                 ["Providers:MicrosoftFoundry:Deployment"] = "gpt-4o",
                 ["RunBounds:MaxSteps"] = "50",
                 ["RunBounds:MaxMinutes"] = "10",
+                // These hosts seed active runs after boot; recovery and deferred OAuth readiness
+                // are exercised by the dedicated production-path startup factory instead.
+                ["Testing:DisableStartupRecovery"] = "true",
+                ["Testing:BypassOAuthInitializationGate"] = "true",
             };
             ConfigureTestConfiguration(values);
             configuration.AddInMemoryCollection(values);
