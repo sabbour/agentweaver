@@ -834,7 +834,8 @@ public sealed class ReviewEndpointHybridMergeTests : IClassFixture<ReviewWebAppl
         await runStore.InsertAsync(run);
         await runStore.UpdateReviewReadyAsync(runId, treeHash, diff, 0);
 
-        var casSucceeded = await runStore.TryStartMergingAsync(runId);
+        var revision = (await runStore.GetLatestOutputRevisionAsync(runId))!;
+        var casSucceeded = await runStore.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         casSucceeded.Should().BeTrue("setup: run must advance from awaiting_review to merging");
 
         var runBeforeRecovery = await runStore.GetAsync(runId);

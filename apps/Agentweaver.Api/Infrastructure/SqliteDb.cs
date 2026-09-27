@@ -75,6 +75,8 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN reviewed_by TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN workflow_run_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN merged_commit_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approved_output_revision_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN current_output_revision_id TEXT;", ct);
         // Coordinator workflow-selection reasoning (#167): short human-readable explanation of why the
         // coordinator selected the workflow it planned this run against. NULL for runs with no captured reason.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN workflow_selection_reason TEXT;", ct);
@@ -568,6 +570,8 @@ public sealed class SqliteDb
                 reviewed_by        TEXT,
                 workflow_run_id    TEXT,
                 merged_commit_hash TEXT,
+                approved_output_revision_id TEXT,
+                current_output_revision_id TEXT,
                 parent_run_id      TEXT,
                 subtask_id         TEXT,
                 origin             TEXT NOT NULL DEFAULT 'interactive',
@@ -603,7 +607,7 @@ public sealed class SqliteDb
                 started_at, ended_at, result,
                 worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
-                reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+                reviewed_by, workflow_run_id, merged_commit_hash, approved_output_revision_id, current_output_revision_id, parent_run_id, subtask_id,
                 origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
                 sandbox_pod_name, sandbox_namespace, workflow_selection_reason,
                 preview_publication_lease_until, preview_publication_lease_owner,
@@ -621,7 +625,7 @@ public sealed class SqliteDb
                 started_at, ended_at, result,
                 worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
-                reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+                reviewed_by, workflow_run_id, merged_commit_hash, approved_output_revision_id, current_output_revision_id, parent_run_id, subtask_id,
                 COALESCE(origin, 'interactive'), retried_from, archived_at,
                 sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace,
                 workflow_selection_reason,
@@ -708,6 +712,33 @@ public sealed class SqliteDb
             fencing_token INTEGER NOT NULL,
             lease_expires_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS run_output_revisions (
+            revision_id TEXT NOT NULL PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            run_id TEXT NOT NULL,
+            lifecycle_generation INTEGER NOT NULL,
+            workflow_digest TEXT,
+            manifest_incomplete INTEGER NOT NULL,
+            tree_hash TEXT NOT NULL,
+            diff_sha256 TEXT NOT NULL,
+            predecessor_revision_id TEXT,
+            diff_bytes BLOB,
+            created_at TEXT NOT NULL,
+            UNIQUE (run_id, lifecycle_generation)
+        );
+        CREATE INDEX IF NOT EXISTS idx_run_output_revisions_history
+            ON run_output_revisions (run_id, lifecycle_generation DESC);
+        CREATE TRIGGER IF NOT EXISTS trg_run_output_revisions_no_update
+            BEFORE UPDATE ON run_output_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'run_output_revisions is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_run_output_revisions_no_delete
+            BEFORE DELETE ON run_output_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'run_output_revisions is immutable');
+        END;
 
         CREATE TABLE IF NOT EXISTS run_revisions (
             run_id              TEXT NOT NULL,

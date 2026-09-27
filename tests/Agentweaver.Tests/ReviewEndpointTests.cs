@@ -71,6 +71,39 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
         }
     }
 
+    [Fact]
+    public async Task OutputRevisionRemainsReadableAfterMergeAndRejectsStaleApproval()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync(dir =>
+            File.WriteAllText(Path.Combine(dir, "review.txt"), "immutable"));
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+
+        var list = await _ownerClient.GetAsync($"/api/runs/{run.Id}/output-revisions");
+        list.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+        listed.RootElement.GetArrayLength().Should().Be(1);
+        listed.RootElement[0].GetProperty("revision_id").GetString().Should().Be(revision.RevisionId);
+
+        var unauthorized = await _otherClient.GetAsync($"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
+        unauthorized.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        var stale = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true, output_revision_id = "stale" });
+        stale.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        var approved = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true, output_revision_id = revision.RevisionId });
+        approved.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await store.GetAsync(run.Id))!.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
+
+        var exact = await _ownerClient.GetAsync($"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
+        exact.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var response = JsonDocument.Parse(await exact.Content.ReadAsStringAsync());
+        response.RootElement.GetProperty("diff").GetString().Should().Be(run.Diff);
+        response.RootElement.GetProperty("diff_sha256").GetString().Should().Be(revision.DiffSha256);
+    }
+
     // =========================================================================
     // Test 1 (SC-004, AC2)
     // After approving, the originating branch tip tree must equal the committed

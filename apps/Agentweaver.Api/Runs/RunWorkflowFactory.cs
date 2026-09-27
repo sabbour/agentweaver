@@ -439,9 +439,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             {
                 await ctx.QueueStateUpdateAsync(MergeDataKey, input, MergeDataScope, ct)
                     .ConfigureAwait(false);
+                var run = await _runStore.GetAsync(RunId.Parse(input.RunId), ct).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("Review-ready run no longer exists.");
                 return new WorkflowReviewRequest(
                     input.RunId, input.TreeHash, input.Diff, input.StepCount,
-                    RaiSafetyFlagged: input.ContentSafetyFlagged);
+                    RaiSafetyFlagged: input.ContentSafetyFlagged,
+                    LifecycleGeneration: run.LifecycleGeneration);
             });
 
         // Adapter: maps WorkflowReviewDecision -> MergeInput by reading the stored
@@ -459,7 +462,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     agentOutput.WorktreeBranch,
                     agentOutput.RepositoryPath,
                     agentOutput.OriginatingBranch,
-                    ReviewedBy: decision.ReviewedBy);
+                    ReviewedBy: decision.ReviewedBy,
+                    OutputRevisionId: decision.OutputRevisionId);
             });
 
         ExecutorBinding policyAgentOutputAdapter = new VisualFunctionExecutor<WorkflowReviewDecision, AgentTurnOutput>(
@@ -1244,7 +1248,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     var ao = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
                     return new MergeInput(
                         ao!.RunId, ao.TreeHash, ao.WorktreePath, ao.WorktreeBranch,
-                        ao.RepositoryPath, ao.OriginatingBranch, ReviewedBy: decision.ReviewedBy);
+                        ao.RepositoryPath, ao.OriginatingBranch, ReviewedBy: decision.ReviewedBy,
+                        OutputRevisionId: decision.OutputRevisionId);
                 });
         }
 
@@ -1256,9 +1261,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 async (output, ctx, ct) =>
                 {
                     await ctx.QueueStateUpdateAsync(MergeDataKey, output, MergeDataScope, ct).ConfigureAwait(false);
+                    var run = await _factory._runStore.GetAsync(RunId.Parse(output.RunId), ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException("Review-ready run no longer exists.");
                     return new WorkflowReviewRequest(
                         output.RunId, output.TreeHash, output.Diff, output.StepCount,
-                        RaiSafetyFlagged: output.ContentSafetyFlagged);
+                        RaiSafetyFlagged: output.ContentSafetyFlagged,
+                        LifecycleGeneration: run.LifecycleGeneration);
                 });
         }
 
@@ -1270,9 +1278,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 async (decision, ctx, ct) =>
                 {
                     var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
+                    var run = await _factory._runStore.GetAsync(RunId.Parse(produced!.RunId), ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException("Review-ready run no longer exists.");
                     return new WorkflowReviewRequest(
-                        produced!.RunId, produced.TreeHash, produced.Diff, produced.StepCount,
-                        RaiSafetyFlagged: produced.ContentSafetyFlagged);
+                        produced.RunId, produced.TreeHash, produced.Diff, produced.StepCount,
+                        RaiSafetyFlagged: produced.ContentSafetyFlagged,
+                        LifecycleGeneration: run.LifecycleGeneration);
                 });
         }
 

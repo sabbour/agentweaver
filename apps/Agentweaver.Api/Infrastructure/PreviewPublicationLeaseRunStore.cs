@@ -232,6 +232,16 @@ public sealed class PreviewPublicationLeaseRunStore(
         DateTimeOffset? now = null) =>
         Inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now);
 
+    public Task<RunOutputRevision?> GetOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        Inner.GetOutputRevisionAsync(runId, revisionId, ct);
+    public Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
+        int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        Inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now);
+    public Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default) =>
+        Inner.GetLatestOutputRevisionAsync(runId, ct);
+    public Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(RunId runId, CancellationToken ct = default) =>
+        Inner.ListOutputRevisionsAsync(runId, ct);
+
     public Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
@@ -254,6 +264,8 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task<bool> TryTransitionToCommittingAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryTransitionToCommittingAsync(runId, ct, now);
+    public Task<bool> TryTransitionToCommittingRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        Inner.TryTransitionToCommittingRevisionAsync(runId, revisionId, ct);
 
     public Task<bool> TryRevertCommittingAsync(
         RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null) =>
@@ -262,6 +274,8 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task<bool> TryStartMergingAsync(
         RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryStartMergingAsync(runId, reviewer, ct, now);
+    public Task<bool> TryStartMergingRevisionAsync(RunId runId, string revisionId, string? reviewer = null, CancellationToken ct = default) =>
+        Inner.TryStartMergingRevisionAsync(runId, revisionId, reviewer, ct);
 
     public Task<bool> RevertMergingAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>

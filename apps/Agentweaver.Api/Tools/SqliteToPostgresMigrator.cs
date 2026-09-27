@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
 using Agentweaver.Domain.BlueprintPackages;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -884,6 +885,93 @@ public sealed class SqliteToPostgresMigrator
         _logger.LogInformation("  Runs: {Migrated}/{Total} migrated, {Skipped} skipped.",
             runsMigrated, runs.Count, runs.Count - runsMigrated);
 
+        if (await HasTableAsync(conn, "run_output_revisions", ct))
+        {
+            await using var outputCommand = conn.CreateCommand();
+            outputCommand.CommandText =
+                """
+                SELECT revision_id, schema_version, run_id, lifecycle_generation, workflow_digest,
+                       manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at
+                FROM run_output_revisions ORDER BY run_id, lifecycle_generation;
+                """;
+            var outputRevisions = new List<RunOutputRevisionRecord>();
+            await using (var reader = await outputCommand.ExecuteReaderAsync(ct))
+            {
+                while (await reader.ReadAsync(ct))
+                {
+                    var revision = new RunOutputRevision(
+                        reader.GetString(0), reader.GetInt32(1), new RunId(Guid.Parse(reader.GetString(2))),
+                        reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetInt32(5) != 0,
+                        reader.GetString(6), reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
+                        reader.IsDBNull(9) ? null : reader.GetFieldValue<byte[]>(9), ParseTs(reader.GetString(10)));
+                    outputRevisions.Add(new RunOutputRevisionRecord
+                    {
+                        RevisionId = revision.RevisionId,
+                        SchemaVersion = revision.SchemaVersion,
+                        RunId = revision.RunId.ToString(),
+                        LifecycleGeneration = revision.LifecycleGeneration,
+                        WorkflowDigest = revision.WorkflowDigest,
+                        ManifestIncomplete = revision.ManifestIncomplete,
+                        TreeHash = revision.TreeHash,
+                        DiffSha256 = revision.DiffSha256,
+                        PredecessorRevisionId = revision.PredecessorRevisionId,
+                        DiffBytes = revision.DiffBytes,
+                        CreatedAt = revision.CreatedAt
+                    });
+                }
+            }
+            var sourceRunsById = runs.ToDictionary(r => r.RunId, StringComparer.Ordinal);
+            foreach (var sourceRun in runs)
+            {
+                if (sourceRun.CurrentOutputRevisionId is not null
+                    && !outputRevisions.Any(r => r.RunId == sourceRun.RunId
+                        && r.RevisionId == sourceRun.CurrentOutputRevisionId))
+                    throw new InvalidOperationException(
+                        $"Source run {sourceRun.RunId} has no current output revision to migrate.");
+            }
+            foreach (var revision in outputRevisions)
+            {
+                var destinationRun = await db.Runs.AsNoTracking()
+                    .SingleOrDefaultAsync(r => r.RunId == revision.RunId, ct);
+                if (!sourceRunsById.TryGetValue(revision.RunId, out var sourceRun)
+                    || destinationRun is null
+                    || destinationRun.LifecycleGeneration != sourceRun.LifecycleGeneration
+                    || destinationRun.Status != sourceRun.Status
+                    || destinationRun.CurrentOutputRevisionId != sourceRun.CurrentOutputRevisionId
+                    || destinationRun.ApprovedOutputRevisionId != sourceRun.ApprovedOutputRevisionId
+                    || destinationRun.TreeHash != sourceRun.TreeHash
+                    || destinationRun.Diff != sourceRun.Diff
+                    || revision.LifecycleGeneration > destinationRun.LifecycleGeneration
+                    || (revision.LifecycleGeneration == destinationRun.LifecycleGeneration
+                        && destinationRun.CurrentOutputRevisionId != revision.RevisionId))
+                    throw new InvalidOperationException(
+                        $"Destination run {revision.RunId} does not match output revision {revision.RevisionId}; rerun migration against a consistent run snapshot.");
+                var existing = await db.RunOutputRevisions.AsNoTracking()
+                    .SingleOrDefaultAsync(r => r.RevisionId == revision.RevisionId, ct);
+                if (existing is not null)
+                {
+                    var verified = new RunOutputRevision(
+                        existing.RevisionId, existing.SchemaVersion, new RunId(Guid.Parse(existing.RunId)),
+                        existing.LifecycleGeneration, existing.WorkflowDigest, existing.ManifestIncomplete,
+                        existing.TreeHash, existing.DiffSha256, existing.PredecessorRevisionId,
+                        existing.DiffBytes, existing.CreatedAt);
+                    if (verified.RunId.ToString() != revision.RunId
+                        || existing.LifecycleGeneration != revision.LifecycleGeneration
+                        || existing.DiffSha256 != revision.DiffSha256
+                        || existing.TreeHash != revision.TreeHash
+                        || existing.WorkflowDigest != revision.WorkflowDigest
+                        || existing.ManifestIncomplete != revision.ManifestIncomplete
+                        || existing.PredecessorRevisionId != revision.PredecessorRevisionId
+                        || existing.CreatedAt != revision.CreatedAt
+                        || !verified.DiffBytes.AsSpan().SequenceEqual(revision.DiffBytes))
+                        throw new InvalidOperationException("Conflicting output revision in destination database.");
+                    continue;
+                }
+                db.RunOutputRevisions.Add(revision);
+            }
+            await db.SaveChangesAsync(ct);
+        }
+
         var executionIdentities = await ReadExecutionIdentitiesAsync(conn, ct);
         _logger.LogInformation("Migrating {Count} execution identities...", executionIdentities.Count);
         var executionIdentitiesMigrated = 0;
@@ -1369,6 +1457,15 @@ public sealed class SqliteToPostgresMigrator
         var executableWorkflowPinnedAt = await HasColumnAsync(conn, "runs", "executable_workflow_pinned_at", ct)
             ? "executable_workflow_pinned_at"
             : "NULL AS executable_workflow_pinned_at";
+        var approvedRevisionId = await HasColumnAsync(conn, "runs", "approved_output_revision_id", ct)
+            ? "approved_output_revision_id"
+            : "NULL AS approved_output_revision_id";
+        var currentOutputRevisionId = await HasColumnAsync(conn, "runs", "current_output_revision_id", ct)
+            ? "current_output_revision_id"
+            : "NULL AS current_output_revision_id";
+        var lifecycleGeneration = await HasColumnAsync(conn, "runs", "lifecycle_generation", ct)
+            ? "lifecycle_generation"
+            : "1 AS lifecycle_generation";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             $"""
@@ -1387,7 +1484,10 @@ public sealed class SqliteToPostgresMigrator
                   {executableWorkflowSource},
                   {executableWorkflowContentDigest},
                   {executableWorkflowDefinitionYaml},
-                  {executableWorkflowPinnedAt}
+                  {executableWorkflowPinnedAt},
+                  {approvedRevisionId},
+                  {lifecycleGeneration},
+                  {currentOutputRevisionId}
               FROM runs;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1436,6 +1536,9 @@ public sealed class SqliteToPostgresMigrator
                 ExecutableWorkflowContentDigest = reader.IsDBNull(38) ? null : reader.GetString(38),
                 ExecutableWorkflowDefinitionYaml = reader.IsDBNull(39) ? null : reader.GetString(39),
                 ExecutableWorkflowPinnedAt = reader.IsDBNull(40) ? null : ParseTs(reader.GetString(40)),
+                ApprovedOutputRevisionId = reader.IsDBNull(41) ? null : reader.GetString(41),
+                LifecycleGeneration = reader.GetInt32(42),
+                CurrentOutputRevisionId = reader.IsDBNull(43) ? null : reader.GetString(43),
             });
         }
         return results;

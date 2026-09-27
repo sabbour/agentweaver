@@ -235,22 +235,121 @@ public sealed class EfRunStore : IRunStore
 
     public async Task UpdateReviewReadyAsync(
         RunId runId, string treeHash, string diff, int stepCount,
-        CancellationToken ct = default, DateTimeOffset? now = null)
+        CancellationToken ct = default, DateTimeOffset? now = null) =>
+        await PublishReviewReadyCoreAsync(runId, null, treeHash, diff, stepCount, ct, now);
+
+    public Task PublishReviewReadyAsync(
+        RunId runId, int expectedLifecycleGeneration, string treeHash, string diff, int stepCount,
+        CancellationToken ct = default, DateTimeOffset? now = null) =>
+        PublishReviewReadyCoreAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now);
+
+    private async Task PublishReviewReadyCoreAsync(
+        RunId runId, int? expectedLifecycleGeneration, string treeHash, string diff, int stepCount,
+        CancellationToken ct, DateTimeOffset? now)
     {
-        var ts = now ?? DateTimeOffset.UtcNow;
+        var ts = (now ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var id = runId.ToString();
-        var terminalStatuses = new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready", "cancelled" };
+        var bytes = RunOutputRevision.EncodeDiff(diff);
+        var digest = RunOutputRevision.Sha256(bytes);
+        if (string.IsNullOrWhiteSpace(treeHash))
+            throw new InvalidOperationException("Review-ready output requires a pinned tree.");
         await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var locked = await db.Runs
+            .Where(r => r.RunId == id && (r.Status == "in_progress" || r.Status == "awaiting_review"))
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, r => r.Status), ct);
+        if (locked != 1)
+            throw new InvalidOperationException("Run cannot publish output from its current status.");
+
+        var run = await db.Runs.AsNoTracking().SingleAsync(r => r.RunId == id, ct);
+        if (expectedLifecycleGeneration is { } expected && run.LifecycleGeneration != expected)
+            throw new InvalidOperationException("Run lifecycle generation changed before output publication.");
+        var existing = await db.RunOutputRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.RunId == id && r.LifecycleGeneration == run.LifecycleGeneration, ct);
+        if (existing is not null)
+        {
+            var revision = ToOutputRevision(existing);
+            if (run.Status != "awaiting_review" || run.CurrentOutputRevisionId != revision.RevisionId
+                || revision.TreeHash != treeHash
+                || revision.DiffSha256 != digest
+                || revision.WorkflowDigest != run.ExecutableWorkflowContentDigest
+                || !revision.DiffBytes.AsSpan().SequenceEqual(bytes))
+                throw new InvalidOperationException("Output revision already published with different content or generation is no longer review-ready.");
+            await tx.CommitAsync(ct);
+            return;
+        }
+        if (run.CurrentOutputRevisionId is not null || (run.Status == "awaiting_review" && run.ReviewReadyAt is not null))
+            throw new InvalidOperationException("Review-ready run has no durable output revision.");
+
+        var predecessor = await db.RunOutputRevisions.AsNoTracking()
+            .Where(r => r.RunId == id && r.LifecycleGeneration < run.LifecycleGeneration)
+            .OrderByDescending(r => r.LifecycleGeneration)
+            .Select(r => r.RevisionId)
+            .FirstOrDefaultAsync(ct);
+        var revisionId = Guid.NewGuid().ToString("N");
+        db.RunOutputRevisions.Add(new RunOutputRevisionRecord
+        {
+            RevisionId = revisionId,
+            SchemaVersion = RunOutputRevision.CurrentSchemaVersion,
+            RunId = id,
+            LifecycleGeneration = run.LifecycleGeneration,
+            WorkflowDigest = run.ExecutableWorkflowContentDigest,
+            ManifestIncomplete = run.ExecutableWorkflowContentDigest is null,
+            TreeHash = treeHash,
+            DiffSha256 = digest,
+            PredecessorRevisionId = predecessor,
+            DiffBytes = bytes,
+            CreatedAt = ts
+        });
         var rows = await db.Runs
-            .Where(r => r.RunId == id && !terminalStatuses.Contains(r.Status))
+            .Where(r => r.RunId == id && r.LifecycleGeneration == run.LifecycleGeneration
+                && (r.Status == "in_progress" || (r.Status == "awaiting_review" && r.ReviewReadyAt == null)))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.TreeHash, treeHash)
                 .SetProperty(r => r.Diff, diff)
-                .SetProperty(r => r.Status, RunStatus.AwaitingReview.ToApiString())
+                .SetProperty(r => r.Status, "awaiting_review")
+                .SetProperty(r => r.CurrentOutputRevisionId, revisionId)
                 .SetProperty(r => r.ReviewReadyAt, ts)
                 .SetProperty(r => r.ApprovalGeneration,
-                    r => r.Status == RunStatus.InProgress.ToApiString() ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
-        WarnIfNoRows(rows, runId, "mark review ready");
+                    r => r.Status == "in_progress" ? r.ApprovalGeneration + 1 : r.ApprovalGeneration), ct);
+        if (rows != 1)
+            throw new InvalidOperationException("Run generation changed during output publication.");
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+
+    private static RunOutputRevision ToOutputRevision(RunOutputRevisionRecord record) =>
+        new(record.RevisionId, record.SchemaVersion, new RunId(Guid.Parse(record.RunId)),
+            record.LifecycleGeneration, record.WorkflowDigest, record.ManifestIncomplete,
+            record.TreeHash, record.DiffSha256, record.PredecessorRevisionId, record.DiffBytes,
+            record.CreatedAt);
+
+    public async Task<RunOutputRevision?> GetOutputRevisionAsync(
+        RunId runId, string revisionId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var record = await db.RunOutputRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.RunId == runId.ToString() && r.RevisionId == revisionId, ct);
+        return record is null ? null : ToOutputRevision(record);
+    }
+
+    public async Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var record = await db.RunOutputRevisions.AsNoTracking()
+            .Where(r => r.RunId == runId.ToString()).OrderByDescending(r => r.LifecycleGeneration)
+            .FirstOrDefaultAsync(ct);
+        return record is null ? null : ToOutputRevision(record);
+    }
+
+    public async Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(
+        RunId runId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var records = await db.RunOutputRevisions.AsNoTracking()
+            .Where(r => r.RunId == runId.ToString()).OrderByDescending(r => r.LifecycleGeneration)
+            .ToListAsync(ct);
+        return records.Select(ToOutputRevision).ToArray();
     }
 
     public async Task<bool> TryTransitionReviewToInProgressAsync(
@@ -265,6 +364,8 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.Status, "in_progress")
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
                 .SetProperty(r => r.ReviewReadyAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.ApprovedOutputRevisionId, (string?)null)
+                .SetProperty(r => r.CurrentOutputRevisionId, (string?)null)
                 .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
         if (rows != 1)
         {
@@ -333,6 +434,8 @@ public sealed class EfRunStore : IRunStore
             .ExecuteUpdateAsync(updates => updates
                 .SetProperty(r => r.Status, RunStatus.InProgress.ToApiString())
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.CurrentOutputRevisionId, (string?)null)
+                .SetProperty(r => r.ApprovedOutputRevisionId, (string?)null)
                 .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
         if (rows != 1)
         {
@@ -357,18 +460,46 @@ public sealed class EfRunStore : IRunStore
             result, new HashSet<RunStatus> { RunStatus.AwaitingReview }, Reviewer: reviewer), ct).ConfigureAwait(false);
     }
 
-    public async Task<bool> TryTransitionToCommittingAsync(
-        RunId runId, CancellationToken ct = default, DateTimeOffset? now = null)
+    public Task<bool> TryTransitionToCommittingAsync(
+        RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        TryTransitionToCommittingCoreAsync(runId, null, ct);
+
+    public Task<bool> TryTransitionToCommittingRevisionAsync(
+        RunId runId, string revisionId, CancellationToken ct = default) =>
+        TryTransitionToCommittingCoreAsync(runId, revisionId, ct);
+
+    private async Task<bool> TryTransitionToCommittingCoreAsync(
+        RunId runId, string? revisionId, CancellationToken ct)
     {
-        var ts = now ?? DateTimeOffset.UtcNow;
         var id = runId.ToString();
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && r.Status == "awaiting_review", ct);
-        if (rec is null) return false;
-        rec.Status = "committing";
-        rec.ReviewReadyAt = null;
-        await db.SaveChangesAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({id}, 0));", ct);
+        var rec = await db.Runs.AsNoTracking().SingleOrDefaultAsync(r => r.RunId == id, ct);
+        if (rec is null || rec.Status != "awaiting_review"
+            || !await MatchesReviewRevisionAsync(db, rec, revisionId, ct))
+            return false;
+        var rows = await db.Runs.Where(r => r.RunId == id && r.Status == "awaiting_review"
+                && r.LifecycleGeneration == rec.LifecycleGeneration && r.TreeHash == rec.TreeHash && r.Diff == rec.Diff)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "committing")
+                .SetProperty(r => r.ReviewReadyAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.ApprovedOutputRevisionId, revisionId), ct);
+        if (rows != 1) return false;
+        await tx.CommitAsync(ct);
         return true;
+    }
+
+    private static async Task<bool> MatchesReviewRevisionAsync(
+        MemoryDbContext db, RunRecord rec, string? revisionId, CancellationToken ct)
+    {
+        var stored = await db.RunOutputRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.RunId == rec.RunId
+                && r.LifecycleGeneration == rec.LifecycleGeneration, ct);
+        return stored is null
+            ? revisionId is null && rec.CurrentOutputRevisionId is null
+            : string.Equals(rec.CurrentOutputRevisionId, stored.RevisionId, StringComparison.Ordinal)
+              && ToOutputRevision(stored).Matches(FromRecord(rec), revisionId);
     }
 
     public async Task<bool> TryRevertCommittingAsync(
@@ -381,24 +512,43 @@ public sealed class EfRunStore : IRunStore
         if (rec is null) return false;
         rec.Status = "awaiting_review";
         rec.ReviewReadyAt = ts;
+        rec.ApprovedOutputRevisionId = null;
         if (treeHash is not null) rec.TreeHash = treeHash;
         await db.SaveChangesAsync(ct);
         return true;
     }
 
-    public async Task<bool> TryStartMergingAsync(
-        RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null)
+    public Task<bool> TryStartMergingAsync(
+        RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        TryStartMergingCoreAsync(runId, null, reviewer, ct);
+
+    public Task<bool> TryStartMergingRevisionAsync(
+        RunId runId, string revisionId, string? reviewer = null, CancellationToken ct = default) =>
+        TryStartMergingCoreAsync(runId, revisionId, reviewer, ct);
+
+    private async Task<bool> TryStartMergingCoreAsync(
+        RunId runId, string? revisionId, string? reviewer, CancellationToken ct)
     {
-        var ts = now ?? DateTimeOffset.UtcNow;
         var id = runId.ToString();
         var mergingFromStates = new[] { "awaiting_review", "committing" };
         await using var db = await _factory.CreateDbContextAsync(ct);
-        var rec = await db.Runs.FirstOrDefaultAsync(r => r.RunId == id && mergingFromStates.Contains(r.Status), ct);
-        if (rec is null) return false;
-        rec.Status = "merging";
-        rec.ReviewedBy = reviewer ?? rec.ReviewedBy;
-        rec.ReviewReadyAt = null;
-        await db.SaveChangesAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({id}, 0));", ct);
+        var rec = await db.Runs.AsNoTracking().SingleOrDefaultAsync(r => r.RunId == id, ct);
+        if (rec is null || !mergingFromStates.Contains(rec.Status)
+            || (rec.Status == "committing"
+                && !string.Equals(rec.ApprovedOutputRevisionId, revisionId, StringComparison.Ordinal))
+            || !await MatchesReviewRevisionAsync(db, rec, revisionId, ct))
+            return false;
+        var rows = await db.Runs.Where(r => r.RunId == id && mergingFromStates.Contains(r.Status)
+                && r.LifecycleGeneration == rec.LifecycleGeneration && r.TreeHash == rec.TreeHash && r.Diff == rec.Diff)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "merging")
+                .SetProperty(r => r.ReviewedBy, reviewer ?? rec.ReviewedBy)
+                .SetProperty(r => r.ReviewReadyAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.ApprovedOutputRevisionId, revisionId), ct);
+        if (rows != 1) return false;
+        await tx.CommitAsync(ct);
         return true;
     }
 
@@ -412,6 +562,7 @@ public sealed class EfRunStore : IRunStore
             .Where(r => r.RunId == id && r.Status == "merging")
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, "awaiting_review")
+                .SetProperty(r => r.ApprovedOutputRevisionId, (string?)null)
                 .SetProperty(r => r.ReviewReadyAt, ts), ct);
         return rows > 0;
     }
@@ -434,8 +585,11 @@ public sealed class EfRunStore : IRunStore
         var id = runId.ToString();
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rows = await db.Runs
-            .Where(r => r.RunId == id && r.Status == "committing")
+            .Where(r => r.RunId == id && r.Status == "committing"
+                && (r.ApprovedOutputRevisionId == null || r.TreeHash == newTreeHash))
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.TreeHash, newTreeHash), ct);
+        if (rows == 0 && (await GetAsync(runId, ct).ConfigureAwait(false))?.ApprovedOutputRevisionId is not null)
+            throw new InvalidOperationException("Committed tree differs from the approved output revision.");
         WarnIfNoRows(rows, runId, "update tree hash after commit");
     }
 
@@ -737,6 +891,8 @@ public sealed class EfRunStore : IRunStore
             .Where(r => r.RunId == id && r.Status == idleStr)
             .ExecuteUpdateAsync(updates => updates
                 .SetProperty(r => r.Status, inProgressStr)
+                .SetProperty(r => r.CurrentOutputRevisionId, (string?)null)
+                .SetProperty(r => r.ApprovedOutputRevisionId, (string?)null)
                 .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
         if (rows != 1)
         {
@@ -1023,6 +1179,8 @@ public sealed class EfRunStore : IRunStore
         WorkflowRunId = r.WorkflowRunId,
         WorkflowSelectionReason = r.WorkflowSelectionReason,
         MergedCommitHash = r.MergedCommitHash,
+        ApprovedOutputRevisionId = r.ApprovedOutputRevisionId,
+        CurrentOutputRevisionId = r.CurrentOutputRevisionId,
         ParentRunId = r.ParentRunId,
         SubtaskId = r.SubtaskId,
         Origin = r.Origin.ToApiString(),
@@ -1078,6 +1236,8 @@ public sealed class EfRunStore : IRunStore
         WorkflowRunId = r.WorkflowRunId,
         WorkflowSelectionReason = r.WorkflowSelectionReason,
         MergedCommitHash = r.MergedCommitHash,
+        ApprovedOutputRevisionId = r.ApprovedOutputRevisionId,
+        CurrentOutputRevisionId = r.CurrentOutputRevisionId,
         ParentRunId = r.ParentRunId,
         SubtaskId = r.SubtaskId,
         Origin = RunOriginExtensions.ParseOrigin(r.Origin),

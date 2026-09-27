@@ -13,10 +13,11 @@ approval and publication cannot silently refer to a different result.
 ## Context / problem
 
 The executable workflow definition is already pinned on root runs by
-[#1588](https://github.com/sabbour/agentweaver/pull/1588). The separate output
-contract is not yet implemented: `Run.Diff` and the review-ready tree hash are
-mutable, `run_revisions` is an audit of feedback cycles rather than an output
-blob store, and the merged commit SHA is only populated after publication.
+[#1588](https://github.com/sabbour/agentweaver/pull/1588). The separate complete output contract is not yet implemented: `run_revisions` is
+an audit of feedback cycles rather than an output blob store, and the merged
+commit SHA is only populated after publication. Ordinary review-ready diff
+bytes now have separate immutable revision storage; full file bytes and
+collective assembly do not.
 The worktree and Git branch may change or disappear during review.
 
 ### Existing identity inventory
@@ -30,7 +31,7 @@ The worktree and Git branch may change or disappear during review.
 | Capability/approval policy | Purpose-bound launch and execution-identity snapshots; current access and safety checks | Preserve current revocation and restrictive policies; snapshots confer no authority |
 | Repository source | Originating/worktree branch and review tree hash; merged commit SHA after merge | Pin the exact consumed base and review-ready tree before accepting approval |
 | Knowledge | Separate versioned memory work (#1400) | Out of scope |
-| Produced files and assembly | Mutable worktree/branch and `Run.Diff`; terminal merge commit | Store review-ready bytes independently of worktree/ref lifecycle and bind approval/publication to that revision |
+| Produced files and assembly | Immutable ordinary diff revision plus mutable worktree/branch; terminal merge commit | Persist full file bytes and assembly/integration lineage separately from the worktree/ref lifecycle |
 
 Application release, manifest schema, selected configuration, content digest,
 Git commit and lifecycle attempt are different identities. A display-name change
@@ -73,6 +74,31 @@ does not change an output digest.
 - [ ] Authenticated REST/MCP/UI expose shared revision history, comparison and
   exact-revision retrieval; legacy runs with incomplete manifests have explicit,
   non-misleading compatibility behavior.
+
+### Ordinary-run core delivered in this slice (partial acceptance)
+
+SQLite and PostgreSQL store the exact review-ready UTF-8 diff in an immutable
+database row with its SHA-256 digest, schema, run lifecycle generation,
+executable-workflow digest (or `manifest_incomplete`), tree hash and predecessor.
+Review-ready transition and revision insertion commit together; repeated
+identical publication keeps its ID and conflicting publication is rejected.
+The run retains its current revision ID until a new lifecycle begins, so a
+missing current row cannot be treated as a legacy run or an older revision.
+The generation-fenced producer request prevents an older checkpoint delivery
+from overwriting a newer generation. An ordinary human approval carries the
+revision ID through pending delivery and workflow resume to the merge CAS;
+the direct path and `/commit` apply the same fence. The run records the approved
+revision ID on merge and refuses to merge a changed post-review commit.
+New runs missing their previously published revision fail closed; pre-existing
+runs with no published revision keep the legacy path without fabricated bytes.
+
+Authorized REST endpoints expose revision metadata and exact stored diff bytes.
+The database retains the bytes for its lifetime; no timer-based expiry is
+implemented. An unavailable ID returns `404`; corrupt/missing persisted bytes
+or unsupported schema returns `410`. This is **not** full #1396 acceptance:
+full-file byte retention, collective assembly and integration lineage, explicit
+artifact/producer-attempt manifests, comparison, and MCP/UI readers are still
+required. The run's lifecycle generation is not a separate producer attempt ID.
 
 ## Dependency-aware delivery plan
 
