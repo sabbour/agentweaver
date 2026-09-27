@@ -82,6 +82,11 @@ public sealed class DataMigratorTests : IDisposable
         workflowRuns.Should().BeGreaterThanOrEqualTo(1, "all seeded workflow_runs must be migrated");
         backlogTasks.Should().BeGreaterThanOrEqualTo(2, "all seeded backlog_tasks must be migrated");
         seededProject.TeamRevision.Should().Be(7, "team mutation concurrency state must survive provider migration");
+        seededProject.BacklogGraphRevision.Should().Be(4);
+        var claimedStory = await db.BacklogTasks.SingleAsync(task => task.ProjectId == _seededProjectId
+            && task.State == "claimed");
+        claimedStory.ClaimedGraphRevision.Should().Be(4);
+        claimedStory.ClaimedPrerequisitesJson.Should().Be("[]");
         seededProject.WebhookSecret.Should().Be("github-webhook:seed",
             "the per-project webhook secret-store reference must survive provider migration");
         recoveredRun.ApprovalGeneration.Should().Be(2,
@@ -670,8 +675,8 @@ public sealed class DataMigratorTests : IDisposable
 
         using var data = conn.CreateCommand();
         data.CommandText = $"""
-            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at, team_revision, webhook_secret)
-                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}',7,'github-webhook:seed');
+            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at, team_revision, backlog_graph_revision, webhook_secret)
+                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}',7,4,'github-webhook:seed');
             INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at)
                 VALUES ('{pid2}','Project B','blank','/b','main','bob','github_copilot','active','{now}','{now}');
 
@@ -707,8 +712,8 @@ public sealed class DataMigratorTests : IDisposable
             INSERT INTO workflow_runs (workflow_run_id, project_id, task, submitting_user, started_at)
                 VALUES ('{wid1}','{pid1}','wf task','alice','{now}');
 
-            INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at, committed_at)
-                VALUES ('{tid1}','{pid1}','Task A','ready','key-a','alice','{now}','{now}');
+            INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at, committed_at, claimed_at, run_id, claimed_graph_revision, claimed_prerequisites_json)
+                VALUES ('{tid1}','{pid1}','Task A','claimed','key-a','alice','{now}','{now}','{now}','{rid1}',4,'[]');
             INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at)
                 VALUES ('{tid2}','{pid1}','Task B','backlog','key-b','alice','{now}');
 

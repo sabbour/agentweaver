@@ -756,6 +756,70 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task BlockedPrefixBeyondFourPickupWindows_FiltersBeforeLimit()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var prerequisite = MakeBacklogTask(project.Id, "prerequisite");
+        await store.InsertAsync(prerequisite);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            for (var i = 0; i < 25; i++)
+            {
+                var blocked = MakeReadyTask(project.Id, $"a{i:D3}");
+                await store.InsertAsync(blocked);
+                db.BacklogTaskDependencies.Add(new Agentweaver.Api.Memory.BacklogTaskDependencyRecord
+                {
+                    ProjectId = project.Id.ToString(),
+                    TaskId = blocked.Id.ToString(),
+                    DependsOnTaskId = prerequisite.Id.ToString(),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+            }
+
+            await db.SaveChangesAsync();
+        }
+        var ready = MakeReadyTask(project.Id, "z");
+        await store.InsertAsync(ready);
+
+        (await store.ListReadyForClaimAsync(project.Id, 3)).Select(t => t.Id).Should().Equal(ready.Id);
+        (await store.CountReadyForPickupAsync()).Should().Be(1);
+    }
+
+    [PostgresFact]
+    public async Task ConcurrentOppositeDependencyEdits_OnlyOneCommits()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var a = MakeReadyTask(project.Id, "a");
+        var b = MakeReadyTask(project.Id, "b");
+        await store.InsertAsync(a);
+        await store.InsertAsync(b);
+
+        static async Task<bool> TryAddAsync(
+            EfBacklogTaskStore store, ProjectId projectId, BacklogTaskId target, BacklogTaskId source)
+        {
+            try
+            {
+                await store.EditDependenciesAsync(projectId, 0,
+                    new BacklogDependencyEdit(target, [source], []));
+                return true;
+            }
+            catch (BacklogDependencyEditException ex) when (ex.Message == "stale_graph_revision")
+            {
+                return false;
+            }
+        }
+
+        var outcomes = await Task.WhenAll(
+            TryAddAsync(store, project.Id, a.Id, b.Id),
+            TryAddAsync(store, project.Id, b.Id, a.Id));
+        outcomes.Should().ContainSingle(value => value);
+        (await store.GetDependencyRevisionAsync(project.Id)).Should().Be(1);
+        (await store.ListDependenciesAsync(project.Id, [a.Id, b.Id])).Should().ContainSingle();
+    }
+
+    [PostgresFact]
     public async Task TryMoveToReady_CasTransition_BacklogToReady()
     {
         var project = await InsertProjectAsync();

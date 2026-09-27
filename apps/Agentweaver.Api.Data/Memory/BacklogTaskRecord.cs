@@ -2,6 +2,8 @@ namespace Agentweaver.Api.Memory;
 
 public sealed class BacklogTaskRecord
 {
+    public long? ClaimedGraphRevision { get; set; }
+    public string? ClaimedPrerequisitesJson { get; set; }
     public string TaskId { get; set; } = "";
     public string ProjectId { get; set; } = "";
     public string Title { get; set; } = "";

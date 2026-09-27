@@ -359,6 +359,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 e.ToTable("projects");
                 e.HasKey(x => x.ProjectId);
                 e.Property(x => x.ProjectId).HasColumnName("project_id");
+                e.Ignore(x => x.BacklogGraphRevision);
             });
             model.Ignore<RunRecord>();
             model.Ignore<ExecutionIdentityRecord>();
@@ -520,6 +521,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.CreatedAt).HasColumnName("created_at");
             e.Property(p => p.UpdatedAt).HasColumnName("updated_at");
             e.Property(p => p.TeamRevision).HasColumnName("team_revision").HasDefaultValue(0L);
+            e.Property(p => p.BacklogGraphRevision).HasColumnName("backlog_graph_revision").HasDefaultValue(0L);
             e.Property(p => p.MaxReadyPerHeartbeat).HasColumnName("max_ready_per_heartbeat").HasDefaultValue(3);
             e.Property(p => p.PickupAutopilot).HasColumnName("pickup_autopilot").HasDefaultValue(true);
             e.Property(p => p.PickupAutoApproveTools).HasColumnName("pickup_auto_approve_tools").HasDefaultValue(true);
@@ -612,6 +614,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.CreatedAt).HasColumnName("created_at");
             e.Property(t => t.CommittedAt).HasColumnName("committed_at");
             e.Property(t => t.ClaimedAt).HasColumnName("claimed_at");
+            e.Property(t => t.ClaimedGraphRevision).HasColumnName("claimed_graph_revision");
+            e.Property(t => t.ClaimedPrerequisitesJson).HasColumnName("claimed_prerequisites_json");
             e.Property(t => t.RunId).HasColumnName("run_id");
             e.Property(t => t.WorkflowOverrideId).HasColumnName("workflow_override_id");
             e.Property(t => t.WorkflowDefinitionSnapshotYaml).HasColumnName("workflow_definition_snapshot_yaml");

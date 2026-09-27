@@ -22,6 +22,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 ## Work intake & board
 
 - [Capture and rank backlog work](./work-intake-board/capture-and-rank-backlog.md) — [#9](https://github.com/sabbour/agentweaver/issues/9)
+- [Link executable backlog tasks safely](./work-intake-board/link-executable-backlog-tasks.md) — [#1398](https://github.com/sabbour/agentweaver/issues/1398)
 - [Monitor work on the project board](./work-intake-board/monitor-board-workflow-state.md) — [#10](https://github.com/sabbour/agentweaver/issues/10)
 - [Sync connected repository issues with the backlog](./work-intake-board/sync-github-issues-to-backlog.md) — [#48](https://github.com/sabbour/agentweaver/issues/48)
 

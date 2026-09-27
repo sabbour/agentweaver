@@ -31,6 +31,8 @@ public sealed record BacklogTask
     public DateTimeOffset? ClaimedAt { get; init; }
     /// <summary>The 1:1 coordinator run this task produced. Non-null iff State == Claimed.</summary>
     public RunId? RunId { get; init; }
+    public long? ClaimedGraphRevision { get; init; }
+    public string? ClaimedPrerequisitesJson { get; init; }
     /// <summary>When set, the task is archived off the active board and no longer claimable.</summary>
     public DateTimeOffset? ArchivedAt { get; init; }
 

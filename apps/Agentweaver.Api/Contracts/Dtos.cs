@@ -1489,6 +1489,24 @@ public sealed record BlockingDependencyDto
     [JsonPropertyName("title")] public required string Title { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("run_status")] public string? RunStatus { get; init; }
+    [JsonPropertyName("reason")] public required string Reason { get; init; }
+    [JsonPropertyName("is_satisfied")] public bool IsSatisfied { get; init; }
+}
+
+public sealed record EditBacklogDependenciesRequest
+{
+    [JsonPropertyName("expected_revision")] public long ExpectedRevision { get; init; }
+    [JsonPropertyName("add")] public IReadOnlyList<string>? Add { get; init; }
+    [JsonPropertyName("remove")] public IReadOnlyList<string>? Remove { get; init; }
+    [JsonPropertyName("replace")] public IReadOnlyList<string>? Replace { get; init; }
+}
+
+public sealed record BacklogDependenciesResponse
+{
+    [JsonPropertyName("revision")] public long Revision { get; init; }
+    [JsonPropertyName("prerequisites")] public required IReadOnlyList<string> Prerequisites { get; init; }
+    [JsonPropertyName("affected_task_ids")] public required IReadOnlyList<string> AffectedTaskIds { get; init; }
+    [JsonPropertyName("changed")] public bool Changed { get; init; }
 }
 
 /// <summary>Full backlog-task projection returned by capture/edit/move/reorder.</summary>
@@ -1512,6 +1530,11 @@ public sealed record BacklogTaskDto
     [JsonPropertyName("promotion_key")] public string? PromotionKey { get; init; }
     [JsonPropertyName("promotion_reason")] public string? PromotionReason { get; init; }
     [JsonPropertyName("depends_on_task_ids")] public required IReadOnlyList<string> DependsOnTaskIds { get; init; }
+    [JsonPropertyName("dependents_task_ids")] public required IReadOnlyList<string> DependentsTaskIds { get; init; }
+    [JsonPropertyName("prerequisites")] public required IReadOnlyList<BlockingDependencyDto> Prerequisites { get; init; }
+    [JsonPropertyName("graph_revision")] public long GraphRevision { get; init; }
+    [JsonPropertyName("claimed_graph_revision")] public long? ClaimedGraphRevision { get; init; }
+    [JsonPropertyName("claimed_prerequisites")] public IReadOnlyList<Agentweaver.Domain.BacklogClaimedPrerequisite>? ClaimedPrerequisites { get; init; }
     [JsonPropertyName("is_blocked")] public bool IsBlocked { get; init; }
     [JsonPropertyName("blocked_reason")] public string? BlockedReason { get; init; }
     [JsonPropertyName("is_ready_to_start")] public bool IsReadyToStart { get; init; }
@@ -1558,6 +1581,9 @@ public sealed record TaskCardDto
     [JsonPropertyName("promotion_key")] public string? PromotionKey { get; init; }
     [JsonPropertyName("promotion_reason")] public string? PromotionReason { get; init; }
     [JsonPropertyName("depends_on_task_ids")] public required IReadOnlyList<string> DependsOnTaskIds { get; init; }
+    [JsonPropertyName("dependents_task_ids")] public required IReadOnlyList<string> DependentsTaskIds { get; init; }
+    [JsonPropertyName("prerequisites")] public required IReadOnlyList<BlockingDependencyDto> Prerequisites { get; init; }
+    [JsonPropertyName("graph_revision")] public long GraphRevision { get; init; }
     [JsonPropertyName("is_blocked")] public bool IsBlocked { get; init; }
     [JsonPropertyName("blocked_reason")] public string? BlockedReason { get; init; }
     [JsonPropertyName("is_ready_to_start")] public bool IsReadyToStart { get; init; }

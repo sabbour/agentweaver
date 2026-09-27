@@ -100,4 +100,26 @@ public sealed class McpBacklogToolsTests : IClassFixture<ProjectsWebApplicationF
         await act.Should().ThrowAsync<McpApiException>()
             .Where(ex => ex.StatusCode == 404);
     }
+
+    [Fact]
+    public async Task EditDependencies_PreviewsAndPersistsThroughSameApiContract()
+    {
+        var project = await CreateProjectAsync();
+        var tools = CreateTools();
+        var upstream = System.Text.Json.JsonDocument.Parse(
+            await tools.BacklogCaptureTaskAsync(project, "upstream")).RootElement.GetProperty("task_id").GetString()!;
+        var downstream = System.Text.Json.JsonDocument.Parse(
+            await tools.BacklogCaptureTaskAsync(project, "downstream")).RootElement.GetProperty("task_id").GetString()!;
+
+        var preview = System.Text.Json.JsonDocument.Parse(
+            await tools.BacklogEditDependenciesAsync(project, downstream, 0, add: [upstream], preview: true)).RootElement;
+        preview.GetProperty("revision").GetInt64().Should().Be(1);
+        System.Text.Json.JsonDocument.Parse(await tools.BacklogGetDependencyRevisionAsync(project))
+            .RootElement.GetProperty("revision").GetInt64().Should().Be(0);
+
+        await tools.BacklogEditDependenciesAsync(project, downstream, 0, add: [upstream]);
+        var projection = System.Text.Json.JsonDocument.Parse(await tools.BacklogGetTaskAsync(project, downstream)).RootElement;
+        projection.GetProperty("prerequisites")[0].GetProperty("task_id").GetString().Should().Be(upstream);
+        projection.GetProperty("is_blocked").GetBoolean().Should().BeTrue();
+    }
 }

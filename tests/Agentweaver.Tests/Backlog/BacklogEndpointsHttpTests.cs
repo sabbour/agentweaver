@@ -94,6 +94,39 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<ProjectsWebApplica
     }
 
     [Fact]
+    public async Task Dependencies_PreviewEditAndReadProjection_UseOneRevisionedContract()
+    {
+        var project = await CreateProjectAsync();
+        var prerequisite = (await CaptureAsync(project, "First story")).GetProperty("task_id").GetString()!;
+        var dependent = (await CaptureAsync(project, "Second story")).GetProperty("task_id").GetString()!;
+        var path = $"/api/projects/{project}/backlog/tasks/{dependent}/dependencies";
+        var revision = await _client.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{project}/backlog/dependencies/revision");
+        revision.GetProperty("revision").GetInt64().Should().Be(0);
+
+        var preview = await _client.PostAsJsonAsync($"{path}?preview=true",
+            new { expected_revision = 0, add = new[] { prerequisite } });
+        preview.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await preview.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("affected_task_ids").EnumerateArray().Select(id => id.GetString())
+            .Should().Contain(dependent);
+        var before = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{project}/backlog/tasks/{dependent}");
+        before.GetProperty("depends_on_task_ids").GetArrayLength().Should().Be(0);
+
+        var edited = await _client.PostAsJsonAsync(path,
+            new { expected_revision = 0, add = new[] { prerequisite } });
+        edited.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await edited.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("revision").GetInt64().Should().Be(1);
+        (await _client.PostAsJsonAsync(path, new { expected_revision = 0, remove = new[] { prerequisite } }))
+            .StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var task = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{project}/backlog/tasks/{dependent}");
+        task.GetProperty("prerequisites")[0].GetProperty("reason").GetString().Should().Be("pending");
+        task.GetProperty("graph_revision").GetInt64().Should().Be(1);
+        var upstream = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{project}/backlog/tasks/{prerequisite}");
+        upstream.GetProperty("dependents_task_ids")[0].GetString().Should().Be(dependent);
+    }
+
+    [Fact]
     public async Task Ready_ProvisionalAutomationTask_IsNotPromotedByContributorEndpoint()
     {
         var projectId = await CreateProjectAsync();

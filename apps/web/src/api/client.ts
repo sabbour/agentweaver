@@ -23,6 +23,7 @@ import type {
   AutoApproveResponse,
   AutopilotResponse,
   BacklogSettingsDto,
+  BacklogDependenciesResponse,
   BacklogTaskDto,
   ByokProviderConfig,
   ByokProviderListResponse,
@@ -1446,6 +1447,19 @@ export class AgentweaverApiClient {
 
   editBacklogTask(projectId: string, taskId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`, body);
+  }
+
+  editBacklogDependencies(
+    projectId: string,
+    taskId: string,
+    body: { expected_revision: number; add?: string[]; remove?: string[]; replace?: string[] },
+    preview = false,
+  ): Promise<BacklogDependenciesResponse> {
+    return this.request<BacklogDependenciesResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/dependencies?preview=${preview}`,
+      body,
+    );
   }
 
   deleteBacklogTask(projectId: string, taskId: string): Promise<void> {

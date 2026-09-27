@@ -1222,6 +1222,9 @@ public sealed class SqliteToPostgresMigrator
         var teamRevision = await HasColumnAsync(conn, "projects", "team_revision", ct)
             ? "team_revision"
             : "0 AS team_revision";
+        var graphRevision = await HasColumnAsync(conn, "projects", "backlog_graph_revision", ct)
+            ? "backlog_graph_revision"
+            : "0 AS backlog_graph_revision";
         var webhookSecret = await HasColumnAsync(conn, "projects", "webhook_secret", ct)
             ? "webhook_secret"
             : "NULL AS webhook_secret";
@@ -1247,7 +1250,7 @@ public sealed class SqliteToPostgresMigrator
                    default_workflow_id, active_review_policy_name, sandbox_profile,
                    source_blueprint_id, source_blueprint_type,
                    blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
-                   allowed_workflow_ids, {webhookSecret}, {teamRevision}
+                   allowed_workflow_ids, {webhookSecret}, {teamRevision}, {graphRevision}
               FROM projects;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1285,6 +1288,7 @@ public sealed class SqliteToPostgresMigrator
                 AllowedWorkflowIds = reader.IsDBNull(27) ? null : reader.GetString(27),
                 WebhookSecret = reader.IsDBNull(28) ? null : reader.GetString(28),
                 TeamRevision = reader.GetInt64(29),
+                BacklogGraphRevision = reader.GetInt64(30),
             });
         }
         return results;
@@ -1490,14 +1494,20 @@ public sealed class SqliteToPostgresMigrator
     private static async Task<List<BacklogTaskRecord>> ReadBacklogTasksAsync(SqliteConnection conn, CancellationToken ct)
     {
         var results = new List<BacklogTaskRecord>();
+        var claimRevision = await HasColumnAsync(conn, "backlog_tasks", "claimed_graph_revision", ct)
+            ? "claimed_graph_revision"
+            : "NULL AS claimed_graph_revision";
+        var claimInputs = await HasColumnAsync(conn, "backlog_tasks", "claimed_prerequisites_json", ct)
+            ? "claimed_prerequisites_json"
+            : "NULL AS claimed_prerequisites_json";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
-            """
+            $"""
             SELECT task_id, project_id, title, description, state, order_key,
                    captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                    workflow_override_id, archived_at, source_file_path,
                    parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending,
-                   ai_execution_provider_key
+                   ai_execution_provider_key, {claimRevision}, {claimInputs}
               FROM backlog_tasks;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1525,6 +1535,8 @@ public sealed class SqliteToPostgresMigrator
                 PromotionReason = reader.IsDBNull(17) ? null : reader.GetString(17),
                 IsAutomationInvocationPending = reader.GetInt64(18) != 0,
                 AiExecutionProviderKey = reader.IsDBNull(19) ? null : reader.GetString(19),
+                ClaimedGraphRevision = reader.IsDBNull(20) ? null : reader.GetInt64(20),
+                ClaimedPrerequisitesJson = reader.IsDBNull(21) ? null : reader.GetString(21),
             });
         }
         return results;

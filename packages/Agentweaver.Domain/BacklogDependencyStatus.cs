@@ -6,5 +6,5 @@ public sealed record BacklogDependencyStatus(
     string DependsOnTitle,
     RunId? DependsOnRunId,
     RunStatus? DependsOnRunStatus,
-    bool IsSatisfied);
-
+    bool IsSatisfied,
+    string Reason = "pending");
