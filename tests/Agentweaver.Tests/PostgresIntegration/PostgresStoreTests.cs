@@ -294,7 +294,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
                 db.Runs.Add(new RunRecord
                 {
                     RunId = id, RepositoryPath = "/r", OriginatingBranch = "main",
-                    ModelSource = "github_copilot", Task = "t", SubmittingUser = "u",
+                    ModelSource = ModelSource.GitHubCopilot.ToApiString(), Task = "t", SubmittingUser = "u",
                     Status = "in_progress", StartedAt = DateTimeOffset.UtcNow,
                     LifecycleGeneration = 1, ParentRunId = id == childId ? parentId : null,
                 });
