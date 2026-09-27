@@ -1650,6 +1650,10 @@ app.MapPost("/api/projects/{id}/orchestrations", StartOrchestrationAsync)
         {
             return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
         }
+        catch (RunRepositoryCapabilityRequiredException ex)
+        {
+            return Results.Conflict(new { error = RunRepositoryCapabilityRequiredException.ErrorCode, message = ex.Message });
+        }
         catch (AgentProviderException ex)
         {
             return Results.Json(

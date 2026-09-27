@@ -1,6 +1,7 @@
 using System.Data;
 using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Endpoints;
@@ -1030,6 +1031,7 @@ internal sealed class WorkflowChildWorkService
                 ct).ConfigureAwait(false);
         if (existing is not null)
         {
+            await PrepareChildCoordinatorCapabilitiesAsync(existing, ct).ConfigureAwait(false);
             _runtime.EnsureRunStream(existing.Id.ToString(), existing.SubmittingUser);
             return existing;
         }
@@ -1064,19 +1066,30 @@ internal sealed class WorkflowChildWorkService
         try
         {
             await _runStore.InsertAsync(child, ct).ConfigureAwait(false);
-            _runtime.EnsureRunStream(child.Id.ToString(), child.SubmittingUser);
-            return child;
         }
         catch
         {
             var winner = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
             if (winner is not null)
             {
+                await PrepareChildCoordinatorCapabilitiesAsync(winner, ct).ConfigureAwait(false);
                 _runtime.EnsureRunStream(winner.Id.ToString(), winner.SubmittingUser);
                 return winner;
             }
             throw;
         }
+        await PrepareChildCoordinatorCapabilitiesAsync(child, ct).ConfigureAwait(false);
+        _runtime.EnsureRunStream(child.Id.ToString(), child.SubmittingUser);
+        return child;
+    }
+
+    private async Task PrepareChildCoordinatorCapabilitiesAsync(DomainRun child, CancellationToken ct)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var lifecycle = scope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
+        if (!await lifecycle.PrepareForLaunchAsync(child, ct).ConfigureAwait(false))
+            throw new InvalidOperationException(
+                $"Workflow child coordinator {child.Id} cannot inherit its parent's run-bound repository capability.");
     }
 
     private static AgentTurnInput? DeserializeIncomingInput(WorkPlan plan)

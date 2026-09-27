@@ -84,6 +84,11 @@ internal sealed class RunGitHubCapabilitySnapshotLifecycle(
 
 
         var snapshots = await persistence.GetCapabilitySnapshotsAsync(runId, ct).ConfigureAwait(false);
+        if (!await persistence.IsIntentionallyBlankOriginProjectAsync(projectId, ct).ConfigureAwait(false)
+            && !snapshots.Any(snapshot =>
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedRepository
+                && snapshot.ProjectId == projectId))
+            return false;
         if ((!string.IsNullOrWhiteSpace(expectedCopilotBindingId)
                 || !string.IsNullOrWhiteSpace(expectedCopilotCredentialVersion))
             && !snapshots.Any(snapshot =>

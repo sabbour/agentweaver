@@ -1,12 +1,14 @@
 using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
+using Agentweaver.Api.Webhooks;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -40,6 +42,14 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         _memoryConnection.Open();
         var services = new ServiceCollection();
         services.AddDbContext<MemoryDbContext>(options => options.UseSqlite(_memoryConnection));
+        services.AddSingleton<ISecretStore, InMemorySecretStore>();
+        services.AddHttpClient();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        services.AddScoped<GitHubConnectionsPersistenceStore>();
+        services.AddScoped<IGitHubConnectionsCredentialVault, GitHubConnectionsCredentialVault>();
+        services.AddScoped<RepoAppInstallationTokenService>();
+        services.AddScoped<GitHubCapabilityBroker>();
+        services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
         _provider = services.BuildServiceProvider();
         using (var scope = _provider.CreateScope())
             scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
@@ -51,6 +61,22 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         _service = BuildService("pod-a", _runtime);
 
         _parent = NewRun(RunId.New(), DomainRunStatus.InProgress);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.Projects.Add(new ProjectRecord
+            {
+                ProjectId = _parent.ProjectId!.Value.ToString(),
+                OriginKind = "blank",
+                Name = "Test workflow",
+                WorkingDirectory = _parent.RepositoryPath,
+                Owner = _parent.SubmittingUser,
+                DefaultProvider = "github-copilot",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            db.SaveChanges();
+        }
         _runStore.InsertAsync(_parent).GetAwaiter().GetResult();
     }
 
