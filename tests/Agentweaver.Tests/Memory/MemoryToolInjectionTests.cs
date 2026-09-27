@@ -40,6 +40,7 @@ public sealed class MemoryToolInjectionTests : IDisposable
     private static readonly string[] AddressedMessageTools =
     [
         "agent_message_send",
+        "agent_message_retry",
         "agent_message_list",
         "agent_message_get",
         "agent_message_claim",

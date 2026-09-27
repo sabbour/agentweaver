@@ -108,6 +108,7 @@ public static class OperatorToolApprovalPolicy
         // Steer / stop live work.
         "coordinator_steer",
         "agent_message_send",
+        "agent_message_retry",
         "agent_message_claim",
         "agent_message_deliver",
         "agent_message_acknowledge",

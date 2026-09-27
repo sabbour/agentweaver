@@ -14,6 +14,10 @@ public sealed record SendAddressedMessage(
     [property: JsonPropertyName("reference_id")] string? ReferenceId = null,
     [property: JsonPropertyName("expires_at")] DateTimeOffset? ExpiresAt = null);
 
+public sealed record RetryAddressedMessage(
+    [property: JsonPropertyName("idempotency_key")] string IdempotencyKey,
+    [property: JsonPropertyName("target_run_id")] string? TargetRunId = null);
+
 public sealed class AddressedMessageError(string code) : Exception(code)
 {
     public string Code { get; } = code;
@@ -23,7 +27,12 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
 {
     public async Task<AddressedMessage> SendAsync(
         string projectId, VerifiedAuthor sender, SendAddressedMessage request,
-        Func<string, bool> isActiveMember, CancellationToken ct)
+        Func<string, bool> isActiveMember, CancellationToken ct) =>
+        await SendCoreAsync(projectId, sender, request, isActiveMember, ct, null);
+
+    private async Task<AddressedMessage> SendCoreAsync(
+        string projectId, VerifiedAuthor sender, SendAddressedMessage request,
+        Func<string, bool> isActiveMember, CancellationToken ct, AddressedMessage? retryOf)
     {
         if (string.IsNullOrWhiteSpace(request.Recipient)
             || string.IsNullOrWhiteSpace(request.TargetRunId)
@@ -57,15 +66,21 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
             throw new AddressedMessageError("target_not_running");
 
         AddressedMessage? reply = null;
-        if (request.ReplyToId is not null)
+        if (request.ReplyToId is not null && retryOf is null)
         {
             reply = await db.AddressedMessages.AsNoTracking().SingleOrDefaultAsync(
                 m => m.Id == request.ReplyToId && m.ProjectId == projectId, ct);
+            var operatorFollowup = sender.SourceRunId is null && reply is not null
+                && reply.SourceRunId is null && reply.SenderIdentity == sender.SourceIdentity
+                && reply.TargetRunId == targetId
+                && string.Equals(reply.Recipient, recipient, StringComparison.OrdinalIgnoreCase);
+            var agentReply = reply is not null
+                && string.Equals(reply.Recipient, sender.AgentName, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(reply.Sender, recipient, StringComparison.OrdinalIgnoreCase)
+                && reply.SourceRunId is not null && reply.SourceRunId == targetId
+                && reply.TargetRunId == sender.SourceRunId;
             if (reply is null || reply.Status != AddressedMessageStates.Acknowledged
-                || !string.Equals(reply.Recipient, sender.AgentName, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(reply.Sender, recipient, StringComparison.OrdinalIgnoreCase)
-                || reply.SourceRunId is null || reply.SourceRunId != targetId
-                || reply.TargetRunId != sender.SourceRunId)
+                || !(operatorFollowup || agentReply))
                 throw new AddressedMessageError("reply_unavailable");
         }
 
@@ -78,8 +93,8 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
             Recipient = recipient,
             SourceRunId = sender.SourceRunId,
             TargetRunId = targetId,
-            ThreadId = reply?.ThreadId ?? Guid.NewGuid().ToString("N"),
-            ReplyToId = reply?.Id,
+            ThreadId = retryOf?.ThreadId ?? reply?.ThreadId ?? Guid.NewGuid().ToString("N"),
+            ReplyToId = retryOf?.ReplyToId ?? reply?.Id,
             ReferenceKind = request.ReferenceKind,
             ReferenceId = request.ReferenceId,
             IdempotencyKey = key,
@@ -119,11 +134,43 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
             .OrderByDescending(m => m.CreatedAt).Take(Math.Clamp(limit, 1, 100)).ToListAsync(ct);
     }
 
+    public async Task<AddressedMessage> RetryAsync(
+        string projectId, string id, VerifiedAuthor sender, RetryAddressedMessage request,
+        Func<string, bool> isActiveMember, CancellationToken ct)
+    {
+        var original = await GetAsync(projectId, id, ct);
+        if (original is null || original.SenderIdentity != sender.SourceIdentity)
+            throw new AddressedMessageError("message_unavailable");
+        if (original.Status is not (AddressedMessageStates.Expired or AddressedMessageStates.Undeliverable))
+            throw new AddressedMessageError("message_not_retryable");
+        return await SendCoreAsync(projectId, sender, new SendAddressedMessage(
+            original.Recipient, request.TargetRunId ?? original.TargetRunId, original.Content,
+            request.IdempotencyKey, original.ReplyToId, original.ReferenceKind, original.ReferenceId),
+            isActiveMember, ct, original);
+    }
+
     public async Task<AddressedMessage?> GetAsync(string projectId, string id, CancellationToken ct)
     {
         await ExpireAsync(projectId, ct);
         return await db.AddressedMessages.AsNoTracking().SingleOrDefaultAsync(
             m => m.ProjectId == projectId && m.Id == id, ct);
+    }
+
+    public Task<bool> HasPendingAsync(string projectId, string targetRunId, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return db.AddressedMessages.AsNoTracking().AnyAsync(m =>
+            m.ProjectId == projectId && m.TargetRunId == targetRunId && m.ExpiresAt > now
+            && (m.Status == AddressedMessageStates.Accepted
+                || m.Status == AddressedMessageStates.Claimed && m.ClaimedUntil <= now), ct);
+    }
+
+    public Task<bool> HasUnfinishedAsync(string projectId, string targetRunId, CancellationToken ct)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return db.AddressedMessages.AsNoTracking().AnyAsync(m =>
+            m.ProjectId == projectId && m.TargetRunId == targetRunId && m.ExpiresAt > now
+            && (m.Status == AddressedMessageStates.Accepted || m.Status == AddressedMessageStates.Claimed), ct);
     }
 
     // Called at a recipient turn boundary, never while the model is mid-turn.
@@ -150,6 +197,7 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
                     .SetProperty(m => m.Status, AddressedMessageStates.Claimed)
                     .SetProperty(m => m.ClaimOwner, owner)
                     .SetProperty(m => m.ClaimedUntil, now.AddMinutes(2))
+                    .SetProperty(m => m.AcknowledgedAt, (DateTimeOffset?)null)
                     .SetProperty(m => m.Fence, m => m.Fence + 1), ct);
             if (updated == 1) return await GetAsync(projectId, candidate.Id, ct);
         }
@@ -166,12 +214,27 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
                 && m.Status == AddressedMessageStates.Claimed && m.ClaimOwner == owner
                 && m.Fence == fence && m.ClaimedUntil > now && m.ExpiresAt > now)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(m => m.Status, AddressedMessageStates.Delivered)
+                .SetProperty(m => m.Status, m => m.AcknowledgedAt == null
+                    ? AddressedMessageStates.Delivered : AddressedMessageStates.Acknowledged)
                 .SetProperty(m => m.DeliveredAt, now)
                 .SetProperty(m => m.ClaimOwner, (string?)null)
                 .SetProperty(m => m.ClaimedUntil, (DateTimeOffset?)null), ct);
         if (updated != 1) throw new AddressedMessageError("claim_lost");
         return (await GetAsync(projectId, id, ct))!;
+    }
+
+    public async Task RenewClaimAsync(
+        string projectId, string id, string recipientRunId, string recipient,
+        string owner, long fence, CancellationToken ct)
+    {
+        await RequireActiveRunAsync(recipientRunId, projectId, recipient, ct);
+        var now = DateTimeOffset.UtcNow;
+        var updated = await db.AddressedMessages
+            .Where(m => m.Id == id && m.ProjectId == projectId && m.TargetRunId == recipientRunId
+                && m.Status == AddressedMessageStates.Claimed && m.ClaimOwner == owner
+                && m.Fence == fence && m.ClaimedUntil > now && m.ExpiresAt > now)
+            .ExecuteUpdateAsync(s => s.SetProperty(m => m.ClaimedUntil, now.AddMinutes(2)), ct);
+        if (updated != 1) throw new AddressedMessageError("claim_lost");
     }
 
     public async Task<AddressedMessage> AcknowledgeAsync(
@@ -181,13 +244,19 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
         var now = DateTimeOffset.UtcNow;
         await db.AddressedMessages
             .Where(m => m.Id == id && m.ProjectId == projectId && m.TargetRunId == recipientRunId
+                && m.Status == AddressedMessageStates.Claimed && m.ClaimOwner != null
+                && m.ClaimOwner.StartsWith("turn:") && m.ClaimedUntil > now && m.ExpiresAt > now)
+            .ExecuteUpdateAsync(s => s.SetProperty(m => m.AcknowledgedAt, now), ct);
+        await db.AddressedMessages
+            .Where(m => m.Id == id && m.ProjectId == projectId && m.TargetRunId == recipientRunId
                 && m.Status == AddressedMessageStates.Delivered && m.ExpiresAt > now)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(m => m.Status, AddressedMessageStates.Acknowledged)
                 .SetProperty(m => m.AcknowledgedAt, now), ct);
         var message = await GetAsync(projectId, id, ct);
         if (message is null || message.TargetRunId != recipientRunId
-            || message.Status != AddressedMessageStates.Acknowledged)
+            || message.Status != AddressedMessageStates.Acknowledged
+                && (message.Status != AddressedMessageStates.Claimed || message.AcknowledgedAt is null))
             throw new AddressedMessageError("message_not_delivered");
         return message;
     }
@@ -205,6 +274,7 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
             && (m.Status == AddressedMessageStates.Accepted || m.Status == AddressedMessageStates.Claimed))
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, AddressedMessageStates.Undeliverable)
                 .SetProperty(m => m.FailureReason, reason)
+                .SetProperty(m => m.AcknowledgedAt, (DateTimeOffset?)null)
                 .SetProperty(m => m.ClaimOwner, (string?)null)
                 .SetProperty(m => m.ClaimedUntil, (DateTimeOffset?)null), ct);
         return (await GetAsync(projectId, id, ct))!;
@@ -235,7 +305,8 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
                 else
                 {
                     var run = await runs.GetAsync(parsed, ct);
-                    if (run is null || run.ArchivedAt is not null || run.EndedAt is not null)
+                    if (run is null || run.ArchivedAt is not null || run.EndedAt is not null
+                        || run.Status != RunStatus.InProgress)
                         reason = run?.Result is "cancelled" or "steering_stop"
                             ? "target_cancelled"
                             : "target_completed";
@@ -257,6 +328,7 @@ public sealed class AddressedMessageService(MemoryDbContext db, IRunStore runs)
                 || m.Status == AddressedMessageStates.Delivered))
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.Status, AddressedMessageStates.Expired)
                 .SetProperty(m => m.FailureReason, "ttl_elapsed")
+                .SetProperty(m => m.AcknowledgedAt, (DateTimeOffset?)null)
                 .SetProperty(m => m.ClaimOwner, (string?)null)
                 .SetProperty(m => m.ClaimedUntil, (DateTimeOffset?)null), ct);
     }

@@ -747,6 +747,19 @@ export interface AddressedMessageDto {
   failureReason: string | null;
 }
 
+export interface SendAddressedMessageRequest {
+  recipient: string;
+  target_run_id: string;
+  content: string;
+  idempotency_key: string;
+  reply_to_id?: string;
+}
+
+export interface RetryAddressedMessageRequest {
+  idempotency_key: string;
+  target_run_id?: string;
+}
+
 export interface AgentMemoryDto {
   id: string;
   agent_name: string;

@@ -23,7 +23,7 @@ import {
   PageSection,
 } from '../components/ui';
 import { Pager } from '../copilot-fluent-system';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { AddressedMessageDto, AgentMemoryDto, AgentMemoryRevisionDto, DecisionDto, DecisionInboxEntryDto, DecisionRevisionDto, PagedResult, SessionHistoryDto } from '../api/types';
 
@@ -129,6 +129,13 @@ export function MemoriesPage() {
 
   const [selectedTab, setSelectedTab] = useState<'decisions' | 'messages' | 'memory' | 'sessions'>('decisions');
   const [messages, setMessages] = useState<AddressedMessageDto[] | null>(null);
+  const [messageRecipient, setMessageRecipient] = useState('');
+  const [messageRun, setMessageRun] = useState('');
+  const [messageContent, setMessageContent] = useState('');
+  const [replyTo, setReplyTo] = useState<AddressedMessageDto | null>(null);
+  const [retryTargetRuns, setRetryTargetRuns] = useState<Record<string, string>>({});
+  const sendKey = useRef<string | null>(null);
+  const retryKeys = useRef<Record<string, string>>({});
   const [decisions,   setDecisions]   = useState<DecisionDto[] | null>(null);
   const [decisionsTotalCount, setDecisionsTotalCount] = useState(0);
   const [decisionsPage, setDecisionsPage] = useState(1);
@@ -265,6 +272,59 @@ export function MemoriesPage() {
     }
     setLoadError(null);
     setReloadKey((key) => key + 1);
+  };
+
+  const refreshMessages = () => {
+    setMessages(null);
+    setReloadKey((key) => key + 1);
+  };
+
+  const submitMessage = async () => {
+    if (!projectId || busyAction || !messageRecipient.trim() || !messageRun.trim() || !messageContent.trim()) return;
+    setBusyAction('send-message');
+    setMutationError(null);
+    try {
+      sendKey.current ??= crypto.randomUUID();
+      await apiClient.sendAddressedMessage(projectId, {
+        recipient: messageRecipient.trim(),
+        target_run_id: messageRun.trim(),
+        content: messageContent.trim(),
+        idempotency_key: sendKey.current,
+        ...(replyTo ? { reply_to_id: replyTo.id } : {}),
+      });
+      sendKey.current = null;
+      setMessageContent('');
+      setReplyTo(null);
+      refreshMessages();
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const retryMessage = async (message: AddressedMessageDto) => {
+    if (!projectId || busyAction) return;
+    setBusyAction(`retry-message:${message.id}`);
+    setMutationError(null);
+    try {
+      retryKeys.current[message.id] ??= crypto.randomUUID();
+      await apiClient.retryAddressedMessage(projectId, message.id, {
+        idempotency_key: retryKeys.current[message.id],
+        ...(retryTargetRuns[message.id]?.trim() ? { target_run_id: retryTargetRuns[message.id].trim() } : {}),
+      });
+      delete retryKeys.current[message.id];
+      setRetryTargetRuns((current) => {
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
+      refreshMessages();
+    } catch (err) {
+      setMutationError(formatApiError(err));
+    } finally {
+      setBusyAction(null);
+    }
   };
 
   const refreshDecisions = () => {
@@ -481,7 +541,24 @@ export function MemoriesPage() {
         )}
 
         {!loading && !loadError && selectedTab === 'messages' && (
-          <PageSection title="Addressed messages" description="Receipt tracking is separate from decisions and tasks. Messages are not delivered automatically yet.">
+          <PageSection title="Addressed messages" description="Send to an active teammate run. Busy recipients receive messages at a safe model-turn boundary; idle wake is not available. Acknowledgment confirms receipt only.">
+            <div className={styles.form}>
+              {replyTo && <span className={styles.itemMeta}>Replying to {replyTo.id} in thread {replyTo.threadId} <Button size="small" onClick={() => { setReplyTo(null); sendKey.current = null; }}>Cancel reply</Button></span>}
+              <div className={styles.inlineFields}>
+                <Field label="Recipient agent" required>
+                  <Input value={messageRecipient} disabled={Boolean(replyTo)} onChange={(_, data) => { setMessageRecipient(data.value); sendKey.current = null; }} />
+                </Field>
+                <Field label="Target run ID" required>
+                  <Input value={messageRun} disabled={Boolean(replyTo)} onChange={(_, data) => { setMessageRun(data.value); sendKey.current = null; }} />
+                </Field>
+              </div>
+              <Field label="Message" required>
+                <Textarea value={messageContent} onChange={(_, data) => { setMessageContent(data.value); sendKey.current = null; }} />
+              </Field>
+              <Button appearance="primary" disabled={busy || !messageRecipient.trim() || !messageRun.trim() || !messageContent.trim()} onClick={() => void submitMessage()}>
+                {replyTo ? 'Send reply' : 'Send message'}
+              </Button>
+            </div>
             <Button onClick={retryLoad}>Refresh messages</Button>
             {messages?.length === 0 && <EmptyState title="No addressed messages" description="Messages between active runs will appear here." />}
             <div className={styles.itemList}>
@@ -492,13 +569,35 @@ export function MemoriesPage() {
                     <Badge>{message.status}</Badge>
                   </div>
                   <span className={styles.itemMeta}>
-                    {message.createdAt} · From {message.sourceRunId ?? 'unknown run'} to {message.targetRunId}
+                    {message.createdAt} · From {message.sourceRunId ?? 'operator'} to {message.targetRunId}
                     {' · '}Thread {message.threadId}
                     {message.replyToId && <> · Reply to {message.replyToId}</>}
                     {message.referenceKind && <> · {message.referenceKind}: {message.referenceId}</>}
                   </span>
                   <div className={styles.itemContent}>{message.content}</div>
                   {message.failureReason && <span className={styles.itemMeta}>Delivery error: {message.failureReason}</span>}
+                  <div className={styles.actions}>
+                    {message.sourceRunId === null && message.status === 'acknowledged' && (
+                      <Button size="small" disabled={busy} onClick={() => {
+                        setReplyTo(message);
+                        setMessageRecipient(message.recipient);
+                        setMessageRun(message.targetRunId);
+                        setMessageContent('');
+                        sendKey.current = null;
+                      }}>Reply</Button>
+                    )}
+                    {(message.status === 'expired' || message.status === 'undeliverable') && (
+                      <>
+                        <Field label={`Replacement target run for ${message.id} (optional)`}>
+                          <Input value={retryTargetRuns[message.id] ?? ''} onChange={(_, data) => {
+                            setRetryTargetRuns((current) => ({ ...current, [message.id]: data.value }));
+                            delete retryKeys.current[message.id];
+                          }} />
+                        </Field>
+                        <Button size="small" disabled={busy} onClick={() => void retryMessage(message)}>Retry delivery</Button>
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
