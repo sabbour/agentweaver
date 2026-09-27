@@ -55,4 +55,5 @@ public sealed record TerminalRunMutation(
     string? TreeHash = null,
     string? WorktreeBranch = null,
     string? Diff = null,
-    RunLeaseFence? RequiredLease = null);
+    RunLeaseFence? RequiredLease = null,
+    int? ExpectedParentLifecycleGeneration = null);

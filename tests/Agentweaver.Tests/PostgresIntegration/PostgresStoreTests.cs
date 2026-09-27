@@ -282,6 +282,57 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         (await runStore.GetAsync(RunId.Parse(runId)))!.Status.Should().Be(RunStatus.InProgress);
         (await eventStream.GetPersistedEventsAsync(runId)).Should().BeEmpty();
     }
+
+    [PostgresFact]
+    public async Task RecoveryTerminal_ParentGenerationAndCompetingOwner_AreCheckedAtWrite()
+    {
+        var parentId = RunId.New().ToString();
+        var childId = RunId.New().ToString();
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            foreach (var id in new[] { parentId, childId })
+                db.Runs.Add(new RunRecord
+                {
+                    RunId = id, RepositoryPath = "/r", OriginatingBranch = "main",
+                    ModelSource = "github_copilot", Task = "t", SubmittingUser = "u",
+                    Status = "in_progress", StartedAt = DateTimeOffset.UtcNow,
+                    LifecycleGeneration = 1, ParentRunId = id == childId ? parentId : null,
+                });
+            await db.SaveChangesAsync();
+        }
+
+        var leases = new PostgresRunLeaseStore(pg.Factory);
+        var runs = new EfRunStore(pg.Factory);
+        var (claimed, token) = await leases.TryClaimAsync(childId, "owner", TimeSpan.FromMinutes(1));
+        claimed.Should().BeTrue();
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "failure" }, DateTimeOffset.UtcNow, 1);
+        var owned = new TerminalRunMutation(outcome, "failure",
+            RequiredLease: new RunLeaseFence("owner", token, 1),
+            ExpectedParentLifecycleGeneration: 1);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            await db.Runs.Where(r => r.RunId == parentId)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.LifecycleGeneration, 2));
+        }
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(childId), owned)).Should().BeFalse();
+        (await runs.GetAsync(RunId.Parse(childId)))!.Status.Should().Be(RunStatus.InProgress);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            await db.Runs.Where(r => r.RunId == parentId)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.LifecycleGeneration, 1));
+        }
+        await leases.ReleaseAsync(childId, "owner", token);
+        var (reclaimed, newToken) = await leases.TryClaimAsync(childId, "successor", TimeSpan.FromMinutes(1));
+        reclaimed.Should().BeTrue();
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(childId), owned)).Should().BeFalse();
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(childId), owned with
+        {
+            RequiredLease = new RunLeaseFence("successor", newToken, 1)
+        })).Should().BeTrue();
+        (await runs.GetUnprojectedTerminalOutcomesAsync()).Should().Contain(
+            pending => pending.RunId == RunId.Parse(childId));
+    }
 }
 
 [Collection("PostgresIntegration")]

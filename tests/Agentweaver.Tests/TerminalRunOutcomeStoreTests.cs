@@ -11,6 +11,73 @@ namespace Agentweaver.Tests.Api;
 public sealed class TerminalRunOutcomeStoreTests
 {
     [Fact]
+    public async Task RecoveryTerminal_ExpiredAndReclaimedLeaseCannotWrite_ButSuccessorCan()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var leases = new SqliteRunLeaseStore(testDb.Db);
+        var run = await InsertInProgressAsync(store);
+        var (claimed, oldToken) = await leases.TryClaimAsync(run.ToString(), "old", TimeSpan.FromMinutes(1));
+        claimed.Should().BeTrue();
+        await using (var connection = await testDb.Db.OpenConnectionAsync())
+        await using (var expire = connection.CreateCommand())
+        {
+            expire.CommandText = "UPDATE run_execution_leases SET lease_expires_at=$expired WHERE run_id=$runId;";
+            expire.Parameters.AddWithValue("$expired", DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O"));
+            expire.Parameters.AddWithValue("$runId", run.ToString());
+            await expire.ExecuteNonQueryAsync();
+        }
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "stale" }, DateTimeOffset.UtcNow, 1);
+        (await store.TryMutateTerminalOutcomeAsync(run,
+            new TerminalRunMutation(outcome, "expired",
+                RequiredLease: new RunLeaseFence("old", oldToken, 1)))).Should().BeFalse();
+        var (reclaimed, newToken) = await leases.TryClaimAsync(run.ToString(), "successor", TimeSpan.FromMinutes(1));
+        reclaimed.Should().BeTrue();
+        newToken.Should().BeGreaterThan(oldToken);
+
+        (await store.TryMutateTerminalOutcomeAsync(run,
+            new TerminalRunMutation(outcome, "stale",
+                RequiredLease: new RunLeaseFence("old", oldToken, 1)))).Should().BeFalse();
+        (await store.GetAsync(run))!.Status.Should().Be(RunStatus.InProgress);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+        (await store.TryMutateTerminalOutcomeAsync(run,
+            new TerminalRunMutation(outcome, "current",
+                RequiredLease: new RunLeaseFence("successor", newToken, 1)))).Should().BeTrue();
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ChildTerminal_ParentGenerationChangeRejectsOwnedChildWrite()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(testDb.Db);
+        var leases = new SqliteRunLeaseStore(testDb.Db);
+        var parent = await InsertInProgressAsync(store);
+        var child = new Run
+        {
+            Id = RunId.New(), RepositoryPath = "/r", OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot, Task = "child",
+            SubmittingUser = "u", Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow, ParentRunId = parent.ToString()
+        };
+        await store.InsertAsync(child);
+        var (claimed, token) = await leases.TryClaimAsync(child.Id.ToString(), "owner", TimeSpan.FromMinutes(1));
+        claimed.Should().BeTrue();
+        await store.UpdateReviewReadyAsync(parent, "tree", "diff", 1);
+        (await store.TryTransitionReviewToInProgressAsync(parent)).Should().BeTrue();
+        var mutation = new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+                new { reason = "stale" }, DateTimeOffset.UtcNow, child.LifecycleGeneration),
+            "stale", RequiredLease: new RunLeaseFence("owner", token, child.LifecycleGeneration),
+            ExpectedParentLifecycleGeneration: 1);
+
+        (await store.TryMutateTerminalOutcomeAsync(child.Id, mutation)).Should().BeFalse();
+        (await store.GetAsync(child.Id))!.Status.Should().Be(RunStatus.InProgress);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task TerminalOutcome_SeparateSqliteInstances_RaceToOneTypedWinner()
     {
         await using var testDb = await TestSqliteDb.CreateAsync();

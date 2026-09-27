@@ -476,24 +476,11 @@ public sealed class EfRunStore : IRunStore
         // in this transaction, so two API instances cannot each write a terminal winner.
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock(hashtextextended({runId.ToString()}, 0));", ct);
-        if (mutation.RequiredLease is { } requiredLease)
-        {
-            var now = DateTimeOffset.UtcNow;
-            var fenced = await db.Runs
-                .Where(r => r.RunId == runId.ToString()
-                            && r.OwnerId == requiredLease.OwnerId
-                            && r.FencingToken == requiredLease.FencingToken
-                            && r.LifecycleGeneration == requiredLease.LifecycleGeneration
-                            && r.LeaseExpiresAt > now)
-                .ExecuteUpdateAsync(
-                    updates => updates.SetProperty(r => r.Status, r => r.Status),
-                    ct)
-                .ConfigureAwait(false);
-            if (fenced == 0)
-                return false;
-        }
         var record = await db.Runs.SingleOrDefaultAsync(r => r.RunId == runId.ToString(), ct);
         if (record is null)
+            return false;
+        if (mutation.RequiredLease is { } fence
+            && fence.LifecycleGeneration != mutation.Outcome.ExpectedLifecycleGeneration)
             return false;
         if (record.LifecycleGeneration != mutation.Outcome.ExpectedLifecycleGeneration
             || TerminalRunOutcome.IsTerminal(RunStatusExtensions.ParseStatus(record.Status)))
@@ -506,22 +493,55 @@ public sealed class EfRunStore : IRunStore
             return false;
 
         var wasInProgress = record.Status == RunStatus.InProgress.ToApiString();
-        record.Status = mutation.Outcome.Status.ToApiString();
-        record.EndedAt = mutation.Outcome.OccurredAt;
-        record.Result = mutation.Result;
-        if (mutation.Reviewer is not null) record.ReviewedBy = mutation.Reviewer;
-        if (mutation.MergeConflicts is not null) record.MergeConflicts = mutation.MergeConflicts;
-        if (mutation.MergedCommitHash is not null) record.MergedCommitHash = mutation.MergedCommitHash;
-        if (mutation.TreeHash is not null) record.TreeHash = mutation.TreeHash;
-        if (mutation.WorktreeBranch is not null) record.WorktreeBranch = mutation.WorktreeBranch;
-        if (mutation.Diff is not null) record.Diff = mutation.Diff;
-        if (wasInProgress)
-            record.ApprovalGeneration++;
+        if (mutation.RequiredLease is { } requiredLease)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var changed = await db.Runs
+                .Where(r => r.RunId == runId.ToString()
+                    && r.LifecycleGeneration == mutation.Outcome.ExpectedLifecycleGeneration
+                    && r.OwnerId == requiredLease.OwnerId
+                    && r.FencingToken == requiredLease.FencingToken
+                    && r.LeaseExpiresAt > now
+                    && r.Status == record.Status
+                    && (r.PreviewPublicationLeaseUntil == null || r.PreviewPublicationLeaseUntil <= now)
+                    && (mutation.ExpectedParentLifecycleGeneration == null
+                        || db.Runs.Any(parent => parent.RunId == r.ParentRunId
+                            && parent.LifecycleGeneration == mutation.ExpectedParentLifecycleGeneration
+                            && parent.Status == "in_progress")))
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(r => r.Status, mutation.Outcome.Status.ToApiString())
+                    .SetProperty(r => r.EndedAt, mutation.Outcome.OccurredAt)
+                    .SetProperty(r => r.Result, mutation.Result)
+                    .SetProperty(r => r.ReviewedBy, r => mutation.Reviewer ?? r.ReviewedBy)
+                    .SetProperty(r => r.MergeConflicts, r => mutation.MergeConflicts ?? r.MergeConflicts)
+                    .SetProperty(r => r.MergedCommitHash, r => mutation.MergedCommitHash ?? r.MergedCommitHash)
+                    .SetProperty(r => r.TreeHash, r => mutation.TreeHash ?? r.TreeHash)
+                    .SetProperty(r => r.WorktreeBranch, r => mutation.WorktreeBranch ?? r.WorktreeBranch)
+                    .SetProperty(r => r.Diff, r => mutation.Diff ?? r.Diff)
+                    .SetProperty(r => r.ApprovalGeneration, r => r.ApprovalGeneration + (wasInProgress ? 1 : 0)),
+                    ct).ConfigureAwait(false);
+            if (changed == 0)
+                return false;
+        }
+        else
+        {
+            record.Status = mutation.Outcome.Status.ToApiString();
+            record.EndedAt = mutation.Outcome.OccurredAt;
+            record.Result = mutation.Result;
+            if (mutation.Reviewer is not null) record.ReviewedBy = mutation.Reviewer;
+            if (mutation.MergeConflicts is not null) record.MergeConflicts = mutation.MergeConflicts;
+            if (mutation.MergedCommitHash is not null) record.MergedCommitHash = mutation.MergedCommitHash;
+            if (mutation.TreeHash is not null) record.TreeHash = mutation.TreeHash;
+            if (mutation.WorktreeBranch is not null) record.WorktreeBranch = mutation.WorktreeBranch;
+            if (mutation.Diff is not null) record.Diff = mutation.Diff;
+            if (wasInProgress)
+                record.ApprovalGeneration++;
+        }
         db.TerminalRunOutcomes.Add(new TerminalRunOutcomeRecord
         {
             RunId = record.RunId,
             LifecycleGeneration = record.LifecycleGeneration,
-            Status = record.Status,
+            Status = mutation.Outcome.Status.ToApiString(),
             EventType = mutation.Outcome.EventType,
             PayloadJson = mutation.Outcome.Payload.GetRawText(),
             OccurredAt = mutation.Outcome.OccurredAt,

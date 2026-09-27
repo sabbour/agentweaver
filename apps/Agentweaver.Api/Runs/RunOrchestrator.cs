@@ -282,7 +282,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         Run run,
         CancellationToken ct,
         RunLeaseClaim? existingLease = null,
-        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null)
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
+        int? expectedParentGeneration = null)
     {
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
@@ -379,7 +380,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             catch (MandatoryContextBudgetExceededException ex)
             {
                 await EnsureAuthorizedAsync().ConfigureAwait(false);
-                await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
+                await FailPreWorkflowLaunchAsync(started.Id, entry, ex, existingLease, started.LifecycleGeneration,
+                    expectedParentGeneration).ConfigureAwait(false);
                 throw;
             }
 
@@ -409,7 +411,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 await EnsureAuthorizedAsync().ConfigureAwait(false);
                 var streamingRun = await StartWorkflowOrFailAsync(
                     input, started.Id, entry, runCts.Token, isChild: true,
-                    isAuthorizedAsync: isAuthorizedAsync).ConfigureAwait(false);
+                    isAuthorizedAsync: isAuthorizedAsync, existingLease: existingLease,
+                    expectedGeneration: started.LifecycleGeneration, expectedParentGeneration: expectedParentGeneration)
+                    .ConfigureAwait(false);
                 await EnsureAuthorizedAsync().ConfigureAwait(false);
                 var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
@@ -637,7 +641,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// </summary>
     public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false,
         int? steeringDirectiveId = null, int? steeringAttempt = null, RunLeaseClaim? existingLease = null,
-        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null)
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
+        int? expectedParentGeneration = null)
     {
         async Task EnsureAuthorizedAsync()
         {
@@ -682,7 +687,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         catch (MandatoryContextBudgetExceededException ex)
         {
             await EnsureAuthorizedAsync().ConfigureAwait(false);
-            await FailPreWorkflowLaunchAsync(run.Id, entry, ex).ConfigureAwait(false);
+            await FailPreWorkflowLaunchAsync(run.Id, entry, ex, existingLease, run.LifecycleGeneration,
+                expectedParentGeneration).ConfigureAwait(false);
             throw;
         }
 
@@ -714,7 +720,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             {
                 await EnsureAuthorizedAsync().ConfigureAwait(false);
                 streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token,
-                    isChild, steeringDirectiveId, steeringAttempt, isAuthorizedAsync).ConfigureAwait(false);
+                    isChild, steeringDirectiveId, steeringAttempt, isAuthorizedAsync, existingLease,
+                    run.LifecycleGeneration, expectedParentGeneration).ConfigureAwait(false);
                 await EnsureAuthorizedAsync().ConfigureAwait(false);
             }
             await EnsureAuthorizedAsync().ConfigureAwait(false);
@@ -743,7 +750,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// </summary>
     public async Task RestartInterruptedChildRunAsync(
         Run run, RunLeaseClaim recoveryLease, CancellationToken ct,
-        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null)
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
+        int? expectedParentGeneration = null)
     {
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Run {run.Id} is not a coordinator child.");
@@ -773,7 +781,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
 
         await StartRevisionAsync(run, run.Task, ct, isChild: true, existingLease: recoveryLease,
-                isAuthorizedAsync: isAuthorizedAsync)
+                isAuthorizedAsync: isAuthorizedAsync, expectedParentGeneration: expectedParentGeneration)
             .ConfigureAwait(false);
     }
 
@@ -1218,7 +1226,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         bool isChild = false,
         int? steeringDirectiveId = null,
         int? steeringAttempt = null,
-        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null)
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
+        RunLeaseClaim? existingLease = null,
+        int? expectedGeneration = null,
+        int? expectedParentGeneration = null)
     {
         try
         {
@@ -1237,29 +1248,22 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             ct.ThrowIfCancellationRequested();
             _logger.LogError(ex, "Workflow binding failed for run {RunId}; transitioning to failed", runId);
             var result = $"workflow_bind_failed: {ex.Message}";
-            try
+            var payload = new { reason = "workflow_bind_failed", detail = ex.Message };
+            var changed = await TryFailLaunchAsync(
+                runId, RunStatus.Failed, EventTypes.RunFailed, payload, DateTimeOffset.UtcNow, result,
+                existingLease, expectedGeneration, expectedParentGeneration).ConfigureAwait(false);
+            if (changed)
             {
-                var payload = new { reason = "workflow_bind_failed", detail = ex.Message };
-                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                    runId,
-                    RunStatus.Failed,
-                    EventTypes.RunFailed,
-                    payload,
-                    DateTimeOffset.UtcNow,
-                    result,
-                    CancellationToken.None).ConfigureAwait(false);
-                if (changed)
-                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
-                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
-                if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
+                await ProjectTerminalOutcomeAsync(true).ConfigureAwait(false);
+                if (!entry.HasEventType(EventTypes.RunFailed))
                     entry.RecordNext(EventTypes.RunFailed, payload);
-                _ = FirePostRunScribeAsync(runId.ToString());
             }
-            finally
+            if (changed || existingLease is null)
             {
+                _ = FirePostRunScribeAsync(runId.ToString());
                 _streamStore.Complete(runId.ToString());
             }
-
             throw new RunSubmissionValidationException($"Policy hook failed: {ex.Message}", ex);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1273,29 +1277,22 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             ct.ThrowIfCancellationRequested();
             _logger.LogError(ex, "Workflow start failed for run {RunId}; transitioning to failed", runId);
             var detail = RedactFailureReason(ex);
-            try
+            var payload = new { reason = "workflow_start_failed", detail };
+            var changed = await TryFailLaunchAsync(
+                runId, RunStatus.Failed, EventTypes.RunFailed, payload, DateTimeOffset.UtcNow, detail,
+                existingLease, expectedGeneration, expectedParentGeneration).ConfigureAwait(false);
+            if (changed)
             {
-                var payload = new { reason = "workflow_start_failed", detail };
-                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                    runId,
-                    RunStatus.Failed,
-                    EventTypes.RunFailed,
-                    payload,
-                    DateTimeOffset.UtcNow,
-                    detail,
-                    CancellationToken.None).ConfigureAwait(false);
-                if (changed)
-                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
-                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
-                if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
+                await ProjectTerminalOutcomeAsync(true).ConfigureAwait(false);
+                if (!entry.HasEventType(EventTypes.RunFailed))
                     entry.RecordNext(EventTypes.RunFailed, payload);
-                _ = FirePostRunScribeAsync(runId.ToString());
             }
-            finally
+            if (changed || existingLease is null)
             {
+                _ = FirePostRunScribeAsync(runId.ToString());
                 _streamStore.Complete(runId.ToString());
             }
-
             throw;
         }
     }
@@ -1303,38 +1300,57 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     private async Task FailPreWorkflowLaunchAsync(
         RunId runId,
         RunStreamEntry entry,
-        MandatoryContextBudgetExceededException exception)
+        MandatoryContextBudgetExceededException exception,
+        RunLeaseClaim? existingLease = null,
+        int? expectedGeneration = null,
+        int? expectedParentGeneration = null)
     {
         var detail = RedactFailureReason(exception);
-        try
+        var payload = new
         {
-            var payload = new
-            {
-                errorCode = "mandatory_context_budget_exceeded",
-                retryable = false,
-                detail,
-            };
-            var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                runId,
-                RunStatus.Failed,
-                EventTypes.RunFailed,
-                payload,
-                DateTimeOffset.UtcNow,
-                detail,
-                CancellationToken.None)
-                .ConfigureAwait(false);
-            if (changed)
-                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false),
-                    "mandatory_context_budget_exceeded");
-            await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
-            if (changed && !entry.HasEventType(EventTypes.RunFailed))
-                entry.RecordNext(EventTypes.RunFailed, payload);
-            _ = FirePostRunScribeAsync(runId.ToString());
-        }
-        finally
+        errorCode = "mandatory_context_budget_exceeded",
+        retryable = false,
+        detail,
+        };
+        var changed = await TryFailLaunchAsync(
+        runId, RunStatus.Failed, EventTypes.RunFailed, payload, DateTimeOffset.UtcNow, detail,
+        existingLease, expectedGeneration, expectedParentGeneration).ConfigureAwait(false);
+        if (changed)
         {
-            _streamStore.Complete(runId.ToString());
+        EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false),
+            "mandatory_context_budget_exceeded");
+        await ProjectTerminalOutcomeAsync(true).ConfigureAwait(false);
+        if (!entry.HasEventType(EventTypes.RunFailed))
+            entry.RecordNext(EventTypes.RunFailed, payload);
         }
+        if (changed || existingLease is null)
+        {
+        _ = FirePostRunScribeAsync(runId.ToString());
+        _streamStore.Complete(runId.ToString());
+        }
+    }
+
+    internal Func<RunId, CancellationToken, Task>? BeforeLaunchFailureWriteOverride { get; set; }
+
+    private async Task<bool> TryFailLaunchAsync(
+        RunId runId, RunStatus status, string eventType, object payload, DateTimeOffset occurredAt,
+        string? result, RunLeaseClaim? lease, int? generation, int? parentGeneration)
+    {
+        if (lease is null)
+            return await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                runId, status, eventType, payload, occurredAt, result, CancellationToken.None).ConfigureAwait(false);
+        if (generation is null)
+            throw new InvalidOperationException("A recovery launch requires its expected lifecycle generation.");
+        if (BeforeLaunchFailureWriteOverride is { } beforeWrite)
+            await beforeWrite(runId, CancellationToken.None).ConfigureAwait(false);
+        return await _runStore.TryMutateTerminalOutcomeAsync(
+            runId,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(status, eventType, payload, occurredAt, generation.Value),
+                result,
+                RequiredLease: new RunLeaseFence(lease.OwnerId, lease.FencingToken, generation.Value),
+                ExpectedParentLifecycleGeneration: parentGeneration),
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1653,7 +1669,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// Mirrors how <see cref="RunWatchLoopService"/> terminalizes a failed run. Fully defensive: any
     /// persistence error is swallowed (logged) so it can never throw back into the dispatch loop.
     /// </summary>
-    public async Task MarkChildRunFailedAsync(Run run, Exception error, CancellationToken ct)
+    public async Task MarkChildRunFailedAsync(
+        Run run, Exception error, CancellationToken ct, RunLeaseClaim? lease = null,
+        int? expectedParentGeneration = null)
     {
         var runId = run.Id.ToString();
         var reason = RedactFailureReason(error);
@@ -1670,25 +1688,27 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 return;
             }
 
-            _ = _streamStore.Get(runId) ?? _streamStore.Create(runId, reserved.SubmittingUser);
-
             var outcome = TerminalRunOutcome.Create(
                 RunStatus.Failed,
                 EventTypes.RunFailed,
                 new { reason },
                 now,
                 reserved.LifecycleGeneration);
-            var changed = await _runStore.TrySetTerminalOutcomeAsync(run.Id, outcome, reason, ct)
+            var changed = await _runStore.TryMutateTerminalOutcomeAsync(
+                run.Id, new TerminalRunMutation(outcome, reason,
+                    RequiredLease: lease is null ? null : new RunLeaseFence(
+                        lease.OwnerId, lease.FencingToken, run.LifecycleGeneration),
+                    ExpectedParentLifecycleGeneration: expectedParentGeneration), ct)
                 .ConfigureAwait(false);
             if (changed)
             {
+                _ = _streamStore.Get(runId) ?? _streamStore.Create(runId, reserved.SubmittingUser);
                 var stored = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
                 EmitCompletedMetric(stored ?? reserved, "failed");
                 EmitErrorMetric(stored ?? reserved, "child_launch_failed");
+                await ProjectTerminalOutcomeAsync(true, ct).ConfigureAwait(false);
+                _ = FirePostRunScribeAsync(runId);
             }
-
-            await ProjectTerminalOutcomeAsync(changed, ct).ConfigureAwait(false);
-            _ = FirePostRunScribeAsync(runId);
         }
 
         catch (Exception ex)

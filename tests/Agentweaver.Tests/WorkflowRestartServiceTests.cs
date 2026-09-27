@@ -509,7 +509,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
-        var leaseStore = new RecordingRunLeaseStore(claimed: true, fencingToken: 17);
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: true);
         var parentId = RunId.New();
         var childId = RunId.New();
         var now = DateTimeOffset.UtcNow;
@@ -578,7 +578,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
-        var leaseStore = new RecordingRunLeaseStore(claimed: true, fencingToken: 17);
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: true);
         var runId = RunId.New();
         await runStore.InsertAsync(new Run
         {
@@ -609,6 +609,43 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
         leaseStore.ClaimedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
         leaseStore.ReleasedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
+    }
+
+    [Fact]
+    public async Task RecoverAsync_LeaseReclaimedBeforeFailureWrite_PreservesSuccessorsRunAndWorktree()
+    {
+        var store = new SqliteRunStore(_db.Db);
+        var streams = new RunStreamStore();
+        var worktrees = new TestWorktreeOps(true, _worktreePath, null);
+        var leases = new SqliteRunLeaseStore(_db.Db);
+        var id = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = id, RepositoryPath = _worktreePath, OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot, Task = "reclaim",
+            SubmittingUser = "test-user", Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow, ParentRunId = RunId.New().ToString(),
+            SubtaskId = "42", WorktreePath = _worktreePath,
+        });
+        var service = BuildService(store, streams, worktrees, leaseStore: leases);
+        service.BeforeRecoveredTerminalWriteOverride = async (run, ct) =>
+        {
+            await using var connection = await _db.Db.OpenConnectionAsync(ct);
+            await using var expire = connection.CreateCommand();
+            expire.CommandText = "UPDATE run_execution_leases SET lease_expires_at=$expired WHERE run_id=$runId;";
+            expire.Parameters.AddWithValue("$expired", DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O"));
+            expire.Parameters.AddWithValue("$runId", run.Id.ToString());
+            (await expire.ExecuteNonQueryAsync(ct)).Should().Be(1);
+            var (claimed, _) = await leases.TryClaimAsync(run.Id.ToString(), "successor", TimeSpan.FromMinutes(1), ct);
+            claimed.Should().BeTrue();
+        };
+
+        await service.RecoverAsync(CancellationToken.None);
+
+        (await store.GetAsync(id))!.Status.Should().Be(RunStatus.InProgress);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+        streams.Get(id.ToString()).Should().BeNull();
+        worktrees.RemoveCount.Should().Be(0);
     }
 
     [Fact]
@@ -849,7 +886,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
-        var leaseStore = new RecordingRunLeaseStore(claimed: true, fencingToken: 73);
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: true);
         var service = BuildService(
             runStore,
             streamStore,
@@ -964,7 +1001,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         restarted.Should().Equal(parentId);
         transferredLease.Should().NotBeNull();
         transferredLease!.OwnerId.Should().Contain("/startup-recovery/");
-        transferredLease.FencingToken.Should().Be(73);
+        transferredLease.FencingToken.Should().Be(1);
         leaseStore.ReleasedRunIds.Should().NotContain(parentId.ToString());
         (await runStore.GetAsync(parentId))!.Status.Should().Be(RunStatus.InProgress);
         await using var verificationScope = _memoryServiceProvider!.CreateAsyncScope();
@@ -982,7 +1019,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
-        var leaseStore = new RecordingRunLeaseStore(claimed: false, fencingToken: 41);
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: false);
         var runId = RunId.New();
         await runStore.InsertAsync(new Run
         {
@@ -1123,7 +1160,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             agentFactory,
             config);
 
-        leaseStore ??= new NoOpRunLeaseStore();
+        leaseStore ??= new SqliteRunLeaseStore(_db.Db);
         var watchLoop = new RunWatchLoopService(
             runStore,
             streamStore,
@@ -1155,19 +1192,22 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             projector);
     }
 
-    private sealed class RecordingRunLeaseStore(bool claimed, long fencingToken) : IRunLeaseStore
+    private sealed class RecordingRunLeaseStore(SqliteDb db, bool claimed) : IRunLeaseStore
     {
+        private readonly SqliteRunLeaseStore _inner = new(db);
         public List<string> ClaimedRunIds { get; } = [];
         public List<string> ReleasedRunIds { get; } = [];
 
-        public Task<(bool Claimed, long FencingToken)> TryClaimAsync(
+        public async Task<(bool Claimed, long FencingToken)> TryClaimAsync(
             string runId,
             string ownerId,
             TimeSpan leaseTtl,
             CancellationToken ct = default)
         {
             ClaimedRunIds.Add(runId);
-            return Task.FromResult((claimed, fencingToken));
+            return claimed
+                ? await _inner.TryClaimAsync(runId, ownerId, leaseTtl, ct)
+                : (false, 0);
         }
 
         public Task<bool> TryRenewAsync(
@@ -1176,16 +1216,16 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             long token,
             TimeSpan leaseTtl,
             CancellationToken ct = default) =>
-            Task.FromResult(claimed);
+            _inner.TryRenewAsync(runId, ownerId, token, leaseTtl, ct);
 
-        public Task ReleaseAsync(
+        public async Task ReleaseAsync(
             string runId,
             string ownerId,
             long token,
             CancellationToken ct = default)
         {
             ReleasedRunIds.Add(runId);
-            return Task.CompletedTask;
+            await _inner.ReleaseAsync(runId, ownerId, token, ct);
         }
 
         public Task<bool> IsLeaseOwnerAsync(
@@ -1193,7 +1233,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             string ownerId,
             long token,
             CancellationToken ct = default) =>
-            Task.FromResult(claimed);
+            _inner.IsLeaseOwnerAsync(runId, ownerId, token, ct);
     }
 
     private sealed class RecordingEventStream : IRunEventStream
@@ -1312,6 +1352,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         /// that a missing-worktree recovery attempt actually went through the reattach path (#246
         /// P0-A) rather than failing immediately without trying.</summary>
         public bool ReattachAttempted { get; private set; }
+        public int RemoveCount { get; private set; }
 
         public TestWorktreeOps(
             bool worktreeExists,
@@ -1354,7 +1395,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch) => throw new NotImplementedException("Not called in restart tests");
         public int GetStepCount(string runId) => throw new NotImplementedException("Not called in restart tests");
         public WorkflowMergeResult MergeWorktree(string repositoryPath, string originatingBranch, string worktreeBranch, string expectedTreeHash) => throw new NotImplementedException("Not called in restart tests");
-        public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) => throw new NotImplementedException("Not called in restart tests");
+        public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) => RemoveCount++;
     }
 
     // -------------------------------------------------------------------------
