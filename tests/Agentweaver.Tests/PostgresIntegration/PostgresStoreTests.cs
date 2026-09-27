@@ -285,6 +285,56 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task Lease_CurrentTokenWithReopenedGeneration_FencesClosureAndTerminalWrites()
+    {
+        var runId = RunId.New().ToString();
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            db.Runs.Add(new Agentweaver.Api.Memory.RunRecord
+            {
+                RunId = runId,
+                RepositoryPath = "/r",
+                OriginatingBranch = "main",
+                ModelSource = "github-copilot",
+                Task = "reopened watcher",
+                SubmittingUser = "u",
+                Status = "in_progress",
+                StartedAt = DateTimeOffset.UtcNow,
+                LifecycleGeneration = 1,
+            });
+            await db.SaveChangesAsync();
+        }
+        var leases = new PostgresRunLeaseStore(pg.Factory);
+        var runs = new EfRunStore(pg.Factory);
+        var stream = new EfRunEventStream(pg.Factory);
+        var (claimed, token) = await leases.TryClaimAsync(runId, "same-owner", TimeSpan.FromMinutes(5));
+        claimed.Should().BeTrue();
+        await using (var db = await pg.CreateDbContextAsync())
+            await db.Runs.Where(r => r.RunId == runId)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.LifecycleGeneration, 2));
+
+        var marker = new RunEvent(0, "watch.stream_closed_without_terminal_event",
+            new { lifecycleGeneration = 1 });
+        var stale = new RunLeaseFence("same-owner", token, 1);
+        (await stream.AppendWhileRunLeaseOwnedAsync(runId, [marker], runs, stale)).Should().BeEmpty();
+        var outcome = TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+            new { reason = "stale" }, DateTimeOffset.UtcNow, 1);
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(runId),
+            new TerminalRunMutation(outcome, "stale", RequiredLease: stale))).Should().BeFalse();
+        (await stream.GetPersistedEventsAsync(runId)).Should().BeEmpty();
+
+        var current = new RunLeaseFence("same-owner", token, 2);
+        (await stream.AppendWhileRunLeaseOwnedAsync(runId,
+            [marker with { Payload = new { lifecycleGeneration = 2 } }], runs, current))
+            .Should().ContainSingle();
+        outcome = TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+            new { reason = "current" }, DateTimeOffset.UtcNow, 2);
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(runId),
+            new TerminalRunMutation(outcome, "current", RequiredLease: current))).Should().BeTrue();
+        (await runs.GetAsync(RunId.Parse(runId)))!.Status.Should().Be(RunStatus.Failed);
+    }
+
+    [PostgresFact]
     public async Task RecoveryTerminal_ParentGenerationAndCompetingOwner_AreCheckedAtWrite()
     {
         var parentId = RunId.New().ToString();

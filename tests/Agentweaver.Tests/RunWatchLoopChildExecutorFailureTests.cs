@@ -87,7 +87,7 @@ public sealed class RunWatchLoopChildExecutorFailureTests
             streamingRun,
             entry,
             ReviewWebApplicationFactory.OwnerUser,
-            CancellationToken.None);
+            CancellationToken.None, 1);
 
         Run? run = null;
         RunEvent? failed = null;
@@ -168,7 +168,7 @@ public sealed class RunWatchLoopChildExecutorFailureTests
             IsRevision: true);
 
         var streamingRun = await workflowFactory.StartAsync(input, runIdStr, CancellationToken.None, isChild: true);
-        watchLoop.StartWatching(runIdStr, streamingRun, entry, ReviewWebApplicationFactory.OwnerUser, CancellationToken.None);
+        watchLoop.StartWatching(runIdStr, streamingRun, entry, ReviewWebApplicationFactory.OwnerUser, CancellationToken.None, 1);
 
         // Poll until the child reaches a terminal state (the throw should fail it within ~1s).
         Run? run = null;

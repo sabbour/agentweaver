@@ -251,7 +251,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token).ConfigureAwait(false);
                 var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
-                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt,
+                    run.LifecycleGeneration);
                 launchCompleted = true;
             }
             catch
@@ -419,7 +420,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 ctsRegistered = true;
                 await EnsureAuthorizedAsync().ConfigureAwait(false);
                 _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt,
-                    existingLease: existingLease);
+                    run.LifecycleGeneration, existingLease: existingLease);
                 launchCompleted = true;
             }
             catch
@@ -611,7 +612,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token).ConfigureAwait(false);
                 var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
-                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt,
+                    run.LifecycleGeneration);
                 launchCompleted = true;
             }
             catch
@@ -734,6 +736,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 entry,
                 run.SubmittingUser,
                 runCt,
+                run.LifecycleGeneration,
                 existingLease);
         }
         catch
@@ -997,7 +1000,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 var runCt = _registry.Register(newAgentRun.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
                 _watchLoop.StartWatching(
-                    newAgentRun.Id.ToString(), streamingRun, entry, newAgentRun.SubmittingUser, runCt);
+                    newAgentRun.Id.ToString(), streamingRun, entry, newAgentRun.SubmittingUser, runCt,
+                    newAgentRun.LifecycleGeneration);
                 launchCompleted = true;
             }
             catch

@@ -89,7 +89,7 @@ public interface IRunEventStream
 
     /// <summary>
     /// Appends events only while the exact coordinator lease and lifecycle generation remain current.
-    /// PostgreSQL implementations fence the lease check and append in one transaction.
+    /// PostgreSQL and SQLite implementations fence the lease check and append in one transaction.
     /// </summary>
     Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedAsync(
         string runId,

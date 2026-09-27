@@ -152,7 +152,7 @@ public sealed class RunWatchLoopStreamEndRecoveryTests : IClassFixture<ReviewWeb
                     scope.ServiceProvider, lifetime);
                 shutdownWatcher.StartWatching(
                     parentId.ToString(), streamingRun, entry,
-                    ReviewWebApplicationFactory.OwnerUser, runCts.Token);
+                    ReviewWebApplicationFactory.OwnerUser, runCts.Token, 1);
                 await Task.Delay(100);
                 lifetime.StopApplication();
                 var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
@@ -281,6 +281,70 @@ public sealed class RunWatchLoopStreamEndRecoveryTests : IClassFixture<ReviewWeb
             .Should().NotContain(e => e.Type == "watch.stream_closed_without_terminal_event");
         entry.IsCompleted.Should().BeFalse();
         await leases.ReleaseAsync(runId, "next", next.FencingToken);
+    }
+
+    [Fact]
+    public async Task LeaseHandoffAfterPrecheck_AndLifecycleReopen_DoNotSpendSuccessorClosureBudget()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var svc = ActivatorUtilities.CreateInstance<RunWatchLoopService>(scope.ServiceProvider);
+        var store = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        var leases = scope.ServiceProvider.GetRequiredService<IRunLeaseStore>();
+        var events = scope.ServiceProvider.GetRequiredService<IRunEventStream>();
+        var sqlite = scope.ServiceProvider.GetRequiredService<SqliteDb>();
+        var id = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = id, RepositoryPath = Path.GetTempPath(), OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot, Task = "closure handoff",
+            SubmittingUser = ReviewWebApplicationFactory.OwnerUser,
+            Status = RunStatus.AwaitingReview, StartedAt = DateTimeOffset.UtcNow,
+        });
+        var runId = id.ToString();
+        var entry = scope.ServiceProvider.GetRequiredService<RunStreamStore>()
+            .Create(runId, ReviewWebApplicationFactory.OwnerUser);
+        var old = await leases.TryClaimAsync(runId, "old-closure", TimeSpan.FromMinutes(5));
+        await using var streamingRun = await CreateUnwatchedStreamAsync();
+        for (var attempt = 0; attempt < 2; attempt++)
+            await svc.HandleStreamEndAsync(runId, streamingRun, entry, null, CancellationToken.None,
+                new RunLeaseClaim("old-closure", old.FencingToken, 1));
+        (await events.GetPersistedEventsAsync(runId))
+            .Count(e => e.Type == "watch.stream_closed_without_terminal_event").Should().Be(2);
+        var successorToken = 0L;
+        svc.BeforeClosureAppendOverride = async () =>
+        {
+            await leases.ReleaseAsync(runId, "old-closure", old.FencingToken);
+            var next = await leases.TryClaimAsync(runId, "new-closure", TimeSpan.FromMinutes(5));
+            next.Claimed.Should().BeTrue();
+            successorToken = next.FencingToken;
+        };
+        await svc.HandleStreamEndAsync(runId, streamingRun, entry, null, CancellationToken.None,
+            new RunLeaseClaim("old-closure", old.FencingToken, 1));
+        (await events.GetPersistedEventsAsync(runId)).Should().HaveCount(2);
+        entry.IsCompleted.Should().BeFalse();
+
+        await using (var connection = await sqlite.OpenConnectionAsync())
+        await using (var update = connection.CreateCommand())
+        {
+            update.CommandText = "UPDATE runs SET lifecycle_generation=2 WHERE run_id=$runId;";
+            update.Parameters.AddWithValue("$runId", runId);
+            (await update.ExecuteNonQueryAsync()).Should().Be(1);
+        }
+        svc.BeforeClosureAppendOverride = null;
+        await svc.HandleStreamEndAsync(runId, streamingRun, entry, null, CancellationToken.None,
+            new RunLeaseClaim("new-closure", successorToken, 1));
+        (await events.GetPersistedEventsAsync(runId)).Should().HaveCount(2,
+            "even the current lease cannot spend a reopened lifecycle's budget using an old watcher");
+
+        await svc.HandleStreamEndAsync(runId, streamingRun, entry, null, CancellationToken.None,
+            new RunLeaseClaim("new-closure", successorToken, 2));
+        var persisted = await new SqliteRunEventStream(scope.ServiceProvider.GetRequiredService<IConfiguration>())
+            .GetPersistedEventsAsync(runId);
+        persisted.Should().HaveCount(3, "a new lifecycle starts its own two-retry budget");
+        JsonSerializer.SerializeToElement(persisted.Last().Payload)
+            .GetProperty("lifecycleGeneration").GetInt32().Should().Be(2);
+        (await store.GetAsync(id))!.Status.Should().Be(RunStatus.AwaitingReview);
+        await leases.ReleaseAsync(runId, "new-closure", successorToken);
     }
 
     private static async Task<StreamingRun> CreateUnwatchedStreamAsync()

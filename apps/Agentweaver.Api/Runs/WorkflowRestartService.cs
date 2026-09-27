@@ -610,7 +610,8 @@ public sealed class WorkflowRestartService
                     ctsRegistered = true;
                     ct.ThrowIfCancellationRequested();
                     _watchLoop.StartWatching(
-                        runIdStr, streamingRun, entry, run.SubmittingUser, runCt, recoveryLease.Claim);
+                        runIdStr, streamingRun, entry, run.SubmittingUser, runCt, run.LifecycleGeneration,
+                        recoveryLease.Claim);
                     recoveryLease.MarkTransferred();
                 }
                 catch

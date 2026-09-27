@@ -577,8 +577,81 @@ public sealed class SqliteRunEventStream : IRunEventStream
         IReadOnlyList<RunEvent> events,
         IRunStore runStore,
         RunLeaseFence lease,
-        CancellationToken ct = default) =>
-        AppendWhileRunActiveAsync(runId, events, runStore, ct);
+        CancellationToken ct = default)
+    {
+        return AppendWhileRunLeaseOwnedCoreAsync(runId, events, lease, ct);
+    }
+
+    private async Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedCoreAsync(
+        string runId, IReadOnlyList<RunEvent> events, RunLeaseFence lease, CancellationToken ct)
+    {
+        if (events.Count == 0)
+            return [];
+
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder(_runConnectionString) { Pooling = false }.ToString());
+        await connection.OpenAsync(ct).ConfigureAwait(false);
+        using (var attach = connection.CreateCommand())
+        {
+            attach.CommandText = "ATTACH DATABASE $path AS event_store;";
+            attach.Parameters.AddWithValue("$path", new SqliteConnectionStringBuilder(_connectionString).DataSource);
+            await attach.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        using var tx = connection.BeginTransaction();
+        using (var owned = connection.CreateCommand())
+        {
+            owned.Transaction = tx;
+            owned.CommandText = """
+                UPDATE runs SET status=status
+                 WHERE run_id=$runId AND lifecycle_generation=$generation
+                   AND status NOT IN ('merged','declined','failed','completed','merge_failed','assemble_ready','cancelled')
+                   AND EXISTS (SELECT 1 FROM run_execution_leases
+                        WHERE run_id=$runId AND owner_id=$owner AND fencing_token=$token
+                          AND lease_expires_at>$now);
+                """;
+            owned.Parameters.AddWithValue("$runId", runId);
+            owned.Parameters.AddWithValue("$generation", lease.LifecycleGeneration);
+            owned.Parameters.AddWithValue("$owner", lease.OwnerId);
+            owned.Parameters.AddWithValue("$token", lease.FencingToken);
+            owned.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            if (await owned.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0)
+                return [];
+        }
+
+        var recorded = new List<RunEvent>(events.Count);
+        foreach (var rawEvent in events)
+        {
+            ct.ThrowIfCancellationRequested();
+            var evt = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(rawEvent));
+            using var insert = connection.CreateCommand();
+            insert.Transaction = tx;
+            insert.CommandText = """
+                INSERT INTO event_store."RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
+                SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
+                FROM event_store."RunEvents" WHERE "RunId"=$runId
+                RETURNING "Sequence";
+                """;
+            insert.Parameters.AddWithValue("$runId", runId);
+            insert.Parameters.AddWithValue("$type", evt.Type);
+            insert.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(evt.Payload));
+            insert.Parameters.AddWithValue("$createdAt",
+                evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+            recorded.Add(evt with { Sequence = Convert.ToInt32(await insert.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture) });
+        }
+        ct.ThrowIfCancellationRequested();
+        tx.Commit();
+        lock (_channelsGate)
+        {
+            if (!_completedRuns.ContainsKey(runId))
+            {
+                var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
+                foreach (var evt in recorded)
+                    channel.Writer.TryWrite(evt);
+            }
+        }
+        return recorded;
+    }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<RunEvent> SubscribeAsync(

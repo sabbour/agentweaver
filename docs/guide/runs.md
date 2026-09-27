@@ -223,8 +223,9 @@ work plan, and healthy child runs. Only an explicit stop or a persisted terminal
 can end the run and cancel its active branches. A genuine stream completion without a
 terminal event remains recoverable for two closures; if it occurs a third time in the same run lifecycle,
 the run fails explicitly with `watch_stream_completed_without_terminal_event` and
-closure-count diagnostics instead of retrying indefinitely. Shutdown and lease handoff
-do not count as malformed completions.
+closure-count diagnostics instead of retrying indefinitely. The retry count resets for
+each run lifecycle. Shutdown, lease handoff, and a superseded watcher from a prior
+lifecycle do not count as malformed completions or terminalize the resumed run.
 
 ### Topology layout
 
