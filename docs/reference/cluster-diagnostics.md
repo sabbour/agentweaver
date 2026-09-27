@@ -2,7 +2,7 @@
 
 ## Overview
 
-`GET /api/diagnostics/cluster` returns a real-time Kubernetes snapshot. It includes dependency checks, agent-host pod inventory, SandboxWarmPool objects, and SandboxClaim objects.
+`GET /api/diagnostics/cluster` returns a real-time Kubernetes snapshot. It includes dependency checks, agent-host pod inventory, SandboxWarmPool objects, and SandboxClaim objects. Project-owned workflow-child evidence is filtered to projects where the caller has an explicit Viewer-or-higher role; platform administrators can inspect all projects, while callers without project scope receive no workflow-child identifiers.
 
 This endpoint requires bearer authentication. Without a Kubernetes client the endpoint remains available: Kubernetes checks report unknown/unavailable conditions and inventories can be empty. Topology returns unavailable graph/layer results.
 

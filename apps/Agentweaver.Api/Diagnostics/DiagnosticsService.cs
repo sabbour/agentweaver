@@ -252,7 +252,9 @@ public sealed class DiagnosticsService
     /// a genuinely broken dependency (DB down, expired GitHub token, exhausted quota, empty warm
     /// pool) surfaces in the Cluster diagnostics page instead of being masked by a green status.
     /// </summary>
-    public async Task<ClusterDiagnosticsDto> GetClusterDiagnosticsAsync(CancellationToken ct = default)
+    public async Task<ClusterDiagnosticsDto> GetClusterDiagnosticsAsync(
+        ClusterDiagnosticsProjectScope projectScope,
+        CancellationToken ct = default)
     {
         var overallSw = Stopwatch.StartNew();
         var generatedUtc = DateTimeOffset.UtcNow;
@@ -275,7 +277,8 @@ public sealed class DiagnosticsService
             Array.Empty<PendingCapacityRunDto>(),
             value => value.Count == 0, ct);
         var workflowChildWorkTask = CollectInventoryAsync(
-            "workflow_child_work", _scopeFactory is not null, GetWorkflowChildWorkAsync,
+            "workflow_child_work", _scopeFactory is not null,
+            token => GetWorkflowChildWorkAsync(projectScope, token),
             Array.Empty<WorkflowChildWorkDiagnosticDto>(),
             value => value.Count == 0, ct);
         var warmPoolSnapshotsTask = CollectInventoryAsync(
@@ -526,12 +529,20 @@ public sealed class DiagnosticsService
     }
 
     private async Task<IReadOnlyList<WorkflowChildWorkDiagnosticDto>> GetWorkflowChildWorkAsync(
+        ClusterDiagnosticsProjectScope projectScope,
         CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var plans = await db.WorkPlans.AsNoTracking()
-            .Where(plan => plan.ParentRunId != null && plan.ParentWorkflowNodeId != null)
+        var plansQuery = db.WorkPlans.AsNoTracking()
+            .Where(plan => plan.ParentRunId != null && plan.ParentWorkflowNodeId != null);
+        if (!projectScope.IncludeAllProjects)
+        {
+            var projectIds = projectScope.ProjectIds.ToArray();
+            plansQuery = plansQuery.Where(plan => projectIds.Contains(plan.ProjectId));
+        }
+
+        var plans = await plansQuery
             .OrderByDescending(plan => plan.Id)
             .Take(50)
             .ToListAsync(ct)
