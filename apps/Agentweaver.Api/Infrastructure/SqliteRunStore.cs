@@ -530,6 +530,9 @@ public sealed class SqliteRunStore : IRunStore
     public async Task<bool> TryMutateTerminalOutcomeAsync(
         RunId runId, TerminalRunMutation mutation, CancellationToken ct = default)
     {
+        if (mutation.RequiredLease is { } fence
+            && fence.LifecycleGeneration != mutation.Outcome.ExpectedLifecycleGeneration)
+            return false;
         // Specialized callers currently require one precise source status (merging or
         // awaiting_review). Keep that compare-and-swap in the same SQLite transaction as the outbox.
         var expected = mutation.ExpectedStatuses?.SingleOrDefault();
@@ -550,6 +553,14 @@ public sealed class SqliteRunStore : IRunStore
               diff=COALESCE($diff, diff)
              WHERE run_id=$runId AND lifecycle_generation=$generation
                AND ($expectedStatus IS NULL OR status=$expectedStatus)
+               AND ($leaseOwner IS NULL OR EXISTS (
+                   SELECT 1 FROM run_execution_leases lease
+                    WHERE lease.run_id=$runId AND lease.owner_id=$leaseOwner
+                      AND lease.fencing_token=$fencingToken AND lease.lease_expires_at>$now))
+               AND ($parentGeneration IS NULL OR EXISTS (
+                   SELECT 1 FROM runs parent WHERE parent.run_id=runs.parent_run_id
+                     AND parent.lifecycle_generation=$parentGeneration
+                     AND parent.status='in_progress'))
                AND (preview_publication_lease_until IS NULL
                     OR preview_publication_lease_until <= $now)
                AND status NOT IN ('merged','declined','failed','completed','merge_failed','assemble_ready','cancelled');
@@ -566,6 +577,9 @@ public sealed class SqliteRunStore : IRunStore
         update.Parameters.AddWithValue("$runId", runId.ToString());
         update.Parameters.AddWithValue("$generation", mutation.Outcome.ExpectedLifecycleGeneration);
         update.Parameters.AddWithValue("$expectedStatus", expected is null ? DBNull.Value : expected.Value.ToApiString());
+        update.Parameters.AddWithValue("$leaseOwner", (object?)mutation.RequiredLease?.OwnerId ?? DBNull.Value);
+        update.Parameters.AddWithValue("$fencingToken", (object?)mutation.RequiredLease?.FencingToken ?? DBNull.Value);
+        update.Parameters.AddWithValue("$parentGeneration", (object?)mutation.ExpectedParentLifecycleGeneration ?? DBNull.Value);
         update.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
         if (await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0) return false;
         await using var insert = connection.CreateCommand();

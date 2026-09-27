@@ -699,6 +699,13 @@ public sealed class SqliteDb
             executable_workflow_pinned_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS run_execution_leases (
+            run_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL,
+            lease_expires_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS run_revisions (
             run_id              TEXT NOT NULL,
             revision_number     INTEGER NOT NULL,

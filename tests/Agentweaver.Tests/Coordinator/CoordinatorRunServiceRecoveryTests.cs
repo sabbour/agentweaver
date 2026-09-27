@@ -163,7 +163,8 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         }
 
         var streamStore = new RunStreamStore();
-        var svc = BuildCoordinatorRunService(_runStore, streamStore);
+        var svc = BuildCoordinatorRunService(_runStore, streamStore,
+            leaseStore: new SqliteRunLeaseStore(_runDb.Db));
 
         await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
         await Task.Delay(200);
@@ -227,7 +228,8 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             await db.SaveChangesAsync();
         }
 
-        await BuildCoordinatorRunService(_runStore, new RunStreamStore())
+        await BuildCoordinatorRunService(_runStore, new RunStreamStore(),
+                leaseStore: new SqliteRunLeaseStore(_runDb.Db))
             .RecoverInterruptedRunsAsync(CancellationToken.None);
 
         (await _runStore.GetAsync(runId))!.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);

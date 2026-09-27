@@ -1109,7 +1109,7 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
     if (_provider is "postgres" or "postgresql")
         builder.Services.AddSingleton<IRunLeaseStore, PostgresRunLeaseStore>();
     else
-        builder.Services.AddSingleton<IRunLeaseStore, NoOpRunLeaseStore>();
+        builder.Services.AddSingleton<IRunLeaseStore, SqliteRunLeaseStore>();
 }
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();

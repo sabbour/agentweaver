@@ -24,6 +24,7 @@ public sealed class WorkflowRestartService
 {
     internal Func<DomainRun, CancellationToken, Task>? RestartChildRunOverride { get; set; }
     internal Func<DomainRun, RunLeaseClaim, CancellationToken, Task>? RestartPinnedWorkflowRunOverride { get; set; }
+    internal Func<DomainRun, CancellationToken, Task>? BeforeRecoveredTerminalWriteOverride { get; set; }
 
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
@@ -82,6 +83,9 @@ public sealed class WorkflowRestartService
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         foreach (var run in inProgress)
         {
+            var parentGeneration = RunId.TryParse(run.ParentRunId, out var parentIdAtScan)
+                ? (await _runStore.GetAsync(parentIdAtScan, ct).ConfigureAwait(false))?.LifecycleGeneration
+                : null;
             var childWorkCorrelation = await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false);
             if (run.ParentRunId is null
                 && run.GetExecutableWorkflowPin() is { } pin
@@ -177,6 +181,8 @@ public sealed class WorkflowRestartService
                             entry: null,
                             cleanupWorktree: false,
                             retryable: true,
+                            lease: childRecoveryLease.Claim,
+                            expectedParentGeneration: parentGeneration,
                             ct: ct).ConfigureAwait(false);
                     }
                 }
@@ -260,7 +266,7 @@ public sealed class WorkflowRestartService
                                             token).ConfigureAwait(false);
                                 }
                                 await orchestrator!.RestartInterruptedChildRunAsync(
-                                    run, recoveryLease.Claim, ct, IsStillAuthorizedAsync).ConfigureAwait(false);
+                                    run, recoveryLease.Claim, ct, IsStillAuthorizedAsync, expectedGeneration).ConfigureAwait(false);
                                 recoveryLease.MarkTransferred();
                             }
                             _logger.LogInformation(
@@ -297,6 +303,8 @@ public sealed class WorkflowRestartService
                     entry: null,
                     cleanupWorktree: true,
                     retryable: retryableChildTransportFailure,
+                    lease: recoveryLease.Claim,
+                    expectedParentGeneration: parentGeneration,
                     ct: ct)
                 .ConfigureAwait(false);
         }
@@ -353,6 +361,9 @@ public sealed class WorkflowRestartService
             // Mutable local shadow: reattach (P0-A, #246) may swap in a corrected WorktreePath/
             // WorktreeBranch mid-iteration; the foreach iteration variable itself can't be reassigned.
             var run = awaitingRun;
+            var parentGeneration = RunId.TryParse(run.ParentRunId, out var parentIdAtScan)
+                ? (await _runStore.GetAsync(parentIdAtScan, ct).ConfigureAwait(false))?.LifecycleGeneration
+                : null;
             var runIdStr = run.Id.ToString();
             await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(runIdStr, ct)
                 .ConfigureAwait(false);
@@ -400,7 +411,7 @@ public sealed class WorkflowRestartService
                     _logger.LogWarning(
                         "Auto-expiring stale no-checkpoint AwaitingReview run {RunId} (age={Age:g}); failing run",
                         run.Id, DateTimeOffset.UtcNow - run.StartedAt);
-                    await FailRecoveredRunAsync(run, "stale_no_checkpoint", entry, cleanupWorktree: false, ct: ct)
+                    await FailRecoveredRunAsync(run, "stale_no_checkpoint", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -421,7 +432,7 @@ public sealed class WorkflowRestartService
                         _logger.LogError(
                             "Worktree missing for recovered AwaitingReview run {RunId} at {Path}; failing run",
                             run.Id, run.WorktreePath);
-                        await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: ct)
+                        await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                             .ConfigureAwait(false);
                         continue;
                     }
@@ -432,7 +443,7 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "WorktreeBranch missing for recovered AwaitingReview run {RunId}; failing run",
                         run.Id);
-                    await FailRecoveredRunAsync(run, "recovered_worktree_branch_missing", entry, cleanupWorktree: false, ct: ct)
+                    await FailRecoveredRunAsync(run, "recovered_worktree_branch_missing", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -442,7 +453,7 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "TreeHash missing for recovered AwaitingReview run {RunId}; failing run",
                         run.Id);
-                    await FailRecoveredRunAsync(run, "recovered_tree_hash_missing", entry, cleanupWorktree: false, ct: ct)
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_missing", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -454,7 +465,7 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "Worktree tree hash mismatch for recovered run {RunId}: expected={Expected} actual={Actual}; failing run",
                         run.Id, run.TreeHash, currentNoCheckpointHash);
-                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, ct: ct)
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -482,7 +493,7 @@ public sealed class WorkflowRestartService
                 else
                 {
                     _logger.LogError("Worktree missing for run {RunId} at {Path}; failing run", run.Id, run.WorktreePath);
-                    await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: ct)
+                    await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -496,7 +507,7 @@ public sealed class WorkflowRestartService
                 {
                     _logger.LogError("Worktree tree hash mismatch for run {RunId}: expected={Expected} actual={Actual}; failing run",
                         run.Id, run.TreeHash, currentTreeHash);
-                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, ct: ct)
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -520,7 +531,7 @@ public sealed class WorkflowRestartService
                 {
                     _logger.LogWarning(ex, "Model provider changed for recovered run {RunId}", run.Id);
                     await FailRecoveredRunAsync(
-                        run, "model_provider_changed", entry, cleanupWorktree: false, ct: ct)
+                        run, "model_provider_changed", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -541,6 +552,8 @@ public sealed class WorkflowRestartService
                         "github_capability_unavailable",
                         entry,
                         cleanupWorktree: false,
+                        lease: recoveryLease.Claim,
+                        expectedParentGeneration: parentGeneration,
                         ct: ct)
                     .ConfigureAwait(false);
                 continue;
@@ -586,7 +599,7 @@ public sealed class WorkflowRestartService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to resume workflow for run {RunId}; failing run", run.Id);
-                await FailRecoveredRunAsync(run, "workflow_resume_failed", entry, cleanupWorktree: false, ct: ct)
+                await FailRecoveredRunAsync(run, "workflow_resume_failed", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                     .ConfigureAwait(false);
             }
         }
@@ -638,6 +651,7 @@ public sealed class WorkflowRestartService
                 entry,
                 cleanupWorktree: false,
                 retryable: true,
+                lease: recoveryLease.Claim,
                 ct: ct).ConfigureAwait(false);
         }
     }
@@ -762,13 +776,21 @@ public sealed class WorkflowRestartService
         RunStreamEntry? entry,
         bool cleanupWorktree,
         CancellationToken ct,
-        bool retryable = false)
+        bool retryable = false,
+        RunLeaseClaim? lease = null,
+        int? expectedParentGeneration = null)
     {
         var runId = run.Id.ToString();
-        var changed = await _runStore.TrySetTerminalOutcomeAsync(
+        var claim = lease ?? throw new InvalidOperationException("Recovery terminal transition requires its execution lease.");
+        if (BeforeRecoveredTerminalWriteOverride is { } beforeWrite)
+            await beforeWrite(run, ct).ConfigureAwait(false);
+        var changed = await _runStore.TryMutateTerminalOutcomeAsync(
             run.Id,
-            TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason, retryable }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
-            reason,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason, retryable }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                reason,
+                RequiredLease: new RunLeaseFence(claim.OwnerId, claim.FencingToken, run.LifecycleGeneration),
+                ExpectedParentLifecycleGeneration: expectedParentGeneration),
             ct).ConfigureAwait(false);
         if (!changed)
         {

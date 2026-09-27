@@ -1216,7 +1216,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         try
         {
             await (StartChildRunOverride?.Invoke(childRun, ct)
-                ?? _orchestrator.StartChildRunAsync(childRun, ct, launchLease, authorize)).ConfigureAwait(false);
+                ?? _orchestrator.StartChildRunAsync(childRun, ct, launchLease, authorize,
+                    launchLease is null ? null : coordinatorRun.LifecycleGeneration)).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested || launchLease is not null)
         {
@@ -1235,7 +1236,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // /api/runs/{childRunId} cannot find — an empty execution log. Persist a terminal FAILED run
             // + RunFailed event FIRST (defensive: never throws), so the failed child is retrievable,
             // THEN mark the subtask failed.
-            await _orchestrator.MarkChildRunFailedAsync(childRun, ex, ct).ConfigureAwait(false);
+            await _orchestrator.MarkChildRunFailedAsync(childRun, ex, ct, launchLease,
+                launchLease is null ? null : coordinatorRun.LifecycleGeneration).ConfigureAwait(false);
+            if (authorize is not null && !await authorize(ct).ConfigureAwait(false))
+                throw new OperationCanceledException("Coordinator child dispatch lost its durable owner.");
 
             var failed = await TryUpdateOwnedSubtaskAsync(
                     workPlanId, subtaskId, SubtaskStatus.Failed, childRun.Id.ToString(), ct)
