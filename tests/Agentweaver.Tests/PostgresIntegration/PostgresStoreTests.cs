@@ -6,6 +6,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using System.Text.Json;
 using static Agentweaver.Tests.Backlog.BacklogTestData;
 
 namespace Agentweaver.Tests.PostgresIntegration;
@@ -738,6 +739,123 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
             "exactly one concurrent claim must win");
         results.Should().ContainSingle(r => r == ClaimReserveResult.Lost,
             "the other concurrent claim must lose");
+    }
+
+    [PostgresFact]
+    public async Task Claim_HoldsPrerequisiteOutcomeThroughDependentWrite()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var prerequisite = MakeReadyTask(project.Id, "prerequisite");
+        var dependent = MakeReadyTask(project.Id, "dependent");
+        await store.InsertAsync(prerequisite);
+        await store.InsertAsync(dependent);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            db.BacklogTaskDependencies.Add(new Agentweaver.Api.Memory.BacklogTaskDependencyRecord
+            {
+                ProjectId = project.Id.ToString(),
+                TaskId = dependent.Id.ToString(),
+                DependsOnTaskId = prerequisite.Id.ToString(),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var prerequisiteRunId = RunId.New();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id, prerequisite.Id, MakeCoordinatorRun(project.Id, prerequisiteRunId),
+            DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Won);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            await db.Runs.Where(r => r.RunId == prerequisiteRunId.ToString())
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "completed")
+                    .SetProperty(r => r.Result, "complete")
+                    .SetProperty(r => r.LifecycleGeneration, 3));
+        }
+
+        var gate = "aw_claim_gate_" + Guid.NewGuid().ToString("N");
+        var lockKey = Random.Shared.NextInt64(1, long.MaxValue);
+        await using var blocker = new NpgsqlConnection(pg.ConnectionString);
+        await blocker.OpenAsync();
+        await using (var setup = new NpgsqlCommand(
+            $"""
+             CREATE FUNCTION {gate}() RETURNS trigger AS $$
+             BEGIN
+                 PERFORM pg_advisory_xact_lock({lockKey});
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql;
+             CREATE TRIGGER {gate} BEFORE UPDATE ON backlog_tasks
+             FOR EACH ROW WHEN (OLD.task_id = '{dependent.Id}')
+             EXECUTE FUNCTION {gate}();
+             """, blocker))
+            await setup.ExecuteNonQueryAsync();
+
+        Task<ClaimReserveResult>? claim = null;
+        try
+        {
+            await using (var hold = new NpgsqlCommand($"SELECT pg_advisory_lock({lockKey})", blocker))
+                await hold.ExecuteNonQueryAsync();
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var dependentRunId = RunId.New();
+            claim = store.TryClaimAndReserveCoordinatorRunAsync(
+                project.Id, dependent.Id, MakeCoordinatorRun(project.Id, dependentRunId),
+                DateTimeOffset.UtcNow, timeout.Token);
+
+            var waiting = false;
+            for (var attempt = 0; attempt < 200 && !waiting; attempt++)
+            {
+                await using var observer = new NpgsqlConnection(pg.ConnectionString);
+                await observer.OpenAsync();
+                await using var check = new NpgsqlCommand(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'advisory' AND query LIKE '%backlog_tasks%')",
+                    observer);
+                waiting = (bool)(await check.ExecuteScalarAsync())!;
+                if (!waiting)
+                    await Task.Delay(25);
+            }
+            waiting.Should().BeTrue("the dependent claim must reach its exact UPDATE boundary");
+
+            await using (var writer = new NpgsqlConnection(pg.ConnectionString))
+            {
+                await writer.OpenAsync();
+                await using var change = new NpgsqlCommand(
+                    "SET lock_timeout = '400ms'; UPDATE runs SET status = 'failed', result = 'failed' WHERE run_id = @runId",
+                    writer);
+                change.Parameters.AddWithValue("runId", prerequisiteRunId.ToString());
+                var attempt = () => change.ExecuteNonQueryAsync();
+                (await attempt.Should().ThrowAsync<PostgresException>())
+                    .Which.SqlState.Should().Be(PostgresErrorCodes.LockNotAvailable,
+                        "the prerequisite cannot change while the dependent claim is at its write boundary");
+            }
+
+            await using (var release = new NpgsqlCommand($"SELECT pg_advisory_unlock({lockKey})", blocker))
+                await release.ExecuteNonQueryAsync();
+            (await claim).Should().Be(ClaimReserveResult.Won);
+
+            var claimed = await store.GetAsync(project.Id, dependent.Id);
+            var snapshot = JsonSerializer.Deserialize<BacklogClaimedPrerequisite[]>(
+                claimed!.ClaimedPrerequisitesJson!)!;
+            snapshot.Should().ContainSingle().Which.Should().Match<BacklogClaimedPrerequisite>(
+                input => input.RunId == prerequisiteRunId.ToString()
+                    && input.LifecycleGeneration == 3);
+            await using var db = await pg.CreateDbContextAsync();
+            (await db.Runs.CountAsync(r => r.RunId == dependentRunId.ToString())).Should().Be(1);
+        }
+        finally
+        {
+            await using (var release = new NpgsqlCommand($"SELECT pg_advisory_unlock({lockKey})", blocker))
+                await release.ExecuteNonQueryAsync();
+            if (claim is not null)
+            {
+                try { await claim; } catch (OperationCanceledException) { }
+            }
+            await using var cleanup = new NpgsqlCommand(
+                $"DROP TRIGGER {gate} ON backlog_tasks; DROP FUNCTION {gate}()", blocker);
+            await cleanup.ExecuteNonQueryAsync();
+        }
     }
 
     [PostgresFact]

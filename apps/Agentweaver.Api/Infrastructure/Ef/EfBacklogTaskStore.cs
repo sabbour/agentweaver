@@ -468,11 +468,35 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             .SingleOrDefaultAsync(ct);
         if (projectLock is null || projectLock.State != "active")
             return new ClaimReserveOutcome(ClaimReserveResult.ProjectUnavailable);
+
+        // Hold the prerequisite identities and their run outcomes through the claim write.
+        // The project lock already fences dependency-graph edits; these row locks fence
+        // concurrent archive/run-link and terminal-outcome changes before snapshotting.
+        await db.Database.SqlQuery<string>(
+            $"""
+             SELECT p.task_id AS "Value"
+             FROM backlog_task_dependencies d
+             JOIN backlog_tasks p ON p.task_id = d.depends_on_task_id AND p.project_id = d.project_id
+             WHERE d.project_id = {pid} AND d.task_id = {tid}
+             ORDER BY p.task_id
+             FOR SHARE OF p
+             """).ToListAsync(ct);
+        await db.Database.SqlQuery<string>(
+            $"""
+             SELECT r.run_id AS "Value"
+             FROM backlog_task_dependencies d
+             JOIN backlog_tasks p ON p.task_id = d.depends_on_task_id AND p.project_id = d.project_id
+             JOIN runs r ON r.run_id = p.run_id AND r.project_id = d.project_id
+             WHERE d.project_id = {pid} AND d.task_id = {tid}
+             ORDER BY r.run_id
+             FOR SHARE OF r
+             """).ToListAsync(ct);
+
         var inputs = await (
             from dependency in db.BacklogTaskDependencies.AsNoTracking()
-            join prerequisite in db.BacklogTasks.AsNoTracking()
+            join prerequisite in db.BacklogTasks.AsNoTracking().Where(p => p.ProjectId == pid)
                 on dependency.DependsOnTaskId equals prerequisite.TaskId
-            join run in db.Runs.AsNoTracking()
+            join run in db.Runs.AsNoTracking().Where(r => r.ProjectId == pid)
                 on prerequisite.RunId equals run.RunId into runs
             from run in runs.DefaultIfEmpty()
             where dependency.ProjectId == pid && dependency.TaskId == tid
