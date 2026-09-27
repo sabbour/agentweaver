@@ -45,10 +45,22 @@ public static class ResilientCheckpointStore
         => Create(checkpointDir, logger, DefaultOpener);
 
     internal static FileSystemJsonCheckpointStore Create(
+        string checkpointDir, ILogger logger, out string selectedDirectory)
+        => Create(checkpointDir, logger, DefaultOpener, out selectedDirectory);
+
+    internal static FileSystemJsonCheckpointStore Create(
         string checkpointDir,
         ILogger logger,
         Func<DirectoryInfo, FileSystemJsonCheckpointStore> openStore)
+        => Create(checkpointDir, logger, openStore, out _);
+
+    internal static FileSystemJsonCheckpointStore Create(
+        string checkpointDir,
+        ILogger logger,
+        Func<DirectoryInfo, FileSystemJsonCheckpointStore> openStore,
+        out string selectedDirectory)
     {
+        selectedDirectory = checkpointDir;
         Directory.CreateDirectory(checkpointDir);
         var indexPath = Path.Combine(checkpointDir, "index.jsonl");
         SanitizeIndex(indexPath, logger);
@@ -72,7 +84,7 @@ public static class ResilientCheckpointStore
                 }
 
                 logger.LogDebug(ex, "Checkpoint store {Path} still locked after {Max} attempts.", checkpointDir, SharedOpenAttempts);
-                return CreatePerPodStore(checkpointDir, logger, "lock contention", openStore);
+                return CreatePerPodStore(checkpointDir, logger, "lock contention", openStore, out selectedDirectory);
             }
             catch (Exception ex) when (IsAccessDenied(ex))
             {
@@ -81,7 +93,7 @@ public static class ResilientCheckpointStore
                 // stacktrace at fail. Fall back quietly to a per-pod directory; CreatePerPodStore emits a
                 // single concise warn describing where checkpoints actually landed.
                 logger.LogDebug(ex, "Checkpoint store {Path} is not accessible (permission denied).", checkpointDir);
-                return CreatePerPodStore(checkpointDir, logger, "permission denied", openStore);
+                return CreatePerPodStore(checkpointDir, logger, "permission denied", openStore, out selectedDirectory);
             }
             catch (Exception ex)
             {
@@ -99,27 +111,27 @@ public static class ResilientCheckpointStore
                     logger.LogDebug(retryEx,
                         "Checkpoint store {Path} is locked after index quarantine; falling back to a per-pod directory.",
                         checkpointDir);
-                    return CreatePerPodStore(checkpointDir, logger, "lock contention", openStore);
+                    return CreatePerPodStore(checkpointDir, logger, "lock contention", openStore, out selectedDirectory);
                 }
                 catch (Exception retryEx) when (IsAccessDenied(retryEx))
                 {
                     logger.LogDebug(retryEx,
                         "Checkpoint store {Path} is not accessible after index quarantine; falling back to a per-pod directory.",
                         checkpointDir);
-                    return CreatePerPodStore(checkpointDir, logger, "permission denied", openStore);
+                    return CreatePerPodStore(checkpointDir, logger, "permission denied", openStore, out selectedDirectory);
                 }
                 catch (Exception retryEx)
                 {
                     logger.LogError(retryEx,
                         "Checkpoint store {Path} still failed after index quarantine; falling back to a per-pod directory.",
                         checkpointDir);
-                    return CreatePerPodStore(checkpointDir, logger, "index still unreadable", openStore);
+                    return CreatePerPodStore(checkpointDir, logger, "index still unreadable", openStore, out selectedDirectory);
                 }
             }
         }
 
         // Unreachable in practice (the loop always returns), but keeps the API booting no matter what.
-        return CreatePerPodStore(checkpointDir, logger, "shared store unavailable", openStore);
+        return CreatePerPodStore(checkpointDir, logger, "shared store unavailable", openStore, out selectedDirectory);
     }
 
     /// <summary>
@@ -133,7 +145,8 @@ public static class ResilientCheckpointStore
         string checkpointDir,
         ILogger logger,
         string reason,
-        Func<DirectoryInfo, FileSystemJsonCheckpointStore> openStore)
+        Func<DirectoryInfo, FileSystemJsonCheckpointStore> openStore,
+        out string selectedDirectory)
     {
         var podId = ResolvePodId();
         var perPodDir = Path.Combine(checkpointDir, "replicas", podId);
@@ -142,6 +155,7 @@ public static class ResilientCheckpointStore
             Directory.CreateDirectory(perPodDir);
             SanitizeIndex(Path.Combine(perPodDir, "index.jsonl"), logger);
             var store = openStore(new DirectoryInfo(perPodDir));
+            selectedDirectory = perPodDir;
             logger.LogWarning(
                 "Shared checkpoint store {Shared} not usable ({Reason}); using per-pod directory {Dir}. "
                 + "Checkpoints are durable for this pod but not shared across replicas (cross-replica resume needs a DB-backed store).",
@@ -155,6 +169,7 @@ public static class ResilientCheckpointStore
             var tempDir = Path.Combine(Path.GetTempPath(), $"agentweaver-checkpoints-{podId}-{Guid.NewGuid():N}");
             Directory.CreateDirectory(tempDir);
             var store = openStore(new DirectoryInfo(tempDir));
+            selectedDirectory = tempDir;
             logger.LogWarning(
                 "Shared checkpoint store {Shared} not usable ({Reason}) and per-pod directory was not writable; "
                 + "using temporary directory {Temp}. Checkpoints will NOT persist across pod restarts.",

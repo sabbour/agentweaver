@@ -1710,6 +1710,13 @@ public sealed class CoordinatorRunService
                     "Coordinator run {RunId}: superseded drafting lease owner stopped without publishing a terminal transition",
                     runId);
             }
+            catch (CoordinatorExecutionFenceLostException ex)
+            {
+                _logger.LogWarning(
+                    "Coordinator run {RunId}: recovered workflow write rejected ({Code}); stale owner cannot persist a spec or plan",
+                    runId, ex.Code);
+                _registry.AbandonIfCurrent(runId, streamingRun);
+            }
             catch (GitHubCopilotUnauthorizedException ex)
             {
                 _logger.LogWarning(ex,
@@ -1905,7 +1912,8 @@ public sealed class CoordinatorRunService
                         // launches and tracks child runs (subtask.* + coordinator.topology events).
                         if (outcome!.Status == "confirmed"
                             && _autoDispatch
-                            && await TryHandOffToDispatchAsync(runId).ConfigureAwait(false))
+                            && await TryHandOffToDispatchAsync(
+                                runId, expectedLifecycleGeneration, leaseOwnerId, fencingToken).ConfigureAwait(false))
                         {
                             // MAF coordinator workflow is done; release only this registry slot.
                             // Dispatch recovery is durable and idempotent, so retaining the checkpoint
@@ -1962,7 +1970,8 @@ public sealed class CoordinatorRunService
     /// the caller skips the Phase 1 finalize/complete path. Returns false when there is no plan or
     /// no subtasks, so the run finalizes normally.
     /// </summary>
-    private async Task<bool> TryHandOffToDispatchAsync(string runId)
+    private async Task<bool> TryHandOffToDispatchAsync(
+        string runId, int expectedLifecycleGeneration, string leaseOwnerId, long fencingToken)
     {
         Run? run;
         bool hasSubtasks;
@@ -1981,7 +1990,9 @@ public sealed class CoordinatorRunService
             return false;
 
         run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
-        if (run is null)
+        if (run is null || !await OwnsActiveDraftLeaseAsync(
+                runId, expectedLifecycleGeneration, leaseOwnerId, fencingToken, CancellationToken.None)
+            .ConfigureAwait(false))
             return false;
 
         _dispatchService.StartDispatch(new CoordinatorDispatchContext(
@@ -2692,7 +2703,10 @@ public sealed class CoordinatorRunService
                     ct);
             }
 
-            var streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
+            var streamingRun = await _factory.ResumeAsync(
+                checkpointInfo, runCts.Token,
+                existingLease is null ? null : new RunLeaseFence(
+                    existingLease.OwnerId, existingLease.FencingToken, run.LifecycleGeneration)).ConfigureAwait(false);
             recoveredStreamingRun = streamingRun;
             if (existingLease is not null
                 && !await OwnsActiveDraftLeaseAsync(

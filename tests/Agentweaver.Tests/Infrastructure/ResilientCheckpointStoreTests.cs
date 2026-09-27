@@ -48,6 +48,26 @@ public sealed class ResilientCheckpointStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task FileFactory_LatestCheckpoint_RecoversFromSelectedReplicaDirectoryOnContention()
+    {
+        Directory.CreateDirectory(_dir);
+        using var lockHolder = new FileSystemJsonCheckpointStore(new DirectoryInfo(_dir));
+        var factory = new FileCheckpointStoreFactory();
+        using var store = (IDisposable)factory.Create("coordinator", _dir, NullLogger.Instance);
+        var runId = Guid.NewGuid().ToString();
+        using var document = JsonDocument.Parse("""{"gate":"replica"}""");
+        await ((JsonCheckpointStore)store).CreateCheckpointAsync(runId, document.RootElement.Clone());
+
+        var checkpoint = await factory.GetLatestCheckpointAsync("coordinator", runId);
+        checkpoint.Should().NotBeNull("recovery must scan the store selected after shared-lock contention");
+        var replicaFile = Directory.EnumerateFiles(Path.Combine(_dir, "replicas"), "*", SearchOption.AllDirectories)
+            .Single(path => path.Contains(runId, StringComparison.Ordinal));
+        File.Exists(replicaFile).Should().BeTrue();
+        (await ((JsonCheckpointStore)store).RetrieveCheckpointAsync(runId, checkpoint!))
+            .GetProperty("gate").GetString().Should().Be("replica");
+    }
+
+    [Fact]
     public void Create_OnBlankAndCorruptIndex_DoesNotThrow_AndLeavesNoBlankLines()
     {
         Directory.CreateDirectory(_dir);

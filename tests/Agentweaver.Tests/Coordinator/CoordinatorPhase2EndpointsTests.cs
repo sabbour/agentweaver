@@ -445,6 +445,52 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         spec!.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser);
     }
 
+    [Fact]
+    public async Task Steer_Send_PeerOwnedOutcomeGate_QueuesOnlyTheDecision_NotOrdinarySteering()
+    {
+        var lease = new DenyRecoveryLeaseStore();
+        using var factory = new CoordinatorWebApplicationFactory { LeaseStoreOverride = lease };
+        using var owner = factory.CreateOwnerClient();
+        var dir = factory.NewWorkingDirectory();
+        var project = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Peer gate {Guid.NewGuid():N}", origin = "blank", working_directory = dir,
+        });
+        project.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Peer gate");
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var started = await owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "Confirm via the peer gate" });
+        started.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await started.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("runId").GetString()!;
+        var pending = factory.Services.GetRequiredService<PendingRequestStore>();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (await pending.GetAsync(runId) is null && DateTime.UtcNow < deadline)
+            await Task.Delay(25);
+        (await pending.GetAsync(runId)).Should().NotBeNull();
+        factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        lease.DenyRecovery = true;
+
+        var response = await owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = "yes, go ahead" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var directive = (await response.Content.ReadFromJsonAsync<SteeringDirectiveResponse>())!;
+        directive.Status.Should().Be(SteeringStatus.Queued);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var stored = await db.SteeringDirectives.SingleAsync(d => d.Id == directive.Id);
+        stored.Source.Should().Be("gate:outcome-spec");
+        (await factory.Services.GetRequiredService<CoordinatorSteeringQueue>()
+            .TryTakeAssemblySendAsync(runId)).Should().BeNull();
+        (await pending.GetDeliveryStateAsync(
+            runId, PendingRequestDeliveryKinds.CoordinatorOutcomeSpec))!.State
+            .Should().Be(PendingRequestDeliveryStates.Ready);
+    }
+
     // #272 regression: the live API harness used the multi-clause phrase
     // "yes, looks good, please proceed". This natural affirmative must confirm the spec (route through
     // the confirm seam), not redraft it.
@@ -1465,5 +1511,26 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             UpdatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
+    }
+
+    private sealed class DenyRecoveryLeaseStore : IRunLeaseStore
+    {
+        public bool DenyRecovery { get; set; }
+
+        public Task<(bool Claimed, long FencingToken)> TryClaimAsync(
+            string runId, string ownerId, TimeSpan leaseTtl, CancellationToken ct = default)
+            => Task.FromResult(DenyRecovery ? (false, 0L) : (true, 1L));
+
+        public Task<bool> TryRenewAsync(
+            string runId, string ownerId, long fencingToken, TimeSpan leaseTtl, CancellationToken ct = default)
+            => Task.FromResult(true);
+
+        public Task ReleaseAsync(
+            string runId, string ownerId, long fencingToken, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<bool> IsLeaseOwnerAsync(
+            string runId, string ownerId, long fencingToken, CancellationToken ct = default)
+            => Task.FromResult(!DenyRecovery);
     }
 }

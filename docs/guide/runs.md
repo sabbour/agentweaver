@@ -136,6 +136,10 @@ the replica holding that lease may return `202` with `status: "queued"`; this me
 decision is durably recorded, **not** that a revision or work plan has completed. Watch
 the outcome spec and run events for the next state. Conflicting decisions cannot replace
 a queued decision at the same gate.
+Chat replies at this gate use the same decision queue: a queued reply is not also sent
+as ordinary steering. Recovered drafts, confirmations, and plans may write only while
+the same run generation and lease remain active; cancellation or takeover wins even
+when it happens after the reply was accepted.
 
 If the checkpoint or durable gate cannot be reconciled, confirm/revise returns a typed
 `409 coordinator_gate_*` error with a run ID, correlation ID, and run-events path instead

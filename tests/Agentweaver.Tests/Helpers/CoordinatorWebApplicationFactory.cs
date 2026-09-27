@@ -160,6 +160,7 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
     public FakeWorkflowSelectionModel WorkflowSelectionModel { get; } = new();
     public FakePreviewClassifier PreviewClassifier { get; } = new();
     public TestFileEditAgentRunner TestAgentRunner { get; } = new();
+    public IRunLeaseStore? LeaseStoreOverride { get; set; }
 
     private HttpClient CreateClientWithKey(string apiKey)
     {
@@ -191,6 +192,11 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
 
     protected override void ConfigureTestServices(IServiceCollection services)
     {
+            if (LeaseStoreOverride is not null)
+            {
+                RemoveService<IRunLeaseStore>(services);
+                services.AddSingleton(LeaseStoreOverride);
+            }
             // Replace the production Copilot drafter with a deterministic, hermetic fake so the
             // drafting step never makes a live model call. The boilerplate spec lives in the test
             // project, not production (production fails the run when the model is unavailable).

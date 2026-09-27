@@ -13,16 +13,16 @@ namespace Agentweaver.Api.Infrastructure;
 /// </summary>
 public sealed class FileCheckpointStoreFactory : ICheckpointStoreFactory
 {
-    // The base directory is only known per-Create call (different per logical store), so remember it
-    // keyed by storeName. Recovery's GetLatestCheckpointAsync then resolves the right directory to scan.
+    // Recovery must scan the directory the store actually opened, including replica/temp fallback.
     private readonly ConcurrentDictionary<string, string> _baseDirs = new(StringComparer.Ordinal);
 
     public bool IsDatabaseBacked => false;
 
     public JsonCheckpointStore Create(string storeName, string fallbackFileDir, ILogger logger)
     {
-        _baseDirs[storeName] = fallbackFileDir;
-        return ResilientCheckpointStore.Create(fallbackFileDir, logger);
+        var store = ResilientCheckpointStore.Create(fallbackFileDir, logger, out var selectedDirectory);
+        _baseDirs[storeName] = selectedDirectory;
+        return store;
     }
 
     /// <summary>

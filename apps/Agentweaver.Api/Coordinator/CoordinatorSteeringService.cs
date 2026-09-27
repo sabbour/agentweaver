@@ -930,7 +930,7 @@ public sealed class CoordinatorSteeringService
             ? await _coordinatorRunService.ConfirmOutcomeSpecAsync(coordinatorRunId, createdBy, allowTaskPromotion: false, ct).ConfigureAwait(false)
             : await _coordinatorRunService.ReviseOutcomeSpecAsync(coordinatorRunId, instruction, createdBy, ct).ConfigureAwait(false);
 
-        if (outcome != CoordinatorGateOutcome.Accepted)
+        if (outcome is not (CoordinatorGateOutcome.Accepted or CoordinatorGateOutcome.Queued))
         {
             _logger.LogInformation(
                 "Outcome-spec chat reply for coordinator {RunId} could not be applied via the confirmation gate ({Outcome}); falling back to normal send semantics",
@@ -938,20 +938,23 @@ public sealed class CoordinatorSteeringService
             return null;
         }
 
-        var appliedAt = DateTimeOffset.UtcNow;
-        await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, appliedAt, ct).ConfigureAwait(false);
+        var status = outcome == CoordinatorGateOutcome.Queued ? SteeringStatus.Queued : SteeringStatus.Applied;
+        var appliedAt = status == SteeringStatus.Applied ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
+        await UpdateDirectiveAsync(
+            directiveId, status, appliedAt, ct,
+            outcome == CoordinatorGateOutcome.Queued ? "gate:outcome-spec" : null).ConfigureAwait(false);
         await EmitSteeringAsync(
-            coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId, SteeringStatus.Applied, instruction, ct)
+            coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId, status, instruction, ct)
             .ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
         _logger.LogInformation(
-            "Outcome-spec chat reply for coordinator {RunId} applied as {ReplyKind} via the existing confirmation gate",
-            coordinatorRunId, replyKind);
+            "Outcome-spec chat reply for coordinator {RunId} {Status} as {ReplyKind} via the existing confirmation gate",
+            coordinatorRunId, status, replyKind);
 
         return new SteeringDirectiveView(
             directiveId, coordinatorRunId, targetChildRunId, SteeringKind.Send, instruction,
-            SteeringStatus.Applied, createdBy, createdAt, appliedAt);
+            status, createdBy, createdAt, appliedAt);
     }
 
     /// <summary>
@@ -1721,7 +1724,8 @@ public sealed class CoordinatorSteeringService
             .ToListAsync(ct).ConfigureAwait(false);
     }
 
-    private async Task UpdateDirectiveAsync(int directiveId, string status, DateTimeOffset? relayedAt, CancellationToken ct)
+    private async Task UpdateDirectiveAsync(
+        int directiveId, string status, DateTimeOffset? relayedAt, CancellationToken ct, string? source = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -1729,6 +1733,8 @@ public sealed class CoordinatorSteeringService
         if (row is null)
             return;
         row.Status = status;
+        if (source is not null)
+            row.Source = source;
         if (relayedAt is not null)
             row.RelayedAt = relayedAt;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);

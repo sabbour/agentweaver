@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Memory;
 using FluentAssertions;
 using Microsoft.Agents.AI.Workflows;
@@ -71,6 +72,45 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         var reader = replicaB.Create("coordinator", "", logger: null!);
         (await reader.RetrieveCheckpointAsync(runId, recovered))
             .GetProperty("gate").GetString().Should().Be("awaiting_confirmation");
+    }
+
+    [PostgresFact]
+    public async Task RecoveredCoordinatorWrite_RejectsLeaseTakeoverAndGenerationChange()
+    {
+        var runId = Guid.NewGuid().ToString();
+        await using var db = await pg.CreateDbContextAsync();
+        db.Runs.Add(new RunRecord
+        {
+            RunId = runId,
+            RepositoryPath = "test",
+            OriginatingBranch = "dev",
+            ModelSource = "github-copilot",
+            Task = "recover gate",
+            SubmittingUser = "owner",
+            Status = "in_progress",
+            StartedAt = DateTimeOffset.UtcNow,
+            OwnerId = "replica-a",
+            FencingToken = 3,
+            LeaseExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+        });
+        await db.SaveChangesAsync();
+        var previous = new RunLeaseFence("replica-a", 3, 1);
+        await using (var valid = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, runId, previous, CancellationToken.None, null))
+            await valid!.CommitAsync(CancellationToken.None);
+
+        await db.Runs.Where(r => r.RunId == runId).ExecuteUpdateAsync(s => s
+            .SetProperty(r => r.OwnerId, "replica-b")
+            .SetProperty(r => r.FencingToken, 4L));
+        var stolen = () => CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, runId, previous, CancellationToken.None, null);
+        await stolen.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
+
+        await db.Runs.Where(r => r.RunId == runId).ExecuteUpdateAsync(s => s
+            .SetProperty(r => r.OwnerId, "replica-a")
+            .SetProperty(r => r.FencingToken, 3L)
+            .SetProperty(r => r.LifecycleGeneration, 2));
+        await stolen.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
     }
 
     [PostgresFact]

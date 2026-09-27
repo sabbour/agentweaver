@@ -1223,6 +1223,86 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         (await GetWorkPlanAsync(runId)).Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task NonResidentGate_LateLifecycleChange_BlocksRecoveredWrite(
+        bool revise, bool generationChanged)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A late run change must fence recovered work");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        var factory = _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (revise)
+            drafter.BeforeDraftAsync = async _ =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            };
+        else
+            factory.BeforeFinalizeWriteAsync = async () =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            };
+
+        try
+        {
+            var responseTask = revise
+                ? _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+                    new { feedback = "A late revision must not persist" })
+                : _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var fence = _factory.Services.GetRequiredService<RunLeaseFenceRegistry>().Get(runId);
+            fence.Should().NotBeNull();
+
+            await using (var connection = await _factory.Services.GetRequiredService<SqliteDb>().OpenConnectionAsync())
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = generationChanged
+                    ? "UPDATE runs SET lifecycle_generation = lifecycle_generation + 1 WHERE run_id = $runId"
+                    : "UPDATE runs SET status = 'failed', result = 'cancelled' WHERE run_id = $runId";
+                command.Parameters.AddWithValue("$runId", runId);
+                (await command.ExecuteNonQueryAsync()).Should().Be(1);
+            }
+            release.TrySetResult();
+            (await responseTask).StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.Conflict);
+
+            // The exact persistence predicate rejects this successor state, independently of the
+            // recovery monitor's polling interval or whether its cancellation callback has fired.
+            await using (var scope = _factory.Services.CreateAsyncScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var write = () => CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+                    db, runId, fence, CancellationToken.None,
+                    _factory.Services.GetRequiredService<SqliteDb>());
+                await write.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
+            }
+
+            var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (registry.Get(runId) is not null && DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            registry.Get(runId).Should().BeNull();
+            (await GetOutcomeSpecAsync(_owner, runId))!.Status.Should().Be(
+                revise ? "drafting" : "awaiting_confirmation");
+            (await GetWorkPlanAsync(runId)).Should().BeNull();
+        }
+        finally
+        {
+            release.TrySetResult();
+            factory.BeforeFinalizeWriteAsync = null;
+            drafter.BeforeDraftAsync = null;
+        }
+    }
+
     [Fact]
     public async Task DuplicateConcurrentRevisions_ConsumeOnlyOneGateAndDraftOnce()
     {
