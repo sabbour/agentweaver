@@ -107,6 +107,14 @@ The project readiness check reports separate capability dimensions:
 A repositoryless project does not require a Repo App installation. A GitHub-backed project is
 repository-ready only when the Repo App installation and its project repository grant are both
 current.
+For GitHub-origin projects, accepting a new BYOK run also captures and fences the
+project's repository grant before creating the run. If that grant is unavailable, the
+start request returns `409 repo_app_repository_grant_required`; reconnect the Repo App
+and grant the selected repository, then prepare a new execution context and retry.
+Readiness is a point-in-time check, not a promise that a grant cannot later be revoked.
+Static workflow fan coordinators and their selected child agents each inherit and
+revalidate the same run-bound repository grant. A grant revoked or changed after
+acceptance still blocks child launch rather than falling back to ambient access.
 
 Repository status alone never makes a project unattended-ready. For GitHub Copilot, the readiness
 check verifies that the selected live binding still has the complete grant and credential tuple

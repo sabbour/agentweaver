@@ -355,9 +355,6 @@ public sealed class CoordinatorRunService
         RunModelProviderSnapshotStore.Capture? capturedSnapshot,
         Exception launchFailure)
     {
-        if (capturedSnapshot is null || _providerSnapshots is null)
-            return;
-
         try
         {
             // Insert can fail after the database committed. Never release a snapshot until the
@@ -365,7 +362,12 @@ public sealed class CoordinatorRunService
             if (await _runStore.GetAsync(run.Id, CancellationToken.None).ConfigureAwait(false) is not null)
                 return;
 
-            await _providerSnapshots.ReleaseAsync(capturedSnapshot, CancellationToken.None).ConfigureAwait(false);
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            await scope.ServiceProvider.GetRequiredService<GitHubConnectionsPersistenceStore>()
+                .DeleteCapabilitySnapshotsForRunAsync(run.Id.ToString(), CancellationToken.None)
+                .ConfigureAwait(false);
+            if (capturedSnapshot is not null && _providerSnapshots is not null)
+                await _providerSnapshots.ReleaseAsync(capturedSnapshot, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception cleanupFailure)
         {
@@ -374,7 +376,7 @@ public sealed class CoordinatorRunService
                 "Failed to release uncommitted provider snapshot for coordinator run {RunId}.",
                 run.Id);
             throw new InvalidOperationException(
-                $"Coordinator run {run.Id} failed before persistence and its provider snapshot could not be released.",
+                $"Coordinator run {run.Id} failed before persistence and its snapshots could not be released.",
                 new AggregateException(launchFailure, cleanupFailure));
         }
     }
@@ -858,14 +860,17 @@ public sealed class CoordinatorRunService
     private async Task EnsureAgentHostCapabilityAsync(
         Run run, EffectiveModelProviderResult effectiveProvider, CancellationToken ct)
     {
+        if (effectiveProvider is EffectiveModelProviderResult.Byok)
+        {
+            await using var byokScope = _scopeFactory.CreateAsyncScope();
+            var byokLifecycle = byokScope.ServiceProvider.GetRequiredService<RunGitHubCapabilitySnapshotLifecycle>();
+            if (!await byokLifecycle.PrepareForLaunchAsync(run, ct).ConfigureAwait(false))
+                throw new RunRepositoryCapabilityRequiredException();
+            return;
+        }
         if (!_sandboxRuntime.IsPodPerRun)
             return;
 
-        // BYOK-active runs never need a GitHub Copilot capability snapshot at pod startup — only
-        // require (and fence) one when the resolver's result is actually Copilot-sourced, matching
-        // the same precedence every other model-provider consumer uses.
-        if (effectiveProvider is EffectiveModelProviderResult.Byok)
-            return;
         if (effectiveProvider is EffectiveModelProviderResult.Unavailable)
             throw effectiveProvider.ToConnectionRequiredException(run.ProjectId);
 

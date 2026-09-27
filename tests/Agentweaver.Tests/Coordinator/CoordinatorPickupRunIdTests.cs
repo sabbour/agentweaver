@@ -14,6 +14,9 @@ using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
+using Agentweaver.Squad.Catalog;
+using Agentweaver.Squad.Model;
+using Agentweaver.Squad.Squad;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -359,8 +362,11 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             .Should().Be(storedPlan.CoordinatorRunId);
     }
 
-    [Fact]
-    public async Task DirectOrchestration_ExplicitStaticFanOverride_ExecutesPinnedWorkflowInsteadOfCoordinatorDecomposition()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectOrchestration_ExplicitStaticFanOverride_ExecutesPinnedWorkflowInsteadOfCoordinatorDecomposition(
+        bool githubOriginByok)
     {
         await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
         using var owner = factory.CreateOwnerClient();
@@ -376,7 +382,75 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         create.StatusCode.Should().Be(HttpStatusCode.Created);
         var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("project_id").GetString()!;
-        SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory);
+        if (githubOriginByok)
+        {
+            var catalog = new CatalogReader();
+            var members = new[]
+            {
+                ("Rachael", "devops-engineer"),
+                ("Deckard", "lead-architect"),
+                ("Roy", "qa-engineer"),
+            }.Select(member => new CastMember(
+                member.Item1,
+                catalog.LoadRole(member.Item2)!,
+                $".squad/agents/{member.Item1.ToLowerInvariant()}/charter.md",
+                CastMemberStatus.Active,
+                true)).ToArray();
+            new SquadWriter(workingDirectory).WriteTeam(
+                new Team("Discovery", "test", members), "test", DateTimeOffset.UtcNow);
+        }
+        else
+            SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory);
+        if (githubOriginByok)
+        {
+            await factory.Services.GetRequiredService<IProjectStore>().UpdateOriginAsync(
+                ProjectId.Parse(projectId),
+                ProjectOrigin.FromGitHub("sabbour/agentweaver"),
+                DateTimeOffset.UtcNow);
+            await using var setupScope = factory.Services.CreateAsyncScope();
+            var setupDb = setupScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var installationId = Random.Shared.NextInt64(1, long.MaxValue);
+            setupDb.Projects.Add(new ProjectRecord
+            {
+                ProjectId = projectId,
+                OriginKind = "from_github",
+                Name = "Selected discovery",
+                WorkingDirectory = workingDirectory,
+                Owner = CoordinatorWebApplicationFactory.OwnerUser,
+                DefaultProvider = "byok",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            setupDb.GitHubInstallations.Add(new GitHubInstallationRecord
+            {
+                InstallationId = installationId,
+                AppKind = GitHubAppKind.Repo,
+                ProjectId = projectId,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            setupDb.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+            {
+                InstallationId = installationId,
+                RepositoryId = 5678,
+                ProjectId = projectId,
+                FullNameDisplay = "sabbour/agentweaver",
+                PermissionDigest = "digest",
+                GrantedAt = DateTimeOffset.UtcNow,
+            });
+            await setupDb.SaveChangesAsync();
+            var byok = setupScope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            var configuration = await byok.AddAsync(new ByokProviderConfiguration(
+                Id: string.Empty,
+                Name: "Test Azure provider",
+                Type: "azure",
+                BaseUrl: "https://byok-resource.openai.azure.com",
+                Model: "gpt-4.1",
+                ApiKey: "test-byok-key"), CancellationToken.None);
+            await byok.SetActiveAsync(configuration.Id, CancellationToken.None);
+            var readiness = await owner.GetFromJsonAsync<JsonElement>(
+                $"/api/projects/{projectId}/github/unattended-readiness");
+            readiness.GetProperty("status").GetString().Should().Be("unattended_ready");
+        }
 
         const string originalYaml = """
             id: direct-fan
@@ -423,9 +497,22 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
               - from: synthesis
                 to: done
             """;
+        var workflowId = githubOriginByok ? "issue-1634-pm-discovery" : "direct-fan";
+        var selectedYaml = originalYaml;
+        if (githubOriginByok)
+        {
+            selectedYaml = new CatalogReader().LoadAllWorkflowYamls()
+                .Select(item => item.Yaml)
+                .Single(yaml => yaml.Contains("id: pm-discovery", StringComparison.Ordinal))
+                .Replace("id: pm-discovery", $"id: {workflowId}", StringComparison.Ordinal)
+                .Replace("role: customer-researcher", "role: devops-engineer", StringComparison.Ordinal)
+                .Replace("role: prototype-designer", "role: lead-architect", StringComparison.Ordinal)
+                .Replace("role: lead-pm", "role: qa-engineer", StringComparison.Ordinal)
+                .Replace("role: product-marketing-manager", "role: qa-engineer", StringComparison.Ordinal);
+        }
         var save = await owner.PutAsJsonAsync(
-            $"/api/projects/{projectId}/workflows/direct-fan",
-            new { yaml = originalYaml });
+            $"/api/projects/{projectId}/workflows/{workflowId}",
+            new { yaml = selectedYaml });
         save.StatusCode.Should().Be(HttpStatusCode.OK);
 
         Repository.Init(workingDirectory);
@@ -445,11 +532,11 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             {
                 goal = "Run the selected discovery fan.",
                 start_mode = "direct",
-                workflow_override_id = "direct-fan",
+                workflow_override_id = workflowId,
                 auto_approve_tools = false,
                 autopilot = false,
             });
-        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        start.StatusCode.Should().Be(HttpStatusCode.Created, await start.Content.ReadAsStringAsync());
         var runId = (await start.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("runId").GetString()!;
 
@@ -467,17 +554,21 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             plan.ValueKind == JsonValueKind.Undefined ? "<none>" : plan.GetRawText());
 
         plan.GetProperty("parentRunId").GetString().Should().Be(runId);
-        plan.GetProperty("parentWorkflowId").GetString().Should().Be("direct-fan");
-        plan.GetProperty("parentWorkflowNodeId").GetString().Should().Be("fan");
-        plan.GetProperty("parentJoinNodeId").GetString().Should().Be("join");
+        plan.GetProperty("parentWorkflowId").GetString().Should().Be(workflowId);
+        plan.GetProperty("parentWorkflowNodeId").GetString().Should().Be(
+            githubOriginByok ? "discovery-fan-out" : "fan");
+        plan.GetProperty("parentJoinNodeId").GetString().Should().Be(
+            githubOriginByok ? "discovery-fan-in" : "join");
         plan.GetProperty("subtasks").EnumerateArray()
             .Select(item => (
                 item.GetProperty("workflowBranchNodeId").GetString(),
                 item.GetProperty("workflowBranchOrdinal").GetInt32()))
-            .Should().Equal(("branch-one", 0), ("branch-two", 1));
+            .Should().Equal(
+                (githubOriginByok ? "customer-signal-research" : "branch-one", 0),
+                (githubOriginByok ? "technical-feasibility-research" : "branch-two", 1));
         plan.GetProperty("subtasks").EnumerateArray()
             .Select(item => item.GetProperty("assignedAgent").GetString())
-            .Should().OnlyContain(agent => agent == "Alpha");
+            .Should().Equal(githubOriginByok ? ["Rachael", "Deckard"] : ["Alpha", "Alpha"]);
 
         var persistedRun = await factory.Services.GetRequiredService<IRunStore>()
             .GetAsync(RunId.Parse(runId));
@@ -508,6 +599,55 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         plans.Should().ContainSingle("restart-safe attachment must not duplicate the work plan");
         plans[0].IntegrationBranch.Should().BeNull();
         plans[0].AssemblyStage.Should().BeNull();
+        if (githubOriginByok)
+        {
+            var snapshots = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                .Where(snapshot => snapshot.RunId == runId
+                    || snapshot.RunId == plans[0].CoordinatorRunId)
+                .ToListAsync();
+            snapshots.Should().HaveCount(2);
+            snapshots.Should().OnlyContain(snapshot =>
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedRepository
+                && snapshot.ProjectId == projectId);
+            var branches = await db.Subtasks.AsNoTracking()
+                .Where(row => row.WorkPlanId == plans[0].Id)
+                .OrderBy(row => row.WorkflowBranchOrdinal)
+                .ToArrayAsync();
+            branches.Should().HaveCount(2);
+            foreach (var branch in branches)
+            {
+                var selectedChild = new Agentweaver.Domain.Run
+                {
+                    Id = RunId.New(),
+                    RepositoryPath = workingDirectory,
+                    OriginatingBranch = "main",
+                    ModelSource = ModelSource.Byok,
+                    ModelId = branch.SelectedModelId,
+                    Task = branch.Scope,
+                    SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+                    Status = RunStatus.Pending,
+                    StartedAt = DateTimeOffset.UtcNow,
+                    ProjectId = ProjectId.Parse(projectId),
+                    AgentName = branch.AssignedAgent,
+                    ParentRunId = plans[0].CoordinatorRunId,
+                    SubtaskId = branch.Id.ToString(),
+                };
+                await factory.Services.GetRequiredService<RunOrchestrator>()
+                    .StartChildRunAsync(selectedChild, CancellationToken.None);
+            }
+            var childIds = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                .Where(snapshot => snapshot.RunId != runId
+                    && snapshot.RunId != plans[0].CoordinatorRunId)
+                .Select(snapshot => snapshot.RunId)
+                .ToArrayAsync();
+            var childSnapshots = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                .Where(snapshot => childIds.Contains(snapshot.RunId))
+                .ToListAsync();
+            childSnapshots.Should().HaveCount(2);
+            childSnapshots.Should().OnlyContain(snapshot =>
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedRepository
+                && snapshot.ProjectId == projectId);
+        }
 
         factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId);
         var runStore = factory.Services.GetRequiredService<IRunStore>();
@@ -533,6 +673,83 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         reattached.Should().BeTrue(
             "checkpointless restart must reattach the original run to one existing fan plan and child set");
         factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId);
+    }
+
+    [Fact]
+    public async Task DirectOrchestration_GitHubOriginByokRevokedRepositoryGrant_RejectsBeforeRunCreation()
+    {
+        await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
+        using var owner = factory.CreateOwnerClient();
+        var workingDirectory = factory.NewWorkingDirectory();
+        var create = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Repository grant preflight {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = workingDirectory,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory);
+        await factory.Services.GetRequiredService<IProjectStore>().UpdateOriginAsync(
+            ProjectId.Parse(projectId), ProjectOrigin.FromGitHub("sabbour/agentweaver"),
+            DateTimeOffset.UtcNow);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var installationId = Random.Shared.NextInt64(1, long.MaxValue);
+        db.Projects.Add(new ProjectRecord
+        {
+            ProjectId = projectId,
+            OriginKind = "from_github",
+            Name = "Repository grant preflight",
+            WorkingDirectory = workingDirectory,
+            Owner = CoordinatorWebApplicationFactory.OwnerUser,
+            DefaultProvider = "byok",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = installationId,
+            AppKind = GitHubAppKind.Repo,
+            ProjectId = projectId,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = installationId,
+            RepositoryId = 5678,
+            ProjectId = projectId,
+            FullNameDisplay = "sabbour/agentweaver",
+            PermissionDigest = "digest",
+            GrantedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+        var configuration = await byok.AddAsync(new ByokProviderConfiguration(
+            Id: string.Empty, Name: "Test Azure provider", Type: "azure",
+            BaseUrl: "https://byok-resource.openai.azure.com",
+            Model: "gpt-4.1", ApiKey: "test-byok-key"), CancellationToken.None);
+        await byok.SetActiveAsync(configuration.Id, CancellationToken.None);
+
+        var readiness = await owner.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/github/unattended-readiness");
+        readiness.GetProperty("status").GetString().Should().Be("unattended_ready");
+        await db.GitHubRepositoryGrants.ExecuteUpdateAsync(update => update
+            .SetProperty(grant => grant.RevokedAt, DateTimeOffset.UtcNow));
+
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var rejected = await owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations",
+            new { goal = "Run the selected discovery workflow", start_mode = "direct" });
+        rejected.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await rejected.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("repo_app_repository_grant_required");
+        body.GetProperty("message").GetString().Should().Contain("Reconnect");
+        (await factory.Services.GetRequiredService<IRunStore>()
+            .GetRunsByProjectAsync(ProjectId.Parse(projectId), includeChildren: true))
+            .Should().BeEmpty("preflight must reject before a run is persisted");
+        (await db.RunGitHubCapabilitySnapshots.CountAsync(snapshot => snapshot.ProjectId == projectId))
+            .Should().Be(0, "rejected starts must not retain a run-bound snapshot without a run");
     }
 
     [Theory]

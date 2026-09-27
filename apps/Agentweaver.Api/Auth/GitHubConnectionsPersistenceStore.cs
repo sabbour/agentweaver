@@ -2001,6 +2001,11 @@ public sealed class GitHubConnectionsPersistenceStore(
             .OrderBy(snapshot => snapshot.Purpose)
             .ToListAsync(ct);
 
+    internal Task<int> DeleteCapabilitySnapshotsForRunAsync(string runId, CancellationToken ct) =>
+        db.RunGitHubCapabilitySnapshots
+            .Where(snapshot => snapshot.RunId == runId)
+            .ExecuteDeleteAsync(ct);
+
     internal async Task<RunGitHubCapabilitySnapshotRecord?> RefreshPlatformDefaultUnattendedCopilotSnapshotAsync(
         string runId,
         CancellationToken ct = default)
@@ -2277,8 +2282,7 @@ public sealed class GitHubConnectionsPersistenceStore(
             .Where(snapshot => includeCopilot || snapshot.Purpose != GitHubCapabilityPurpose.UnattendedCopilot)
             .ToList();
         if (target.Count != 0)
-            return target.Count == source.Count &&
-                target.Select(snapshot => snapshot.Purpose).SequenceEqual(source.Select(snapshot => snapshot.Purpose));
+            return MatchesInheritedSnapshots(source, target);
 
         var inherited = source.Select(snapshot => new RunGitHubCapabilitySnapshotRecord
         {
@@ -2315,9 +2319,31 @@ public sealed class GitHubConnectionsPersistenceStore(
         {
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             db.ChangeTracker.Clear();
-            return false;
+            var winner = (await GetCapabilitySnapshotsAsync(targetRunId, ct).ConfigureAwait(false))
+                .Where(snapshot => includeCopilot || snapshot.Purpose != GitHubCapabilityPurpose.UnattendedCopilot)
+                .ToList();
+            return MatchesInheritedSnapshots(source, winner);
         }
     }
+
+    private static bool MatchesInheritedSnapshots(
+        IReadOnlyList<RunGitHubCapabilitySnapshotRecord> source,
+        IReadOnlyList<RunGitHubCapabilitySnapshotRecord> target) =>
+        target.Count == source.Count && source.Zip(target).All(pair =>
+            pair.First.Purpose == pair.Second.Purpose
+            && pair.First.AppKind == pair.Second.AppKind
+            && pair.First.SourceKind == pair.Second.SourceKind
+            && pair.First.ProjectId == pair.Second.ProjectId
+            && pair.First.EntraObjectId == pair.Second.EntraObjectId
+            && pair.First.SourceAuthorizationId == pair.Second.SourceAuthorizationId
+            && pair.First.SourceBindingId == pair.Second.SourceBindingId
+            && pair.First.InstallationId == pair.Second.InstallationId
+            && pair.First.RepositoryId == pair.Second.RepositoryId
+            && pair.First.CredentialReference == pair.Second.CredentialReference
+            && pair.First.CredentialVersion == pair.Second.CredentialVersion
+            && pair.First.GrantDigest == pair.Second.GrantDigest
+            && pair.First.CapturedAt == pair.Second.CapturedAt
+            && pair.First.SnapshotExpiresAt == pair.Second.SnapshotExpiresAt);
 
     /// <summary>
     /// Performs an idempotent, fail-closed migration of finite v1 snapshots. It only accepts an
