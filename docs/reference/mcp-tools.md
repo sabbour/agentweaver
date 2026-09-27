@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **119 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **121 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -35,8 +35,10 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `backlog_capture_task` | Capture a new task into the project backlog. |
 | `backlog_decompose_spec` | Decompose a workspace spec file into proposed backlog tasks for a project. Reads a markdown file from the project's workspace, runs AI decomposition, and returns proposed items for review. Use confirm=true to create the tasks, confirm=false for preview only. Results are capped at 50 items. |
 | `backlog_delete_task` | Delete a backlog task. Fails with 409 if the task has already been claimed. |
+| `backlog_edit_dependencies` | Atomically add, remove, or replace a task's prerequisites at an expected project graph revision; preview=true does not mutate. |
 | `backlog_edit_task` | Edit the title and/or description of a backlog task. |
 | `backlog_get_board` | Get the full Kanban board for a project: Backlog, Ready, Problems, Human Review, Active, and Done. |
+| `backlog_get_dependency_revision` | Get the project dependency graph revision for a safe edit or preview. |
 | `backlog_get_settings` | Get the per-project backlog pickup settings (max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools). |
 | `backlog_get_task` | Get one enriched backlog task, including blocking dependency status. |
 | `backlog_get_workflow_stages` | Get the ordered canonical run-bucket definitions for a project (Problems, Human Review, Active, Done). |
