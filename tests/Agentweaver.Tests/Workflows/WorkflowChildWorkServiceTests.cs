@@ -2,6 +2,7 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -451,6 +452,133 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ParentCancellation_WhenOneChildCancellationFails_AttemptsEverySnapshottedChild()
+    {
+        var firstChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var secondChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var thirdChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var fourthChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var (firstPlanId, firstActiveSubtaskIds, _) = await SeedTopLevelFanPlanAsync(firstChild, secondChild);
+        var (secondPlanId, secondActiveSubtaskIds, _) = await SeedTopLevelFanPlanAsync(thirdChild, fourthChild);
+        var runtime = new RecordingRuntime { FailFirstCancellation = true };
+        var service = BuildService("pod-failure-isolation", runtime);
+
+        var act = async () => await service.CancelForParentAsync(_parent.Id.ToString());
+
+        var failure = await act.Should().ThrowAsync<AggregateException>();
+        failure.Which.InnerExceptions.Should().ContainSingle();
+        runtime.CancellationAttempts.Select(run => run.Id)
+            .Should().BeEquivalentTo([firstChild.Id, secondChild.Id, thirdChild.Id, fourthChild.Id]);
+        using var scope = _provider.CreateScope();
+        var claimed = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+            .Subtasks.AsNoTracking()
+            .Where(subtask => firstActiveSubtaskIds.Concat(secondActiveSubtaskIds).Contains(subtask.Id))
+            .ToListAsync();
+        claimed.Should().OnlyContain(subtask =>
+            subtask.CancellationRequestedAt != null
+            && subtask.CancellationRequestedByRunId == _parent.Id.ToString());
+        (await GetPlanAsync(firstPlanId)).ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Suppressed);
+        (await GetPlanAsync(secondPlanId)).ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Suppressed);
+    }
+
+    [Fact]
+    public async Task ParentCancellation_TwoActiveChildren_TerminalRaceAndRestart_PersistOneAttributableEventEach()
+    {
+        var firstChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var secondChild = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+        {
+            ParentRunId = _parent.Id.ToString(),
+        };
+        var (planId, activeSubtaskIds, pendingSubtaskId) = await SeedTopLevelFanPlanAsync(
+            firstChild,
+            secondChild);
+        var eventDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "aw-child-cancellation-events-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(eventDirectory);
+        try
+        {
+            var eventConfig = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Database:Path"] = Path.Combine(eventDirectory, "agentweaver.db"),
+                })
+                .Build();
+            CreateRunEventsTable(Path.Combine(eventDirectory, "memory.db"));
+            var firstEventStream = new SqliteRunEventStream(eventConfig);
+            var firstRuntime = new PersistingCancellationRuntime(
+                _runStore,
+                firstEventStream,
+                [firstChild.Id, secondChild.Id],
+                terminalizeBeforeFirstCancellation: true);
+            var firstService = BuildService("pod-production-race", firstRuntime);
+
+            await firstService.CancelForParentAsync(_parent.Id.ToString());
+
+            var restartedEventStream = new SqliteRunEventStream(eventConfig);
+            var restartedRuntime = new PersistingCancellationRuntime(
+                _runStore,
+                restartedEventStream,
+                [firstChild.Id, secondChild.Id],
+                terminalizeBeforeFirstCancellation: false);
+            var restartedService = BuildService("pod-restarted", restartedRuntime);
+            await restartedService.PrepareRestartRecoveryAsync();
+            await restartedService.SweepAsync();
+
+            foreach (var childId in new[] { firstChild.Id, secondChild.Id })
+            {
+                var events = await restartedEventStream.GetPersistedEventsAsync(childId.ToString());
+                var cancellations = events.Where(evt => evt.Type == EventTypes.RunCancelled).ToList();
+                cancellations.Should().ContainSingle();
+                var payload = JsonSerializer.SerializeToElement(cancellations[0].Payload);
+                payload.GetProperty("reason").GetString().Should().Be("parent_cancelled");
+                payload.GetProperty("requested").GetBoolean().Should().BeTrue();
+                payload.GetProperty("requestedByRunId").GetString().Should().Be(_parent.Id.ToString());
+                (await _runStore.GetAsync(childId))!.Status.Should().Be(DomainRunStatus.Failed);
+            }
+
+            restartedRuntime.Deliveries.Should().BeEmpty("cancelled work cannot resume its parent join");
+            (await restartedEventStream.GetPersistedEventsAsync(_parent.Id.ToString()))
+                .Should().NotContain(evt => evt.Type == EventTypes.WorkflowStep);
+            using var scope = _provider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var activeSubtasks = await db.Subtasks.AsNoTracking()
+                .Where(subtask => activeSubtaskIds.Contains(subtask.Id))
+                .ToListAsync();
+            activeSubtasks.Should().OnlyContain(subtask =>
+                subtask.CancellationRequestedAt != null
+                && subtask.CancellationRequestedByRunId == _parent.Id.ToString());
+            var pendingSubtask = await db.Subtasks.AsNoTracking()
+                .SingleAsync(subtask => subtask.Id == pendingSubtaskId);
+            pendingSubtask.Status.Should().Be(SubtaskStatus.Pending);
+            pendingSubtask.CancellationRequestedAt.Should().BeNull();
+            var plan = await GetPlanAsync(planId);
+            plan.Status.Should().Be(WorkPlanStatus.Cancelled);
+            plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Suppressed);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(eventDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RestartRecovery_ReissuesCancellationForLateActiveChild()
     {
         var attached = await CreateAsync(Request());
@@ -677,7 +805,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
 
     private WorkflowChildWorkService BuildService(
         string podId,
-        RecordingRuntime runtime,
+        IWorkflowChildWorkRuntime runtime,
         int staleSeconds = 120)
     {
         var configuration = new ConfigurationBuilder()
@@ -881,6 +1009,31 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         ModelId = "test-model",
     };
 
+    private static void CreateRunEventsTable(string path)
+    {
+        using var connection = new SqliteConnection($"Data Source={path}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            CREATE TABLE "RunEvents" (
+                "Id" INTEGER NOT NULL CONSTRAINT "PK_RunEvents" PRIMARY KEY AUTOINCREMENT,
+                "RunId" TEXT NOT NULL,
+                "Sequence" INTEGER NOT NULL,
+                "EventIdentity" TEXT NULL,
+                "EventType" TEXT NOT NULL,
+                "PayloadJson" TEXT NOT NULL,
+                "CreatedAt" TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX "IX_RunEvents_RunId_Sequence"
+                ON "RunEvents" ("RunId", "Sequence");
+            CREATE UNIQUE INDEX "IX_RunEvents_RunId_EventIdentity"
+                ON "RunEvents" ("RunId", "EventIdentity")
+                WHERE "EventIdentity" IS NOT NULL;
+            """;
+        command.ExecuteNonQuery();
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _provider.DisposeAsync();
@@ -896,10 +1049,13 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         public Action? BeforeParentResumeActiveCheck { get; set; }
         public List<CoordinatorDispatchContext> Started { get; } = [];
         public List<DomainRun> Cancelled { get; } = [];
+        public List<DomainRun> CancellationAttempts { get; } = [];
         public List<WorkflowChildWorkResult> Deliveries { get; } = [];
         public List<(string RunId, string OwnerUser)> EnsuredStreams { get; } = [];
         public List<(string RunId, string EventIdentity, JsonElement Payload)> DurableParentSteps { get; } = [];
         public bool DeliverResult { get; set; }
+        public bool FailFirstCancellation { get; set; }
+        private int _cancellationFailures;
 
         public bool DispatchEnabled
         {
@@ -966,8 +1122,94 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
 
         public Task CancelRunAsync(DomainRun run, string requestedByRunId, CancellationToken ct)
         {
+            CancellationAttempts.Add(run);
+            if (FailFirstCancellation && Interlocked.Exchange(ref _cancellationFailures, 1) == 0)
+                throw new InvalidOperationException("forced child cancellation failure");
             Cancelled.Add(run);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class PersistingCancellationRuntime(
+        IRunStore runStore,
+        IRunEventStream eventStream,
+        IReadOnlyList<RunId> racedChildIds,
+        bool terminalizeBeforeFirstCancellation) : IWorkflowChildWorkRuntime
+    {
+        private readonly RunStreamStore _streamStore = new(eventStream);
+        private int _raceTriggered;
+
+        public List<WorkflowChildWorkResult> Deliveries { get; } = [];
+        public bool DispatchEnabled => true;
+        public bool IsDispatchActive(string coordinatorRunId) => false;
+        public bool IsParentResumeActive(string parentRunId) => false;
+        public void StartDispatch(CoordinatorDispatchContext context) { }
+        public void RecordParentStep(string parentRunId, object payload) { }
+        public Task<bool> RecordParentReadyStepAsync(
+            int workPlanId,
+            string parentRunId,
+            string eventIdentity,
+            object payload,
+            CancellationToken ct) => Task.FromResult(false);
+        public void EnsureRunStream(string runId, string ownerUser) =>
+            _ = _streamStore.Get(runId) ?? _streamStore.Create(runId, ownerUser);
+        public Task PublishParentGraphAsync(
+            string parentRunId,
+            string parentWorkflowNodeId,
+            string childCoordinatorRunId,
+            CancellationToken ct) => Task.CompletedTask;
+        public Task<bool> TryDeliverParentResumeAsync(
+            string parentRunId,
+            PendingDelivery delivery,
+            WorkflowChildWorkResult result,
+            CancellationToken ct)
+        {
+            Deliveries.Add(result);
+            return Task.FromResult(false);
+        }
+
+        public async Task CancelRunAsync(DomainRun run, string requestedByRunId, CancellationToken ct)
+        {
+            if (terminalizeBeforeFirstCancellation
+                && Interlocked.Exchange(ref _raceTriggered, 1) == 0)
+            {
+                foreach (var childId in racedChildIds)
+                {
+                    (await runStore.TerminalizeForTestAsync(
+                        childId,
+                        DomainRunStatus.Failed,
+                        ct: CancellationToken.None)).Should().BeTrue();
+                }
+            }
+
+            EnsureRunStream(run.Id.ToString(), run.SubmittingUser);
+            await EndpointHelpers.CancelRunWorkAsync(
+                run,
+                runStore,
+                _streamStore,
+                new RunWorkflowRegistry(),
+                new NoOpWorktreeOperations(),
+                NullLogger.Instance,
+                ct,
+                eventStream: eventStream,
+                reason: "parent_cancelled",
+                requestedByRunId: requestedByRunId);
+        }
+    }
+
+    private sealed class NoOpWorktreeOperations : IWorktreeOperations
+    {
+        public bool WorktreeExists(string worktreePath) => false;
+        public string CommitChanges(string worktreePath, string runId) => throw new NotImplementedException();
+        public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch) => throw new NotImplementedException();
+        public int GetStepCount(string runId) => throw new NotImplementedException();
+        public MergeResult MergeWorktree(
+            string repositoryPath,
+            string originatingBranch,
+            string worktreeBranch,
+            string expectedTreeHash) => throw new NotImplementedException();
+        public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) =>
+            throw new NotImplementedException();
+        public string? GetTreeHash(string worktreePath) => null;
     }
 }

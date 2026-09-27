@@ -4,6 +4,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Tests.Runtime;
 
@@ -151,6 +152,70 @@ public sealed class SqliteRunEventStreamTests : IDisposable
 
         duplicate.Sequence.Should().Be(first.Sequence);
         (await afterRestart.GetPersistedEventsAsync(runId)).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task AppendIdentifiedAsync_ConcurrentDistinctIdentities_RetriesSequenceConflicts()
+    {
+        const string runId = "run-parent-cancellation-sequence-contention";
+        const int writerCount = 12;
+        using var start = new Barrier(writerCount);
+        var streams = Enumerable.Range(0, writerCount)
+            .Select(_ => new SqliteRunEventStream(_config))
+            .ToArray();
+
+        var results = await Task.WhenAll(streams.Select((stream, index) => Task.Run(async () =>
+        {
+            start.SignalAndWait();
+            return await stream.AppendIdentifiedAsync(
+                runId,
+                $"parent-cancelled:0:parent-{index}",
+                new RunEvent(0, EventTypes.RunCancelled, new
+                {
+                    reason = "parent_cancelled",
+                    requested = true,
+                    requestedByRunId = $"parent-{index}",
+                }));
+        })));
+
+        results.Select(result => result.Sequence).Should().BeEquivalentTo(Enumerable.Range(1, writerCount));
+        var persisted = await streams[0].GetPersistedEventsAsync(runId);
+        persisted.Should().HaveCount(writerCount);
+        persisted.Select(evt => evt.Sequence).Should().Equal(Enumerable.Range(1, writerCount));
+    }
+
+    [Fact]
+    public async Task AppendIdentifiedAsync_WhenDatabaseIsBusy_RetriesWholeTransaction()
+    {
+        const string runId = "run-parent-cancellation-busy";
+        var memoryDbPath = Path.Combine(_dir, "memory.db");
+        var logger = new RetryTrackingLogger();
+        var stream = new SqliteRunEventStream(_config, logger);
+        using var blocker = new SqliteConnection($"Data Source={memoryDbPath}");
+        blocker.Open();
+        using var lockCommand = blocker.CreateCommand();
+        lockCommand.CommandText = "BEGIN EXCLUSIVE;";
+        lockCommand.ExecuteNonQuery();
+
+        var append = Task.Run(() => stream.AppendIdentifiedAsync(
+            runId,
+            "parent-cancelled:0:parent-run",
+            new RunEvent(0, EventTypes.RunCancelled, new
+            {
+                reason = "parent_cancelled",
+                requested = true,
+                requestedByRunId = "parent-run",
+            })));
+
+        await Task.Delay(TimeSpan.FromMilliseconds(1700));
+        using var release = blocker.CreateCommand();
+        release.CommandText = "COMMIT;";
+        release.ExecuteNonQuery();
+
+        var persisted = await append.WaitAsync(TimeSpan.FromSeconds(10));
+        persisted.Sequence.Should().Be(1);
+        logger.RetryObserved.Should().BeTrue("the exclusive lock must force the identified append retry path");
+        (await stream.GetPersistedEventsAsync(runId)).Should().ContainSingle();
     }
 
     [Fact]
@@ -817,6 +882,28 @@ public sealed class SqliteRunEventStreamTests : IDisposable
         await foreach (var evt in stream.SubscribeAsync(runId, 0, cts.Token))
             replayed.Add(evt);
         return replayed;
+    }
+
+    private sealed class RetryTrackingLogger : ILogger<SqliteRunEventStream>
+    {
+        public bool RetryObserved { get; private set; }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning
+                && formatter(state, exception).Contains(
+                    "Retrying identified SQLite RunEvent append",
+                    StringComparison.Ordinal))
+            {
+                RetryObserved = true;
+            }
+        }
     }
 
     private sealed class InterleavingRunEventStream(IRunEventStream inner, string gateOnType) : IRunEventStream
