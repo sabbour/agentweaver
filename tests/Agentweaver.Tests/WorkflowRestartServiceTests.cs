@@ -27,6 +27,31 @@ namespace Agentweaver.Tests;
 /// </summary>
 public sealed class WorkflowRestartServiceTests : IAsyncDisposable
 {
+    [Fact]
+    public async Task RecoverAsync_CancelledSweep_DoesNotTerminalizeRun()
+    {
+        var store = new SqliteRunStore(_db.Db);
+        var id = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = id,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "canceled recovery",
+            SubmittingUser = "test-user",
+            Status = RunStatus.Committing,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var service = BuildService(store, new RunStreamStore(),
+            new TestWorktreeOps(worktreeExists: false, worktreePath: _worktreePath, treeHash: null));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await FluentActions.Invoking(() => service.RecoverAsync(cancelled.Token))
+            .Should().ThrowAsync<OperationCanceledException>();
+        (await store.GetAsync(id))!.Status.Should().Be(RunStatus.Committing);
+    }
+
     private readonly TestSqliteDb _db;
     private readonly string _checkpointsPath;
     private readonly string _worktreePath;

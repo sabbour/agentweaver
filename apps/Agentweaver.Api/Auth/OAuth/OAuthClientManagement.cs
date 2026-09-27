@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -11,9 +12,58 @@ namespace Agentweaver.Api.Auth.OAuth;
 public sealed class OAuthStaticClientReconciler(
     IServiceScopeFactory scopeFactory,
     OAuthServerConfiguration configuration,
-    ILogger<OAuthStaticClientReconciler> logger) : IHostedService
+    IHostApplicationLifetime lifetime,
+    ILogger<OAuthStaticClientReconciler> logger) : BackgroundService
 {
-    public async Task StartAsync(CancellationToken cancellationToken)
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(30);
+    private volatile bool _initialized;
+    public bool IsInitialized => _initialized;
+    internal Func<CancellationToken, Task>? ReconcileOverride { get; set; }
+    internal TimeSpan RetryInterval { get; set; } = RetryDelay;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await Task.Yield();
+        await HostStartup.WaitForStartAsync(lifetime.ApplicationStarted, stoppingToken).ConfigureAwait(false);
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                timeout.CancelAfter(AttemptTimeout);
+                await (ReconcileOverride?.Invoke(timeout.Token) ?? ReconcileAsync(timeout.Token))
+                    .ConfigureAwait(false);
+                _initialized = true;
+                return;
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                logger.LogWarning(
+                    "Initial static OAuth client reconciliation exceeded {Timeout}; retrying in {Delay}",
+                    AttemptTimeout, RetryInterval);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Initial static OAuth client reconciliation failed; retrying in {Delay}", RetryInterval);
+            }
+
+            try
+            {
+                await Task.Delay(RetryInterval, stoppingToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+    }
+
+    internal async Task ReconcileAsync(CancellationToken cancellationToken)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -55,8 +105,6 @@ public sealed class OAuthStaticClientReconciler(
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     internal static OpenIddictApplicationDescriptor CreateDescriptor(OAuthStaticClient client, string resource)
     {

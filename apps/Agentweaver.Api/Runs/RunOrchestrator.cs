@@ -652,9 +652,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         var ctsRegistered = false;
         try
         {
-            var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
+            Microsoft.Agents.AI.Workflows.StreamingRun streamingRun;
+            using (ct.Register(static state => ((CancellationTokenSource)state!).Cancel(), runCts))
+            {
+                ct.ThrowIfCancellationRequested();
+                streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+            }
+            ct.ThrowIfCancellationRequested();
             var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
             ctsRegistered = true;
+            ct.ThrowIfCancellationRequested();
             _watchLoop.StartWatching(
                 run.Id.ToString(),
                 streamingRun,
@@ -1151,6 +1159,11 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
         }
 
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw;
+        }
         catch (WorkflowBindException ex)
         {
             _logger.LogError(ex, "Workflow binding failed for run {RunId}; transitioning to failed", runId);
@@ -1179,6 +1192,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             }
 
             throw new RunSubmissionValidationException($"Policy hook failed: {ex.Message}", ex);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
