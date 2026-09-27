@@ -23,6 +23,7 @@ namespace Agentweaver.Api.Runs;
 public sealed class RunWatchLoopService
 {
     internal Func<Task>? BeforeTerminalMutationOverride { get; set; }
+    internal Func<Task>? BeforeClosureAppendOverride { get; set; }
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
@@ -88,6 +89,7 @@ public sealed class RunWatchLoopService
         RunStreamEntry entry,
         string ownerUser,
         CancellationToken runCt,
+        int lifecycleGeneration,
         RunLeaseClaim? existingLease = null)
     {
         _ = Task.Run(async () =>
@@ -153,7 +155,7 @@ public sealed class RunWatchLoopService
             // stuck/runaway ACTIVE execution is still caught: while armed, an active span exceeding
             // _watchLoopTimeout cancels linkedCts exactly as before.
             var watchdog = new ExecutionWatchdog(linkedCts, _watchLoopTimeout);
-            var watchLease = new RunLeaseClaim(leaseOwnerId, fencingToken);
+            var watchLease = new RunLeaseClaim(leaseOwnerId, fencingToken, lifecycleGeneration);
             var durableStopMonitor = MonitorDurableSteeringStopAsync(runId, entry, linkedCts.Token);
             try
             {
@@ -540,12 +542,15 @@ public sealed class RunWatchLoopService
         var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
         if (run is not null && !TerminalRunOutcome.IsTerminal(run.Status))
         {
+            var watchGeneration = watchLease?.LifecycleGeneration ?? run.LifecycleGeneration;
             var fence = watchLease is null ? null
-                : new RunLeaseFence(watchLease.OwnerId, watchLease.FencingToken, run.LifecycleGeneration);
+                : new RunLeaseFence(watchLease.OwnerId, watchLease.FencingToken, watchGeneration);
+            if (BeforeClosureAppendOverride is not null)
+                await BeforeClosureAppendOverride().ConfigureAwait(false);
             var attempt = watchLease is null
-                ? entry.RecordNext(UnexpectedStreamEndEvent, new { lifecycleGeneration = run.LifecycleGeneration })
+                ? entry.RecordNext(UnexpectedStreamEndEvent, new { lifecycleGeneration = watchGeneration })
                 : entry.RecordNextIfLeaseOwned(
-                    UnexpectedStreamEndEvent, new { lifecycleGeneration = run.LifecycleGeneration },
+                    UnexpectedStreamEndEvent, new { lifecycleGeneration = watchGeneration },
                     _runStore, fence!, CancellationToken.None);
             if (attempt == 0)
             {
@@ -557,12 +562,12 @@ public sealed class RunWatchLoopService
                 evt.Type == UnexpectedStreamEndEvent
                 && System.Text.Json.JsonSerializer.SerializeToElement(evt.Payload)
                     .TryGetProperty("lifecycleGeneration", out var generation)
-                && generation.GetInt32() == run.LifecycleGeneration);
+                && generation.GetInt32() == watchGeneration);
             if (closures >= MaxUnexpectedStreamEnds)
             {
                 _logger.LogError(
                     "Run {RunId} exhausted {ClosureCount} unexpected stream completions in lifecycle {Generation}",
-                    runId, closures, run.LifecycleGeneration);
+                    runId, closures, watchGeneration);
                 await FailRunSafeAsync(
                     runId, entry, "watch_stream_completed_without_terminal_event",
                     watchLease, streamingRun, new { closureCount = closures, maxClosures = MaxUnexpectedStreamEnds })
@@ -761,7 +766,7 @@ public sealed class RunWatchLoopService
                 entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
                 entry.RecordNext(EventTypes.ReviewApproved, new { });
                 await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.MergeCompleted,
-                    new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode }).ConfigureAwait(false);
+                    new { merged_commit_hash = mergeOutput.MergeResult, merge_mode = mergeOutput.MergeMode }, watchLease).ConfigureAwait(false);
                 _ = FirePostRunScribeAsync(runId);
                 return true;
             }
@@ -787,7 +792,7 @@ public sealed class RunWatchLoopService
 
                 EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
                 await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunCompleted,
-                    new { result = mergeOutput.MergeResult ?? "completed" }).ConfigureAwait(false);
+                    new { result = mergeOutput.MergeResult ?? "completed" }, watchLease).ConfigureAwait(false);
                 _ = FirePostRunScribeAsync(runId);
                 return true;
             }
@@ -802,7 +807,7 @@ public sealed class RunWatchLoopService
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "completed", label = "Review", timestamp_utc = now.ToString("O") });
             entry.RecordNext(EventTypes.ReviewApproved, new { });
             await CompleteTerminalOutcomeAsync(mergeFailedChanged, runId, entry, EventTypes.MergeFailed,
-                new { reason = mergeOutput.MergeResult }).ConfigureAwait(false);
+                new { reason = mergeOutput.MergeResult }, watchLease).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -817,7 +822,7 @@ public sealed class RunWatchLoopService
 
             EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
             await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunCompleted,
-                new { result = "no_changes" }).ConfigureAwait(false);
+                new { result = "no_changes" }, watchLease).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -849,7 +854,7 @@ public sealed class RunWatchLoopService
                     result = fanCompleted.JoinedOutput,
                     workPlanId = fanCompleted.WorkPlanId,
                     childCoordinatorRunId = fanCompleted.ChildCoordinatorRunId,
-                }).ConfigureAwait(false);
+                }, watchLease).ConfigureAwait(false);
             return true;
         }
 
@@ -873,13 +878,13 @@ public sealed class RunWatchLoopService
                                 diff = assembleReady.Diff ?? string.Empty,
                                 stepCount = assembleReady.StepCount,
                             },
-                            now, currentRun.LifecycleGeneration),
+                            now, lease.LifecycleGeneration),
                         null,
                         TreeHash: assembleReady.TreeHash ?? string.Empty,
                         WorktreeBranch: assembleReady.WorktreeBranch ?? string.Empty,
                         Diff: assembleReady.Diff ?? string.Empty,
                         RequiredLease: new RunLeaseFence(
-                            lease.OwnerId, lease.FencingToken, currentRun.LifecycleGeneration)),
+                            lease.OwnerId, lease.FencingToken, lease.LifecycleGeneration)),
                     CancellationToken.None).ConfigureAwait(false)
                 : watchLease is null && await _runStore.SetAssembleReadyAsync(
                     parsedRunId,
@@ -897,7 +902,7 @@ public sealed class RunWatchLoopService
                     worktreeBranch = assembleReady.WorktreeBranch ?? string.Empty,
                     diff = assembleReady.Diff ?? string.Empty,
                     stepCount = assembleReady.StepCount,
-                }).ConfigureAwait(false);
+                }, watchLease).ConfigureAwait(false);
 
             // Emit an explicit no-changes signal when the worker produced nothing so the coordinator
             // and the UI can surface it clearly (the reviewer must not be sent to an empty diff with
@@ -935,7 +940,7 @@ public sealed class RunWatchLoopService
             if (!changed) return false;
 
             EmitTerminalMetrics(currentRun, now, "failed", turnFailed.Reason, changed);
-            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, failedPayload).ConfigureAwait(false);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, failedPayload, watchLease).ConfigureAwait(false);
             return true;
         }
 
@@ -958,7 +963,7 @@ public sealed class RunWatchLoopService
             if (!changed) return false;
 
             EmitTerminalMetrics(currentRun, now, "failed", childFailed.Reason, changed);
-            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, failedPayload).ConfigureAwait(false);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, failedPayload, watchLease).ConfigureAwait(false);
             return true;
         }
 
@@ -972,7 +977,7 @@ public sealed class RunWatchLoopService
             EmitTerminalMetrics(currentRun, now, "failed", "declined", changed);
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "review", status = "declined", label = "Review", timestamp_utc = now.ToString("O") });
             entry.RecordNext(EventTypes.WorkflowStep, new { step = "merge", status = "skipped", label = "Merge", timestamp_utc = now.ToString("O") });
-            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.ReviewDeclined, new { }).ConfigureAwait(false);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.ReviewDeclined, new { }, watchLease).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -987,7 +992,7 @@ public sealed class RunWatchLoopService
 
             EmitTerminalMetrics(currentRun, now, "failed", "content_safety", changed);
             await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed,
-                new { reason = "content_safety" }).ConfigureAwait(false);
+                new { reason = "content_safety" }, watchLease).ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             return true;
         }
@@ -1079,7 +1084,7 @@ public sealed class RunWatchLoopService
                 return false;
 
             EmitTerminalMetrics(run, failedAt, "failed", reason, changed);
-            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, payload)
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunFailed, payload, watchLease)
                 .ConfigureAwait(false);
             _ = FirePostRunScribeAsync(runId);
             await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
@@ -1093,7 +1098,7 @@ public sealed class RunWatchLoopService
         }
         finally
         {
-            if (expectedStreamingRun is not null)
+            if (changed && expectedStreamingRun is not null)
                 _registry.AbandonIfCurrent(runId, expectedStreamingRun);
             if (changed)
             {
@@ -1108,7 +1113,8 @@ public sealed class RunWatchLoopService
         string runId,
         RunStreamEntry entry,
         string eventType,
-        object payload)
+        object payload,
+        RunLeaseClaim? watchLease)
     {
         if (!changed)
             return;
@@ -1119,7 +1125,7 @@ public sealed class RunWatchLoopService
             if (run is not null
                 && _terminalOutcomeProjector is not null
                 && await _terminalOutcomeProjector.TryProjectExistingTerminalAsync(
-                    run.Id, run.LifecycleGeneration, canonicalEvent!, CancellationToken.None, _streamStore)
+                    run.Id, watchLease?.LifecycleGeneration ?? run.LifecycleGeneration, canonicalEvent!, CancellationToken.None, _streamStore)
                     .ConfigureAwait(false))
                 return;
 
@@ -1156,10 +1162,11 @@ public sealed class RunWatchLoopService
         return await _runStore.TryMutateTerminalOutcomeAsync(
                 runId,
                 new TerminalRunMutation(
-                    TerminalRunOutcome.Create(status, eventType, payload, occurredAt, run.LifecycleGeneration),
+                    TerminalRunOutcome.Create(status, eventType, payload, occurredAt,
+                        watchLease?.LifecycleGeneration ?? run.LifecycleGeneration),
                     result,
                     RequiredLease: watchLease is null ? null
-                        : new RunLeaseFence(watchLease.OwnerId, watchLease.FencingToken, run.LifecycleGeneration)),
+                        : new RunLeaseFence(watchLease.OwnerId, watchLease.FencingToken, watchLease.LifecycleGeneration)),
                 CancellationToken.None).ConfigureAwait(false);
     }
 

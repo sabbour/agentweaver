@@ -279,7 +279,7 @@ public sealed class RunStreamEntry
         CancellationToken ct)
     {
         if (!HasDurableSequenceAuthority)
-            return RecordNext(type, payload);
+            throw new InvalidOperationException("Lease-fenced events require a durable event stream.");
 
         var candidate = StructuredRunFailureTerminal.NormalizeFailure(
             new RunEvent(0, type, payload, DateTimeOffset.UtcNow));

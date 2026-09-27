@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 
 namespace Agentweaver.Api.Infrastructure;
 
-public sealed record RunLeaseClaim(string OwnerId, long FencingToken);
+public sealed record RunLeaseClaim(string OwnerId, long FencingToken, int LifecycleGeneration = 1);
 public sealed record RunLeaseFence(string OwnerId, long FencingToken, int LifecycleGeneration);
 
 public sealed class RunLeaseFenceRegistry

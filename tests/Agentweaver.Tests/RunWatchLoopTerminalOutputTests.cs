@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using RunStatus = Agentweaver.Domain.RunStatus;
@@ -298,6 +299,79 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
         entry.IsCompleted.Should().BeFalse();
         entry.HasEventType(EventTypes.RunFailed).Should().BeFalse();
         await leases.ReleaseAsync(runId, "new-watcher", successorToken);
+    }
+
+    [Theory]
+    [InlineData("merged")]
+    [InlineData("completed")]
+    [InlineData("merge_failed")]
+    [InlineData("no_changes")]
+    [InlineData("declined")]
+    [InlineData("content_safety")]
+    [InlineData("root_failed")]
+    [InlineData("child_failed")]
+    [InlineData("assemble_ready")]
+    [InlineData("fan_completed")]
+    [InlineData("unknown")]
+    [InlineData("generic_failure")]
+    [InlineData("watch_loop_timeout")]
+    [InlineData("send_response_failed")]
+    [InlineData("child_executor_failed:agent")]
+    public async Task ReopenedLifecycle_StaleWatcherCannotTerminalize_WithCurrentLease(string outcome)
+    {
+        var (svc, entry, runId) = CreateServiceAndEntry();
+        using var scope = _factory.Services.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        var leases = scope.ServiceProvider.GetRequiredService<IRunLeaseStore>();
+        var sqlite = scope.ServiceProvider.GetRequiredService<SqliteDb>();
+        var owner = await leases.TryClaimAsync(runId, "same-owner", TimeSpan.FromMinutes(5));
+        owner.Claimed.Should().BeTrue();
+        await using (var connection = await sqlite.OpenConnectionAsync())
+        await using (var update = connection.CreateCommand())
+        {
+            update.CommandText = "UPDATE runs SET lifecycle_generation=2 WHERE run_id=$runId;";
+            update.Parameters.AddWithValue("$runId", runId);
+            (await update.ExecuteNonQueryAsync()).Should().Be(1);
+        }
+        var output = outcome switch
+        {
+            "merged" => (object)new MergeOutput(runId, "merged", "sha"),
+            "completed" => new MergeOutput(runId, "completed", "done"),
+            "merge_failed" => new MergeOutput(runId, "merge_failed", "conflict"),
+            "no_changes" => new NoChangesOutput(runId),
+            "declined" => new DeclinedOutput(runId),
+            "content_safety" => new ContentSafetyFailedOutput(runId),
+            "root_failed" => new AgentTurnFailedOutput(runId, "agent_error"),
+            "child_failed" => new ChildTurnFailedOutput(runId, "child_error"),
+            "assemble_ready" => new AssembleReadyOutput(runId, "branch", "tree", "diff", true, 1),
+            "fan_completed" => new WorkflowFanCompletedOutput(runId, "joined", 1, runId),
+            _ => new object(),
+        };
+        var stale = new RunLeaseClaim("same-owner", owner.FencingToken, 1);
+        var failureReason = outcome == "generic_failure" ? "watch_loop_error" : outcome;
+        var isGenericFailure = outcome is "generic_failure" or "watch_loop_timeout"
+            or "send_response_failed" or "child_executor_failed:agent";
+        var changed = isGenericFailure
+            ? await svc.FailRunSafeAsync(runId, entry, failureReason, stale)
+            : await svc.HandleTerminalOutputAsync(
+                runId, new WorkflowOutputEvent(output, "terminal"), entry, CancellationToken.None, stale);
+        changed.Should().BeFalse();
+        (await store.GetAsync(RunId.Parse(runId)))!.Status.Should().Be(RunStatus.InProgress);
+        entry.IsCompleted.Should().BeFalse();
+        entry.GetSnapshotSince(0).Events.Should().BeEmpty();
+
+        if (outcome is "completed" or "root_failed" or "assemble_ready" or "generic_failure"
+            or "watch_loop_timeout" or "send_response_failed" or "child_executor_failed:agent")
+        {
+            var current = new RunLeaseClaim("same-owner", owner.FencingToken, 2);
+            var won = isGenericFailure
+                ? await svc.FailRunSafeAsync(runId, entry, failureReason, current)
+                : await svc.HandleTerminalOutputAsync(
+                    runId, new WorkflowOutputEvent(output, "terminal"), entry, CancellationToken.None, current);
+            won.Should().BeTrue();
+            entry.IsCompleted.Should().BeTrue();
+        }
+        await leases.ReleaseAsync(runId, "same-owner", owner.FencingToken);
     }
 
     private (RunWatchLoopService Service, RunStreamEntry Entry, string RunId) CreateServiceAndEntry()
