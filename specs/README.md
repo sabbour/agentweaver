@@ -45,6 +45,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Run a single-agent task](./orchestration-runs/run-a-single-agent-task.md) — [#14](https://github.com/sabbour/agentweaver/issues/14)
 - [Coordinate a multi-agent goal](./orchestration-runs/coordinate-a-multi-agent-goal.md) — [#15](https://github.com/sabbour/agentweaver/issues/15)
 - [Steer and recover active orchestrations](./orchestration-runs/steer-and-recover-orchestrations.md) — [#16](https://github.com/sabbour/agentweaver/issues/16)
+- [Send addressed messages to teammates](./orchestration-runs/send-addressed-agent-messages.md) — [#1406](https://github.com/sabbour/agentweaver/issues/1406)
 - [Push a pull request as a coordinator execution step](./orchestration-runs/push-pr-as-execution-step.md) — [#394](https://github.com/sabbour/agentweaver/issues/394)
 
 ## Review & merge

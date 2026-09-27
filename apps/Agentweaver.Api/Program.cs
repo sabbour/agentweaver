@@ -159,6 +159,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>(
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
 builder.Services.AddScoped<DecisionLedgerSyncService>();
+builder.Services.AddScoped<AddressedMessageService>();
 
 // Workflow services
 builder.Services.AddSingleton<RunWorkflowRegistry>();
@@ -1353,6 +1354,7 @@ else
     applicationEndpoints.MapUserModelProviderEndpoints();
     applicationEndpoints.MapGitHubRepositorySelectionEndpoints();
     applicationEndpoints.MapDecisionsEndpoints();
+    applicationEndpoints.MapAddressedMessagesEndpoints();
     applicationEndpoints.MapMemoryEndpoints();
     applicationEndpoints.MapWorkflowDefinitionEndpoints();
     applicationEndpoints.MapWorkflowTriggerEndpoints();

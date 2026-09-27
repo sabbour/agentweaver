@@ -25,7 +25,7 @@ import {
 import { Pager } from '../copilot-fluent-system';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { AgentMemoryDto, AgentMemoryRevisionDto, DecisionDto, DecisionInboxEntryDto, DecisionRevisionDto, PagedResult, SessionHistoryDto } from '../api/types';
+import type { AddressedMessageDto, AgentMemoryDto, AgentMemoryRevisionDto, DecisionDto, DecisionInboxEntryDto, DecisionRevisionDto, PagedResult, SessionHistoryDto } from '../api/types';
 
 const useStyles = makeStyles({
   breadcrumbLink: {
@@ -127,7 +127,8 @@ export function MemoriesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
 
-  const [selectedTab, setSelectedTab] = useState<'decisions' | 'memory' | 'sessions'>('decisions');
+  const [selectedTab, setSelectedTab] = useState<'decisions' | 'messages' | 'memory' | 'sessions'>('decisions');
+  const [messages, setMessages] = useState<AddressedMessageDto[] | null>(null);
   const [decisions,   setDecisions]   = useState<DecisionDto[] | null>(null);
   const [decisionsTotalCount, setDecisionsTotalCount] = useState(0);
   const [decisionsPage, setDecisionsPage] = useState(1);
@@ -204,6 +205,17 @@ export function MemoriesPage() {
         }
         return;
       }
+      if (selectedTab === 'messages') {
+        if (messages !== null) { setLoading(false); return; }
+        try {
+          setMessages(await apiClient.getAddressedMessages(projectId));
+        } catch (err: unknown) {
+          setLoadError(formatApiError(err));
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
       if (selectedTab === 'memory') {
         if (memory !== null) { setLoading(false); return; }
         try {
@@ -238,12 +250,14 @@ export function MemoriesPage() {
       }
     };
     void loadTabData();
-  }, [projectId, selectedTab, decisions, inbox, memory, sessions, reloadKey, loadDecisionsPage, memoryPage, memoryPageSize, sessionsPage, sessionsPageSize, appliedMemoryQuery, memoryStatus]);
+  }, [projectId, selectedTab, decisions, inbox, messages, memory, sessions, reloadKey, loadDecisionsPage, memoryPage, memoryPageSize, sessionsPage, sessionsPageSize, appliedMemoryQuery, memoryStatus]);
 
   const retryLoad = () => {
     if (selectedTab === 'decisions') {
       setDecisions(null);
       setInbox(null);
+    } else if (selectedTab === 'messages') {
+      setMessages(null);
     } else if (selectedTab === 'memory') {
       setMemory(null);
     } else {
@@ -449,9 +463,10 @@ export function MemoriesPage() {
 
       <TabList
         selectedValue={selectedTab}
-        onTabSelect={(_, data) => setSelectedTab(data.value as 'decisions' | 'memory' | 'sessions')}
+        onTabSelect={(_, data) => setSelectedTab(data.value as 'decisions' | 'messages' | 'memory' | 'sessions')}
       >
         <Tab value="decisions">Decisions</Tab>
+        <Tab value="messages">Addressed messages</Tab>
         <Tab value="memory">Agent memory</Tab>
         <Tab value="sessions">Session history</Tab>
       </TabList>
@@ -463,6 +478,31 @@ export function MemoriesPage() {
           <MessageBar intent="error">
             <MessageBarBody>{mutationError}</MessageBarBody>
           </MessageBar>
+        )}
+
+        {!loading && !loadError && selectedTab === 'messages' && (
+          <PageSection title="Addressed messages" description="Receipt tracking is separate from decisions and tasks. Messages are not delivered automatically yet.">
+            <Button onClick={retryLoad}>Refresh messages</Button>
+            {messages?.length === 0 && <EmptyState title="No addressed messages" description="Messages between active runs will appear here." />}
+            <div className={styles.itemList}>
+              {messages?.map((message) => (
+                <div className={styles.item} key={message.id}>
+                  <div className={styles.itemHeader}>
+                    <span className={styles.itemTitle}>{message.sender} → {message.recipient}</span>
+                    <Badge>{message.status}</Badge>
+                  </div>
+                  <span className={styles.itemMeta}>
+                    {message.createdAt} · From {message.sourceRunId ?? 'unknown run'} to {message.targetRunId}
+                    {' · '}Thread {message.threadId}
+                    {message.replyToId && <> · Reply to {message.replyToId}</>}
+                    {message.referenceKind && <> · {message.referenceKind}: {message.referenceId}</>}
+                  </span>
+                  <div className={styles.itemContent}>{message.content}</div>
+                  {message.failureReason && <span className={styles.itemMeta}>Delivery error: {message.failureReason}</span>}
+                </div>
+              ))}
+            </div>
+          </PageSection>
         )}
 
         {!loading && !loadError && selectedTab === 'decisions' && (

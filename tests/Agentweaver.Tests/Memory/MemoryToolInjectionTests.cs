@@ -37,6 +37,15 @@ public sealed class MemoryToolInjectionTests : IDisposable
         "update_session",
         "submit_inbox_entry",
     ];
+    private static readonly string[] AddressedMessageTools =
+    [
+        "agent_message_send",
+        "agent_message_list",
+        "agent_message_get",
+        "agent_message_claim",
+        "agent_message_deliver",
+        "agent_message_acknowledge",
+    ];
 
     private readonly string _workspace;
 
@@ -70,6 +79,7 @@ public sealed class MemoryToolInjectionTests : IDisposable
         // The reporting tools that DID show up in the failing live run must still be present too, so
         // memory tools are proven to be injected on the SAME path — not a separate one.
         names.Should().Contain(new[] { "report_intent", "report_outcome" });
+        names.Should().Contain(AddressedMessageTools);
     }
 
     [Fact]

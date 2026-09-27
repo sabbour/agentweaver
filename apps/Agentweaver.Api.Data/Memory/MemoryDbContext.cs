@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Coordinator;
@@ -14,6 +15,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public bool SuppressKnowledgeRevisionCapture { get; set; }
     public DbSet<Decision> Decisions => Set<Decision>();
     public DbSet<DecisionInboxEntry> DecisionInbox => Set<DecisionInboxEntry>();
+    public DbSet<AddressedMessage> AddressedMessages => Set<AddressedMessage>();
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
     public DbSet<AgentMemoryRevision> AgentMemoryRevisions => Set<AgentMemoryRevision>();
     public DbSet<DecisionRevision> DecisionRevisions => Set<DecisionRevision>();
@@ -106,6 +108,38 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             .HasForeignKey(d => d.SupersededById)
             .IsRequired(false);
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Status });
+        model.Entity<AddressedMessage>(message =>
+        {
+            message.ToTable("addressed_messages");
+            message.HasKey(m => m.Id);
+            message.Property(m => m.Id).HasMaxLength(32);
+            message.Property(m => m.ProjectId).HasMaxLength(128);
+            message.Property(m => m.Sender).HasMaxLength(128);
+            message.Property(m => m.SenderIdentity).HasMaxLength(256);
+            message.Property(m => m.Recipient).HasMaxLength(128);
+            message.Property(m => m.SourceRunId).HasMaxLength(128);
+            message.Property(m => m.TargetRunId).HasMaxLength(128);
+            message.Property(m => m.ThreadId).HasMaxLength(32);
+            message.Property(m => m.ReplyToId).HasMaxLength(32);
+            message.Property(m => m.ReferenceKind).HasMaxLength(32);
+            message.Property(m => m.ReferenceId).HasMaxLength(128);
+            message.Property(m => m.IdempotencyKey).HasMaxLength(128);
+            message.Property(m => m.Status).HasMaxLength(32);
+            message.Property(m => m.ClaimOwner).HasMaxLength(128);
+            message.Property(m => m.FailureReason).HasMaxLength(128);
+            // UTC ticks preserve instant ordering across offsets for SQLite lease predicates.
+            var utcTicks = new ValueConverter<DateTimeOffset, long>(
+                value => value.UtcTicks,
+                value => new DateTimeOffset(value, TimeSpan.Zero));
+            message.Property(m => m.CreatedAt).HasConversion(utcTicks);
+            message.Property(m => m.ExpiresAt).HasConversion(utcTicks);
+            message.Property(m => m.ClaimedUntil).HasConversion(utcTicks);
+            message.Property(m => m.DeliveredAt).HasConversion(utcTicks);
+            message.Property(m => m.AcknowledgedAt).HasConversion(utcTicks);
+            message.HasIndex(m => new { m.ProjectId, m.SenderIdentity, m.IdempotencyKey }).IsUnique();
+            message.HasIndex(m => new { m.ProjectId, m.TargetRunId, m.Status, m.CreatedAt });
+            message.HasIndex(m => new { m.ProjectId, m.ThreadId, m.CreatedAt });
+        });
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Slug }).IsUnique();
         model.Entity<DecisionInboxEntry>().Property(e => e.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<DecisionInboxEntry>()

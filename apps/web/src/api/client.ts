@@ -914,6 +914,14 @@ export class AgentweaverApiClient {
     );
   }
 
+  getAddressedMessages(projectId: string, runId?: string): Promise<import('./types').AddressedMessageDto[]> {
+    const query = runId ? `?run_id=${encodeURIComponent(runId)}` : '';
+    return this.request<import('./types').AddressedMessageDto[]>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/agent-messages${query}`,
+    );
+  }
+
   getDecisionRevisions(
     projectId: string,
     decisionId: string,

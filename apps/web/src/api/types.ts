@@ -726,6 +726,27 @@ export interface DecisionInboxEntryDto {
   updated_at: string;
 }
 
+export interface AddressedMessageDto {
+  id: string;
+  projectId: string;
+  sender: string;
+  recipient: string;
+  sourceRunId: string | null;
+  targetRunId: string;
+  threadId: string;
+  replyToId: string | null;
+  referenceKind: string | null;
+  referenceId: string | null;
+  idempotencyKey: string;
+  content: string;
+  status: 'accepted' | 'claimed' | 'delivered' | 'acknowledged' | 'expired' | 'undeliverable';
+  createdAt: string;
+  expiresAt: string;
+  deliveredAt: string | null;
+  acknowledgedAt: string | null;
+  failureReason: string | null;
+}
+
 export interface AgentMemoryDto {
   id: string;
   agent_name: string;

@@ -80,6 +80,7 @@ public sealed class SqliteToPostgresMigrator
         List<DecisionRevision> decisionRevisions;
         List<DecisionInboxEntry> inbox;
         List<SessionContext> sessions;
+        List<AddressedMessage> addressedMessages;
         try
         {
             memories = await source.AgentMemory.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
@@ -88,6 +89,9 @@ public sealed class SqliteToPostgresMigrator
             decisionRevisions = await source.DecisionRevisions.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             inbox = await source.DecisionInbox.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             sessions = await source.SessionContexts.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            addressedMessages = await HasTableAsync(source, "addressed_messages", ct).ConfigureAwait(false)
+                ? await source.AddressedMessages.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
+                : [];
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
                                         ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase))
@@ -167,13 +171,14 @@ public sealed class SqliteToPostgresMigrator
         }
 
         if (memories.Count + decisions.Count + memoryRevisions.Count + decisionRevisions.Count
-            + inbox.Count + sessions.Count == 0)
+            + inbox.Count + sessions.Count + addressedMessages.Count == 0)
             return;
 
         var projectIds = memories.Select(x => x.ProjectId)
             .Concat(decisions.Select(x => x.ProjectId))
             .Concat(inbox.Select(x => x.ProjectId))
             .Concat(sessions.Select(x => x.ProjectId))
+            .Concat(addressedMessages.Select(x => x.ProjectId))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var destinationProjectIds = await destination.Projects.AsNoTracking()
@@ -189,6 +194,7 @@ public sealed class SqliteToPostgresMigrator
         var migratedDecisions = 0;
         var migratedInbox = 0;
         var migratedSessions = 0;
+        var migratedMessages = 0;
         await using var transaction = await destination.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         destination.SuppressKnowledgeRevisionCapture = true;
         try
@@ -294,6 +300,21 @@ public sealed class SqliteToPostgresMigrator
                         $"Memory state transfer aborted: SessionContext id {session.Id} conflicts with the destination.");
                 }
             }
+            foreach (var message in addressedMessages)
+            {
+                var existing = await destination.AddressedMessages.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Id == message.Id, ct).ConfigureAwait(false);
+                if (existing is null)
+                {
+                    destination.AddressedMessages.Add(message);
+                    migratedMessages++;
+                }
+                else if (!AddressedMessageMatches(message, existing))
+                {
+                    throw new InvalidOperationException(
+                        $"Memory state transfer aborted: AddressedMessage id {message.Id} conflicts with the destination.");
+                }
+            }
             await destination.SaveChangesAsync(ct).ConfigureAwait(false);
 
             if (destination.Database.IsNpgsql())
@@ -316,11 +337,12 @@ public sealed class SqliteToPostgresMigrator
         }
 
         _logger.LogInformation(
-            "  Memory state migrated: {Memories} memories, {Decisions} decisions, {Inbox} inbox entries, {Sessions} sessions.",
+            "  Memory state migrated: {Memories} memories, {Decisions} decisions, {Inbox} inbox entries, {Sessions} sessions, {Messages} messages.",
             migratedMemories,
             migratedDecisions,
             migratedInbox,
-            migratedSessions);
+            migratedSessions,
+            migratedMessages);
     }
 
     private static Task ResetPostgresIdentityAsync(
@@ -409,6 +431,29 @@ public sealed class SqliteToPostgresMigrator
         source.SerializedState == destination.SerializedState &&
         NormalizeTimestamp(source.StartedAt) == NormalizeTimestamp(destination.StartedAt) &&
         NormalizeTimestamp(source.EndedAt) == NormalizeTimestamp(destination.EndedAt);
+
+    private static bool AddressedMessageMatches(AddressedMessage source, AddressedMessage destination) =>
+        source.ProjectId == destination.ProjectId &&
+        source.Sender == destination.Sender &&
+        source.SenderIdentity == destination.SenderIdentity &&
+        source.Recipient == destination.Recipient &&
+        source.SourceRunId == destination.SourceRunId &&
+        source.TargetRunId == destination.TargetRunId &&
+        source.ThreadId == destination.ThreadId &&
+        source.ReplyToId == destination.ReplyToId &&
+        source.ReferenceKind == destination.ReferenceKind &&
+        source.ReferenceId == destination.ReferenceId &&
+        source.IdempotencyKey == destination.IdempotencyKey &&
+        source.Content == destination.Content &&
+        source.Status == destination.Status &&
+        source.ClaimOwner == destination.ClaimOwner &&
+        source.Fence == destination.Fence &&
+        source.FailureReason == destination.FailureReason &&
+        source.CreatedAt == destination.CreatedAt &&
+        source.ExpiresAt == destination.ExpiresAt &&
+        source.ClaimedUntil == destination.ClaimedUntil &&
+        source.DeliveredAt == destination.DeliveredAt &&
+        source.AcknowledgedAt == destination.AcknowledgedAt;
 
     private async Task MigrateGitHubConnectionsRecordsAsync(string memoryDbPath, MemoryDbContext destination, CancellationToken ct)
     {

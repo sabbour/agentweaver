@@ -43,6 +43,8 @@ public static class OperatorToolApprovalPolicy
         "coordinator_outcome_spec_get",
         "coordinator_work_plan_get",
         "decision_inbox_list",
+        "agent_message_list",
+        "agent_message_get",
         "decision_list",
         "diagnostics_get",
         "get_project_workspace_file",
@@ -105,6 +107,10 @@ public static class OperatorToolApprovalPolicy
 
         // Steer / stop live work.
         "coordinator_steer",
+        "agent_message_send",
+        "agent_message_claim",
+        "agent_message_deliver",
+        "agent_message_acknowledge",
 
         // Confirm an outcome.
         "coordinator_outcome_spec_confirm",
@@ -186,6 +192,8 @@ public static class OperatorToolApprovalPolicy
         // Decisions: reads + submit/create/update (draft-level, not merge/reject).
         "decision_create",
         "decision_inbox_list",
+        "agent_message_list",
+        "agent_message_get",
         "decision_inbox_submit",
         "decision_compare",
         "decision_history",

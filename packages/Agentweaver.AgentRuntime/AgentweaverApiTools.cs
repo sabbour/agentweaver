@@ -38,6 +38,12 @@ internal static class AgentweaverApiTools
         "coordinator_work_plan_get",
         "coordinator_children_get",
         "orchestration_topology",
+        "agent_message_send",
+        "agent_message_list",
+        "agent_message_get",
+        "agent_message_claim",
+        "agent_message_deliver",
+        "agent_message_acknowledge",
         // NOTE: start_preview does NOT belong here. It moved to PreviewRunnerToolProvider (#334)
         // and is never yielded by Build() below, but this stale entry lingered — causing the
         // permission handler to misclassify it as a "no governance" Agentweaver API tool. Now that
@@ -283,6 +289,54 @@ internal static class AgentweaverApiTools
             "get_memory_history",
             "Inspect immutable revisions of a memory record, including provenance, approval, lifecycle, and predecessor metadata. Returns paginated JSON.");
 
+        var messageRoute = $"api/projects/{Uri.EscapeDataString(projectId)}/agent-messages";
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Active teammate's name")] string recipient,
+                [Description("Active recipient run ID")] string target_run_id,
+                [Description("Message content")] string content,
+                [Description("Stable idempotency key for retry")] string idempotency_key,
+                [Description("Acknowledged message ID when replying")] string? reply_to_id = null,
+                [Description("Optional backlog_task, work_plan, or finding")] string? reference_kind = null,
+                [Description("Optional referenced item ID")] string? reference_id = null,
+                CancellationToken ct = default) =>
+                await PostMessageAsync(http, messageRoute,
+                    new { recipient, target_run_id, content, idempotency_key, reply_to_id, reference_kind, reference_id },
+                    ct).ConfigureAwait(false),
+            "agent_message_send", "Persist a direct message to one teammate's active run. Retry with the same idempotency key.");
+
+        yield return AIFunctionFactory.Create(
+            async (CancellationToken ct = default) =>
+                await GetJsonAsync(http, messageRoute, ct).ConfigureAwait(false),
+            "agent_message_list", "List addressed messages visible to this run, including receipt and failure state.");
+
+        yield return AIFunctionFactory.Create(
+            async ([Description("Message ID")] string message_id, CancellationToken ct = default) =>
+                await GetJsonAsync(http, $"{messageRoute}/{Uri.EscapeDataString(message_id)}", ct).ConfigureAwait(false),
+            "agent_message_get", "Inspect a direct message's state, correlation and diagnostics.");
+
+        yield return AIFunctionFactory.Create(
+            async ([Description("Unique claim attempt owner")] string owner, CancellationToken ct = default) =>
+                await PostMessageAsync(http, $"{messageRoute}/claim", new { owner }, ct).ConfigureAwait(false),
+            "agent_message_claim", "Lease a pending message for this run. Only use at a safe turn boundary.");
+
+        yield return AIFunctionFactory.Create(
+            async ([Description("Message ID")] string message_id,
+                [Description("Claim owner")] string owner,
+                [Description("Claim fence")] long fence,
+                CancellationToken ct = default) =>
+                await PostMessageAsync(http,
+                    $"{messageRoute}/{Uri.EscapeDataString(message_id)}/deliver",
+                    new { owner, fence }, ct).ConfigureAwait(false),
+            "agent_message_deliver", "Record delivery only after showing the leased message to the recipient.");
+
+        yield return AIFunctionFactory.Create(
+            async ([Description("Message ID")] string message_id, CancellationToken ct = default) =>
+                await PostMessageAsync(http,
+                    $"{messageRoute}/{Uri.EscapeDataString(message_id)}/acknowledge",
+                    new { }, ct).ConfigureAwait(false),
+            "agent_message_acknowledge", "Confirm receipt only; does not complete tasks or approve decisions.");
+
         // NOTE (issue #334): `start_preview` used to be registered here, gated on both projectId AND
         // agentName being non-empty. Sandboxed subtask runs (e.g. dynamically-cast build/validation
         // agents) can reach this method with one of those empty, so the tool silently never showed
@@ -499,6 +553,18 @@ internal static class AgentweaverApiTools
             return $"{toolName} failed: could not reach the Agentweaver API — {ex.Message}";
         }
         return await HandleWriteResponseAsync(toolName, response, successMessage, conflictMessage, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<string> PostMessageAsync(
+        HttpClient http, string path, object body, CancellationToken ct)
+    {
+        using var response = await http.PostAsJsonAsync(path, body, ct).ConfigureAwait(false);
+        var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Addressed message API returned HTTP {(int)response.StatusCode}: {content}",
+                null, response.StatusCode);
+        return content;
     }
 
     private static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)
