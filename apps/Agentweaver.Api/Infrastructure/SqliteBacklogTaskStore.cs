@@ -132,7 +132,9 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                    prerequisite.run_id,
                    r.status,
                    r.result,
-                   prerequisite.archived_at
+                   prerequisite.archived_at,
+                   r.merged_commit_hash,
+                   r.tree_hash
               FROM backlog_task_dependencies d
               JOIN backlog_tasks prerequisite ON prerequisite.task_id = d.depends_on_task_id
               LEFT JOIN runs r ON r.run_id = prerequisite.run_id
@@ -154,11 +156,15 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 reader.IsDBNull(4) ? null : RunStatusExtensions.ParseStatus(reader.GetString(4)),
                 reader.IsDBNull(6) && BacklogPrerequisiteOutcome.IsSatisfied(
                     reader.IsDBNull(4) ? null : reader.GetString(4),
-                    reader.IsDBNull(5) ? null : reader.GetString(5)),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8)),
                 BacklogPrerequisiteOutcome.Reason(
                     !reader.IsDBNull(6),
                     reader.IsDBNull(4) ? null : reader.GetString(4),
-                    reader.IsDBNull(5) ? null : reader.GetString(5))));
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8))));
         }
 
         return results;
@@ -278,8 +284,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                            prerequisite.archived_at IS NOT NULL
                            OR prerequisite.run_id IS NULL
                            OR r.run_id IS NULL
-                           OR COALESCE((r.status = 'merged' OR
-                               (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed'))), 0) = 0
+                           OR COALESCE(((r.status = 'completed' AND r.result = 'confirmed') OR
+                               ((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete')))
+                                AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
+                                AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL)), 0) = 0
                        )
                )
              ORDER BY order_key ASC, committed_at ASC, task_id ASC
@@ -311,8 +319,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                            prerequisite.archived_at IS NOT NULL
                            OR prerequisite.run_id IS NULL
                            OR r.run_id IS NULL
-                           OR COALESCE((r.status = 'merged' OR
-                               (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed'))), 0) = 0
+                           OR COALESCE(((r.status = 'completed' AND r.result = 'confirmed') OR
+                               ((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete')))
+                                AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
+                                AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL)), 0) = 0
                        )
                );
             """;
@@ -702,11 +712,16 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             {
                 var status = reader.IsDBNull(3) ? null : reader.GetString(3);
                 var result = reader.IsDBNull(4) ? null : reader.GetString(4);
-                if (!reader.IsDBNull(2) || !BacklogPrerequisiteOutcome.IsSatisfied(status, result))
+                if (!reader.IsDBNull(2) || !BacklogPrerequisiteOutcome.IsSatisfied(
+                        status, result,
+                        reader.IsDBNull(5) ? null : reader.GetString(5),
+                        reader.IsDBNull(6) ? null : reader.GetString(6)))
                     return new ClaimReserveOutcome(ClaimReserveResult.Lost);
                 claimedInputs.Add(new BacklogClaimedPrerequisite(
                     reader.GetString(0), reader.GetString(1),
-                    BacklogPrerequisiteOutcome.Reason(false, status, result),
+                    BacklogPrerequisiteOutcome.Reason(false, status, result,
+                        reader.IsDBNull(5) ? null : reader.GetString(5),
+                        reader.IsDBNull(6) ? null : reader.GetString(6)),
                     reader.GetInt32(7),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
                     reader.IsDBNull(6) ? null : reader.GetString(6),
@@ -736,8 +751,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                                prerequisite.archived_at IS NOT NULL
                                OR prerequisite.run_id IS NULL
                                OR r.run_id IS NULL
-                               OR COALESCE((r.status = 'merged' OR
-                                   (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed'))), 0) = 0
+                               OR COALESCE(((r.status = 'completed' AND r.result = 'confirmed') OR
+                                   ((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete')))
+                                    AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
+                                    AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL)), 0) = 0
                            )
                    );
                 """;

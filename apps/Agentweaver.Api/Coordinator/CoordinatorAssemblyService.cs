@@ -2054,6 +2054,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         // ── Complete ─────────────────────────────────────────────────────────────────────────────
+        if (!await TerminalizeCoordinatorRunAsync(
+                context.CoordinatorRunId, RunStatus.Completed, "assembly_complete", ct,
+                merge.CommitHash, intent.IntendedTree).ConfigureAwait(false))
+        {
+            _logger.LogWarning(
+                "Collective assembly: terminal output identity was not published for run {RunId}; leaving plan {WorkPlanId} for recovery",
+                context.CoordinatorRunId, workPlanId);
+            return;
+        }
+
         if (!await _assemblyStore.TryCompleteAfterAppliedMergeAsync(
                 workPlanId,
                 _myPodId,
@@ -2070,9 +2080,6 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         });
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.Complete, edges, ct)
             .ConfigureAwait(false);
-
-        await TerminalizeCoordinatorRunAsync(
-            context.CoordinatorRunId, RunStatus.Completed, "assembly_complete", ct).ConfigureAwait(false);
 
         await PersistAndCompleteStreamAsync(context.CoordinatorRunId).ConfigureAwait(false);
         _logger.LogInformation("Collective assembly complete for run {RunId}", context.CoordinatorRunId);
@@ -4301,20 +4308,34 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// cleanup is intentionally deferred to <see cref="RunCoordinatorScribeAsync"/> so the shared
     /// per-run AgentHost pod remains available for the final A2A Scribe turn.
     /// </summary>
-    private async Task TerminalizeCoordinatorRunAsync(
-        string coordinatorRunId, RunStatus status, string result, CancellationToken ct)
+    private async Task<bool> TerminalizeCoordinatorRunAsync(
+        string coordinatorRunId, RunStatus status, string result, CancellationToken ct,
+        string? mergedCommitHash = null, string? treeHash = null)
     {
-        if (RunId.TryParse(coordinatorRunId, out var id))
+        if (!RunId.TryParse(coordinatorRunId, out var id))
+            return false;
+        if (mergedCommitHash is not null || treeHash is not null)
         {
-            await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+            var run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
+            if (run is null) return false;
+            return await _runStore.TryMutateTerminalOutcomeAsync(
                 id,
-                status,
-                status == RunStatus.Failed ? EventTypes.RunFailed : EventTypes.RunCompleted,
-                status == RunStatus.Failed ? new { reason = result } : new { result },
-                DateTimeOffset.UtcNow,
-                result,
+                new TerminalRunMutation(
+                    TerminalRunOutcome.Create(status, EventTypes.RunCompleted,
+                        new { result }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    result,
+                    MergedCommitHash: mergedCommitHash,
+                    TreeHash: treeHash),
                 ct).ConfigureAwait(false);
         }
+        return await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+            id,
+            status,
+            status == RunStatus.Failed ? EventTypes.RunFailed : EventTypes.RunCompleted,
+            status == RunStatus.Failed ? new { reason = result } : new { result },
+            DateTimeOffset.UtcNow,
+            result,
+            ct).ConfigureAwait(false);
     }
 
     private async Task MarkCoordinatorAwaitingReviewAsync(string coordinatorRunId, CancellationToken ct)

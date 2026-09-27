@@ -104,6 +104,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 prerequisite.RunId,
                 RunStatus = run == null ? null : run.Status,
                 RunResult = run == null ? null : run.Result,
+                Commit = run == null ? null : run.MergedCommitHash,
+                Tree = run == null ? null : run.TreeHash,
                 prerequisite.ArchivedAt,
             }).ToListAsync(ct);
 
@@ -113,8 +115,10 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             row.Title,
             row.RunId is null ? null : RunId.Parse(row.RunId),
             row.RunStatus is null ? null : RunStatusExtensions.ParseStatus(row.RunStatus),
-            row.ArchivedAt is null && BacklogPrerequisiteOutcome.IsSatisfied(row.RunStatus, row.RunResult),
-            BacklogPrerequisiteOutcome.Reason(row.ArchivedAt is not null, row.RunStatus, row.RunResult)))
+            row.ArchivedAt is null && BacklogPrerequisiteOutcome.IsSatisfied(
+                row.RunStatus, row.RunResult, row.Commit, row.Tree),
+            BacklogPrerequisiteOutcome.Reason(
+                row.ArchivedAt is not null, row.RunStatus, row.RunResult, row.Commit, row.Tree)))
             .ToList();
     }
 
@@ -189,8 +193,11 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 && db.BacklogTasks.Any(p => p.TaskId == d.DependsOnTaskId
                     && (p.ArchivedAt != null || p.RunId == null
                         || !db.Runs.Any(r => r.RunId == p.RunId
-                            && (r.Status == "merged" || (r.Status == "completed"
-                                && (r.Result == "assembly_complete" || r.Result == "complete" || r.Result == "confirmed"))))))))
+                            && ((r.Status == "completed" && r.Result == "confirmed")
+                                || ((r.Status == "merged" || (r.Status == "completed"
+                                    && (r.Result == "assembly_complete" || r.Result == "complete")))
+                                    && r.MergedCommitHash != null && r.MergedCommitHash.Trim() != ""
+                                    && r.TreeHash != null && r.TreeHash.Trim() != "")))))))
             .OrderBy(t => t.OrderKey).ThenBy(t => t.CommittedAt).ThenBy(t => t.TaskId)
             .Take(limit)
             .ToListAsync(ct);
@@ -514,14 +521,15 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 WorkflowDigest = run == null ? null : run.ExecutableWorkflowContentDigest,
             }).ToListAsync(ct);
         if (inputs.Any(input => input.ArchivedAt is not null
-            || !BacklogPrerequisiteOutcome.IsSatisfied(input.Status, input.Result)))
+            || !BacklogPrerequisiteOutcome.IsSatisfied(
+                input.Status, input.Result, input.Commit, input.Tree)))
         {
             await tx.RollbackAsync(ct);
             return new ClaimReserveOutcome(ClaimReserveResult.Lost);
         }
         var claimedInputs = JsonSerializer.Serialize(inputs.Select(input => new BacklogClaimedPrerequisite(
             input.DependsOnTaskId, input.RunId!,
-            BacklogPrerequisiteOutcome.Reason(false, input.Status, input.Result),
+            BacklogPrerequisiteOutcome.Reason(false, input.Status, input.Result, input.Commit, input.Tree),
             input.Generation, input.Commit, input.Tree, input.WorkflowDigest)).ToArray());
         var graphRevision = projectLock.BacklogGraphRevision;
 
