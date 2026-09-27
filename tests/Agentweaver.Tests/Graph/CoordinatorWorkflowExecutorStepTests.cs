@@ -3,6 +3,8 @@ using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
+using Agentweaver.Api.Workflows;
+using Agentweaver.Squad.Catalog;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Graph;
@@ -69,6 +71,39 @@ public sealed class CoordinatorWorkflowExecutorStepTests : IClassFixture<Coordin
 
         RunWatchLoopService.TryBuildExecutorStepEvent(meta, "started").Should().BeNull();
         RunWatchLoopService.TryBuildExecutorStepEvent(meta, "completed").Should().BeNull();
+    }
+
+    [Fact]
+    public void AuthoredAgentNode_SuppressesOnlyGenericEvents_NotItsDedicatedSteps()
+    {
+        var meta = new ExecutorNodeMeta("synthesis", "Synthesis", Hidden: false, EmitsOwnStepEvents: true);
+        RunWatchLoopService.TryBuildExecutorStepEvent(meta, "started").Should().BeNull();
+        RunWatchLoopService.TryBuildExecutorStepEvent(meta, "completed").Should().BeNull();
+        RunWatchLoopService.TryBuildExecutorStepEvent(
+            new ExecutorNodeMeta("discovery-fan-in", "Discovery Research Join", Hidden: false),
+            "completed").Should().NotBeNull();
+    }
+
+    [Fact]
+    public void PmDiscovery_FanJoinAndPromptSteps_HaveOneEmitterEach()
+    {
+        var (yaml, source) = new CatalogReader().LoadAllWorkflowYamls()
+            .Single(item => item.Yaml.Contains("id: pm-discovery", StringComparison.Ordinal));
+        var definition = WorkflowDefinitionLoader.Load(yaml, source).Definition!;
+        var map = Factory.BuildExecutorMetaForTest(isChild: false, definition);
+
+        foreach (var node in new[] { "synthesis", "review" })
+        {
+            var meta = map[$"agent-turn-{node}"];
+            meta.LogicalNodeId.Should().Be(node);
+            meta.EmitsOwnStepEvents.Should().BeTrue();
+            RunWatchLoopService.TryBuildExecutorStepEvent(meta, "started").Should().BeNull();
+            RunWatchLoopService.TryBuildExecutorStepEvent(meta, "completed").Should().BeNull();
+        }
+
+        var join = map["fan-in-discovery-fan-in"];
+        join.EmitsOwnStepEvents.Should().BeFalse();
+        RunWatchLoopService.TryBuildExecutorStepEvent(join, "completed").Should().NotBeNull();
     }
 
     [Fact]

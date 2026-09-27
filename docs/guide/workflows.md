@@ -164,6 +164,13 @@ same parent correlation and publish `joinedOutput` on `child_work_ready`. That r
 durable and emitted exactly once even when a hosted worker prepares the continuation on a different
 replica from the parent run; retries and restarts reuse the continuation's stable event identity.
 Failed or cancelled fan work does not emit `child_work_ready`.
+During an API rolling restart, a second replica does not park a parent that has already resumed
+the joined result: the following prompt and review continue on the original run. Each authored
+prompt has one started and one completed step event per execution, including after fan-in. If an
+execution owner is lost after the fan continuation was delivered, recovery fails explicitly with
+`workflow_parent_active_recovery_unavailable` (or `workflow_parent_parked_after_resume` for a
+previously parked parent) rather than replaying non-idempotent synthesis or reporting an
+inactive AgentHost dispatch.
 Nested fans, dynamic branches, quorum/first-success joins, and `coordinator_composed` remain
 unsupported.
 
