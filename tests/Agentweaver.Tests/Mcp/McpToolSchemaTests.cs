@@ -368,6 +368,36 @@ public sealed class McpToolSchemaTests
         diagnostic.Message.Should().Be($"Run failed with code '{code}'. Retry availability is unknown.");
     }
 
+    [Theory]
+    [InlineData(
+        "coordinator_outcome_spec_draft_stalled",
+        "Outcome-spec drafting stalled before a complete response was available. Partial output was retained when available. Retry the run or choose another model.")]
+    [InlineData(
+        "mandatory_context_budget_exceeded",
+        "Run failed with code 'mandatory_context_budget_exceeded'. Retry is not available.")]
+    public async Task RunFailureDiagnostic_PreservesValidTerminalCodes(string code, string expectedMessage)
+    {
+        var tools = new DiagnosticsTools(CreateApiClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new
+                {
+                    code,
+                    message = "untrusted",
+                    component = "coordinator",
+                    timestamp = "2026-09-26T00:00:00Z",
+                    retryable = false,
+                    correlation_ids = new Dictionary<string, string>(),
+                    cause_chain = Array.Empty<string>(),
+                }),
+            })));
+
+        var diagnostic = await tools.RunFailureDiagnosticAsync("run-1");
+
+        diagnostic.Code.Should().Be(code);
+        diagnostic.Message.Should().Be(expectedMessage);
+    }
+
     [Fact]
     public async Task RunFailureDiagnostic_PreservesCoordinatorCodeAndSafeCauseBreadcrumbs()
     {

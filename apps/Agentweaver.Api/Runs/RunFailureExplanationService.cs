@@ -33,6 +33,7 @@ public sealed class RunFailureExplanationService(
         {
             events = await eventStream.GetPersistedEventsAsync(run.Id.ToString(), 0, ct)
                 .ConfigureAwait(false);
+            events = events.OrderBy(evt => evt.Sequence).ToArray();
         }
         catch (OperationCanceledException)
         {

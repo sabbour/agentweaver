@@ -90,13 +90,15 @@ public static class RunFailureDiagnosticSanitizer
         "agent_turn_internal_error", "a2a_transport_failure", "agent_host_turn_incomplete",
         "assembly_blocked", "assembly_failed", "coordinator_execution_failed",
         "coordinator_direct_execution_failed", "coordinator_outcome_spec_invalid_response",
-        "coordinator_outcome_spec_model_refused", "coordinator_startup_failed",
+        "coordinator_outcome_spec_draft_stalled", "coordinator_outcome_spec_model_refused",
+        "coordinator_startup_failed",
         "github_copilot_auth_required", "github_copilot_capability_snapshot_unavailable",
         "github_copilot_model_unavailable", "github_copilot_models_unavailable",
         "github_copilot_provider_unavailable", "github_copilot_rate_limited",
         "github_copilot_runtime_not_configured", "github_copilot_turn_stalled",
         "github_copilot_turn_timeout", "model_provider_changed",
-        "model_provider_connection_required", "model_provider_snapshot_unavailable",
+        "mandatory_context_budget_exceeded", "model_provider_connection_required",
+        "model_provider_snapshot_unavailable",
         "model_provider_unavailable", "model_provider_validation_unavailable",
         "shell_execution_timeout",
     };
@@ -119,6 +121,8 @@ public static class RunFailureDiagnosticSanitizer
     {
         if (code == "coordinator_outcome_spec_model_refused")
             return "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.";
+        if (code == "coordinator_outcome_spec_draft_stalled")
+            return "Outcome-spec drafting stalled before a complete response was available. Partial output was retained when available. Retry the run or choose another model.";
         if (code == "coordinator_outcome_spec_invalid_response")
             return "The model returned an invalid outcome-spec response after one correction attempt. Retry the run or choose another model.";
         var retrySummary = retryable switch

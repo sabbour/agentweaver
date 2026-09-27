@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Diagnostics;
 
@@ -141,6 +142,21 @@ public sealed record InventoryCollectionStatusDto
     [JsonPropertyName("complete")] public required bool Complete { get; init; }
     [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
     [JsonPropertyName("detail")] public required string Detail { get; init; }
+}
+
+public sealed record ClusterDiagnosticsProjectScope(
+    bool IncludeAllProjects,
+    IReadOnlySet<string> ProjectIds)
+{
+    public static ClusterDiagnosticsProjectScope AllProjects { get; } =
+        new(true, new HashSet<string>(StringComparer.Ordinal));
+
+    public static ClusterDiagnosticsProjectScope ForProjects(IEnumerable<ProjectId> projectIds) =>
+        new(
+            false,
+            projectIds
+                .Select(projectId => projectId.ToString())
+                .ToHashSet(StringComparer.Ordinal));
 }
 
 public sealed record WorkflowChildWorkDiagnosticDto
