@@ -864,13 +864,39 @@ internal sealed class WorkflowChildWorkService
                 .ToListAsync(ct).ConfigureAwait(false);
         }
 
+        var cancellationFailures = new List<Exception>();
         foreach (var planId in planIds)
         {
             var snapshot = await LoadPlanSnapshotAsync(planId, ct).ConfigureAwait(false);
-            if (snapshot is not null)
+            if (snapshot is null)
+                continue;
+
+            try
+            {
                 await SuppressAndCancelAsync(snapshot.Plan, ct, forceDeliverySuppression: true)
                     .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Failed to cancel child work plan {WorkPlanId} for parent {ParentRunId}; continuing remaining plans",
+                    planId,
+                    parentRunId);
+                cancellationFailures.Add(new InvalidOperationException(
+                    $"Failed to cancel child work plan '{planId}' for parent '{parentRunId}'.",
+                    ex));
+            }
         }
+
+        if (cancellationFailures.Count > 0)
+            throw new AggregateException(
+                $"Failed to cancel {cancellationFailures.Count} child work plan(s) for parent '{parentRunId}'.",
+                cancellationFailures);
 
         return planIds.Count;
     }
@@ -1203,12 +1229,36 @@ internal sealed class WorkflowChildWorkService
             }
         }
 
+        var cancellationFailures = new List<Exception>();
         foreach (var run in runs
             .GroupBy(candidate => candidate.Run.Id)
             .Select(group => group.First()))
         {
-            await _runtime.CancelRunAsync(run.Run, run.RequestedByRunId, ct).ConfigureAwait(false);
+            try
+            {
+                await _runtime.CancelRunAsync(run.Run, run.RequestedByRunId, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Failed to cancel snapshotted child run {ChildRunId} for parent {ParentRunId}; continuing remaining children",
+                    run.Run.Id,
+                    run.RequestedByRunId);
+                cancellationFailures.Add(new InvalidOperationException(
+                    $"Failed to cancel snapshotted child run '{run.Run.Id}' for parent '{run.RequestedByRunId}'.",
+                    ex));
+            }
         }
+
+        if (cancellationFailures.Count > 0)
+            throw new AggregateException(
+                $"Failed to cancel {cancellationFailures.Count} snapshotted child run(s) for work plan {plan.Id}.",
+                cancellationFailures);
     }
 
     private async Task MarkContinuationArmedAsync(int workPlanId, string requestId, CancellationToken ct)
