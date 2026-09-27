@@ -117,6 +117,68 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
     }
 
     [Fact]
+    public void BuildIntegrationBranch_BranchMovesAfterVerification_UsesOnlyVerifiedCommit()
+    {
+        var repoPath = CreateTempGitRepo();
+        const string branch = "agentweaver/child-a";
+        CommitOnNewBranch(repoPath, branch, "verified.txt", "verified bytes", "verified");
+        var expectedTree = _manager.GetBranchTipTreeSha(repoPath, branch)!;
+        var verified = _manager.GetVerifiedChildInput(repoPath, branch, expectedTree);
+        verified.Should().NotBeNull();
+
+        CommitOnNewBranch(repoPath, branch, "unverified.txt", "unverified bytes", "moved after verification");
+        _manager.GetVerifiedChildInput(repoPath, branch, expectedTree).Should().BeNull();
+
+        var result = _manager.BuildIntegrationBranch(
+            repoPath, "main", "agentweaver/integration/pinned", [verified!]);
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        using var repo = new Repository(repoPath);
+        var tip = repo.Branches["agentweaver/integration/pinned"].Tip;
+        tip.Sha.Should().Be(verified!.CommitSha);
+        tip.Tree.Sha.Should().Be(expectedTree);
+        ReadBlob(repo, tip["verified.txt"]).Should().Be("verified bytes");
+        tip["unverified.txt"].Should().BeNull();
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_VerifiedCommitUnavailable_BlocksWithoutPublishing()
+    {
+        var repoPath = CreateTempGitRepo();
+        var result = _manager.BuildIntegrationBranch(
+            repoPath, "main", "agentweaver/integration/unavailable",
+            [new("agentweaver/child", new string('a', 40))]);
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.MissingInput);
+        result.ConflictingBranch.Should().Be("agentweaver/child");
+        using var repo = new Repository(repoPath);
+        repo.Branches["agentweaver/integration/unavailable"].Should().BeNull();
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_DirectoryFileConflict_RecordsBothImmutableContributors()
+    {
+        var repoPath = CreateTempGitRepo();
+        const string first = "agentweaver/child-file";
+        const string second = "agentweaver/child-directory";
+        CommitOnNewBranch(repoPath, first, "docs", "file", "file child");
+        CommitOnNewBranch(repoPath, second, "docs/readme.md", "nested", "directory child");
+        var firstSha = _manager.GetBranchTipCommitSha(repoPath, first)!;
+        var secondSha = _manager.GetBranchTipCommitSha(repoPath, second)!;
+
+        var result = _manager.BuildIntegrationBranch(
+            repoPath, "main", "agentweaver/integration/directory-file",
+            [new(first, firstSha), new(second, secondSha)]);
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Conflict);
+        result.ConflictingFiles.Should().Contain(["docs", "docs/readme.md"]);
+        result.ConflictingInputs.Should().ContainKey(first).WhoseValue.Should().Be(firstSha);
+        result.ConflictingInputs.Should().ContainKey(second).WhoseValue.Should().Be(secondSha);
+        using var repo = new Repository(repoPath);
+        repo.Branches["agentweaver/integration/directory-file"].Should().BeNull();
+    }
+
+    [Fact]
     public void BuildIntegrationBranch_MissingChild_BlocksWithoutPublishingPartialRef()
     {
         var repoPath = CreateTempGitRepo();
@@ -290,5 +352,24 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
         foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
             File.SetAttributes(file, FileAttributes.Normal);
         Directory.Delete(path, recursive: true);
+    }
+}
+
+internal static class IntegrationBranchTestExtensions
+{
+    internal static IntegrationBranchResult BuildIntegrationBranch(
+        this WorktreeManager manager,
+        string repositoryPath,
+        string originatingBranch,
+        string integrationBranch,
+        IReadOnlyList<string> childBranchesInOrder,
+        bool publish = true)
+    {
+        var inputs = childBranchesInOrder
+            .Select(branch => new IntegrationChildInput(
+                branch, manager.GetBranchTipCommitSha(repositoryPath, branch) ?? string.Empty))
+            .ToArray();
+        return manager.BuildIntegrationBranch(
+            repositoryPath, originatingBranch, integrationBranch, inputs, publish);
     }
 }

@@ -1724,23 +1724,17 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             }
             var expectedOutput = required || !string.IsNullOrWhiteSpace(run.WorktreeBranch)
                 || !string.IsNullOrWhiteSpace(run.TreeHash);
-            var decision = DependencyBranchInclusion.Evaluate(
+            var verification = DependencyBranchInclusion.Verify(
                 _worktreeManager, context.RepositoryPath, run.WorktreeBranch, run.TreeHash);
-            if (decision != BranchInclusionOutcome.Include)
+            if (verification.Outcome != BranchInclusionOutcome.Include)
             {
                 if (expectedOutput)
-                    missing.Add($"subtask {depId}: {decision}; restore recorded output or retry producer");
+                    missing.Add($"subtask {depId}: {verification.Outcome}; restore recorded output or retry producer");
                 continue;
             }
 
-            var tipSha = _worktreeManager.GetBranchTipCommitSha(context.RepositoryPath, run.WorktreeBranch!);
-            if (string.IsNullOrEmpty(tipSha))
-            {
-                missing.Add($"subtask {depId}: commit missing; recover child branch");
-                continue;
-            }
-
-            if (!_worktreeManager.BranchContains(context.RepositoryPath, integrationBranch, tipSha))
+            if (!_worktreeManager.BranchContains(
+                    context.RepositoryPath, integrationBranch, verification.Input!.CommitSha))
                 missing.Add(run.WorktreeBranch!);
         }
 
@@ -1758,7 +1752,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
         var requiredIds = TransitiveDependencies(subtaskId, edges);
         var byId = subtasks.ToDictionary(subtask => subtask.Id);
-        var branches = new List<string>();
+        var inputs = new List<IntegrationChildInput>();
         foreach (var id in AssemblyPlanning.TopologicalOrder(subtasks.Select(s => s.Id).ToList(), edges))
         {
             if (!requiredIds.Contains(id) || !statusById.TryGetValue(id, out var status)
@@ -1780,10 +1774,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     return false;
                 continue;
             }
-            var decision = DependencyBranchInclusion.Evaluate(
+            var verification = DependencyBranchInclusion.Verify(
                 _worktreeManager!, context.RepositoryPath, run.WorktreeBranch, run.TreeHash);
-            if (decision == BranchInclusionOutcome.Include)
-                branches.Add(run.WorktreeBranch!);
+            if (verification.Outcome == BranchInclusionOutcome.Include)
+                inputs.Add(verification.Input!);
             else if (DependencyBranchInclusion.RequiresArtifact(subtask)
                      || !string.IsNullOrWhiteSpace(run.WorktreeBranch)
                      || !string.IsNullOrWhiteSpace(run.TreeHash))
@@ -1793,7 +1787,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var result = _worktreeManager!.BuildIntegrationBranch(
             context.RepositoryPath, context.OriginatingBranch,
             CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId),
-            branches, publish: false);
+            inputs, publish: false);
         if (result.Outcome == IntegrationBranchOutcome.Built)
             return true;
         _logger.LogError(
@@ -1838,7 +1832,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         var orderedIds = AssemblyPlanning.TopologicalOrder(subtasks.Select(s => s.Id).ToList(), edges);
         var subtasksById = subtasks.ToDictionary(s => s.Id);
 
-        var branches = new List<string>();
+        var inputs = new List<IntegrationChildInput>();
         foreach (var id in orderedIds)
         {
             if (!statusById.TryGetValue(id, out var status) || !SubtaskStatus.Satisfies(status))
@@ -1870,12 +1864,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // commit). The committed worktree branch — whose tip tree == run.TreeHash — is the
             // authoritative artifact. BuildIntegrationBranch no-ops/fast-forwards an unchanged branch,
             // so passing a genuinely-empty (no-op) dependency is safe and cannot deadlock.
-            var decision = DependencyBranchInclusion.Evaluate(
+            var verification = DependencyBranchInclusion.Verify(
                 _worktreeManager, context.RepositoryPath, run?.WorktreeBranch, run?.TreeHash);
-            switch (decision)
+            switch (verification.Outcome)
             {
                 case BranchInclusionOutcome.Include:
-                    branches.Add(run!.WorktreeBranch!);
+                    inputs.Add(verification.Input!);
                     break;
                 case BranchInclusionOutcome.ExcludeMissingBranch:
                     if (!expectedOutput)
@@ -1938,7 +1932,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             try
             {
                 var result = _worktreeManager.BuildIntegrationBranch(
-                    context.RepositoryPath, context.OriginatingBranch, integrationBranch, branches);
+                    context.RepositoryPath, context.OriginatingBranch, integrationBranch, inputs);
 
                 if (result.Outcome == IntegrationBranchOutcome.Conflict)
                 {

@@ -439,7 +439,8 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
         missing.Should().BeEmpty();
         includedIds.Should().Contain(subtaskIds[0],
             "the final collective assembly must include a committed child even when its display diff was swallowed (#197)");
-        branchesInOrder.Should().Contain(branch);
+        branchesInOrder.Should().ContainSingle()
+            .Which.Should().Be(new IntegrationChildInput(branch, _worktree.GetBranchTipCommitSha(repo, branch)!));
     }
 
     [Fact]
@@ -454,7 +455,8 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
 
         var inputs = await InvokeBuildAssemblyInputsAsync(
             sut, Context("coord-assembly-incomplete", repo), await LoadSubtasksAsync(planId), []);
-        inputs.Branches.Should().ContainSingle().Which.Should().Be(branch);
+        inputs.Branches.Should().ContainSingle()
+            .Which.Should().Be(new IntegrationChildInput(branch, _worktree.GetBranchTipCommitSha(repo, branch)!));
         inputs.Missing.Should().ContainSingle().Which.Should().Contain("child_run_missing");
     }
 
@@ -520,7 +522,7 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
         return await task;
     }
 
-    private static async Task<(List<string> Branches, List<int> Included, List<string> Missing)> InvokeBuildAssemblyInputsAsync(
+    private static async Task<(List<IntegrationChildInput> Branches, List<int> Included, List<string> Missing)> InvokeBuildAssemblyInputsAsync(
         CoordinatorAssemblyService sut,
         CoordinatorDispatchContext context,
         IReadOnlyCollection<Subtask> subtasks,
@@ -531,7 +533,7 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
         var task = (Task)m.Invoke(sut, new object[] { context, subtasks, edges, CancellationToken.None })!;
         await task;
         var result = task.GetType().GetProperty("Result")!.GetValue(task)!;
-        var branches = (List<string>)result.GetType().GetProperty("BranchesInOrder")!.GetValue(result)!;
+        var branches = (List<IntegrationChildInput>)result.GetType().GetProperty("InputsInOrder")!.GetValue(result)!;
         var included = (List<int>)result.GetType().GetProperty("IncludedSubtaskIds")!.GetValue(result)!;
         var missing = ((System.Collections.IEnumerable)result.GetType().GetProperty("MissingOutputs")!.GetValue(result)!)
             .Cast<object>()

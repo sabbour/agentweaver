@@ -77,12 +77,12 @@ public interface ICollectiveAssemblyPipeline
     Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct);
 }
 
-/// <summary>Inputs to build the integration branch: eligible child branches in dependency order.</summary>
+/// <summary>Inputs to build the integration branch: verified immutable child commits in dependency order.</summary>
 public sealed record CollectiveIntegrationRequest(
     string RepositoryPath,
     string OriginatingBranch,
     string IntegrationBranch,
-    IReadOnlyList<string> ChildBranchesInOrder);
+    IReadOnlyList<IntegrationChildInput> ChildInputsInOrder);
 
 /// <summary>Inputs to the collective RAI review of the aggregate diff.</summary>
 /// <param name="WorktreePath">

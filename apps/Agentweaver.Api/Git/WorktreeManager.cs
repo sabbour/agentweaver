@@ -479,6 +479,21 @@ public sealed class WorktreeManager
         return repo.Branches[branchName]?.Tip?.Tree.Sha;
     }
 
+    /// <summary>Reads the tip once and returns its immutable commit only if its tree matches the handoff.</summary>
+    public IntegrationChildInput? GetVerifiedChildInput(
+        string repositoryPath, string branchName, string expectedTreeSha)
+    {
+        if (string.IsNullOrWhiteSpace(branchName) || string.IsNullOrWhiteSpace(expectedTreeSha)
+            || !Repository.IsValid(repositoryPath))
+            return null;
+
+        using var repo = new Repository(repositoryPath);
+        var tip = repo.Branches[branchName]?.Tip;
+        return tip is not null && string.Equals(tip.Tree.Sha, expectedTreeSha, StringComparison.Ordinal)
+            ? new IntegrationChildInput(branchName, tip.Sha)
+            : null;
+    }
+
     /// <summary>
     /// Ancestor / containment check used to VERIFY that an integration branch actually incorporates a
     /// required dependency's HEAD before a dependent child dispatches from it (issue #197, BLOCKING #3).
@@ -853,12 +868,12 @@ public sealed class WorktreeManager
     /// <summary>
     /// Phase 3 (D1): builds the COLLECTIVE integration branch. Creates (or resets)
     /// <paramref name="integrationBranch"/> at the originating branch tip, then merges each eligible
-    /// child branch in <paramref name="childBranchesInOrder"/> (already dependency/topologically
+    /// child commit in <paramref name="childInputsInOrder"/> (already dependency/topologically
     /// ordered) into it using HEADLESS tree merges (<see cref="ObjectDatabase.MergeCommits"/>) — no
     /// working directory or worktree is checked out. Missing inputs and independent overlapping
     /// edits stop the build without publishing a partial integration ref. On success it returns
     /// the aggregate tree hash and diff vs the originating branch. An empty
-    /// <paramref name="childBranchesInOrder"/> (every child was a no-change <c>completed</c>) yields
+    /// <paramref name="childInputsInOrder"/> (every child was a no-change <c>completed</c>) yields
     /// an empty-diff success.
     /// <para>Branch-ref only: the originating branch is never modified here; that happens later in the
     /// single collective merge.</para>
@@ -867,7 +882,7 @@ public sealed class WorktreeManager
         string repositoryPath,
         string originatingBranch,
         string integrationBranch,
-        IReadOnlyList<string> childBranchesInOrder,
+        IReadOnlyList<IntegrationChildInput> childInputsInOrder,
         bool publish = true)
     {
         if (publish)
@@ -892,42 +907,50 @@ public sealed class WorktreeManager
         var integrationCommit = origin.Tip;
         var pathOwners = new Dictionary<string, (string Branch, Commit Tip)>(StringComparer.Ordinal);
 
-        foreach (var childBranch in childBranchesInOrder)
+        foreach (var input in childInputsInOrder)
         {
-            var child = repo.Branches[childBranch];
-            if (child?.Tip is null)
+            var childBranch = input.Branch;
+            var childTip = string.IsNullOrWhiteSpace(input.CommitSha)
+                ? null : repo.Lookup<Commit>(input.CommitSha);
+            if (childTip is null)
                 return IntegrationBranchResult.MissingInput(integrationBranch, childBranch);
 
-            var mergeBase = repo.ObjectDatabase.FindMergeBase(integrationCommit, child.Tip);
+            var mergeBase = repo.ObjectDatabase.FindMergeBase(integrationCommit, childTip);
             if (mergeBase is null)
                 return IntegrationBranchResult.Conflict(
                     integrationBranch, childBranch, [],
                     $"Child branch '{childBranch}' has no common base with the integration revision.");
 
             // Child is already contained in the integration branch — no-op.
-            if (string.Equals(mergeBase.Sha, child.Tip.Sha, StringComparison.Ordinal))
+            if (string.Equals(mergeBase.Sha, childTip.Sha, StringComparison.Ordinal))
                 continue;
 
-            var childChanges = repo.Diff.Compare<TreeChanges>(mergeBase.Tree, child.Tip.Tree);
+            var childChanges = repo.Diff.Compare<TreeChanges>(mergeBase.Tree, childTip.Tree);
             var overlapping = new HashSet<string>(StringComparer.Ordinal);
+            var overlappingOwners = new Dictionary<string, (string Branch, Commit Tip)>(StringComparer.Ordinal);
             foreach (var change in childChanges)
             {
                 foreach (var path in new[] { change.Path, change.OldPath }.OfType<string>())
                 {
-                    if (pathOwners.TryGetValue(path, out var owner)
-                        && !string.Equals(
-                            repo.ObjectDatabase.FindMergeBase(owner.Tip, child.Tip)?.Sha,
-                            owner.Tip.Sha, StringComparison.Ordinal))
+                    foreach (var (ownedPath, owner) in pathOwners)
+                    {
+                        if (!PathsOverlap(path, ownedPath)
+                            || string.Equals(
+                                repo.ObjectDatabase.FindMergeBase(owner.Tip, childTip)?.Sha,
+                                owner.Tip.Sha, StringComparison.Ordinal))
+                            continue;
                         overlapping.Add(path);
+                        overlapping.Add(ownedPath);
+                        overlappingOwners[ownedPath] = owner;
+                    }
                 }
             }
             if (overlapping.Count > 0)
             {
-                var inputs = overlapping
-                    .Select(path => pathOwners[path])
+                var inputs = overlappingOwners.Values
                     .GroupBy(owner => owner.Branch, StringComparer.Ordinal)
                     .ToDictionary(group => group.Key, group => group.First().Tip.Sha, StringComparer.Ordinal);
-                inputs[childBranch] = child.Tip.Sha;
+                inputs[childBranch] = childTip.Sha;
                 return IntegrationBranchResult.Conflict(
                     integrationBranch, childBranch, overlapping.Order(StringComparer.Ordinal).ToArray(),
                     $"Independent child '{childBranch}' overlaps accepted child output. Resolve the named paths explicitly.",
@@ -937,17 +960,28 @@ public sealed class WorktreeManager
             // Fast-forward: integration is an ancestor of the child tip.
             if (string.Equals(mergeBase.Sha, integrationCommit.Sha, StringComparison.Ordinal))
             {
-                integrationCommit = child.Tip;
+                integrationCommit = childTip;
             }
             else
             {
-                var merge = repo.ObjectDatabase.MergeCommits(integrationCommit, child.Tip, new MergeTreeOptions());
+                var merge = repo.ObjectDatabase.MergeCommits(integrationCommit, childTip, new MergeTreeOptions());
                 if (merge.Status == MergeTreeStatus.Conflicts)
                 {
+                    var conflictingFiles = ExtractConflictingFiles(merge);
+                    var contributors = pathOwners
+                        .Where(entry => conflictingFiles.Any(path => PathsOverlap(entry.Key, path)))
+                        .Select(entry => entry.Value)
+                        .ToList();
+                    if (contributors.Count == 0)
+                        contributors.AddRange(pathOwners.Values);
+                    var inputs = contributors
+                        .GroupBy(owner => owner.Branch, StringComparer.Ordinal)
+                        .ToDictionary(group => group.Key, group => group.First().Tip.Sha, StringComparer.Ordinal);
+                    inputs[childBranch] = childTip.Sha;
                     return IntegrationBranchResult.Conflict(
-                        integrationBranch, childBranch, ExtractConflictingFiles(merge),
+                        integrationBranch, childBranch, conflictingFiles,
                         $"Child '{childBranch}' conflicts with the integration revision. Resolve the named paths explicitly.",
-                        new Dictionary<string, string> { [childBranch] = child.Tip.Sha });
+                        inputs);
                 }
 
                 var signature = WithTimestamp();
@@ -956,16 +990,16 @@ public sealed class WorktreeManager
                     signature,
                     $"Assemble {childBranch} into {integrationBranch}",
                     merge.Tree,
-                    new[] { integrationCommit, child.Tip },
+                    new[] { integrationCommit, childTip },
                     prettifyMessage: true);
             }
 
             foreach (var change in childChanges)
             {
                 if (change.Path is not null)
-                    pathOwners[change.Path] = (childBranch, child.Tip);
+                    pathOwners[change.Path] = (childBranch, childTip);
                 if (change.OldPath is not null)
-                    pathOwners[change.OldPath] = (childBranch, child.Tip);
+                    pathOwners[change.OldPath] = (childBranch, childTip);
             }
         }
 
@@ -986,6 +1020,11 @@ public sealed class WorktreeManager
             integrationCommit.Tree.Sha,
             patch.Content);
     }
+
+    private static bool PathsOverlap(string first, string second) =>
+        string.Equals(first, second, StringComparison.Ordinal)
+        || first.StartsWith(second + "/", StringComparison.Ordinal)
+        || second.StartsWith(first + "/", StringComparison.Ordinal);
 
     private static string SanitizeWorktreeName(string name)
     {

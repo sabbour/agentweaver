@@ -12,7 +12,8 @@ integration result, with ambiguous overlaps requiring an explicit decision.
 ## Context / problem
 
 A missing or moved child branch could previously be excluded while the remaining
-branches assembled successfully. Independent children editing the same file could
+branches assembled successfully; a branch moved after verification could also
+contribute unverified bytes. Independent children editing the same file could
 silently accept whichever child's branch was merged last.
 
 ## Scope
@@ -37,7 +38,8 @@ silently accept whichever child's branch was merged last.
 - [x] A dependent does not launch from an absent or incomplete integration base.
 - [x] Non-overlapping children merge; independent same-path edits, including
   renames and deletions, block integration without replacing the prior ref.
-- [x] Conflict events carry affected paths and available contributor commit IDs.
+- [x] Conflict events carry affected paths and contributor commit IDs, including
+  both sides of directory/file collisions.
 - [ ] Every required producer supplies a durable immutable commit/tree or verified
   no-change receipt, including retries and cancelled attempts.
 - [ ] Each downstream attempt pins its accepted base and upstream identities,

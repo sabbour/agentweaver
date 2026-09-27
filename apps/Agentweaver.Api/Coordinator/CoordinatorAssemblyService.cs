@@ -952,13 +952,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             }, ct).ConfigureAwait(false);
             return;
         }
-        var branchesInOrder = assemblyInputs.BranchesInOrder;
+        var inputsInOrder = assemblyInputs.InputsInOrder;
         var touchedFilesBySubtask = assemblyInputs.TouchedFilesBySubtask;
         var includedSubtaskIds = assemblyInputs.IncludedSubtaskIds;
 
         // D1 — build the COMBINED integration branch.
         var integrationRequest = new CollectiveIntegrationRequest(
-            context.RepositoryPath, context.OriginatingBranch, integrationBranch, branchesInOrder);
+            context.RepositoryPath, context.OriginatingBranch, integrationBranch, inputsInOrder);
         IntegrationBranchResult integration;
         try
         {
@@ -988,8 +988,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (integration.Outcome == IntegrationBranchOutcome.MissingInput)
         {
-            var missingIndex = assemblyInputs.BranchesInOrder.FindIndex(
-                branch => string.Equals(branch, integration.ConflictingBranch, StringComparison.Ordinal));
+            var missingIndex = assemblyInputs.InputsInOrder.FindIndex(
+                input => string.Equals(input.Branch, integration.ConflictingBranch, StringComparison.Ordinal));
             var missingSubtask = missingIndex < 0 ? null : subtasks.FirstOrDefault(
                 subtask => subtask.Id == assemblyInputs.IncludedSubtaskIds[missingIndex]);
             await BlockAsync(context, workPlanId, edges, "required_output_missing", new
@@ -1326,7 +1326,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             .Where(s => !string.IsNullOrEmpty(s.ChildRunId))
             .ToDictionary(s => s.Id, s => s.ChildRunId!);
 
-        var branchesInOrder = new List<string>();
+        var inputsInOrder = new List<IntegrationChildInput>();
         var touchedFilesBySubtask = new Dictionary<int, IReadOnlySet<string>>();
         var includedSubtaskIds = new List<int>();
         var missingOutputs = new List<CoordinatorMissingOutput>();
@@ -1367,12 +1367,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 continue;
             }
 
-            var decision = DependencyBranchInclusion.Evaluate(
+            var verification = DependencyBranchInclusion.Verify(
                 _worktreeManager, context.RepositoryPath, run.WorktreeBranch, run.TreeHash);
-            switch (decision)
+            switch (verification.Outcome)
             {
                 case BranchInclusionOutcome.Include:
-                    branchesInOrder.Add(run.WorktreeBranch!);
+                    inputsInOrder.Add(verification.Input!);
                     includedSubtaskIds.Add(id);
                     break;
                 case BranchInclusionOutcome.ExcludeMissingBranch:
@@ -1387,7 +1387,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             }
         }
 
-        return new CoordinatorAssemblyInputs(branchesInOrder, touchedFilesBySubtask, includedSubtaskIds, missingOutputs);
+        return new CoordinatorAssemblyInputs(inputsInOrder, touchedFilesBySubtask, includedSubtaskIds, missingOutputs);
     }
 
     private async Task ResumeInReviewAsync(
@@ -1618,7 +1618,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     }
 
     private sealed record CoordinatorAssemblyInputs(
-        List<string> BranchesInOrder,
+        List<IntegrationChildInput> InputsInOrder,
         Dictionary<int, IReadOnlySet<string>> TouchedFilesBySubtask,
         List<int> IncludedSubtaskIds,
         List<CoordinatorMissingOutput> MissingOutputs);
