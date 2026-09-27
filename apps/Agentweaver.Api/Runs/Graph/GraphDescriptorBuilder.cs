@@ -83,7 +83,7 @@ public sealed class GraphDescriptorBuilder
     {
         var map = new Dictionary<string, ExecutorNodeMeta>(StringComparer.Ordinal);
         foreach (var (id, m) in _rawNodes)
-            map[id] = new ExecutorNodeMeta(m.LogicalNodeId, m.Label, m.Hidden);
+            map[id] = new ExecutorNodeMeta(m.LogicalNodeId, m.Label, m.Hidden, m.EmitsOwnStepEvents);
         return map;
     }
 
@@ -106,7 +106,11 @@ public sealed class GraphDescriptorBuilder
     private static RawMeta Resolve(ExecutorBinding b)
     {
         if (b.RawValue is IWorkflowNodeMeta m)
-            return new RawMeta(m.LogicalNodeId, m.DisplayLabel, m.Role, m.NodeType, m.NodeKind, m.Hidden);
+            return new RawMeta(
+                m.LogicalNodeId, m.DisplayLabel, m.Role, m.NodeType, m.NodeKind, m.Hidden,
+                b.RawValue is AgentTurnExecutor or RaiTurnExecutor or MergeExecutor
+                    or OpenPullRequestTurnExecutor or ScribeTurnExecutor
+                    or RubberduckTurnExecutor or BuildTestTurnExecutor);
 
         // ONLY allowed fallback: the framework RequestPort review gate.
         if (string.Equals(b.Id, ReviewGatePortId, StringComparison.Ordinal))
@@ -273,7 +277,8 @@ public sealed class GraphDescriptorBuilder
     }
 
     private readonly record struct RawMeta(
-        string LogicalNodeId, string Label, string Role, string NodeType, string Kind, bool Hidden);
+        string LogicalNodeId, string Label, string Role, string NodeType, string Kind, bool Hidden,
+        bool EmitsOwnStepEvents = false);
 }
 
 /// <summary>
@@ -282,4 +287,5 @@ public sealed class GraphDescriptorBuilder
 /// into <c>workflow.step</c> UI events. <see cref="LogicalNodeId"/> equals the rendered descriptor
 /// node id so <c>payload.step</c> lines up with the graph node the frontend keys on.
 /// </summary>
-public sealed record ExecutorNodeMeta(string LogicalNodeId, string DisplayLabel, bool Hidden);
+public sealed record ExecutorNodeMeta(
+    string LogicalNodeId, string DisplayLabel, bool Hidden, bool EmitsOwnStepEvents = false);

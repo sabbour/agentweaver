@@ -1689,8 +1689,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     /// lifecycle events into <c>workflow.step</c> UI events. Lets tests assert the gap-node mapping
     /// (e.g. <c>child-assemble-ready</c> -&gt; <c>assemble-ready</c>) without running a workflow.
     /// </summary>
-    internal IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaForTest(bool isChild) =>
-        BuildWorkflow(isChild).ExecutorMeta;
+    internal IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaForTest(
+        bool isChild, WorkflowDefinition? effectiveDefinition = null) =>
+        BuildWorkflow(isChild, effectiveDefinition).ExecutorMeta;
 
     private async Task<WorkflowLoadResult> ResolveEffectiveWorkflowAsync(
         string? projectId,

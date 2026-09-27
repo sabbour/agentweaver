@@ -352,7 +352,8 @@ public sealed class RunWatchLoopService
         await foreach (var evt in streamingRun.WatchStreamAsync(ct))
         {
             if (evt is not RequestInfoEvent)
-                await _pendingStore.MarkObservedWorkflowAdvanceAsync(runId, CancellationToken.None)
+                await _pendingStore.MarkObservedWorkflowAdvanceAsync(
+                    runId, (evt as ExecutorInvokedEvent)?.ExecutorId, CancellationToken.None)
                     .ConfigureAwait(false);
 
             // Any event means the workflow is actively executing again. If we were parked awaiting a
@@ -634,7 +635,7 @@ public sealed class RunWatchLoopService
     /// </summary>
     internal static object? TryBuildExecutorStepEvent(ExecutorNodeMeta? meta, string status, string? message = null)
     {
-        if (meta is null || meta.Hidden)
+        if (meta is null || meta.Hidden || meta.EmitsOwnStepEvents)
             return null;
         if (DedicatedStepNodes.Contains(meta.LogicalNodeId))
             return null;

@@ -403,13 +403,18 @@ public sealed class PendingRequestStore
 
     public async Task<bool> MarkObservedWorkflowAdvanceAsync(
         string runId,
+        string? invokedExecutorId = null,
         CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        // Buffered pre-pause events are not evidence that the fan response crossed
+        // the request port; the joined executor's invocation is.
+        var fanAdvanced = invokedExecutorId?.StartsWith("fan-in-", StringComparison.Ordinal) == true;
         var delivered = await db.PendingRequests
             .Where(p => p.RunId == runId
-                && p.DeliveryState == PendingRequestDeliveryStates.Delivering)
+                && p.DeliveryState == PendingRequestDeliveryStates.Delivering
+                && (p.DeliveryKind != PendingRequestDeliveryKinds.WorkflowChildWork || fanAdvanced))
             .ExecuteUpdateAsync(updates => updates
                 .SetProperty(p => p.DeliveryState, PendingRequestDeliveryStates.Delivered)
                 .SetProperty(p => p.DeliveredAt, DateTimeOffset.UtcNow)

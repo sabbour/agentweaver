@@ -93,13 +93,13 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task RestartBeforeDispatch_ParksParentInRecoverableWaitingState()
+    public async Task StartupPreparation_DoesNotParkParentWithoutItsExecutionLease()
     {
         var (persisted, _) = await _service.EnsurePersistedAsync(Request());
 
         await _service.PrepareRestartRecoveryAsync();
 
-        (await _runStore.GetAsync(_parent.Id))!.Status.Should().Be(DomainRunStatus.AwaitingReview);
+        (await _runStore.GetAsync(_parent.Id))!.Status.Should().Be(DomainRunStatus.InProgress);
         (await GetPlanAsync(persisted.Id)).ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Committed);
         _runtime.Started.Should().BeEmpty();
     }
@@ -152,6 +152,53 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
             .Should().Be(WorkflowChildWorkResumeStates.Delivered);
         (await _runStore.GetAsync(_parent.Id))!.Status.Should().Be(DomainRunStatus.InProgress);
+    }
+
+    [Fact]
+    public async Task NoRestart_ObservedAdvanceWinsDeliveryAck_ReconcilesPlanWithoutReplayingJoin()
+    {
+        var attached = await CreateAsync(Request());
+        await SetPlanAndBranchStatusAsync(attached.WorkPlanId, WorkPlanStatus.Complete, SubtaskStatus.Completed);
+        _runtime.DeliverResult = true;
+        _runtime.OnDelivered = async () =>
+        {
+            (await _pendingRequests.MarkObservedWorkflowAdvanceAsync(_parent.Id.ToString()))
+                .Should().BeFalse("an unrelated queued event does not prove fan-in advanced");
+            (await _pendingRequests.MarkObservedWorkflowAdvanceAsync(
+                _parent.Id.ToString(), "fan-in-discovery-fan-in")).Should().BeTrue();
+        };
+
+        await _service.SweepAsync();
+        await _service.SweepAsync();
+
+        _runtime.Deliveries.Should().ContainSingle();
+        _runtime.DurableParentSteps.Should().ContainSingle();
+        (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+            .Should().Be(WorkflowChildWorkResumeStates.Delivered);
+        (await _runStore.GetAsync(_parent.Id))!.Status.Should().Be(DomainRunStatus.InProgress);
+        (await _service.HasDeliveredParentResumeAsync(_parent.Id.ToString())).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ApiOnlySecondStartup_AfterJoinedResume_PreservesActiveParentAndBranchIdentities()
+    {
+        var attached = await CreateAsync(Request());
+        await SetPlanAndBranchStatusAsync(attached.WorkPlanId, WorkPlanStatus.Complete, SubtaskStatus.Completed);
+        _runtime.DeliverResult = true;
+        await _service.SweepAsync();
+        var originalIds = attached.Branches.Select(branch => branch.SubtaskId).ToArray();
+
+        await BuildService("second-api-pod", _runtime).PrepareRestartRecoveryAsync();
+        await _service.SweepAsync();
+
+        (await _runStore.GetAsync(_parent.Id))!.Status.Should().Be(DomainRunStatus.InProgress,
+            "the second API must not park a live synthesis or make review dispatch inactive");
+        (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+            .Should().Be(WorkflowChildWorkResumeStates.Delivered);
+        (await _service.HasDeliveredParentResumeAsync(_parent.Id.ToString())).Should().BeTrue();
+        attached.Branches.Select(branch => branch.SubtaskId).Should().Equal(originalIds);
+        _runtime.Deliveries.Should().ContainSingle();
+        _runtime.DurableParentSteps.Should().ContainSingle();
     }
 
     [Fact]
@@ -1054,6 +1101,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         public List<(string RunId, string OwnerUser)> EnsuredStreams { get; } = [];
         public List<(string RunId, string EventIdentity, JsonElement Payload)> DurableParentSteps { get; } = [];
         public bool DeliverResult { get; set; }
+        public Func<Task>? OnDelivered { get; set; }
         public bool FailFirstCancellation { get; set; }
         private int _cancellationFailures;
 
@@ -1110,14 +1158,16 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             string childCoordinatorRunId,
             CancellationToken ct) => Task.CompletedTask;
 
-        public Task<bool> TryDeliverParentResumeAsync(
+        public async Task<bool> TryDeliverParentResumeAsync(
             string parentRunId,
             PendingDelivery delivery,
             WorkflowChildWorkResult result,
             CancellationToken ct)
         {
             Deliveries.Add(result);
-            return Task.FromResult(DeliverResult);
+            if (OnDelivered is not null)
+                await OnDelivered();
+            return DeliverResult;
         }
 
         public Task CancelRunAsync(DomainRun run, string requestedByRunId, CancellationToken ct)

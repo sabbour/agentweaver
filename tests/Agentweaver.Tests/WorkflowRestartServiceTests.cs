@@ -879,14 +879,16 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
     public async Task RecoverAsync_CheckpointlessPinnedFanParent_RestartsOriginalRunWithoutDuplicatingPlan(
-        bool existingPlan)
+        bool existingPlan, bool deliveredAndParked, bool peerOwnsActiveResume)
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
-        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: true);
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: !peerOwnsActiveResume);
         var service = BuildService(
             runStore,
             streamStore,
@@ -901,7 +903,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             ModelSource = ModelSource.GitHubCopilot,
             Task = "resume the pinned fan",
             SubmittingUser = "test-user",
-            Status = RunStatus.InProgress,
+            Status = deliveredAndParked ? RunStatus.AwaitingReview : RunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
             WorktreePath = _worktreePath,
             WorktreeBranch = "agentweaver/test",
@@ -979,12 +981,30 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
                 ParentWorkflowId = "pinned-fan",
                 ParentWorkflowNodeId = "fan",
                 ParentJoinNodeId = "join",
-                ParentResumeState = WorkflowChildWorkResumeStates.Committed,
+                ParentResumeRequestId = deliveredAndParked || peerOwnsActiveResume ? "fan-request" : null,
+                ParentResumeState = deliveredAndParked || peerOwnsActiveResume
+                    ? WorkflowChildWorkResumeStates.Delivered
+                    : WorkflowChildWorkResumeStates.Committed,
                 Status = WorkPlanStatus.Planned,
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
             await db.SaveChangesAsync();
+            if (deliveredAndParked || peerOwnsActiveResume)
+            {
+                db.PendingRequests.Add(new PendingRequestRecord
+                {
+                    RunId = parentId.ToString(),
+                    RequestId = "fan-request",
+                    RequestJson = "{}",
+                    OwnerUser = "test-user",
+                    DeliveryKind = PendingRequestDeliveryKinds.WorkflowChildWork,
+                    DeliveryState = PendingRequestDeliveryStates.Delivered,
+                    DecisionIdentity = "fan-result",
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+                await db.SaveChangesAsync();
+            }
         }
 
         var restarted = new List<RunId>();
@@ -998,12 +1018,32 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
 
         await service.RecoverAsync(CancellationToken.None);
 
-        restarted.Should().Equal(parentId);
-        transferredLease.Should().NotBeNull();
-        transferredLease!.OwnerId.Should().Contain("/startup-recovery/");
-        transferredLease.FencingToken.Should().Be(1);
-        leaseStore.ReleasedRunIds.Should().NotContain(parentId.ToString());
-        (await runStore.GetAsync(parentId))!.Status.Should().Be(RunStatus.InProgress);
+        restarted.Should().Equal(deliveredAndParked || peerOwnsActiveResume ? [] : [parentId]);
+        var recovered = await runStore.GetAsync(parentId);
+        if (peerOwnsActiveResume)
+        {
+            transferredLease.Should().BeNull();
+            leaseStore.ClaimedRunIds.Should().Contain(parentId.ToString());
+            leaseStore.ReleasedRunIds.Should().BeEmpty();
+            recovered!.Status.Should().Be(RunStatus.InProgress,
+                "a second API startup cannot park a peer-owned synthesis before review dispatch");
+            streamStore.Get(parentId.ToString()).Should().BeNull();
+        }
+        else if (deliveredAndParked)
+        {
+            transferredLease.Should().BeNull();
+            leaseStore.ReleasedRunIds.Should().Contain(parentId.ToString());
+            recovered!.Status.Should().Be(RunStatus.Failed);
+            recovered.Result.Should().Be("workflow_parent_parked_after_resume");
+        }
+        else
+        {
+            transferredLease.Should().NotBeNull();
+            transferredLease!.OwnerId.Should().Contain("/startup-recovery/");
+            transferredLease.FencingToken.Should().Be(1);
+            leaseStore.ReleasedRunIds.Should().NotContain(parentId.ToString());
+            recovered!.Status.Should().Be(RunStatus.InProgress);
+        }
         await using var verificationScope = _memoryServiceProvider!.CreateAsyncScope();
         var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await verificationDb.WorkPlans.CountAsync(plan => plan.ParentRunId == parentId.ToString()))

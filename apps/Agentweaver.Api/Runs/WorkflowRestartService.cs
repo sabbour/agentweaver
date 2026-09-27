@@ -101,6 +101,21 @@ public sealed class WorkflowRestartService
                     continue;
                 }
 
+                if (childWorkCorrelation == WorkflowChildWorkCorrelation.ParentOrCoordinator
+                    && childWork is not null
+                    && await childWork.HasDeliveredParentResumeAsync(
+                        run.Id.ToString(), ct).ConfigureAwait(false))
+                {
+                    _logger.LogError(
+                        "Pinned workflow parent {RunId} lost its execution owner after the fan resume was delivered; " +
+                        "synthesis cannot be replayed safely", run.Id);
+                    await FailRecoveredRunAsync(
+                        run, "workflow_parent_active_recovery_unavailable",
+                        entry: null, cleanupWorktree: false, lease: parentRecoveryLease.Claim, ct: ct)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
                 var checkpoint = await _factory.GetLatestCheckpointAsync(
                     run.Id.ToString(), ct).ConfigureAwait(false);
                 if (checkpoint is null)
@@ -376,6 +391,22 @@ public sealed class WorkflowRestartService
             }
 
             var entry = _streamStore.Create(runIdStr, run.SubmittingUser);
+            if ((await _pendingStore.GetDeliveryStateAsync(
+                    runIdStr, PendingRequestDeliveryKinds.WorkflowChildWork, ct)
+                    .ConfigureAwait(false))?.State == PendingRequestDeliveryStates.Delivered
+                && await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false)
+                    == WorkflowChildWorkCorrelation.ParentOrCoordinator)
+            {
+                _logger.LogError(
+                    "Pinned workflow parent {RunId} was parked after its fan resume was delivered; " +
+                    "the synthesis step cannot be restarted safely", run.Id);
+                await FailRecoveredRunAsync(
+                    run, "workflow_parent_parked_after_resume",
+                    entry, cleanupWorktree: false, lease: recoveryLease.Claim, ct: ct)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
             entry.MarkAwaitingReview();
 
             var checkpointInfo = await _factory.GetLatestCheckpointAsync(runIdStr, ct).ConfigureAwait(false);

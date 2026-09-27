@@ -664,9 +664,6 @@ internal sealed class WorkflowChildWorkService
             await SuppressAndCancelAsync(snapshot.Plan, ct).ConfigureAwait(false);
             return false;
         }
-        if (parent.Status != DomainRunStatus.AwaitingReview)
-            return false;
-
         var pendingState = await _pendingRequests.GetDeliveryStateAsync(
             snapshot.Plan.ParentRunId,
             PendingRequestDeliveryKinds.WorkflowChildWork,
@@ -681,6 +678,8 @@ internal sealed class WorkflowChildWorkService
                 ct).ConfigureAwait(false);
             return false;
         }
+        if (parent.Status != DomainRunStatus.AwaitingReview)
+            return false;
 
         var delivery = await _pendingRequests.TryClaimDeliveryAsync(
             snapshot.Plan.ParentRunId,
@@ -777,14 +776,19 @@ internal sealed class WorkflowChildWorkService
             delivery.ClaimOwner,
             delivery.ClaimedAt,
             CancellationToken.None).ConfigureAwait(false);
-        if (marked)
+        var observed = !marked && (await _pendingRequests.GetDeliveryStateAsync(
+                snapshot.Plan.ParentRunId,
+                PendingRequestDeliveryKinds.WorkflowChildWork,
+                CancellationToken.None).ConfigureAwait(false)) is { State: PendingRequestDeliveryStates.Delivered,
+                    DecisionIdentity: var identity } && identity == delivery.DecisionIdentity;
+        if (marked || observed)
             await MarkPlanDeliveredAsync(
                 workPlanId,
                 delivery.ClaimOwner,
                 delivery.ClaimedAt,
                 DateTimeOffset.UtcNow,
                 ct).ConfigureAwait(false);
-        return marked;
+        return marked || observed;
     }
 
     public async Task PrepareRestartRecoveryAsync(CancellationToken ct = default)
@@ -834,13 +838,26 @@ internal sealed class WorkflowChildWorkService
                     ct).ConfigureAwait(false);
             }
 
-            var parent = await TryGetRunAsync(snapshot.Plan.ParentRunId, ct).ConfigureAwait(false);
-            if (parent is not null && parent.Status == DomainRunStatus.InProgress)
-                await _runStore.TryParkForChildWorkAsync(
-                    parent.Id,
-                    parent.LifecycleGeneration,
-                    ct).ConfigureAwait(false);
+            // Parking an in-progress parent here is unsafe: another replica can own its
+            // execution lease and already be running synthesis after the fan joined.
+            // WorkflowRestartService parks undelivered parents only after claiming that lease.
         }
+    }
+
+    public async Task<bool> HasDeliveredParentResumeAsync(
+        string parentRunId,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .Where(plan => plan.ParentRunId == parentRunId && plan.ParentWorkflowNodeId != null)
+            .AnyAsync(plan => plan.ParentResumeState == WorkflowChildWorkResumeStates.Delivered
+                || db.PendingRequests.Any(request => request.RunId == parentRunId
+                    && request.RequestId == plan.ParentResumeRequestId
+                    && request.DeliveryKind == PendingRequestDeliveryKinds.WorkflowChildWork
+                    && request.DeliveryState == PendingRequestDeliveryStates.Delivered), ct)
+            .ConfigureAwait(false);
     }
 
     public async Task<int> CancelForParentAsync(string parentRunId, CancellationToken ct = default)
