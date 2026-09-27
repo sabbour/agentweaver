@@ -1289,10 +1289,10 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 id, id, "Approved → human review", "plumbing", "action", true,
                 async (decision, ctx, ct) =>
                 {
-                    var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
-                    var reviewed = await ctx.ReadStateAsync<WorkflowReviewRequest>(ReviewRequestKey, MergeDataScope, ct)
-                        .ConfigureAwait(false);
-                    return RecreateBlockedReviewRequest(produced, reviewed);
+                    var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
+                        .ConfigureAwait(false)
+                        ?? throw new InvalidOperationException("Approved automated review has no produced output.");
+                    return await _factory.CaptureReviewRequestAsync(produced, ctx, ct).ConfigureAwait(false);
                 });
         }
 
