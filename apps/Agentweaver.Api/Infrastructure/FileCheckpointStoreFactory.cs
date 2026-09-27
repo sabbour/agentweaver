@@ -13,39 +13,34 @@ namespace Agentweaver.Api.Infrastructure;
 /// </summary>
 public sealed class FileCheckpointStoreFactory : ICheckpointStoreFactory
 {
-    // The base directory is only known per-Create call (different per logical store), so remember it
-    // keyed by storeName. Recovery's GetLatestCheckpointAsync then resolves the right directory to scan.
-    private readonly ConcurrentDictionary<string, string> _baseDirs = new(StringComparer.Ordinal);
+    // Recovery must scan the directory the store actually opened, including replica/temp fallback.
+    private readonly ConcurrentDictionary<string, (string Directory, JsonCheckpointStore Store)> _stores = new(StringComparer.Ordinal);
 
     public bool IsDatabaseBacked => false;
 
     public JsonCheckpointStore Create(string storeName, string fallbackFileDir, ILogger logger)
     {
-        _baseDirs[storeName] = fallbackFileDir;
-        return ResilientCheckpointStore.Create(fallbackFileDir, logger);
+        var store = ResilientCheckpointStore.Create(fallbackFileDir, logger, out var selectedDirectory);
+        _stores[storeName] = (selectedDirectory, store);
+        return store;
     }
 
     /// <summary>
-    /// Scans the per-session checkpoint directory and returns the most recently written checkpoint
-    /// (the file store equivalent of the DB "latest by CreatedAt" query).
+    /// MAF's file-store index enumerates checkpoints in creation order. Use the already-open
+    /// store to read it: index.jsonl is exclusively locked while that store is alive.
+    /// File modification times can tie or be reordered independently of checkpoint order.
     /// </summary>
-    public Task<CheckpointInfo?> GetLatestCheckpointAsync(string storeName, string sessionId, CancellationToken ct = default)
+    public async Task<CheckpointInfo?> GetLatestCheckpointAsync(string storeName, string sessionId, CancellationToken ct = default)
     {
-        if (!_baseDirs.TryGetValue(storeName, out var baseDir))
-            return Task.FromResult<CheckpointInfo?>(null);
+        if (!_stores.TryGetValue(storeName, out var selected))
+            return null;
 
-        var dir = Path.Combine(baseDir, sessionId);
-        if (!Directory.Exists(dir) || Directory.GetFiles(dir).Length == 0)
-            return Task.FromResult<CheckpointInfo?>(null);
+        if (!Directory.Exists(selected.Directory))
+            return null;
 
-        var latestFile = Directory.GetFiles(dir)
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
-        if (latestFile is null)
-            return Task.FromResult<CheckpointInfo?>(null);
-
-        var checkpointId = Path.GetFileNameWithoutExtension(latestFile);
-        return Task.FromResult<CheckpointInfo?>(new CheckpointInfo(sessionId, checkpointId));
+        ct.ThrowIfCancellationRequested();
+        var index = await selected.Store.RetrieveIndexAsync(sessionId).ConfigureAwait(false);
+        return index.LastOrDefault();
     }
 
     // The file store is GC'd by directory sweeping in CheckpointGcService, not here.

@@ -129,6 +129,27 @@ For define-outcome mode with autopilot off, the coordinator:
 
 You review the OutcomeSpec in the conversation panel. If it looks right, confirm. If you need to adjust scope or correct an assumption, say so in the chat — the coordinator revises and re-presents.
 
+A gate shown as **awaiting confirmation** stays usable after an API restart or when your
+request reaches a different replica. The coordinator resumes its persisted checkpoint
+under the run's lease rather than drafting the original spec again. A decision sent to
+the replica holding that lease may return `202` with `status: "queued"`; this means the
+decision is durably recorded, **not** that a revision or work plan has completed. Watch
+the outcome spec and run events for the next state. Conflicting decisions cannot replace
+a queued decision at the same gate.
+Chat replies at this gate use the same decision queue: a queued reply is not also sent
+as ordinary steering. Recovered drafts, confirmations, and plans may write only while
+the same run generation and lease remain active; cancellation or takeover wins even
+when it happens after the reply was accepted.
+
+If the checkpoint or durable gate cannot be reconciled, confirm/revise returns a typed
+`409 coordinator_gate_*` error with a run ID, correlation ID, and run-events path instead
+of claiming that an active run is inactive. Do not keep resubmitting a decision against
+a missing or corrupt gate; inspect the run events and retry the run only after addressing
+the reported recovery problem. Provider revocation still returns
+`409 model_provider_changed` before a decision is queued.
+If a revision's model call was interrupted without a provable outcome, recovery fails
+closed with a stalled-draft diagnostic rather than invoking the model a second time.
+
 ::: warning Check the launch mode
 Define-outcome with autopilot off waits for your confirmation. Direct mode skips outcome
 drafting, and explicit per-run autopilot can confirm unattended. Tool approval and

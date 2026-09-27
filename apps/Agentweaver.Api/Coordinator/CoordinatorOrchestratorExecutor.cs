@@ -116,7 +116,8 @@ public sealed class CoordinatorOrchestratorExecutor
     /// exists for the run it returns without re-planning. Best-effort decomposition (model turn with
     /// a deterministic fallback) — it always produces a valid, persisted plan.
     /// </summary>
-    public async Task<CoordinatorOrchestrationResult> OrchestrateAsync(CoordinatorDraftInput input, CancellationToken ct)
+    public async Task<CoordinatorOrchestrationResult> OrchestrateAsync(
+        CoordinatorDraftInput input, CancellationToken ct, RunLeaseFence? recoveredFence = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -230,6 +231,21 @@ public sealed class CoordinatorOrchestratorExecutor
             assigned.Add(new AssignedSubtask(d, agentName, model));
         }
 
+        await using var planTx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, input.RunId, recoveredFence, ct, scope.ServiceProvider.GetService<SqliteDb>()).ConfigureAwait(false);
+        if (planTx is not null)
+        {
+            // The earlier idempotency read precedes model planning; another owner may have
+            // committed the plan while we were planning. Recheck under the run-row write lock.
+            var persistedPlan = await db.WorkPlans.AsNoTracking()
+                .FirstOrDefaultAsync(w => w.CoordinatorRunId == input.RunId, ct).ConfigureAwait(false);
+            if (persistedPlan is not null)
+            {
+                var inlineCount = await db.Subtasks.AsNoTracking()
+                    .CountAsync(s => s.WorkPlanId == persistedPlan.Id, ct).ConfigureAwait(false);
+                return new CoordinatorOrchestrationResult(persistedPlan.Id, inlineCount, promotedTaskIds);
+            }
+        }
         var (workPlanId, persisted) = await PersistPlanAsync(
             db,
             input,
@@ -240,6 +256,8 @@ public sealed class CoordinatorOrchestratorExecutor
             inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned,
             ct)
             .ConfigureAwait(false);
+        if (planTx is not null)
+            await planTx.CommitAsync(ct).ConfigureAwait(false);
 
         var workPlanStatus = inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned;
         EmitWorkPlanEvent(

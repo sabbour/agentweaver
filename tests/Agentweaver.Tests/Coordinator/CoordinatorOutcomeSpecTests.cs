@@ -1030,6 +1030,335 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         run!.Status.Should().Be("in_progress", "revise must re-suspend, not dispatch or terminate");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NonResidentGate_RecoversAndAdvancesWithoutReplayingInitialDraft(bool revise)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Recover an outcome gate after its owner disappears");
+        await WaitForGateAsync(runId);
+        var workflow = _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        (await workflow.HasCheckpointAsync(runId)).Should().BeTrue("the suspended gate must have a durable checkpoint");
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var drafts = 0;
+        drafter.BeforeDraftAsync = _ =>
+        {
+            Interlocked.Increment(ref drafts);
+            return Task.CompletedTask;
+        };
+
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+
+        var response = revise
+            ? await _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+                new { feedback = "Limit the scope to one endpoint" })
+            : await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        if (revise)
+        {
+            await PollOutcomeSpecUntilAsync(runId,
+                spec => spec.Status == "awaiting_confirmation"
+                    && spec.ClarifyingQuestions?.Contains("one endpoint", StringComparison.Ordinal) == true);
+            drafts.Should().Be(1, "recovery resumes the gate, not the initial model draft");
+            await WaitForGateAsync(runId);
+        }
+        else
+        {
+            (await PollOutcomeSpecUntilAsync(runId, spec => spec.Status == "confirmed"))
+                .Should().NotBeNull();
+            drafts.Should().Be(0, "confirmation never invokes the outcome-spec model");
+            (await PollWorkPlanAsync(runId)).Should().NotBeNull();
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.WorkPlans.CountAsync(p => p.CoordinatorRunId == runId))
+                .Should().Be(1, "a recovered confirm must start planning only once");
+        }
+    }
+
+    [Fact]
+    public async Task NonResidentGate_MissingCheckpoint_ReturnsAttributableErrorWithoutConsumingGate()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var run = (await runStore.GetAsync(RunId.Parse(runId)))!;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = run.ProjectId!.Value.ToString(),
+                CoordinatorRunId = runId,
+                Goal = run.Task,
+                DesiredOutcome = "A reviewable outcome",
+                Scope = "One API endpoint",
+                Assumptions = "Existing permissions apply",
+                Status = "awaiting_confirmation",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", run.ProjectId!.Value.ToString(), runId);
+
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/runs/{runId}/outcome-spec/revise", new { feedback = "Clarify the endpoint" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        error.GetProperty("error").GetString().Should().Be("coordinator_gate_checkpoint_missing");
+        error.GetProperty("run_id").GetString().Should().Be(runId);
+        error.GetProperty("correlation_id").GetString().Should().NotBeNullOrWhiteSpace();
+        error.GetProperty("diagnostic_path").GetString().Should().Be($"/api/runs/{runId}/events");
+        (await GetOutcomeSpecAsync(_owner, runId))!.Status.Should().Be("awaiting_confirmation");
+
+        var forbidden = await _other.PostAsJsonAsync(
+            $"/api/runs/{runId}/outcome-spec/revise", new { feedback = "Read another project's gate" });
+        forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await forbidden.Content.ReadAsStringAsync()).Should().NotContain("coordinator_gate_checkpoint_missing");
+    }
+
+    [Fact]
+    public async Task NonResidentGate_AdvertisedWithoutPersistedSpec_ReturnsTypedDiagnostic()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Missing a previously advertised spec is inconsistent");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.OutcomeSpecs.Where(s => s.CoordinatorRunId == runId).ExecuteDeleteAsync();
+        }
+
+        var response = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("coordinator_gate_spec_missing");
+        (await GetWorkPlanAsync(runId)).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NonResidentGate_RejectsStaleGenerationOrCorruptGate(bool staleGeneration)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Do not replay a stale or corrupt gate");
+        await WaitForGateAsync(runId);
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+        if (staleGeneration)
+        {
+            await using var connection = await _factory.Services.GetRequiredService<SqliteDb>()
+                .OpenConnectionAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE runs SET lifecycle_generation = lifecycle_generation + 1 WHERE run_id = $runId";
+            command.Parameters.AddWithValue("$runId", runId);
+            (await command.ExecuteNonQueryAsync()).Should().Be(1);
+        }
+        else
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.PendingRequests.Where(p => p.RunId == runId)
+                .ExecuteUpdateAsync(u => u.SetProperty(p => p.RequestJson, "{invalid"));
+        }
+
+        var response = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be(staleGeneration
+            ? "coordinator_gate_generation_changed" : "coordinator_gate_request_invalid");
+        (await GetOutcomeSpecAsync(_owner, runId))!.Status.Should().Be("awaiting_confirmation");
+        (await GetWorkPlanAsync(runId)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task NonResidentGate_ChangedProviderKeyRetry_RecoversOnce()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Keep provider and recovery decisions fenced");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+
+        await _factory.ChangePlatformProviderIdentityAsync("replacement-account");
+        var staleKey = await _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+            new { feedback = "A single deliverable" });
+        staleKey.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await staleKey.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("model_provider_changed");
+
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, runId, ensureProvider: false);
+        var retry = await _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+            new { feedback = "A single deliverable" });
+        retry.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PollOutcomeSpecUntilAsync(runId, spec =>
+            spec.ClarifyingQuestions?.Contains("A single deliverable", StringComparison.Ordinal) == true))
+            .Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task NonResidentGate_CancellationBeforeRecovery_DoesNotStartPlanning()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Cancellation takes precedence over gate recovery");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        await using (var connection = await _factory.Services.GetRequiredService<SqliteDb>().OpenConnectionAsync())
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE runs SET status = 'failed', result = 'cancelled' WHERE run_id = $runId";
+            command.Parameters.AddWithValue("$runId", runId);
+            (await command.ExecuteNonQueryAsync()).Should().Be(1);
+        }
+
+        var response = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("run_not_active");
+        (await GetWorkPlanAsync(runId)).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task NonResidentGate_LateLifecycleChange_BlocksRecoveredWrite(
+        bool revise, bool generationChanged)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A late run change must fence recovered work");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        var factory = _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (revise)
+            drafter.BeforeDraftAsync = async _ =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            };
+        else
+            factory.BeforeFinalizeWriteAsync = async () =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            };
+
+        try
+        {
+            var responseTask = revise
+                ? _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+                    new { feedback = "A late revision must not persist" })
+                : _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var fence = _factory.Services.GetRequiredService<RunLeaseFenceRegistry>().Get(runId);
+            fence.Should().NotBeNull();
+
+            await using (var connection = await _factory.Services.GetRequiredService<SqliteDb>().OpenConnectionAsync())
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = generationChanged
+                    ? "UPDATE runs SET lifecycle_generation = lifecycle_generation + 1 WHERE run_id = $runId"
+                    : "UPDATE runs SET status = 'failed', result = 'cancelled' WHERE run_id = $runId";
+                command.Parameters.AddWithValue("$runId", runId);
+                (await command.ExecuteNonQueryAsync()).Should().Be(1);
+            }
+            release.TrySetResult();
+            (await responseTask).StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.Conflict);
+
+            // The exact persistence predicate rejects this successor state, independently of the
+            // recovery monitor's polling interval or whether its cancellation callback has fired.
+            await using (var scope = _factory.Services.CreateAsyncScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var write = () => CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+                    db, runId, fence, CancellationToken.None,
+                    _factory.Services.GetRequiredService<SqliteDb>());
+                await write.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
+            }
+
+            var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (registry.Get(runId) is not null && DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            registry.Get(runId).Should().BeNull();
+            (await GetOutcomeSpecAsync(_owner, runId))!.Status.Should().Be(
+                revise ? "drafting" : "awaiting_confirmation");
+            (await GetWorkPlanAsync(runId)).Should().BeNull();
+        }
+        finally
+        {
+            release.TrySetResult();
+            factory.BeforeFinalizeWriteAsync = null;
+            drafter.BeforeDraftAsync = null;
+        }
+    }
+
+    [Fact]
+    public async Task DuplicateConcurrentRevisions_ConsumeOnlyOneGateAndDraftOnce()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Concurrent retries must not duplicate drafting");
+        await WaitForGateAsync(runId);
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var drafts = 0;
+        drafter.BeforeDraftAsync = _ =>
+        {
+            Interlocked.Increment(ref drafts);
+            return Task.CompletedTask;
+        };
+
+        const string feedback = "Use a bounded single-step design";
+        var requests = Enumerable.Range(0, 2)
+            .Select(_ => _owner.PostAsJsonAsync(
+                $"/api/runs/{runId}/outcome-spec/revise", new { feedback }));
+        var responses = await Task.WhenAll(requests);
+        responses.Count(r => r.StatusCode == HttpStatusCode.OK).Should().Be(1);
+        responses.Count(r => r.StatusCode == HttpStatusCode.Conflict).Should().Be(1);
+        (await PollOutcomeSpecUntilAsync(runId, spec =>
+            spec.ClarifyingQuestions?.Contains(feedback, StringComparison.Ordinal) == true))
+            .Should().NotBeNull();
+        drafts.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("delivering", "coordinator_gate_delivery_uncertain")]
+    [InlineData("waiting", "coordinator_gate_request_invalid")]
+    public async Task NonResidentGate_ConflictingPendingRequest_FailsClosed(
+        string deliveryState, string expectedError)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Reject an ambiguous pending request");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            if (deliveryState == "waiting")
+                await db.PendingRequests.Where(p => p.RunId == runId)
+                    .ExecuteUpdateAsync(u => u.SetProperty(p => p.RequestId, $"other-{runId}"));
+            else
+                await db.PendingRequests.Where(p => p.RunId == runId)
+                    .ExecuteUpdateAsync(u => u.SetProperty(p => p.DeliveryState, deliveryState));
+        }
+
+        var response = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be(expectedError);
+        (await GetWorkPlanAsync(runId)).Should().BeNull();
+    }
+
     // =========================================================================
     // Regression (#315): a revision must carry the already-reviewed prior draft forward to the
     // drafter so its established requirements are preserved instead of being silently re-generated
