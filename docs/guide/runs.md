@@ -217,6 +217,10 @@ if older coordinator context mentions `assembly_blocked` or `ineligible_subtasks
 the coordinator is waiting for subtasks that are not ready to assemble yet. A child whose run status
 is **InProgress** stays running in the topology and run tree, not failed. Failure diagnostics and
 retry guidance appear only after the run reaches a failed terminal status.
+During an API rollout, a watch connection may close while a workflow is waiting for its
+fan branches. This does not cancel the run: recovery reattaches to the persisted parent,
+work plan, and healthy child runs. Only an explicit stop or a persisted terminal outcome
+can end the run and cancel its active branches.
 
 ### Topology layout
 
