@@ -31,6 +31,23 @@ public sealed class ResilientCheckpointStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task FileFactory_LatestCheckpoint_UsesActualMafFileLayoutAndSession()
+    {
+        var factory = new FileCheckpointStoreFactory();
+        var store = factory.Create("coordinator", _dir, NullLogger.Instance);
+        var runId = Guid.NewGuid().ToString();
+        var otherRun = Guid.NewGuid().ToString();
+        using var document = JsonDocument.Parse("""{"gate":"awaiting_confirmation"}""");
+        await store.CreateCheckpointAsync(runId, document.RootElement.Clone());
+        await store.CreateCheckpointAsync(otherRun, document.RootElement.Clone());
+        var latest = await factory.GetLatestCheckpointAsync("coordinator", runId);
+        latest.Should().NotBeNull();
+        (await store.RetrieveCheckpointAsync(runId, latest!))
+            .GetProperty("gate").GetString().Should().Be("awaiting_confirmation");
+        (store as IDisposable)?.Dispose();
+    }
+
+    [Fact]
     public void Create_OnBlankAndCorruptIndex_DoesNotThrow_AndLeavesNoBlankLines()
     {
         Directory.CreateDirectory(_dir);

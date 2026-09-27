@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -1028,9 +1029,10 @@ public sealed class CoordinatorRunService
     private async Task<CoordinatorGateOutcome> SubmitDecisionAsync(
         string runId, CoordinatorOutcomeSpecDecision decision, CancellationToken ct)
     {
+        Run? persistedRun = null;
         if (RunId.TryParse(runId, out var parsedRunId))
         {
-            var persistedRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            persistedRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
             if (persistedRun is not null)
             {
                 using var scope = _scopeFactory.CreateScope();
@@ -1041,33 +1043,120 @@ public sealed class CoordinatorRunService
         }
 
         var streamingRun = _registry.Get(runId);
+        var recoveredHere = false;
         if (streamingRun is null)
         {
-            // Not in local registry — coordinator may be on another replica.
-            // Checkpoints are on the shared RWX PVC; resume here so any replica
-            // can handle confirm/revise without sticky routing.
+            if (persistedRun is null || persistedRun.Status != RunStatus.InProgress
+                || persistedRun.ParentRunId is not null
+                || !string.Equals(persistedRun.AgentName, "Coordinator", StringComparison.Ordinal))
+                return CoordinatorGateOutcome.RunNotActive;
+
+            var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
+            if (spec is null)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var advertised = await db.PendingRequests.AsNoTracking()
+                    .AnyAsync(p => p.RunId == runId, ct).ConfigureAwait(false)
+                    || await db.RunEvents.AsNoTracking()
+                        .AnyAsync(e => e.RunId == runId
+                            && e.EventType == EventTypes.CoordinatorOutcomeSpec, ct)
+                        .ConfigureAwait(false);
+                if (advertised)
+                    throw GateRecoveryError(runId, "coordinator_gate_spec_missing");
+                return CoordinatorGateOutcome.RunNotActive;
+            }
+            if (spec.Status != "awaiting_confirmation")
+                return CoordinatorGateOutcome.NoPendingGate;
+            if (spec.ProjectId != persistedRun.ProjectId.ToString()
+                || string.IsNullOrWhiteSpace(spec.DesiredOutcome)
+                || string.IsNullOrWhiteSpace(spec.Scope))
+                throw GateRecoveryError(runId, "coordinator_gate_spec_invalid");
+
+            using (var scope = _scopeFactory.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                if (await db.WorkPlans.AsNoTracking()
+                    .AnyAsync(p => p.CoordinatorRunId == runId, ct).ConfigureAwait(false))
+                    throw GateRecoveryError(runId, "coordinator_gate_state_conflict");
+            }
+
+            if (await _factory.GetLatestCheckpointAsync(runId, ct).ConfigureAwait(false) is null)
+                throw GateRecoveryError(runId, "coordinator_gate_checkpoint_missing");
+
             try
             {
                 streamingRun = await TryResumeOnDemandAsync(runId, ct).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (CoordinatorGateRecoveryException)
             {
-                // MAF SDK $type-ordering bug: JsonMarshaller fails to deserialize the checkpoint
-                // on a secondary replica. Defer the decision to the shared DB so the primary
-                // replica's watch loop can apply it without cross-replica checkpoint restore.
-                _logger.LogWarning(ex,
-                    "On-demand checkpoint restore failed for coordinator run {RunId}; deferring decision to DB",
-                    runId);
-
-                if (await TryDeferDecisionAsync(runId, decision, ct).ConfigureAwait(false))
-                    return CoordinatorGateOutcome.Accepted;
-
-                return CoordinatorGateOutcome.RunNotActive;
+                throw;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Outcome-spec gate recovery failed for run {RunId}", runId);
+                throw GateRecoveryError(runId, "coordinator_gate_checkpoint_invalid", ex);
             }
 
             if (streamingRun is null)
-                return CoordinatorGateOutcome.RunNotActive;
+            {
+                if (!await IsCurrentRunGenerationAsync(runId, persistedRun.LifecycleGeneration, ct).ConfigureAwait(false))
+                    return CoordinatorGateOutcome.RunNotActive;
+                if ((await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false))?.Status != "awaiting_confirmation")
+                    return CoordinatorGateOutcome.NoPendingGate;
+                (string? RequestId, string DeliveryState, int? LifecycleGeneration, RequestPortInfo PortInfo)? peerGate;
+                try
+                {
+                    peerGate = await _pendingStore.GetRequestStateAsync(runId, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw GateRecoveryError(runId, "coordinator_gate_request_invalid", ex);
+                }
+                if (peerGate is null)
+                    throw GateRecoveryError(runId, "coordinator_gate_recovery_in_progress");
+                if ((peerGate.Value.LifecycleGeneration ?? 1) != persistedRun.LifecycleGeneration)
+                    throw GateRecoveryError(runId, "coordinator_gate_generation_changed");
+                if (await _pendingStore.MatchesRecentDecisionAsync(runId, decision, ct).ConfigureAwait(false))
+                    return CoordinatorGateOutcome.NoPendingGate;
+                // A peer owns the lease. Queue only against its durable gate; the owner's poller
+                // or the orphaned-decision drainer will deliver it once, not this replica.
+                try
+                {
+                    if (await TryDeferDecisionAsync(runId, decision, ct).ConfigureAwait(false))
+                        return CoordinatorGateOutcome.Queued;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogError(ex, "Durable outcome-spec gate is invalid for run {RunId}", runId);
+                    throw GateRecoveryError(runId, "coordinator_gate_request_invalid", ex);
+                }
+                throw GateRecoveryError(runId, "coordinator_gate_recovery_in_progress");
+            }
+            recoveredHere = true;
         }
+
+        if (persistedRun is null || persistedRun.Status != RunStatus.InProgress
+            || !await IsCurrentRunGenerationAsync(runId, persistedRun.LifecycleGeneration, ct).ConfigureAwait(false))
+            return CoordinatorGateOutcome.RunNotActive;
+
+        try
+        {
+            var requestState = await _pendingStore.GetRequestStateAsync(runId, ct).ConfigureAwait(false);
+            if (requestState?.DeliveryState == PendingRequestDeliveryStates.Delivering)
+                throw GateRecoveryError(runId, "coordinator_gate_delivery_uncertain");
+            if (requestState is { } armedGate
+                && (armedGate.LifecycleGeneration ?? 1) != persistedRun.LifecycleGeneration)
+                throw GateRecoveryError(runId, "coordinator_gate_generation_changed");
+        }
+        catch (Exception ex) when (ex is not CoordinatorGateRecoveryException and not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Durable outcome-spec gate is invalid for run {RunId}", runId);
+            throw GateRecoveryError(runId, "coordinator_gate_request_invalid", ex);
+        }
+
+        if (await _pendingStore.MatchesRecentDecisionAsync(runId, decision, ct).ConfigureAwait(false))
+            return CoordinatorGateOutcome.NoPendingGate;
 
         var delivery = await QueueAndClaimCoordinatorDecisionAsync(runId, decision, ct).ConfigureAwait(false);
         if (delivery is null)
@@ -1086,10 +1175,22 @@ public sealed class CoordinatorRunService
             return CoordinatorGateOutcome.NoPendingGate;
 
         var queuedDecision = delivery.GetResponse<CoordinatorOutcomeSpecDecision>();
-        return await SendCoordinatorDecisionAsync(runId, streamingRun, delivery, queuedDecision, ct)
-            .ConfigureAwait(false)
-            ? CoordinatorGateOutcome.Accepted
-            : CoordinatorGateOutcome.RunNotActive;
+        if (await SendCoordinatorDecisionAsync(runId, streamingRun, delivery, queuedDecision, ct)
+            .ConfigureAwait(false))
+            return CoordinatorGateOutcome.Accepted;
+        if (recoveredHere)
+            throw GateRecoveryError(runId, "coordinator_gate_delivery_failed");
+        return CoordinatorGateOutcome.RunNotActive;
+    }
+
+    private static CoordinatorGateRecoveryException GateRecoveryError(
+        string runId, string code, Exception? cause = null) => new(runId, code, cause);
+
+    private async Task<bool> IsCurrentRunGenerationAsync(string runId, int generation, CancellationToken ct)
+    {
+        var run = await _runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false);
+        return run is { Status: RunStatus.InProgress }
+            && run.LifecycleGeneration == generation;
     }
 
     private async Task<PendingDelivery?> QueueAndClaimCoordinatorDecisionAsync(
@@ -1125,6 +1226,8 @@ public sealed class CoordinatorRunService
             pending = await WaitForGateToArmAsync(runId, ct).ConfigureAwait(false);
         if (pending is null)
             return null;
+        if (await _pendingStore.MatchesRecentDecisionAsync(runId, decision, ct).ConfigureAwait(false))
+            return null;
 
         var decisionIdentity = PendingRequestStore.CreateDecisionIdentity(pending.Request.RequestId, decision);
         var queued = await _pendingStore.TryQueueDeliveryAsync(
@@ -1152,6 +1255,17 @@ public sealed class CoordinatorRunService
         CancellationToken ct)
     {
         if (!string.Equals(delivery.DeliveryKind, PendingRequestDeliveryKinds.CoordinatorOutcomeSpec, StringComparison.Ordinal))
+        {
+            await _pendingStore.ReleaseDeliveryAsync(
+                runId, delivery.DecisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
+                .ConfigureAwait(false);
+            return false;
+        }
+
+        var fence = _leaseFences.Get(runId);
+        if (fence is not null
+            && !await OwnsActiveDraftLeaseAsync(
+                runId, fence.LifecycleGeneration, fence.OwnerId, fence.FencingToken, ct).ConfigureAwait(false))
         {
             await _pendingStore.ReleaseDeliveryAsync(
                 runId, delivery.DecisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
@@ -1775,7 +1889,8 @@ public sealed class CoordinatorRunService
                     // coordinator.outcome_spec and marked the entry awaiting-review.
                     if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is not null)
                         break;
-                    await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
+                    await _pendingStore.SetAsync(
+                        runId, rie.Request, ownerUser, ct, expectedLifecycleGeneration).ConfigureAwait(false);
                     // Start polling for decisions deferred by secondary replicas that failed to
                     // restore the MAF checkpoint. Fire-and-forget — cancels when the run CT cancels.
                     _ = PollDeferredDecisionsAsync(runId, ct);
@@ -1917,6 +2032,16 @@ public sealed class CoordinatorRunService
             }
             catch (Exception ex)
             {
+                var spec = await GetOutcomeSpecAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+                if (spec?.Status == "awaiting_confirmation"
+                    && await IsCurrentRunGenerationAsync(
+                        run.Id.ToString(), run.LifecycleGeneration, ct).ConfigureAwait(false))
+                {
+                    _logger.LogError(ex,
+                        "Coordinator gate recovery failed for run {RunId}; leaving its durable gate for a typed request-time diagnostic",
+                        run.Id);
+                    continue;
+                }
                 _logger.LogError(ex, "Coordinator restart recovery failed for run {RunId}; failing it", run.Id);
                 var entry = _streamStore.Get(run.Id.ToString()) ?? _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
                 await FailRunSafeAsync(
@@ -2303,9 +2428,6 @@ public sealed class CoordinatorRunService
         var spec = await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false);
         if (spec?.Status != "awaiting_confirmation") return null;
 
-        var checkpointInfo = await _factory.GetLatestCheckpointAsync(runId, ct).ConfigureAwait(false);
-        if (checkpointInfo is null) return null;
-
         _logger.LogInformation(
             "Multi-replica on-demand resume: coordinator run {RunId} not in local registry; " +
             "resuming from shared checkpoint", runId);
@@ -2391,7 +2513,7 @@ public sealed class CoordinatorRunService
             var hasCheckpoint = await _factory.HasCheckpointAsync(runId, ct).ConfigureAwait(false);
             if (state.IsDrafting)
             {
-                if (state.HasObservableOutput || state.HasRetryMarker)
+                if (state.HasObservableOutput || state.HasRetryMarker || state.IsRevision)
                 {
                     var entry = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
                     await FailRunSafeAsync(
@@ -2476,23 +2598,24 @@ public sealed class CoordinatorRunService
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var isDrafting = await db.OutcomeSpecs
+        var draft = await db.OutcomeSpecs
             .AsNoTracking()
-            .AnyAsync(
-                spec => spec.CoordinatorRunId == runId && spec.Status == "drafting",
-                ct)
+            .Where(spec => spec.CoordinatorRunId == runId && spec.Status == "drafting")
+            .Select(spec => new { spec.DesiredOutcome, spec.Scope })
+            .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
-        if (!isDrafting)
+        if (draft is null)
             return default;
 
-        var draftingSequence = await db.RunEvents
+        var draftingEvent = await db.RunEvents
             .AsNoTracking()
             .Where(e => e.RunId == runId && e.EventType == EventTypes.CoordinatorOutcomeSpecDrafting)
-            .MaxAsync(e => (int?)e.Sequence, ct)
-            .ConfigureAwait(false) ?? 0;
+            .OrderByDescending(e => e.Sequence)
+            .Select(e => new { e.Sequence })
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
         var eventTypes = await db.RunEvents
             .AsNoTracking()
-            .Where(e => e.RunId == runId && e.Sequence > draftingSequence)
+            .Where(e => e.RunId == runId && e.Sequence > (draftingEvent == null ? 0 : draftingEvent.Sequence))
             .Select(e => e.EventType)
             .ToListAsync(ct)
             .ConfigureAwait(false);
@@ -2501,7 +2624,10 @@ public sealed class CoordinatorRunService
         var hasRetryMarker = eventTypes.Contains(
             EventTypes.CoordinatorOutcomeSpecDraftRetrying,
             StringComparer.Ordinal);
-        return new DraftRecoveryState(true, hasObservableOutput, hasRetryMarker);
+        return new DraftRecoveryState(
+            true, hasObservableOutput, hasRetryMarker,
+            !string.IsNullOrWhiteSpace(draft.DesiredOutcome)
+                || !string.IsNullOrWhiteSpace(draft.Scope));
     }
 
     private static bool IsObservableDraftEffect(string eventType) =>
@@ -2515,7 +2641,8 @@ public sealed class CoordinatorRunService
     private readonly record struct DraftRecoveryState(
         bool IsDrafting,
         bool HasObservableOutput,
-        bool HasRetryMarker);
+        bool HasRetryMarker,
+        bool IsRevision);
 
     /// <summary>
     /// Resumes a coordinator run that was suspended at the confirmation gate (spec draft/confirm phase)
@@ -2540,6 +2667,8 @@ public sealed class CoordinatorRunService
             _logger.LogError(
                 "Failed to load checkpoint for run {RunId}: checkpoint not found",
                 runId);
+            if ((await GetOutcomeSpecAsync(runId, ct).ConfigureAwait(false))?.Status == "awaiting_confirmation")
+                throw GateRecoveryError(runId, "coordinator_gate_checkpoint_missing");
             await FailRunSafeAsync(runId, entry, "checkpoint_missing").ConfigureAwait(false);
             return;
         }
@@ -2685,8 +2814,30 @@ public sealed class CoordinatorRunService
                 if (evt is not RequestInfoEvent rie)
                     continue;
 
+                (string? RequestId, string DeliveryState, int? LifecycleGeneration, RequestPortInfo PortInfo)? stored;
+                try
+                {
+                    stored = await _pendingStore.GetRequestStateAsync(runId, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    throw GateRecoveryError(runId, "coordinator_gate_request_invalid", ex);
+                }
+                if (stored?.DeliveryState == PendingRequestDeliveryStates.Delivering)
+                    throw GateRecoveryError(runId, "coordinator_gate_delivery_uncertain");
+                if (stored is not null
+                    && (stored.Value.DeliveryState == PendingRequestDeliveryStates.Delivered
+                        ? stored.Value.RequestId == rie.Request.RequestId
+                        : stored.Value.RequestId != rie.Request.RequestId
+                            || !Equals(stored.Value.PortInfo, rie.Request.PortInfo)))
+                    throw GateRecoveryError(runId, "coordinator_gate_request_mismatch");
+                if (stored is { } persistedGate
+                    && (persistedGate.LifecycleGeneration ?? 1) != run.LifecycleGeneration)
+                    throw GateRecoveryError(runId, "coordinator_gate_generation_changed");
+
                 if (await _pendingStore.GetAsync(runId, ct).ConfigureAwait(false) is null)
-                    await _pendingStore.SetAsync(runId, rie.Request, run.SubmittingUser, ct).ConfigureAwait(false);
+                    await _pendingStore.SetAsync(
+                        runId, rie.Request, run.SubmittingUser, ct, run.LifecycleGeneration).ConfigureAwait(false);
 
                 _logger.LogInformation("Confirmation gate re-armed for run {RunId}", runId);
                 return rie.Request;
@@ -3308,6 +3459,9 @@ public enum CoordinatorGateOutcome
 {
     /// <summary>Decision accepted and sent to the suspended run.</summary>
     Accepted,
+
+    /// <summary>Decision durably queued for the replica holding the gate's lease.</summary>
+    Queued,
 
     /// <summary>No live workflow is registered for this run (terminated, never started, or post-restart).</summary>
     RunNotActive,

@@ -95,6 +95,15 @@ public static class CoordinatorFailureCodes
     public const string StartupFailed = "coordinator_startup_failed";
 }
 
+public sealed class CoordinatorGateRecoveryException(string runId, string errorCode, Exception? innerException = null)
+    : Exception("The outcome-spec gate could not be safely recovered. Inspect the run diagnostic before retrying.", innerException)
+{
+    public string RunId { get; } = runId;
+    public string ErrorCode { get; } = errorCode;
+    public string CorrelationId { get; } = Guid.NewGuid().ToString("N");
+    public string DiagnosticPath { get; } = $"/api/runs/{runId}/events";
+}
+
 /// <summary>
 /// Safe caller-facing failure raised only after a persisted coordinator run has been terminalized.
 /// </summary>

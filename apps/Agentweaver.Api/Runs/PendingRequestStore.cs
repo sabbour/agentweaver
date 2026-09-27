@@ -34,9 +34,10 @@ public sealed class PendingRequestStore
     public PendingRequestStore(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
 
     /// <summary>Arms (or re-arms) the pending gate for a run. Upserts by the unique run id.</summary>
-    public async Task SetAsync(string runId, ExternalRequest request, string ownerUser, CancellationToken ct = default)
+    public async Task SetAsync(
+        string runId, ExternalRequest request, string ownerUser, CancellationToken ct = default,
+        int? lifecycleGeneration = null)
     {
-        var json = SerializeRequest(request);
         var requestId = request.RequestId;
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -44,6 +45,12 @@ public sealed class PendingRequestStore
         var existing = await db.PendingRequests
             .FirstOrDefaultAsync(p => p.RunId == runId, ct)
             .ConfigureAwait(false);
+        var previousDecisionHash = existing is { ResponseJson: not null }
+            ? HashDecision(existing.ResponseJson)
+            : existing is null ? null
+                : JsonSerializer.Deserialize<PendingRequestEnvelope>(
+                    existing.RequestJson, JsonDefaults.Options)?.PreviousDecisionHash;
+        var json = SerializeRequest(request, lifecycleGeneration, previousDecisionHash);
 
         if (existing is null)
         {
@@ -103,6 +110,42 @@ public sealed class PendingRequestStore
             .AnyAsync(p => p.RunId == runId
                 && p.RequestId == requestId, ct)
             .ConfigureAwait(false);
+    }
+
+    public async Task<(string? RequestId, string DeliveryState, int? LifecycleGeneration, RequestPortInfo PortInfo)?> GetRequestStateAsync(
+        string runId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .Where(p => p.RunId == runId)
+            .Select(p => new { p.RequestId, p.DeliveryState, p.RequestJson })
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        if (row is null) return null;
+        var envelope = JsonSerializer.Deserialize<PendingRequestEnvelope>(row.RequestJson, JsonDefaults.Options)
+            ?? throw new InvalidOperationException("Stored pending request could not be deserialized.");
+        if (row.RequestId is not null && row.RequestId != envelope.RequestId)
+            throw new InvalidOperationException("Stored pending request identity does not match its gate.");
+        return (row.RequestId ?? envelope.RequestId, row.DeliveryState, envelope.LifecycleGeneration, envelope.PortInfo);
+    }
+
+    public async Task<bool> MatchesRecentDecisionAsync<TResponse>(
+        string runId, TResponse response, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .Where(p => p.RunId == runId)
+            .Select(p => new { p.RequestJson, p.ResponseJson, p.DeliveryState })
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        if (row is null) return false;
+        var hash = HashDecision(JsonSerializer.Serialize(response, JsonDefaults.Options));
+        if (row.DeliveryState == PendingRequestDeliveryStates.Delivered
+            && row.ResponseJson is not null && HashDecision(row.ResponseJson) == hash)
+            return true;
+        var envelope = JsonSerializer.Deserialize<PendingRequestEnvelope>(
+            row.RequestJson, JsonDefaults.Options);
+        return envelope?.PreviousDecisionHash == hash;
     }
 
     public async Task<bool> ExistsUndeliveredAsync(string runId, CancellationToken ct = default)
@@ -475,7 +518,12 @@ public sealed class PendingRequestStore
     // round-tripped — it is never read after the gate is armed, and PortableValue requires MAF's
     // checkpoint converter to deserialize faithfully.
 
-    private sealed record PendingRequestEnvelope(RequestPortInfo PortInfo, string RequestId);
+    private sealed record PendingRequestEnvelope(
+        RequestPortInfo PortInfo, string RequestId, int? LifecycleGeneration = null,
+        string? PreviousDecisionHash = null);
+
+    private static string HashDecision(string responseJson) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(responseJson)));
 
     public static string CreateDecisionIdentity<TResponse>(string requestId, TResponse response)
     {
@@ -485,9 +533,11 @@ public sealed class PendingRequestStore
         return $"{requestId}:{hash}";
     }
 
-    private static string SerializeRequest(ExternalRequest request) =>
+    private static string SerializeRequest(
+        ExternalRequest request, int? lifecycleGeneration, string? previousDecisionHash) =>
         JsonSerializer.Serialize(
-            new PendingRequestEnvelope(request.PortInfo, request.RequestId), JsonDefaults.Options);
+            new PendingRequestEnvelope(
+                request.PortInfo, request.RequestId, lifecycleGeneration, previousDecisionHash), JsonDefaults.Options);
 
     private static ExternalRequest DeserializeRequest(string json)
     {

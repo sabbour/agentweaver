@@ -185,6 +185,60 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RecoverInterruptedRunsAsync_RevisionWithNoOutput_DoesNotRepeatModelCall()
+    {
+        var runId = RunId.New();
+        await _runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            AgentName = "Coordinator",
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "retain the reviewed revision boundary",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            Origin = RunOrigin.Interactive,
+        });
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = "project-revision",
+                CoordinatorRunId = runId.ToString(),
+                Goal = "retain the reviewed revision boundary",
+                DesiredOutcome = "original reviewed draft",
+                Scope = "one endpoint",
+                Assumptions = "original assumptions",
+                Status = "drafting",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            });
+            db.RunEvents.Add(new RunEventRecord
+            {
+                RunId = runId.ToString(),
+                Sequence = 1,
+                EventType = EventTypes.CoordinatorOutcomeSpecDrafting,
+                PayloadJson = """{"revise":true}""",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await BuildCoordinatorRunService(_runStore, new RunStreamStore())
+            .RecoverInterruptedRunsAsync(CancellationToken.None);
+
+        (await _runStore.GetAsync(runId))!.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        using var verification = _scopeFactory.CreateScope();
+        (await verification.ServiceProvider.GetRequiredService<MemoryDbContext>().RunEvents
+            .AnyAsync(e => e.RunId == runId.ToString()
+                && e.EventType == EventTypes.CoordinatorOutcomeSpecDraftRetrying))
+            .Should().BeFalse("a revision whose model invocation outcome is unknown must never replay");
+    }
+
+    [Fact]
     public async Task RecoverInterruptedRunsAsync_PeerOwnsDraftLease_DoesNotReplayOrTerminalize()
     {
         var runId = RunId.New();

@@ -56,6 +56,24 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task CoordinatorGateCheckpoint_IsVisibleToAnotherReplicaWithoutReplayingDraft()
+    {
+        var replicaA = new PostgresCheckpointStoreFactory(pg.Factory);
+        var replicaB = new PostgresCheckpointStoreFactory(pg.Factory);
+        var runId = Guid.NewGuid().ToString();
+        var writer = replicaA.Create("coordinator", "", logger: null!);
+        var checkpoint = await writer.CreateCheckpointAsync(
+            runId, Json("""{"gate":"awaiting_confirmation","generation":1}"""));
+
+        var recovered = await replicaB.GetLatestCheckpointAsync("coordinator", runId);
+        recovered.Should().NotBeNull();
+        recovered!.CheckpointId.Should().Be(checkpoint.CheckpointId);
+        var reader = replicaB.Create("coordinator", "", logger: null!);
+        (await reader.RetrieveCheckpointAsync(runId, recovered))
+            .GetProperty("gate").GetString().Should().Be("awaiting_confirmation");
+    }
+
+    [PostgresFact]
     public async Task ConcurrentWrites_FromTwoWriters_AreAllVisible_NoContention()
     {
         var replicaA = new PostgresJsonCheckpointStore(pg.Factory, "runs");

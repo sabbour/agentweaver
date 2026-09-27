@@ -26,25 +26,25 @@ public sealed class FileCheckpointStoreFactory : ICheckpointStoreFactory
     }
 
     /// <summary>
-    /// Scans the per-session checkpoint directory and returns the most recently written checkpoint
-    /// (the file store equivalent of the DB "latest by CreatedAt" query).
+    /// MAF writes encoded {sessionId}_{checkpointId}.json files at the store root, not
+    /// under a per-session directory. Resolve the latest checkpoint for this session only.
     /// </summary>
     public Task<CheckpointInfo?> GetLatestCheckpointAsync(string storeName, string sessionId, CancellationToken ct = default)
     {
         if (!_baseDirs.TryGetValue(storeName, out var baseDir))
             return Task.FromResult<CheckpointInfo?>(null);
 
-        var dir = Path.Combine(baseDir, sessionId);
-        if (!Directory.Exists(dir) || Directory.GetFiles(dir).Length == 0)
+        if (!Directory.Exists(baseDir))
             return Task.FromResult<CheckpointInfo?>(null);
 
-        var latestFile = Directory.GetFiles(dir)
+        var latestFile = Directory.EnumerateFiles(baseDir, $"{sessionId}_*%2Ejson")
             .OrderByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
         if (latestFile is null)
             return Task.FromResult<CheckpointInfo?>(null);
 
-        var checkpointId = Path.GetFileNameWithoutExtension(latestFile);
+        var name = Uri.UnescapeDataString(Path.GetFileName(latestFile));
+        var checkpointId = name[(sessionId.Length + 1)..^".json".Length];
         return Task.FromResult<CheckpointInfo?>(new CheckpointInfo(sessionId, checkpointId));
     }
 
