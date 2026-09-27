@@ -760,6 +760,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
     {
         var project = await InsertProjectAsync();
         var store = new EfBacklogTaskStore(pg.Factory);
+        var initialReadyCount = await store.CountReadyForPickupAsync();
         var prerequisite = MakeBacklogTask(project.Id, "prerequisite");
         await store.InsertAsync(prerequisite);
         await using (var db = await pg.CreateDbContextAsync())
@@ -783,7 +784,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
         await store.InsertAsync(ready);
 
         (await store.ListReadyForClaimAsync(project.Id, 3)).Select(t => t.Id).Should().Equal(ready.Id);
-        (await store.CountReadyForPickupAsync()).Should().Be(1);
+        (await store.CountReadyForPickupAsync()).Should().Be(initialReadyCount + 1);
     }
 
     [PostgresFact]
