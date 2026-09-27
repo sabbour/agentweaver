@@ -123,10 +123,11 @@ public sealed class ChildOutputPropagationTests : IDisposable
         // Simulate the child's ephemeral worktree/sandbox having been torn down: there is NO worktree
         // directory, only the committed branch in the shared repository.
         var content = _manager.TryReadCommittedFileContent(
-            repoPath, "agentweaver/child-gone", commitHash: null, "research-domain.md", out var isBinary);
+            repoPath, "agentweaver/child-gone", commitHash: null, "research-domain.md", out var isBinary, out var sourceAvailable);
 
         content.Should().NotBeNull("the file must be readable from the durable git branch, not a torn-down worktree");
         isBinary.Should().BeFalse();
+        sourceAvailable.Should().BeTrue();
         content!.Content.Should().Be("durable content survives sandbox teardown");
         content.Path.Should().Be("research-domain.md");
     }
@@ -137,8 +138,9 @@ public sealed class ChildOutputPropagationTests : IDisposable
         var repoPath = CreateTempGitRepo();
         CommitOnNewBranch(repoPath, "agentweaver/child-x", "a.txt", "a", "c");
 
-        _manager.TryReadCommittedFileContent(repoPath, "agentweaver/child-x", null, "missing.txt", out _)
+        _manager.TryReadCommittedFileContent(repoPath, "agentweaver/child-x", null, "missing.txt", out _, out var sourceAvailable)
             .Should().BeNull();
+        sourceAvailable.Should().BeTrue();
     }
 
     // (c) Changed-files reports exactly the modified set — no phantom "+0 -0" rows.

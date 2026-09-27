@@ -462,6 +462,21 @@ Each agent runs inside a **dedicated git worktree** branched from the project's 
 
 While a child is running, its **Changes** and **Files** views refresh automatically. If its worktree is still provisioning, the views show that state instead of an empty result and continue polling until current artifacts are available.
 
+For a merged run with a recorded merge commit, the **Files** view and file-content
+preview read that exact commit, not the current agent branch or a leftover worktree.
+Moving the branch does not change previously merged content. If Git no longer has
+the recorded commit, the REST workspace and file-content endpoints return
+`410 pinned_commit_unavailable` instead of showing newer content; a file absent from
+that commit returns `404`. The web artifact browser uses these same endpoints.
+MCP `run_get_file` currently returns the stored per-file **diff**, not the
+file-content endpoint; it does not yet provide exact committed file bytes.
+Legacy merged runs with no recorded
+commit retain branch-based fallback, which does **not** guarantee exact historical
+bytes. Git commit reachability is not a fixed retention policy: rewriting refs and
+garbage-collecting unreachable objects can make old content unavailable.
+This is a committed-output retrieval safeguard, not yet a revision-history or
+review-approval contract for uncommitted files and coordinator assembly.
+
 
 <!-- flagship-diagrams:start -->
 ## Visual model
