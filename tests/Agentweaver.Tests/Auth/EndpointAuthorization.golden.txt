@@ -42,6 +42,8 @@ GET /api/ping | OperationalAnonymous
 GET /api/projects | PlatformOrMcp
 GET /api/projects/{id} | PlatformOrMcp
 GET /api/projects/{id}/access | PlatformOrMcp
+GET /api/projects/{id}/agent-messages | PlatformOrMcp
+GET /api/projects/{id}/agent-messages/{messageId} | PlatformOrMcp
 GET /api/projects/{id}/agents/{name}/memory | PlatformOrMcp
 GET /api/projects/{id}/agents/{name}/memory/{memId} | PlatformOrMcp
 GET /api/projects/{id}/agents/{name}/memory/{memId}/compare | PlatformOrMcp
@@ -166,6 +168,10 @@ POST /api/github/repository-selections | PlatformOrMcp
 POST /api/github/webhooks/repo-app | WebhookHmac
 POST /api/notifications/{notificationId}/dismiss | PlatformOrMcp
 POST /api/projects | PlatformOrMcp
+POST /api/projects/{id}/agent-messages | PlatformOrMcp
+POST /api/projects/{id}/agent-messages/claim | PlatformOrMcp
+POST /api/projects/{id}/agent-messages/{messageId}/acknowledge | PlatformOrMcp
+POST /api/projects/{id}/agent-messages/{messageId}/deliver | PlatformOrMcp
 POST /api/projects/{id}/agents/{name}/memory | PlatformOrMcp
 POST /api/projects/{id}/agents/{name}/memory/{memId}/promote | PlatformOrMcp
 POST /api/projects/{id}/agents/{name}/memory/{memId}/restore | PlatformOrMcp
