@@ -153,7 +153,9 @@ public sealed class RunWatchLoopService
             var durableStopMonitor = MonitorDurableSteeringStopAsync(runId, entry, linkedCts.Token);
             try
             {
-                await WatchAsync(runId, streamingRun, entry, ownerUser, watchdog, linkedCts.Token).ConfigureAwait(false);
+                await WatchAsync(
+                    runId, streamingRun, entry, ownerUser, watchdog,
+                    new RunLeaseClaim(leaseOwnerId, fencingToken), linkedCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (_appStopping.IsCancellationRequested)
             {
@@ -177,6 +179,12 @@ public sealed class RunWatchLoopService
                     runId, _watchLoopTimeout);
                 await FailRunSafeAsync(runId, entry, "watch_loop_timeout").ConfigureAwait(false);
             }
+            catch (Exception ex) when (_appStopping.IsCancellationRequested || Volatile.Read(ref leaseLost) != 0)
+            {
+                _logger.LogInformation(ex,
+                    "Run {RunId}: watcher stopped during shutdown or lease handoff without a terminal transition",
+                    runId);
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Watch loop failed for run {RunId}; transitioning to Failed", runId);
@@ -185,6 +193,8 @@ public sealed class RunWatchLoopService
             finally
             {
                 await linkedCts.CancelAsync().ConfigureAwait(false);
+                if (_appStopping.IsCancellationRequested)
+                    _registry.AbandonIfCurrent(runId, streamingRun);
                 try { await durableStopMonitor.ConfigureAwait(false); }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
@@ -327,6 +337,7 @@ public sealed class RunWatchLoopService
         RunStreamEntry entry,
         string ownerUser,
         ExecutionWatchdog watchdog,
+        RunLeaseClaim watchLease,
         CancellationToken ct)
     {
         // #331 — build/preview subtask terminal-emission gap: the agent turn itself can complete
@@ -351,6 +362,7 @@ public sealed class RunWatchLoopService
 
         await foreach (var evt in streamingRun.WatchStreamAsync(ct))
         {
+            ct.ThrowIfCancellationRequested();
             if (evt is not RequestInfoEvent)
                 await _pendingStore.MarkObservedWorkflowAdvanceAsync(
                     runId, (evt as ExecutorInvokedEvent)?.ExecutorId, CancellationToken.None)
@@ -475,11 +487,12 @@ public sealed class RunWatchLoopService
                     break;
 
                 case WorkflowOutputEvent woe:
-                        var isTerminal = await HandleTerminalOutputAsync(runId, woe, entry, ct).ConfigureAwait(false);
+                        var isTerminal = await HandleTerminalOutputAsync(
+                            runId, woe, entry, ct, watchLease).ConfigureAwait(false);
                         if (isTerminal)
                         {
                             await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
-                            _registry.Abandon(runId);
+                            _registry.AbandonIfCurrent(runId, streamingRun);
                             _factory.DeleteCheckpoints(runId);
                             _factory.ClearRunExecutorMeta(runId);
                             return;
@@ -490,32 +503,38 @@ public sealed class RunWatchLoopService
             }
         }
 
-        // #331 recovery: the agent turn completed cleanly (agent.turn.end observed, post-turn commit
-        // succeeded, TerminalFailureReason null) but the stream still ended before the child graph's
-        // conditional edge produced the child-assemble-ready WorkflowOutputEvent. For a coordinator
-        // CHILD run this is unambiguous — the trimmed child graph's ONLY possible outcomes after a
-        // successful agent turn are child-assemble-ready or child-turn-failed, and we already know
-        // the turn did not fail. Recover the real, verified work as assemble-ready instead of
-        // discarding it via the generic stream-ended fallback (which previously cascaded into
-        // `assembly_blocked: ineligible_subtasks` for a subtask that had genuinely succeeded).
-        // #331 recovery: the agent turn completed cleanly (agent.turn.end observed, post-turn commit
-        // succeeded, TerminalFailureReason null) but the stream still ended before the child graph's
-        // conditional edge produced the child-assemble-ready WorkflowOutputEvent. For a coordinator
-        // CHILD run this is unambiguous — the trimmed child graph's ONLY possible outcomes after a
-        // successful agent turn are child-assemble-ready or child-turn-failed, and we already know
-        // the turn did not fail. Recover the real, verified work as assemble-ready instead of
-        // discarding it via the generic stream-ended fallback (which previously cascaded into
-        // `assembly_blocked: ineligible_subtasks` for a subtask that had genuinely succeeded).
-        if (await TryRecoverChildAssembleReadyOnStreamEndAsync(
-                runId, entry, lastSuccessfulAgentTurnOutput, ct).ConfigureAwait(false))
+        await HandleStreamEndAsync(
+            runId, streamingRun, entry, lastSuccessfulAgentTurnOutput, ct, watchLease)
+            .ConfigureAwait(false);
+    }
+
+    internal async Task HandleStreamEndAsync(
+        string runId,
+        StreamingRun streamingRun,
+        RunStreamEntry entry,
+        AgentTurnOutput? lastSuccessfulAgentTurnOutput,
+        CancellationToken ct,
+        RunLeaseClaim? watchLease = null)
+    {
+        // A graceful host stop can close WatchStreamAsync without throwing cancellation.
+        // Neither that closure nor a replaced owner is evidence of a terminal workflow result.
+        if (ct.IsCancellationRequested)
         {
+            _registry.AbandonIfCurrent(runId, streamingRun);
             return;
         }
 
+        // The trimmed child graph has a verified terminal agent output even when its final
+        // conditional edge did not emit. Never synthesize this outcome during shutdown.
+        if (await TryRecoverChildAssembleReadyOnStreamEndAsync(
+                runId, entry, lastSuccessfulAgentTurnOutput, ct, watchLease, streamingRun)
+                .ConfigureAwait(false))
+            return;
+
         _logger.LogWarning(
-            "Workflow stream ended for run {RunId} without a terminal event; transitioning to Failed",
+            "Workflow stream ended for run {RunId} without a terminal event; retaining durable state for recovery",
             runId);
-        await FailRunSafeAsync(runId, entry, "watch_stream_completed_without_terminal_event").ConfigureAwait(false);
+        _registry.AbandonIfCurrent(runId, streamingRun);
     }
 
     /// <summary>
@@ -523,23 +542,24 @@ public sealed class RunWatchLoopService
     /// agent turn completed successfully (no <see cref="AgentTurnOutput.TerminalFailureReason"/>) but
     /// whose workflow stream ended before the trimmed child graph's conditional edge produced the
     /// <c>child-assemble-ready</c> <see cref="WorkflowOutputEvent"/>. Root and non-child runs are left
-    /// to the generic <c>watch_stream_completed_without_terminal_event</c> fallback — their graphs
-    /// have additional stages (RAI/review/merge/scribe) after the agent turn, so a bare successful
-    /// agent turn is NOT sufficient evidence the run is actually done.
-    /// Returns true when the run was terminalized here (caller must stop watching); false when there
-    /// is nothing to recover (caller falls through to the generic failure).
+    /// to durable recovery — their graphs have additional stages (RAI/review/merge/scribe)
+    /// after the agent turn, so a bare successful agent turn is NOT sufficient evidence
+    /// the run is actually done. Returns true only when verified child work was terminalized.
     /// </summary>
     internal async Task<bool> TryRecoverChildAssembleReadyOnStreamEndAsync(
         string runId,
         RunStreamEntry entry,
         AgentTurnOutput? lastSuccessfulAgentTurnOutput,
-        CancellationToken ct)
+        CancellationToken ct,
+        RunLeaseClaim? watchLease = null,
+        StreamingRun? expectedStreamingRun = null)
     {
         if (lastSuccessfulAgentTurnOutput is not { } recoveredOutput)
             return false;
 
         if (!await IsChildRunAsync(runId, ct).ConfigureAwait(false))
             return false;
+        ct.ThrowIfCancellationRequested();
 
         _logger.LogWarning(
             "Workflow stream ended for run {RunId} without a terminal event, but the agent turn " +
@@ -558,11 +578,15 @@ public sealed class RunWatchLoopService
                 RaiSafetyFlagged: recoveredOutput.ContentSafetyFlagged),
             "child-assemble-ready");
 
-        if (!await HandleTerminalOutputAsync(runId, recoveredEvent, entry, ct).ConfigureAwait(false))
+        if (!await HandleTerminalOutputAsync(runId, recoveredEvent, entry, ct, watchLease)
+                .ConfigureAwait(false))
             return false;
 
         await StopPortForwardsSafeAsync(runId).ConfigureAwait(false);
-        _registry.Abandon(runId);
+        if (expectedStreamingRun is not null)
+            _registry.AbandonIfCurrent(runId, expectedStreamingRun);
+        else
+            _registry.Abandon(runId);
         _factory.DeleteCheckpoints(runId);
         _factory.ClearRunExecutorMeta(runId);
         return true;
@@ -662,12 +686,17 @@ public sealed class RunWatchLoopService
         string runId,
         WorkflowOutputEvent woe,
         RunStreamEntry entry,
-        CancellationToken ct)
+        CancellationToken ct,
+        RunLeaseClaim? watchLease = null)
     {
         var parsedRunId = RunId.Parse(runId);
 
-        if (_activeLeases.TryGetValue(runId, out var activeLease))
+        _activeLeases.TryGetValue(runId, out var registeredLease);
+        if (watchLease is not null || registeredLease.OwnerId is not null)
         {
+            var activeLease = watchLease is { } captured
+                ? (captured.OwnerId, captured.FencingToken)
+                : registeredLease;
             var isOwner = await _leaseStore.IsLeaseOwnerAsync(
                 runId, activeLease.OwnerId, activeLease.FencingToken, CancellationToken.None).ConfigureAwait(false);
             if (!isOwner)
@@ -793,14 +822,35 @@ public sealed class RunWatchLoopService
         // coordinator can collect/assemble it in Phase 3. No scribe, no merge, no cleanup.
         if (woe.Is<AssembleReadyOutput>(out var assembleReady))
         {
-            var changed = await _runStore.SetAssembleReadyAsync(
-                parsedRunId,
-                assembleReady.TreeHash ?? string.Empty,
-                assembleReady.WorktreeBranch ?? string.Empty,
-                assembleReady.Diff ?? string.Empty,
-                assembleReady.StepCount,
-                now,
-                CancellationToken.None).ConfigureAwait(false);
+            var changed = watchLease is { } lease && currentRun is not null
+                ? await _runStore.TryMutateTerminalOutcomeAsync(
+                    parsedRunId,
+                    new TerminalRunMutation(
+                        TerminalRunOutcome.Create(
+                            RunStatus.AssembleReady, EventTypes.RunAssembleReady,
+                            new
+                            {
+                                treeHash = assembleReady.TreeHash ?? string.Empty,
+                                worktreeBranch = assembleReady.WorktreeBranch ?? string.Empty,
+                                diff = assembleReady.Diff ?? string.Empty,
+                                stepCount = assembleReady.StepCount,
+                            },
+                            now, currentRun.LifecycleGeneration),
+                        null,
+                        TreeHash: assembleReady.TreeHash ?? string.Empty,
+                        WorktreeBranch: assembleReady.WorktreeBranch ?? string.Empty,
+                        Diff: assembleReady.Diff ?? string.Empty,
+                        RequiredLease: new RunLeaseFence(
+                            lease.OwnerId, lease.FencingToken, currentRun.LifecycleGeneration)),
+                    CancellationToken.None).ConfigureAwait(false)
+                : watchLease is null && await _runStore.SetAssembleReadyAsync(
+                    parsedRunId,
+                    assembleReady.TreeHash ?? string.Empty,
+                    assembleReady.WorktreeBranch ?? string.Empty,
+                    assembleReady.Diff ?? string.Empty,
+                    assembleReady.StepCount,
+                    now,
+                    CancellationToken.None).ConfigureAwait(false);
             EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
             if (changed)
                 await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunAssembleReady, new
@@ -814,7 +864,7 @@ public sealed class RunWatchLoopService
             // Emit an explicit no-changes signal when the worker produced nothing so the coordinator
             // and the UI can surface it clearly (the reviewer must not be sent to an empty diff with
             // no explanation — they need to know this subtask wrote no files to the repository).
-            if (!assembleReady.HasChanges)
+            if (changed && !assembleReady.HasChanges)
             {
                 var child = await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false);
                 entry.RecordNext(EventTypes.RunNoChangesProduced, new
@@ -826,7 +876,7 @@ public sealed class RunWatchLoopService
                 });
             }
 
-            return true;
+            return changed;
         }
 
         // Root/full-pipeline graph-native failure terminal. Preserve the structured reason emitted
@@ -997,7 +1047,7 @@ public sealed class RunWatchLoopService
         finally
         {
             // #350: a run reaching this generic failure path (e.g.
-            // watch_stream_completed_without_terminal_event, child_executor_failed) is terminal and
+            // watch_loop_timeout, child_executor_failed) is terminal and
             // NEVER coming back — StopPortForwardsSafeAsync above only unregisters local bookkeeping
             // (IPodNameRegistry, port-forward sessions), it does NOT stop the remote AgentHost pod.
             // Without this the underlying process can keep executing tool calls and emitting
