@@ -38,10 +38,17 @@ public sealed class ResilientCheckpointStoreTests : IDisposable
         var runId = Guid.NewGuid().ToString();
         var otherRun = Guid.NewGuid().ToString();
         using var document = JsonDocument.Parse("""{"gate":"awaiting_confirmation"}""");
-        await store.CreateCheckpointAsync(runId, document.RootElement.Clone());
+        var first = await store.CreateCheckpointAsync(runId, document.RootElement.Clone());
+        var second = await store.CreateCheckpointAsync(runId, document.RootElement.Clone());
         await store.CreateCheckpointAsync(otherRun, document.RootElement.Clone());
+        var firstFile = Directory.GetFiles(_dir, $"{runId}_{first.CheckpointId}*").Single();
+        var secondFile = Directory.GetFiles(_dir, $"{runId}_{second.CheckpointId}*").Single();
+        File.SetLastWriteTimeUtc(firstFile, DateTime.UtcNow);
+        File.SetLastWriteTimeUtc(secondFile, DateTime.UtcNow.AddMinutes(-1));
         var latest = await factory.GetLatestCheckpointAsync("coordinator", runId);
         latest.Should().NotBeNull();
+        latest!.CheckpointId.Should().Be(second.CheckpointId,
+            "checkpoint index order, not file timestamps, determines the recoverable gate");
         (await store.RetrieveCheckpointAsync(runId, latest!))
             .GetProperty("gate").GetString().Should().Be("awaiting_confirmation");
         (store as IDisposable)?.Dispose();
