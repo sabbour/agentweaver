@@ -133,6 +133,32 @@ public sealed class CoordinatorReconcilerTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ReArm_RequiredOutputWithoutGitVerifier_KeepsDependentPending()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        var child = await SeedChildRunAsync(RunStatus.AssembleReady);
+        var (planId, ids) = await SeedPlanAsync(coord,
+            [(SubtaskStatus.Running, child), (SubtaskStatus.Pending, null)],
+            dependency: (1, 0));
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var producer = await db.Subtasks.SingleAsync(subtask => subtask.Id == ids[0]);
+            producer.DeclaredOutputPathsJson = "[\"result.txt\"]";
+            await db.SaveChangesAsync();
+        }
+        _streamStore.Create(coord, "owner");
+
+        await BuildDispatch().RunDispatchLoopAsync(Context(coord), default);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        var dependent = await GetSubtaskAsync(ids[1]);
+        dependent.Status.Should().Be(SubtaskStatus.Pending);
+        dependent.ChildRunId.Should().BeNull("the required output cannot be verified without Git");
+    }
+
+    [Fact]
     public async Task ReArm_EmitsCoordinatorRecoveredAuditEvent()
     {
         const string coord = "coord-rearm-audit";
