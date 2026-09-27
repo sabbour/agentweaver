@@ -112,6 +112,13 @@ The former `serial` node type is no longer supported or advertised because it ha
 older YAML that still declares `type: serial` is rejected with guidance to replace it with ordinary
 edges.
 
+`coordinator_composed` is reserved for a future dynamic work-plan stage. It is recognized by the
+YAML grammar but is **not authorable or executable**: workflow save, generation, selection, and run
+binding reject it until a durable embedded coordinator can decompose a pre-created work plan and
+assemble without its own review, merge, or Scribe. Validation reports a missing prompt, multiple
+composed nodes, nested steps, recursion, or any continuation other than one unconditional edge.
+Use ordinary sequential edges or a static fan region for supported workflows today.
+
 Every newly generated or saved `check` node must declare an explicit canonical `gate_kind`
 (`rai`, `human-review`, or `rubberduck`). Historical persisted workflows whose check ids are `rai`,
 `review`, or `rubberduck` still load and execute through the grammar's documented

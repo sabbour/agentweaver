@@ -40,7 +40,7 @@ internal static class WorkflowGrammarContract
         Node(WorkflowNodeType.Check, "check", "check", "Check / gate", true, true, ["rai", "human-review", "rubberduck"], ["branches", "gate_kind"], ["rai", "human-review", "rubberduck"]),
         Node(WorkflowNodeType.FanOut, "fan_out", "fan-out", "Fan-out", true, true, ["fan-out"]),
         Node(WorkflowNodeType.FanIn, "fan_in", "fan-in", "Fan-in", true, true, ["fan-in"]),
-        Node(WorkflowNodeType.CoordinatorComposed, "coordinator_composed", "coordinator-composed", "Coordinator-composed", true, false, ["coordinator-composed"]),
+        Node(WorkflowNodeType.CoordinatorComposed, "coordinator_composed", "coordinator-composed", "Coordinator-composed", false, false, ["coordinator-composed"], ["prompt"]),
         Node(WorkflowNodeType.Merge, "merge", "merge", "Merge", false, true, ["merge"]),
         Node(WorkflowNodeType.Scribe, "scribe", "scribe", "Scribe", false, true, ["scribe"]),
         Node(WorkflowNodeType.Terminal, "terminal", "terminal", "Terminal", true, true, ["terminal"]),

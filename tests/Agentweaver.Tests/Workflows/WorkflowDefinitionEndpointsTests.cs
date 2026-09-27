@@ -102,6 +102,47 @@ public sealed class WorkflowDefinitionEndpointsTests : IDisposable
         body.GetProperty("validation_errors")[0].GetString().Should().Contain("must all be unconditional");
     }
 
+    [Fact]
+    public async Task Put_InvalidCoordinatorComposition_ReturnsUnprocessableEntity()
+    {
+        await using var factory = new ProjectsWebApplicationFactory();
+        var client = factory.CreateAuthenticatedClient();
+        var create = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Composed validation {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = factory.NewWorkingDirectory(),
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString();
+
+        const string yaml = """
+            id: invalid-composed
+            name: Invalid composed
+            start: compose
+            nodes:
+              - id: compose
+                type: coordinator_composed
+              - id: done
+                type: terminal
+            edges:
+              - from: compose
+                to: done
+                when: approved
+            """;
+        var response = await client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/invalid-composed", new { yaml });
+
+        response.StatusCode.Should().Be(HttpStatusCode.UnprocessableEntity);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("workflow_not_bindable");
+        var errors = body.GetProperty("validation_errors").EnumerateArray()
+            .Select(error => error.GetString()).ToArray();
+        errors.Should().Contain(error => error!.Contains("requires a non-empty prompt"));
+        errors.Should().Contain(error => error!.Contains("exactly one unconditional continuation"));
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); } catch { }

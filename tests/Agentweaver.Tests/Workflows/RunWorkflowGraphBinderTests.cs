@@ -89,6 +89,122 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Fact]
+    public void ComposedNode_ValidShapeRemainsNonRunnableUntilDurableExecutionIsWired()
+    {
+        var definition = ComposedDefinition();
+
+        RunWorkflowGraphBinder.GetTopologyErrors(definition).Should().BeEmpty();
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().ContainSingle(error =>
+            error.Contains("not yet wired to a runtime executor", StringComparison.Ordinal));
+        var grammar = WorkflowGrammarContract.NodeTypes.Single(node =>
+            node.Type == WorkflowNodeType.CoordinatorComposed);
+        grammar.Authorable.Should().BeFalse();
+        grammar.RuntimeBindable.Should().BeFalse();
+        grammar.RequiredFields.Should().Contain("prompt");
+    }
+
+    [Fact]
+    public void ComposedNode_RejectsMissingPromptAndMultipleNodes()
+    {
+        var original = ComposedDefinition();
+        var definition = original with
+        {
+            Nodes =
+            [
+                .. original.Nodes.Select(node => node.Id == "compose" ? node with { Prompt = "  " } : node),
+                Node("another", WorkflowNodeType.CoordinatorComposed),
+            ],
+        };
+
+        var errors = RunWorkflowGraphBinder.GetTopologyErrors(definition);
+        errors.Should().Contain(error => error.Contains("at most one coordinator_composed"));
+        errors.Should().Contain(error => error.Contains("'compose' requires a non-empty prompt"));
+        errors.Should().Contain(error => error.Contains("'another' requires a non-empty prompt"));
+    }
+
+    [Fact]
+    public void ComposedNode_RejectsConditionalOrMultipleContinuations()
+    {
+        var original = ComposedDefinition();
+        foreach (var edges in new IReadOnlyList<WorkflowEdge>[]
+        {
+            [.. original.Edges.Where(edge => edge.From != "compose"),
+                new WorkflowEdge { From = "compose", To = "done", When = "approved" }],
+            [.. original.Edges, new WorkflowEdge { From = "compose", To = "entry" }],
+        })
+        {
+            RunWorkflowGraphBinder.GetTopologyErrors(original with { Edges = edges })
+                .Should().Contain(error => error.Contains("exactly one unconditional continuation"));
+        }
+    }
+
+    [Fact]
+    public void ComposedNode_RejectsRecursionAndNestedSteps()
+    {
+        var original = ComposedDefinition();
+        var definition = original with
+        {
+            Nodes = original.Nodes.Select(node => node.Id == "compose"
+                ? node with { Steps = ["entry"] }
+                : node).ToArray(),
+            Edges = [.. original.Edges, new WorkflowEdge { From = "done", To = "compose" }],
+        };
+
+        var errors = RunWorkflowGraphBinder.GetTopologyErrors(definition);
+        errors.Should().Contain(error => error.Contains("cannot declare nested steps"));
+        errors.Should().Contain(error => error.Contains("cannot recursively reach itself"));
+    }
+
+    [Fact]
+    public void ComposedNode_LoadedFromGeneratedYamlCannotBecomeExecutable()
+    {
+        const string yaml = """
+            id: generated-dynamic
+            name: Generated dynamic
+            start: entry
+            nodes:
+              - id: entry
+                type: prompt
+                prompt: Collect the goal
+              - id: compose
+                type: coordinator_composed
+                prompt: Derive dependent tasks
+              - id: done
+                type: terminal
+            edges:
+              - from: entry
+                to: compose
+              - from: compose
+                to: done
+            """;
+
+        var loaded = WorkflowDefinitionLoader.Load(
+            yaml, "generated.yaml", validationMode: WorkflowDefinitionValidationMode.Authoring);
+        loaded.IsValid.Should().BeTrue(loaded.Error);
+        var act = () => RunWorkflowGraphBinder.ValidateBindable(loaded.Definition!);
+        act.Should().Throw<WorkflowBindException>()
+            .WithMessage("*coordinator_composed*not yet wired*");
+    }
+
+    private static WorkflowDefinition ComposedDefinition() => new()
+    {
+        Id = "dynamic",
+        Name = "Dynamic",
+        Start = "entry",
+        Nodes =
+        [
+            Node("entry", WorkflowNodeType.Prompt),
+            Node("compose", WorkflowNodeType.CoordinatorComposed) with { Prompt = "Decompose this goal" },
+            Node("done", WorkflowNodeType.Terminal),
+        ],
+        Edges =
+        [
+            new WorkflowEdge { From = "entry", To = "compose" },
+            new WorkflowEdge { From = "compose", To = "done" },
+        ],
+    };
+
+    [Fact]
     public void ValidStaticFanTopology_IsRuntimeBindable()
     {
         var definition = StaticFanDefinition();
