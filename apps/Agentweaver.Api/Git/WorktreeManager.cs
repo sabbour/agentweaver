@@ -855,11 +855,9 @@ public sealed class WorktreeManager
     /// <paramref name="integrationBranch"/> at the originating branch tip, then merges each eligible
     /// child branch in <paramref name="childBranchesInOrder"/> (already dependency/topologically
     /// ordered) into it using HEADLESS tree merges (<see cref="ObjectDatabase.MergeCommits"/>) — no
-    /// working directory or worktree is checked out, so this is safe to run from the coordinator's
-    /// background loop. When a merge conflict occurs, the coordinator currently auto-resolves it by
-    /// accepting the CHILD branch's version for each conflicting path and continues building the
-    /// aggregate. On success it returns the aggregate tree hash, the aggregate diff vs the
-    /// originating branch, and any auto-resolutions that occurred. An empty
+    /// working directory or worktree is checked out. Missing inputs and independent overlapping
+    /// edits stop the build without publishing a partial integration ref. On success it returns
+    /// the aggregate tree hash and diff vs the originating branch. An empty
     /// <paramref name="childBranchesInOrder"/> (every child was a no-change <c>completed</c>) yields
     /// an empty-diff success.
     /// <para>Branch-ref only: the originating branch is never modified here; that happens later in the
@@ -869,139 +867,124 @@ public sealed class WorktreeManager
         string repositoryPath,
         string originatingBranch,
         string integrationBranch,
-        IReadOnlyList<string> childBranchesInOrder)
+        IReadOnlyList<string> childBranchesInOrder,
+        bool publish = true)
     {
-        EnsurePrimaryWorktreeNotCheckedOutOnBranch(repositoryPath, originatingBranch, integrationBranch);
+        if (publish)
+            EnsurePrimaryWorktreeNotCheckedOutOnBranch(repositoryPath, originatingBranch, integrationBranch);
 
         // Defensive: a prior — or interrupted — assembly can leave a LINKED worktree checked out on
         // the integration branch, which makes the ref undeletable below ("Cannot delete branch ... as
         // it is the current HEAD of a linked repository"). The integration branch is built headlessly
         // and is never meant to be checked out, so prune any such stale worktree first so a re-run
         // (e.g. after request-changes re-dispatch) can reset the branch cleanly.
-        PruneWorktreesCheckedOutOnBranch(repositoryPath, integrationBranch);
+        if (publish)
+            PruneWorktreesCheckedOutOnBranch(repositoryPath, integrationBranch);
 
         using var repo = new Repository(repositoryPath);
 
         var origin = repo.Branches[originatingBranch]
             ?? throw new InvalidOperationException($"Originating branch '{originatingBranch}' was not found.");
 
-        EnsureMainRepositoryNotCheckedOutOnBranch(repo, integrationBranch, origin);
-
-        // Create/reset the integration branch ref at the originating branch tip.
-        var existing = repo.Branches[integrationBranch];
-        if (existing is not null)
-            repo.Branches.Remove(existing);
-        var intBranch = repo.CreateBranch(integrationBranch, origin.Tip);
+        if (publish)
+            EnsureMainRepositoryNotCheckedOutOnBranch(repo, integrationBranch, origin);
 
         var integrationCommit = origin.Tip;
-        var autoResolutions = new List<(string Branch, IReadOnlyList<string> Files)>();
+        var pathOwners = new Dictionary<string, (string Branch, Commit Tip)>(StringComparer.Ordinal);
 
         foreach (var childBranch in childBranchesInOrder)
         {
             var child = repo.Branches[childBranch];
             if (child?.Tip is null)
-            {
-                _logger.LogWarning(
-                    "Integration build: child branch '{Branch}' not found or empty — skipping", childBranch);
-                continue;
-            }
+                return IntegrationBranchResult.MissingInput(integrationBranch, childBranch);
 
             var mergeBase = repo.ObjectDatabase.FindMergeBase(integrationCommit, child.Tip);
+            if (mergeBase is null)
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch, childBranch, [],
+                    $"Child branch '{childBranch}' has no common base with the integration revision.");
 
             // Child is already contained in the integration branch — no-op.
-            if (mergeBase is not null && string.Equals(mergeBase.Sha, child.Tip.Sha, StringComparison.Ordinal))
+            if (string.Equals(mergeBase.Sha, child.Tip.Sha, StringComparison.Ordinal))
                 continue;
+
+            var childChanges = repo.Diff.Compare<TreeChanges>(mergeBase.Tree, child.Tip.Tree);
+            var overlapping = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var change in childChanges)
+            {
+                foreach (var path in new[] { change.Path, change.OldPath }.OfType<string>())
+                {
+                    if (pathOwners.TryGetValue(path, out var owner)
+                        && !string.Equals(
+                            repo.ObjectDatabase.FindMergeBase(owner.Tip, child.Tip)?.Sha,
+                            owner.Tip.Sha, StringComparison.Ordinal))
+                        overlapping.Add(path);
+                }
+            }
+            if (overlapping.Count > 0)
+            {
+                var inputs = overlapping
+                    .Select(path => pathOwners[path])
+                    .GroupBy(owner => owner.Branch, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First().Tip.Sha, StringComparer.Ordinal);
+                inputs[childBranch] = child.Tip.Sha;
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch, childBranch, overlapping.Order(StringComparer.Ordinal).ToArray(),
+                    $"Independent child '{childBranch}' overlaps accepted child output. Resolve the named paths explicitly.",
+                    inputs);
+            }
 
             // Fast-forward: integration is an ancestor of the child tip.
-            if (mergeBase is not null && string.Equals(mergeBase.Sha, integrationCommit.Sha, StringComparison.Ordinal))
+            if (string.Equals(mergeBase.Sha, integrationCommit.Sha, StringComparison.Ordinal))
             {
                 integrationCommit = child.Tip;
-                continue;
             }
-
-            // 3-way headless tree merge.
-            var merge = repo.ObjectDatabase.MergeCommits(integrationCommit, child.Tip, new MergeTreeOptions());
-            if (merge.Status == MergeTreeStatus.Conflicts)
+            else
             {
-                var conflictingFiles = ExtractConflictingFiles(merge);
-                _logger.LogInformation(
-                    "Integration build: auto-resolving {Count} conflict(s) from branch '{Branch}' by accepting child changes. Files: {Files}",
-                    conflictingFiles.Count,
-                    childBranch,
-                    string.Join(", ", conflictingFiles));
-
-                // TODO(issue-85): distinguish "single child amends another child's file" (safe to
-                // auto-resolve) from true sibling-vs-sibling conflicts that should still surface as
-                // IntegrationBranchOutcome.Conflict for human resolution.
-                if (mergeBase is null)
+                var merge = repo.ObjectDatabase.MergeCommits(integrationCommit, child.Tip, new MergeTreeOptions());
+                if (merge.Status == MergeTreeStatus.Conflicts)
                 {
                     return IntegrationBranchResult.Conflict(
-                        integrationBranch,
-                        childBranch,
-                        conflictingFiles,
-                        "Unable to auto-resolve integration conflict because no merge base was found.");
+                        integrationBranch, childBranch, ExtractConflictingFiles(merge),
+                        $"Child '{childBranch}' conflicts with the integration revision. Resolve the named paths explicitly.",
+                        new Dictionary<string, string> { [childBranch] = child.Tip.Sha });
                 }
 
-                var treeDefinition = TreeDefinition.From(integrationCommit.Tree);
-                var childTree = child.Tip.Tree;
-                var childChanges = repo.Diff.Compare<TreeChanges>(mergeBase.Tree, child.Tip.Tree);
-                foreach (var change in childChanges)
-                {
-                    if (change.Status is ChangeKind.Deleted or ChangeKind.Renamed)
-                        treeDefinition.Remove(change.OldPath ?? change.Path);
-
-                    if (change.Status is ChangeKind.Deleted or ChangeKind.Unmodified)
-                        continue;
-
-                    var childEntry = childTree[change.Path];
-                    if (childEntry?.TargetType == TreeEntryTargetType.Blob)
-                    {
-                        var childBlob = repo.Lookup<Blob>(childEntry.Target.Id);
-                        if (childBlob is not null)
-                            treeDefinition.Add(change.Path, childBlob, childEntry.Mode);
-                    }
-                }
-
-                var resolvedTree = repo.ObjectDatabase.CreateTree(treeDefinition);
-                var resolvedSignature = WithTimestamp();
+                var signature = WithTimestamp();
                 integrationCommit = repo.ObjectDatabase.CreateCommit(
-                    resolvedSignature,
-                    resolvedSignature,
-                    $"Assemble {childBranch} into {integrationBranch} [auto-resolved {conflictingFiles.Count} conflict(s) — accepted child changes]",
-                    resolvedTree,
+                    signature,
+                    signature,
+                    $"Assemble {childBranch} into {integrationBranch}",
+                    merge.Tree,
                     new[] { integrationCommit, child.Tip },
                     prettifyMessage: true);
-
-                autoResolutions.Add((childBranch, conflictingFiles));
-                continue;
             }
 
-            var signature = WithTimestamp();
-            integrationCommit = repo.ObjectDatabase.CreateCommit(
-                signature,
-                signature,
-                $"Assemble {childBranch} into {integrationBranch}",
-                merge.Tree,
-                new[] { integrationCommit, child.Tip },
-                prettifyMessage: true);
+            foreach (var change in childChanges)
+            {
+                if (change.Path is not null)
+                    pathOwners[change.Path] = (childBranch, child.Tip);
+                if (change.OldPath is not null)
+                    pathOwners[change.OldPath] = (childBranch, child.Tip);
+            }
         }
 
-        // Point the integration branch ref at the final assembled commit. Under the shared-repo race
-        // (issue #218) a concurrent build can delete+recreate this ref between its creation above and
-        // here, so repo.Refs[intBranch.CanonicalName] may momentarily be null. Re-create the ref in that
-        // case instead of dereferencing null (which surfaced as an ArgumentNullException from UpdateTarget).
-        var intRef = repo.Refs[intBranch.CanonicalName];
-        if (intRef is null)
-            repo.Refs.Add(intBranch.CanonicalName, integrationCommit.Id, allowOverwrite: true);
-        else
-            repo.Refs.UpdateTarget(intRef, integrationCommit.Id);
+        if (publish)
+        {
+            // Publish only the complete result; on failure preserve the previous revision for diagnosis.
+            var refName = $"refs/heads/{integrationBranch}";
+            var intRef = repo.Refs[refName];
+            if (intRef is null)
+                repo.Refs.Add(refName, integrationCommit.Id, allowOverwrite: true);
+            else
+                repo.Refs.UpdateTarget(intRef, integrationCommit.Id);
+        }
 
         using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, integrationCommit.Tree);
         return IntegrationBranchResult.Success(
             integrationBranch,
             integrationCommit.Tree.Sha,
-            patch.Content,
-            autoResolutions);
+            patch.Content);
     }
 
     private static string SanitizeWorktreeName(string name)

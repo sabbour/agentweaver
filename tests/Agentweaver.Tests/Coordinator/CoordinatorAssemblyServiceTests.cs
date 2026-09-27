@@ -1378,7 +1378,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var coordinatorRunId = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coordinatorRunId);
         var childRunId = RunId.New();
-        await SeedChildRunAsync(childRunId, "child/recovered", DiffTouching("src/recovered.cs"));
+        await SeedChildRunAsync(childRunId, "child/recovered", DiffTouching("src/recovered.cs"),
+            noOutput: true);
         var (workPlanId, subtaskIds) = await SeedPlanAsync(
             coordinatorRunId,
             new[] { SubtaskStatus.Completed, SubtaskStatus.Failed },
@@ -2536,36 +2537,51 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task RunAssembly_AutoResolvedIntegrationConflict_EmitsCoordinatorEvent()
+    public async Task RunAssembly_IntegrationConflict_BlocksWithoutReview()
     {
         var coordinatorRunId = RunId.New().ToString();
         var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
             new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         await SeedCoordinatorRunAsync(coordinatorRunId);
         _streamStore.Create(coordinatorRunId, "alice");
-        _pipeline.IntegrationResult = IntegrationBranchResult.Success(
+        _pipeline.IntegrationResult = IntegrationBranchResult.Conflict(
             CoordinatorAssemblyService.IntegrationBranchName(coordinatorRunId),
-            "agg-tree",
-            "aggregate diff",
-            [("agentweaver/child-b", new[] { "shared.txt", "docs\\note.md" })]);
+            "agentweaver/child-b", ["shared.txt"], "independent overlap");
 
-        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
-        await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
-            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
-            .Should().Be(AssemblyReviewSubmitResult.Accepted);
-
-        await run;
+        await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
 
         var evt = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
-            .Single(e => e.Type == EventTypes.CoordinatorIntegrationConflictAutoResolved);
+            .Single(e => e.Type == EventTypes.MergeConflicted);
         var payload = JsonSerializer.SerializeToNode(evt.Payload)!.AsObject();
         payload["workPlanId"]!.GetValue<int>().Should().Be(workPlanId);
         payload["conflictingBranch"]!.GetValue<string>().Should().Be("agentweaver/child-b");
-        payload["strategy"]!.GetValue<string>().Should().Be("accept_child");
         payload["conflictingFiles"]!.AsArray().Select(x => x!.GetValue<string>())
-            .Should().ContainInOrder("shared.txt", "docs\\note.md");
+            .Should().Contain("shared.txt");
+    }
+
+    [Fact]
+    public async Task RunAssembly_ChildBranchDisappearsDuringBuild_BlocksWithRecovery()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.Completed]);
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        _pipeline.IntegrationResult = IntegrationBranchResult.MissingInput(
+            CoordinatorAssemblyService.IntegrationBranchName(coordinatorRunId), "agentweaver/lost-child");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyBlocked, cts.Token);
+
+        var evt = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.CoordinatorAssemblyBlocked);
+        var payload = JsonSerializer.SerializeToNode(evt.Payload)!.AsObject();
+        payload["reason"]!.GetValue<string>().Should().Be("required_output_missing");
+        payload["missingBranch"]!.GetValue<string>().Should().Be("agentweaver/lost-child");
+        payload["missingOutputs"]!.AsArray()[0]!["recoveryGuidance"]!.GetValue<string>()
+            .Should().Contain("Recover required child branch");
+        await _steering.SteerAsync(coordinatorRunId, "stop", null, "", "alice", default);
+        await run;
     }
 
     [Fact]
@@ -3362,7 +3378,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var coordinatorRunId = RunId.New().ToString();
         var childRunId = RunId.New();
         await SeedCoordinatorRunAsync(coordinatorRunId);
-        await SeedChildRunAsync(childRunId, "child-branch", "child diff", coordinatorRunId);
+        await SeedChildRunAsync(childRunId, "child-branch", "child diff", coordinatorRunId, noOutput: true);
         await SeedPlanAsync(
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady }, new[] { childRunId.ToString() });
         _streamStore.Create(coordinatorRunId, "alice");
@@ -4092,7 +4108,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         RunId runId,
         string worktreeBranch,
         string diff,
-        string? parentRunId = null)
+        string? parentRunId = null,
+        bool noOutput = false)
     {
         await _runStore.InsertAsync(new Run
         {
@@ -4108,7 +4125,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             AgentName = "morpheus",
         });
         await _runStore.SetAssembleReadyAsync(
-            runId, treeHash: "tree-" + runId, worktreeBranch, diff, stepCount: 1, DateTimeOffset.UtcNow);
+            runId, treeHash: noOutput ? "" : "tree-" + runId,
+            noOutput ? "" : worktreeBranch, noOutput ? "" : diff,
+            stepCount: 1, DateTimeOffset.UtcNow);
     }
 
     private async Task<(int WorkPlanId, List<int> SubtaskIds)> SeedPlanAsync(

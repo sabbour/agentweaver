@@ -1,4 +1,5 @@
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
@@ -9,8 +10,8 @@ namespace Agentweaver.Api.Coordinator;
 /// </summary>
 internal enum BranchInclusionOutcome
 {
-    /// <summary>The branch is valid (exists and, when a handoff tree hash was recorded, its tip tree
-    /// matches) — include it. This covers genuinely-empty (no-op) children too: their branch merges as
+    /// <summary>The branch is valid (exists and its tip tree matches the recorded handoff tree
+    /// hash) — include it. This covers genuinely-empty (no-op) children too: their branch merges as
     /// a no-op / fast-forward and never deadlocks.</summary>
     Include,
 
@@ -18,8 +19,8 @@ internal enum BranchInclusionOutcome
     /// child MUST have committed its branch, so this is a LOUD contract violation, not a normal skip.</summary>
     ExcludeMissingBranch,
 
-    /// <summary>The branch exists but its tip TREE hash does not match the run's recorded handoff tree
-    /// hash — the branch is stale / diverged from the artifact the coordinator observed. Excluded loudly
+    /// <summary>The branch has no recorded tree hash, or its tip TREE hash does not match the handoff
+    /// hash — the output cannot be verified. Excluded loudly
     /// so a stale base is never silently propagated.</summary>
     ExcludeTreeMismatch,
 }
@@ -43,11 +44,11 @@ internal enum BranchInclusionOutcome
 /// </summary>
 internal static class DependencyBranchInclusion
 {
-    /// <summary>
-    /// Evaluates whether a satisfied dependency's <paramref name="worktreeBranch"/> is a valid,
-    /// includable artifact. Validity = branch exists AND (when <paramref name="treeHash"/> is
-    /// non-empty) the branch tip's tree sha equals it.
-    /// </summary>
+    internal static bool RequiresArtifact(Subtask subtask) =>
+        CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(subtask.DeclaredOutputPathsJson).State
+        != CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidEmpty;
+
+    /// <summary>Requires both a recorded handoff tree and a matching branch tip.</summary>
     internal static BranchInclusionOutcome Evaluate(
         WorktreeManager worktreeManager,
         string repositoryPath,
@@ -57,9 +58,8 @@ internal static class DependencyBranchInclusion
         if (string.IsNullOrEmpty(worktreeBranch) || !worktreeManager.BranchExists(repositoryPath, worktreeBranch))
             return BranchInclusionOutcome.ExcludeMissingBranch;
 
-        // A non-empty recorded tree hash is the handoff contract: the branch tip tree MUST equal it.
-        // An empty tree hash means "no contract recorded" and passes on branch existence alone.
-        if (!worktreeManager.BranchTipMatchesTree(repositoryPath, worktreeBranch, treeHash))
+        if (string.IsNullOrWhiteSpace(treeHash)
+            || !worktreeManager.BranchTipMatchesTree(repositoryPath, worktreeBranch, treeHash))
             return BranchInclusionOutcome.ExcludeTreeMismatch;
 
         return BranchInclusionOutcome.Include;

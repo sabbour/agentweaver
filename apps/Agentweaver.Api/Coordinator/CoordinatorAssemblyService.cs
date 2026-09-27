@@ -936,6 +936,22 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         var assemblyInputs = await BuildAssemblyInputsAsync(context, subtasks, edges, ct).ConfigureAwait(false);
+        if (assemblyInputs.MissingOutputs.Count > 0)
+        {
+            await BlockAsync(context, workPlanId, edges, "required_output_missing", new
+            {
+                workPlanId,
+                reason = "required_output_missing",
+                missingOutputs = assemblyInputs.MissingOutputs.Select(m => new
+                {
+                    subtaskId = m.SubtaskId,
+                    childRunId = m.ChildRunId,
+                    reason = m.Reason,
+                    recoveryGuidance = m.RecoveryGuidance,
+                }).ToArray(),
+            }, ct).ConfigureAwait(false);
+            return;
+        }
         var branchesInOrder = assemblyInputs.BranchesInOrder;
         var touchedFilesBySubtask = assemblyInputs.TouchedFilesBySubtask;
         var includedSubtaskIds = assemblyInputs.IncludedSubtaskIds;
@@ -970,6 +986,27 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return;
         }
 
+        if (integration.Outcome == IntegrationBranchOutcome.MissingInput)
+        {
+            var missingIndex = assemblyInputs.BranchesInOrder.FindIndex(
+                branch => string.Equals(branch, integration.ConflictingBranch, StringComparison.Ordinal));
+            var missingSubtask = missingIndex < 0 ? null : subtasks.FirstOrDefault(
+                subtask => subtask.Id == assemblyInputs.IncludedSubtaskIds[missingIndex]);
+            await BlockAsync(context, workPlanId, edges, "required_output_missing", new
+            {
+                workPlanId,
+                reason = "required_output_missing",
+                missingOutputs = new[] { new
+                {
+                    subtaskId = missingSubtask?.Id,
+                    childRunId = missingSubtask?.ChildRunId,
+                    reason = "branch_missing",
+                    recoveryGuidance = $"Recover required child branch {integration.ConflictingBranch} and retry assembly.",
+                } },
+                missingBranch = integration.ConflictingBranch,
+            }, ct).ConfigureAwait(false);
+            return;
+        }
         if (integration.Outcome == IntegrationBranchOutcome.Conflict)
         {
             // D2 — merging child branches into the integration branch conflicted: STOP, no merge.
@@ -979,19 +1016,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 reason = "integration_conflict",
                 conflictingBranch = integration.ConflictingBranch,
                 conflictingFiles = integration.ConflictingFiles,
+                conflictingInputs = integration.ConflictingInputs,
+                recoveryGuidance = integration.Reason,
             }, ct).ConfigureAwait(false);
             return;
-        }
-
-        foreach (var (branch, files) in integration.AutoResolutions)
-        {
-            Emit(context.CoordinatorRunId, EventTypes.CoordinatorIntegrationConflictAutoResolved, new
-            {
-                workPlanId,
-                conflictingBranch = branch,
-                conflictingFiles = files,
-                strategy = "accept_child",
-            });
         }
 
         var aggregateDiff = integration.Diff ?? string.Empty;
@@ -1301,14 +1329,31 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var branchesInOrder = new List<string>();
         var touchedFilesBySubtask = new Dictionary<int, IReadOnlySet<string>>();
         var includedSubtaskIds = new List<int>();
+        var missingOutputs = new List<CoordinatorMissingOutput>();
         foreach (var id in orderedIds)
         {
-            if (!childRunBySubtask.TryGetValue(id, out var childRunId)) continue;
-            if (!RunId.TryParse(childRunId, out var parsed)) continue;
+            var subtask = subtasks.First(s => s.Id == id);
+            var required = DependencyBranchInclusion.RequiresArtifact(subtask);
+            if (!childRunBySubtask.TryGetValue(id, out var childRunId)
+                || !RunId.TryParse(childRunId, out var parsed))
+            {
+                if (required)
+                    missingOutputs.Add(new(id, subtask.ChildRunId, "child_run_missing",
+                        "Retry the artifact-producing subtask and verify its child run before assembling."));
+                continue;
+            }
             var run = await _runStore.GetAsync(parsed, ct).ConfigureAwait(false);
-            if (run is null) continue;
+            if (run is null)
+            {
+                if (required)
+                    missingOutputs.Add(new(id, childRunId, "child_run_missing",
+                        "Recover or retry the child run before assembling."));
+                continue;
+            }
             // run.Diff is kept ONLY for UI / touched-file extraction — never as inclusion authority.
             touchedFilesBySubtask[id] = AssemblyPlanning.ExtractTouchedFiles(run.Diff);
+            var expectedOutput = required || !string.IsNullOrWhiteSpace(run.WorktreeBranch)
+                || !string.IsNullOrWhiteSpace(run.TreeHash);
 
             // BLOCKING #1 (issue #197): gate FINAL-assembly branch inclusion on branch VALIDITY (exists +
             // tip tree == recorded handoff TreeHash), NOT on run.Diff. GetDiff can swallow an error and
@@ -1316,13 +1361,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             // from the collective assembly. The committed worktree branch is the authoritative artifact.
             if (_worktreeManager is null)
             {
-                // No git access (e.g. unit context) — preserve legacy behavior: include when a branch and
-                // a display diff are both present.
-                if (!string.IsNullOrEmpty(run.WorktreeBranch) && !string.IsNullOrEmpty(run.Diff))
-                {
-                    branchesInOrder.Add(run.WorktreeBranch);
-                    includedSubtaskIds.Add(id);
-                }
+                if (expectedOutput)
+                    missingOutputs.Add(new(id, childRunId, "unverified_output",
+                        "Restore Git verification and retry assembly; a display diff is not a verified output."));
                 continue;
             }
 
@@ -1335,23 +1376,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     includedSubtaskIds.Add(id);
                     break;
                 case BranchInclusionOutcome.ExcludeMissingBranch:
-                    _logger.LogError(
-                        "Coordinator assembly: subtask {SubtaskId} (child run {ChildRunId}) excluded from FINAL collective " +
-                        "assembly for run {RunId} because its worktree branch is missing (WorktreeBranch={WorktreeBranch}, " +
-                        "TreeHash={TreeHash}) — committed child work may be omitted (issue #197).",
-                        id, childRunId, context.CoordinatorRunId, run.WorktreeBranch ?? "<null>", run.TreeHash ?? "<null>");
+                    if (expectedOutput)
+                        missingOutputs.Add(new(id, childRunId, "branch_missing",
+                            "Recover the child branch or retry the producer before assembling."));
                     break;
                 case BranchInclusionOutcome.ExcludeTreeMismatch:
-                    _logger.LogError(
-                        "Coordinator assembly: subtask {SubtaskId} (child run {ChildRunId}) excluded from FINAL collective " +
-                        "assembly for run {RunId} because its branch tip tree does not match the recorded handoff contract " +
-                        "(WorktreeBranch={WorktreeBranch}, expected TreeHash={TreeHash}) — stale/diverged branch (issue #197).",
-                        id, childRunId, context.CoordinatorRunId, run.WorktreeBranch ?? "<null>", run.TreeHash ?? "<null>");
+                    missingOutputs.Add(new(id, childRunId, "tree_mismatch",
+                        "Restore the recorded child tree or retry the producer; do not use the moved branch tip."));
                     break;
             }
         }
 
-        return new CoordinatorAssemblyInputs(branchesInOrder, touchedFilesBySubtask, includedSubtaskIds);
+        return new CoordinatorAssemblyInputs(branchesInOrder, touchedFilesBySubtask, includedSubtaskIds, missingOutputs);
     }
 
     private async Task ResumeInReviewAsync(
@@ -1584,7 +1620,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private sealed record CoordinatorAssemblyInputs(
         List<string> BranchesInOrder,
         Dictionary<int, IReadOnlySet<string>> TouchedFilesBySubtask,
-        List<int> IncludedSubtaskIds);
+        List<int> IncludedSubtaskIds,
+        List<CoordinatorMissingOutput> MissingOutputs);
+
+    private sealed record CoordinatorMissingOutput(
+        int? SubtaskId, string? ChildRunId, string Reason, string RecoveryGuidance);
 
     private async Task<(string ModelSource, string? ByokProviderFingerprint)>
         ResolveAssemblyProviderBoundaryAsync(string coordinatorRunId, CancellationToken ct)

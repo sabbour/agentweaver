@@ -1561,7 +1561,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// missing, it repairs once (re-runs <see cref="RebuildDependencyBaseBranchAsync"/>) and re-checks.
     /// <list type="bullet">
     /// <item>Returns <see cref="CoordinatorDispatchContext.OriginatingBranch"/> when the subtask has no
-    /// dependencies, or when the integration branch is ENTIRELY ABSENT (existing loud fallback).</item>
+    /// dependencies.</item>
     /// <item>Returns <c>null</c> (a dispatch-BLOCKING sentinel) when the integration branch exists but,
     /// even after a repair, is still missing a required upstream head — we must NOT silently dispatch a
     /// dependent from a base missing upstream artifacts (issue #197 symptom B).</item>
@@ -1578,23 +1578,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (!edges.Any(e => e.SubtaskId == subtaskId))
             return context.OriginatingBranch;
         if (_worktreeManager is null)
-            return context.OriginatingBranch;
+        {
+            _logger.LogError("Coordinator dispatch: cannot verify upstream outputs for dependent subtask {SubtaskId}; Git verifier unavailable", subtaskId);
+            return null;
+        }
 
         var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId);
         try
         {
             if (!_worktreeManager.BranchExists(context.RepositoryPath, integrationBranch))
             {
-                // A dependent subtask reached dispatch but the integration branch its upstreams should
-                // have produced does not exist. This is NOT a normal fallback: the child would start
-                // from the coordinator's originating branch and silently miss upstream artifacts
-                // (issue #197 symptom B). Surface it loudly so the degradation is visible instead of
-                // masquerading as a clean run built on the parent goal.
-                _logger.LogError(
-                    "Coordinator dispatch: dependent subtask {SubtaskId} found no integration branch {IntegrationBranch} for run {RunId}; " +
-                    "upstream artifacts may be missing. Falling back to originating branch {Origin} — investigate assembly rebuild.",
-                    subtaskId, integrationBranch, context.CoordinatorRunId, context.OriginatingBranch);
-                return context.OriginatingBranch;
+                await RebuildDependencyBaseBranchAsync(context, workPlanId, statusById, edges, ct).ConfigureAwait(false);
+                if (!_worktreeManager.BranchExists(context.RepositoryPath, integrationBranch))
+                {
+                    _logger.LogError(
+                        "Coordinator dispatch: integration branch {IntegrationBranch} missing for dependent subtask {SubtaskId}; recover upstream output and rebuild its base before retry.",
+                        integrationBranch, subtaskId);
+                    return null;
+                }
             }
 
             // BLOCKING #3/#4: verify the integration branch CONTAINS every satisfied upstream head this
@@ -1604,7 +1605,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             var missing = await FindMissingRequiredHeadsAsync(
                 context, workPlanId, subtaskId, integrationBranch, statusById, edges, ct).ConfigureAwait(false);
             if (missing.Count == 0)
-                return integrationBranch;
+                return await ValidateRequiredInputsAsync(
+                    context, workPlanId, subtaskId, statusById, edges, ct).ConfigureAwait(false)
+                    ? integrationBranch : null;
 
             _logger.LogWarning(
                 "Coordinator dispatch: integration branch {IntegrationBranch} for run {RunId} is missing required upstream head(s) " +
@@ -1616,7 +1619,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             var stillMissing = await FindMissingRequiredHeadsAsync(
                 context, workPlanId, subtaskId, integrationBranch, statusById, edges, ct).ConfigureAwait(false);
             if (stillMissing.Count == 0)
-                return integrationBranch;
+                return await ValidateRequiredInputsAsync(
+                    context, workPlanId, subtaskId, statusById, edges, ct).ConfigureAwait(false)
+                    ? integrationBranch : null;
 
             // Repair did not converge — do NOT silently fall back to the originating branch (that would
             // ship a dependent built on a base missing upstream work). Block the dispatch loudly.
@@ -1629,20 +1634,17 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex,
-                "Coordinator dispatch: could not inspect integration branch {IntegrationBranch} for subtask {SubtaskId}; using origin {Origin}",
-                integrationBranch, subtaskId, context.OriginatingBranch);
-            return context.OriginatingBranch;
+            _logger.LogError(ex,
+                "Coordinator dispatch: could not verify integration branch {IntegrationBranch} for subtask {SubtaskId}; recover Git verification before retry.",
+                integrationBranch, subtaskId);
+            return null;
         }
     }
 
     /// <summary>
     /// Returns the names of satisfied upstream dependency branches (transitive) whose committed HEAD is
-    /// NOT contained in <paramref name="integrationBranch"/>. An empty list means the integration branch
-    /// is a valid base for <paramref name="subtaskId"/>. Only VALID branches (exist + tip tree matches
-    /// the recorded handoff contract) are required — a missing/mismatched branch is a separate loud error
-    /// surfaced by <see cref="RebuildDependencyBaseBranchAsync"/> and is intentionally not double-counted
-    /// here (it cannot be "contained", and blocking on it would deadlock a genuinely-absent upstream).
+    /// NOT contained in <paramref name="integrationBranch"/>, or whose required output cannot be
+    /// verified. Only explicitly no-output predecessors may lack a Git branch.
     /// </summary>
     private async Task<IReadOnlyList<string>> FindMissingRequiredHeadsAsync(
         CoordinatorDispatchContext context,
@@ -1668,28 +1670,106 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         {
             if (!statusById.TryGetValue(depId, out var status) || !SubtaskStatus.Satisfies(status))
                 continue;
-            if (!byId.TryGetValue(depId, out var dep) ||
-                string.IsNullOrEmpty(dep.ChildRunId) ||
-                !RunId.TryParse(dep.ChildRunId, out var depRunId))
+            if (!byId.TryGetValue(depId, out var dep))
+            {
+                missing.Add($"subtask {depId}: metadata missing");
                 continue;
+            }
+            var required = DependencyBranchInclusion.RequiresArtifact(dep);
+            if (string.IsNullOrEmpty(dep.ChildRunId) || !RunId.TryParse(dep.ChildRunId, out var depRunId))
+            {
+                if (required)
+                    missing.Add($"subtask {depId}: child run missing; retry producer");
+                continue;
+            }
 
             var run = await _runStore.GetAsync(depRunId, ct).ConfigureAwait(false);
-            // Only VALID branches are required-and-containable. Missing/mismatched branches are handled
-            // (loudly) by the rebuild path, not blocked on here.
-            if (DependencyBranchInclusion.Evaluate(
-                    _worktreeManager, context.RepositoryPath, run?.WorktreeBranch, run?.TreeHash)
-                != BranchInclusionOutcome.Include)
+            if (run is null)
+            {
+                if (required)
+                    missing.Add($"subtask {depId}: child run not found; recover or retry producer");
                 continue;
+            }
+            var expectedOutput = required || !string.IsNullOrWhiteSpace(run.WorktreeBranch)
+                || !string.IsNullOrWhiteSpace(run.TreeHash);
+            var decision = DependencyBranchInclusion.Evaluate(
+                _worktreeManager, context.RepositoryPath, run.WorktreeBranch, run.TreeHash);
+            if (decision != BranchInclusionOutcome.Include)
+            {
+                if (expectedOutput)
+                    missing.Add($"subtask {depId}: {decision}; restore recorded output or retry producer");
+                continue;
+            }
 
-            var tipSha = _worktreeManager.GetBranchTipCommitSha(context.RepositoryPath, run!.WorktreeBranch!);
+            var tipSha = _worktreeManager.GetBranchTipCommitSha(context.RepositoryPath, run.WorktreeBranch!);
             if (string.IsNullOrEmpty(tipSha))
+            {
+                missing.Add($"subtask {depId}: commit missing; recover child branch");
                 continue;
+            }
 
             if (!_worktreeManager.BranchContains(context.RepositoryPath, integrationBranch, tipSha))
                 missing.Add(run.WorktreeBranch!);
         }
 
         return missing;
+    }
+
+    private async Task<bool> ValidateRequiredInputsAsync(
+        CoordinatorDispatchContext context,
+        int workPlanId,
+        int subtaskId,
+        IReadOnlyDictionary<int, string> statusById,
+        IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
+        CancellationToken ct)
+    {
+        var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+        var requiredIds = TransitiveDependencies(subtaskId, edges);
+        var byId = subtasks.ToDictionary(subtask => subtask.Id);
+        var branches = new List<string>();
+        foreach (var id in AssemblyPlanning.TopologicalOrder(subtasks.Select(s => s.Id).ToList(), edges))
+        {
+            if (!requiredIds.Contains(id) || !statusById.TryGetValue(id, out var status)
+                || !SubtaskStatus.Satisfies(status))
+                continue;
+            if (!byId.TryGetValue(id, out var subtask))
+                return false;
+            if (string.IsNullOrWhiteSpace(subtask.ChildRunId)
+                || !RunId.TryParse(subtask.ChildRunId, out var runId))
+            {
+                if (DependencyBranchInclusion.RequiresArtifact(subtask))
+                    return false;
+                continue;
+            }
+            var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
+            if (run is null)
+            {
+                if (DependencyBranchInclusion.RequiresArtifact(subtask))
+                    return false;
+                continue;
+            }
+            var decision = DependencyBranchInclusion.Evaluate(
+                _worktreeManager!, context.RepositoryPath, run.WorktreeBranch, run.TreeHash);
+            if (decision == BranchInclusionOutcome.Include)
+                branches.Add(run.WorktreeBranch!);
+            else if (DependencyBranchInclusion.RequiresArtifact(subtask)
+                     || !string.IsNullOrWhiteSpace(run.WorktreeBranch)
+                     || !string.IsNullOrWhiteSpace(run.TreeHash))
+                return false;
+        }
+
+        var result = _worktreeManager!.BuildIntegrationBranch(
+            context.RepositoryPath, context.OriginatingBranch,
+            CoordinatorAssemblyService.IntegrationBranchName(context.CoordinatorRunId),
+            branches, publish: false);
+        if (result.Outcome == IntegrationBranchOutcome.Built)
+            return true;
+        _logger.LogError(
+            "Coordinator dispatch: dependent subtask {SubtaskId} cannot use integration base: {Reason}. Conflicting producer {Branch}; files {Files}; commits {Inputs}. Resolve conflict or recover output before retry.",
+            subtaskId, result.Reason, result.ConflictingBranch,
+            string.Join(", ", result.ConflictingFiles),
+            string.Join(", ", result.ConflictingInputs.Select(input => $"{input.Key}@{input.Value}")));
+        return false;
     }
 
     /// <summary>All subtasks the given subtask depends on, transitively (upstream closure via edges).</summary>
@@ -1731,12 +1811,27 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         {
             if (!statusById.TryGetValue(id, out var status) || !SubtaskStatus.Satisfies(status))
                 continue;
-            if (!subtasksById.TryGetValue(id, out var subtask) ||
-                string.IsNullOrEmpty(subtask.ChildRunId) ||
-                !RunId.TryParse(subtask.ChildRunId, out var childRunId))
+            if (!subtasksById.TryGetValue(id, out var subtask))
+                return;
+            var required = DependencyBranchInclusion.RequiresArtifact(subtask);
+            if (string.IsNullOrEmpty(subtask.ChildRunId) || !RunId.TryParse(subtask.ChildRunId, out var childRunId))
+            {
+                if (required)
+                {
+                    _logger.LogError("Coordinator dispatch: required output missing for subtask {SubtaskId}; retry producer before rebuilding dependency base", id);
+                    return;
+                }
                 continue;
+            }
 
             var run = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
+            if (run is null && required)
+            {
+                _logger.LogError("Coordinator dispatch: child run {ChildRunId} missing for subtask {SubtaskId}; recover or retry producer", subtask.ChildRunId, id);
+                return;
+            }
+            var expectedOutput = required || !string.IsNullOrWhiteSpace(run?.WorktreeBranch)
+                || !string.IsNullOrWhiteSpace(run?.TreeHash);
 
             // Issue #197 root-cause fix: include a satisfied dependency based on branch VALIDITY, NOT
             // on run.Diff (a best-effort display string that GetDiff can leave EMPTY after a real
@@ -1751,13 +1846,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     branches.Add(run!.WorktreeBranch!);
                     break;
                 case BranchInclusionOutcome.ExcludeMissingBranch:
+                    if (!expectedOutput)
+                        break;
                     _logger.LogError(
                         "Coordinator dispatch: SATISFIED dependency subtask {SubtaskId} (child run {ChildRunId}) excluded from " +
                         "dependency-base integration branch for run {RunId} because its worktree branch is missing " +
                         "(WorktreeBranch={WorktreeBranch}, TreeHash={TreeHash}). A satisfied child must have committed its " +
                         "branch — dependents may branch from a base missing upstream artifacts (issue #197).",
                         id, subtask.ChildRunId, context.CoordinatorRunId, run?.WorktreeBranch ?? "<null>", run?.TreeHash ?? "<null>");
-                    break;
+                    return;
                 case BranchInclusionOutcome.ExcludeTreeMismatch:
                     _logger.LogError(
                         "Coordinator dispatch: SATISFIED dependency subtask {SubtaskId} (child run {ChildRunId}) excluded from " +
@@ -1765,7 +1862,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                         "recorded handoff contract (WorktreeBranch={WorktreeBranch}, expected TreeHash={TreeHash}). The branch " +
                         "is stale/diverged — refusing to propagate a mismatched base (issue #197).",
                         id, subtask.ChildRunId, context.CoordinatorRunId, run?.WorktreeBranch ?? "<null>", run?.TreeHash ?? "<null>");
-                    break;
+                    return;
             }
         }
 
@@ -1813,24 +1910,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
                 if (result.Outcome == IntegrationBranchOutcome.Conflict)
                 {
-                    _logger.LogWarning(
-                        "Coordinator dispatch: dependency-base merge for run {RunId} conflicted while adding {Branch}; final assembly will require resolution. Files: {Files}",
+                    _logger.LogError(
+                        "Coordinator dispatch: dependency-base merge for run {RunId} blocked by {Branch}; resolve the named files or recover its missing output before retry. Files: {Files}. {Reason}",
                         context.CoordinatorRunId,
                         result.ConflictingBranch,
-                        string.Join(", ", result.ConflictingFiles ?? []));
-                }
-
-                // Conflict behavior (BLOCKING #6): BuildIntegrationBranch auto-resolves a sibling
-                // conflict by accepting the later child's version. That silently overwrites earlier
-                // child work, so surface EACH auto-resolution LOUDLY (naming branch + files) — never let
-                // it be swallowed at Information level inside the git layer.
-                foreach (var (branch, files) in result.AutoResolutions)
-                {
-                    _logger.LogWarning(
-                        "Coordinator dispatch: dependency-base rebuild for run {RunId} AUTO-RESOLVED a conflict by accepting " +
-                        "later child branch {Branch} — earlier child work on these files was overwritten: {Files}. Verify the " +
-                        "collective result is intended (issue #85).",
-                        context.CoordinatorRunId, branch, string.Join(", ", files));
+                        string.Join(", ", result.ConflictingFiles ?? []), result.Reason);
                 }
                 return;
             }
