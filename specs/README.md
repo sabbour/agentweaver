@@ -37,6 +37,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Support multiple workflow triggers](./workflows-automation/support-multiple-workflow-triggers.md) — [#713](https://github.com/sabbour/agentweaver/issues/713)
 - [Select workflow event actions](./workflows-automation/select-workflow-event-actions.md) — [#716](https://github.com/sabbour/agentweaver/issues/716)
 - [Execute static workflow branches durably](./workflows-automation/execute-static-workflow-branches-durably.md) — [#1418](https://github.com/sabbour/agentweaver/issues/1418)
+- [Pin reviewed output by immutable revision](./workflows-automation/pin-reviewed-output-by-revision.md) — [#1396](https://github.com/sabbour/agentweaver/issues/1396)
 
 ## Orchestration & runs
 

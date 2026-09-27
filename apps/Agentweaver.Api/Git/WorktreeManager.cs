@@ -1585,9 +1585,11 @@ public sealed class WorktreeManager
         string? worktreeBranch,
         string? commitHash,
         string relativeFilePath,
-        out bool isBinary)
+        out bool isBinary,
+        out bool sourceAvailable)
     {
         isBinary = false;
+        sourceAvailable = false;
         if (string.IsNullOrEmpty(repositoryPath) || !Repository.IsValid(repositoryPath))
             return null;
 
@@ -1596,11 +1598,12 @@ public sealed class WorktreeManager
         Commit? commit = null;
         if (!string.IsNullOrEmpty(commitHash))
             commit = repo.Lookup<Commit>(commitHash);
-        if (commit is null && !string.IsNullOrEmpty(worktreeBranch))
+        else if (!string.IsNullOrEmpty(worktreeBranch))
             commit = repo.Branches[worktreeBranch]?.Tip;
         if (commit is null)
             return null;
 
+        sourceAvailable = true;
         var gitPath = relativeFilePath.Replace('\\', '/');
         var treeEntry = commit[gitPath];
         if (treeEntry is null || treeEntry.TargetType != TreeEntryTargetType.Blob)

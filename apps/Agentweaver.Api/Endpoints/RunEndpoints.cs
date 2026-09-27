@@ -2083,18 +2083,29 @@ app.MapGet("/api/runs/{id}/workspace", async (
     // Merged runs: enumerate the commit tree from git (worktree has been deleted).
     if (run.Status is RunStatus.Merged)
     {
-        if (string.IsNullOrEmpty(run.RepositoryPath))
+        var hasPinnedCommit = !string.IsNullOrWhiteSpace(run.MergedCommitHash);
+        if (string.IsNullOrEmpty(run.RepositoryPath) || !Repository.IsValid(run.RepositoryPath))
+        {
+            if (hasPinnedCommit)
+                return Results.Json(new { error = "pinned_commit_unavailable" },
+                    statusCode: StatusCodes.Status410Gone);
             return Results.NotFound();
+        }
         try
         {
             using var repo = new Repository(run.RepositoryPath);
             Commit? commit = null;
-            if (!string.IsNullOrEmpty(run.MergedCommitHash))
+            if (hasPinnedCommit)
                 commit = repo.Lookup<Commit>(run.MergedCommitHash);
-            if (commit is null && !string.IsNullOrEmpty(run.WorktreeBranch))
+            else if (!string.IsNullOrEmpty(run.WorktreeBranch))
                 commit = repo.Branches[run.WorktreeBranch]?.Tip;
             if (commit is null)
+            {
+                if (hasPinnedCommit)
+                    return Results.Json(new { error = "pinned_commit_unavailable" },
+                        statusCode: StatusCodes.Status410Gone);
                 return Results.Json(Array.Empty<WorkspaceNode>());
+            }
 
             var nodes = new List<WorkspaceNode>();
             EnumerateGitTree(commit.Tree, "", nodes);
@@ -3140,18 +3151,25 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
         // 409 "Worktree not available" once its sandbox is gone.
         if (run.Status is RunStatus.Merged or RunStatus.AssembleReady or RunStatus.Completed)
         {
-            if (string.IsNullOrEmpty(run.RepositoryPath))
+            var hasPinnedCommit = !string.IsNullOrWhiteSpace(run.MergedCommitHash);
+            if (string.IsNullOrEmpty(run.RepositoryPath) && !hasPinnedCommit)
                 return Results.NotFound();
             try
             {
                 var durable = worktreeManager.TryReadCommittedFileContent(
-                    run.RepositoryPath, run.WorktreeBranch, run.MergedCommitHash, normalizedPath, out _);
+                    run.RepositoryPath, run.WorktreeBranch, run.MergedCommitHash, normalizedPath,
+                    out _, out var sourceAvailable);
+                if (hasPinnedCommit && !sourceAvailable)
+                    return Results.Json(new { error = "pinned_commit_unavailable" },
+                        statusCode: StatusCodes.Status410Gone);
                 if (durable is not null)
                     return Results.Json(durable);
+                if (hasPinnedCommit)
+                    return Results.NotFound();
 
                 // The committed branch/commit could not resolve the file. Fall back to the live
-                // worktree if it still exists (e.g. assemble_ready run not yet torn down); otherwise
-                // the file genuinely does not exist in this run's output.
+                // worktree only for legacy runs without a pinned merge commit (or assemble_ready
+                // children whose branch has not yet been integrated).
                 if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
                     return Results.NotFound();
             }
