@@ -104,6 +104,71 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         planEvents.Should().HaveCount(1, "exactly one plan-time snapshot event is emitted");
     }
 
+    [Fact]
+    public async Task ReservedComposedPlan_IsPopulatedInPlace_WithoutSelectingNestedWorkflow()
+    {
+        var projectId = await CreateProjectAsync();
+        var project = await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId));
+        var runId = RunId.New().ToString();
+        var parentRunId = RunId.New().ToString();
+        int planId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var now = DateTimeOffset.UtcNow;
+            var spec = new OutcomeSpec
+            {
+                ProjectId = projectId,
+                CoordinatorRunId = runId,
+                Goal = "Derive a dependent work plan",
+                DesiredOutcome = "Derive a dependent work plan",
+                Scope = "Embedded workflow stage",
+                Assumptions = string.Empty,
+                Status = "confirmed",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = projectId,
+                CoordinatorRunId = runId,
+                ParentRunId = parentRunId,
+                ParentWorkflowId = "workflow-v1",
+                ParentWorkflowNodeId = "composed",
+                ParentResumeState = "committed",
+                Status = WorkPlanStatus.Planned,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            planId = plan.Id;
+        }
+
+        var input = new CoordinatorDraftInput(
+            runId, projectId, "Derive a dependent work plan", "octocat",
+            project!.WorkingDirectory, "test-model");
+        var factory = _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        var first = await factory.OrchestrateComposedAsync(input, CancellationToken.None);
+        var second = await factory.OrchestrateComposedAsync(input, CancellationToken.None);
+
+        first.WorkPlanId.Should().Be(planId);
+        second.WorkPlanId.Should().Be(planId);
+        second.InlineSubtaskCount.Should().Be(first.InlineSubtaskCount);
+        first.InlineSubtaskCount.Should().BeGreaterThan(0);
+        using var verifyScope = _factory.Services.CreateScope();
+        var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verify.WorkPlans.CountAsync(plan => plan.CoordinatorRunId == runId)).Should().Be(1);
+        (await verify.Subtasks.CountAsync(subtask => subtask.WorkPlanId == planId))
+            .Should().Be(first.InlineSubtaskCount);
+        (await verify.WorkPlans.SingleAsync(plan => plan.Id == planId))
+            .WorkflowId.Should().BeNull("the child must not select a recursive authored workflow");
+    }
+
     // #238 — a non-empty run model pin (explicit request `modelId` OR the project's GitHub Copilot
     // default) must pin EVERY subtask, regardless of complexity. The deterministic decomposition
     // fallback yields a single MEDIUM-complexity subtask assigned to the roster's sole member, whose

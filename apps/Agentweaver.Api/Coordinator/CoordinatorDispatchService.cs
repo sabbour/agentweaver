@@ -3767,4 +3767,5 @@ public sealed record CoordinatorDispatchContext(
     string SubmittingUser,
     ProjectId? ProjectId,
     bool StaticWorkflowChild = false,
-    string? StaticParentTask = null);
+    string? StaticParentTask = null,
+    bool ComposedWorkflowChild = false);

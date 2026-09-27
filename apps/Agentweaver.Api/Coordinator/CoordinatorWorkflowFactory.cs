@@ -264,6 +264,10 @@ public sealed class CoordinatorWorkflowFactory
         return new CoordinatorOutcome(input.RunId, specId, "confirmed");
     }
 
+    internal Task<CoordinatorOrchestratorExecutor.CoordinatorOrchestrationResult> OrchestrateComposedAsync(
+        CoordinatorDraftInput input, CancellationToken ct) =>
+        _orchestrator.OrchestrateAsync(input, ct);
+
     private async Task<int> PersistDirectSpecAsync(CoordinatorDraftInput input, CancellationToken ct)
     {
         const string status = "confirmed";

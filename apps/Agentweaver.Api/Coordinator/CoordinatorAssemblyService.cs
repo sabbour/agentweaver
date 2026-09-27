@@ -746,12 +746,115 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// </summary>
     internal async Task RunAssemblyAsync(CoordinatorDispatchContext context, CancellationToken ct)
     {
+        if (context.ComposedWorkflowChild)
+        {
+            await RunComposedAssemblyAsync(context, ct).ConfigureAwait(false);
+            return;
+        }
+
         var plan = await LoadPlanAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
         if (plan is null)
         {
             _logger.LogWarning(
                 "Collective assembly: no work plan for run {RunId}; nothing to assemble", context.CoordinatorRunId);
             return;
+        }
+
+        async Task RunComposedAssemblyAsync(CoordinatorDispatchContext context, CancellationToken ct)
+        {
+            var plan = await LoadPlanAsync(context.CoordinatorRunId, ct).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"Composed coordinator {context.CoordinatorRunId} lost its work plan before assembly.");
+            var (workPlanId, status, subtasks, edges) = plan;
+            using var scope = _serviceProvider.CreateScope();
+            var childWork = scope.ServiceProvider.GetRequiredService<WorkflowChildWorkService>();
+
+            if (status is WorkPlanStatus.Complete or WorkPlanStatus.AssemblyFailed)
+            {
+                await childWork.TryPrepareResumeAsync(workPlanId, ct).ConfigureAwait(false);
+                await childWork.TryDeliverResumeAsync(
+                    workPlanId, $"workflow-composed-recovery:{_myPodId}", ct: ct).ConfigureAwait(false);
+                return;
+            }
+            if (status == WorkPlanStatus.Assembling)
+            {
+                var staleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
+                if (!await _assemblyStore.TryReclaimStaleAssemblyAsync(workPlanId, staleBefore, ct)
+                        .ConfigureAwait(false))
+                    return;
+            }
+            if (!await _assemblyStore.TryStartAssemblyAsync(
+                    workPlanId, IntegrationBranchName(context.CoordinatorRunId), ct).ConfigureAwait(false))
+                return;
+
+            try
+            {
+                var statusById = subtasks.ToDictionary(subtask => subtask.Id, subtask => subtask.Status);
+                if (subtasks.Count == 0 || !AssemblyPlanning.AllEligible(statusById))
+                {
+                    var failed = string.Join(", ", subtasks
+                        .Where(subtask => !AssemblyPlanning.IsEligible(subtask.Status))
+                        .Select(subtask => $"{subtask.Id}:{subtask.Status}"));
+                    await childWork.CompleteComposedAssemblyAsync(
+                        workPlanId, null, $"composed_subtasks_ineligible:{failed}", ct).ConfigureAwait(false);
+                    return;
+                }
+
+                var inputs = await BuildAssemblyInputsAsync(context, subtasks, edges, ct).ConfigureAwait(false);
+                if (inputs.MissingOutputs.Count > 0)
+                {
+                    await childWork.CompleteComposedAssemblyAsync(
+                        workPlanId, null, "composed_required_output_missing:"
+                            + string.Join(",", inputs.MissingOutputs.Select(item => item.SubtaskId)), ct)
+                        .ConfigureAwait(false);
+                    return;
+                }
+
+                var integrationBranch = IntegrationBranchName(context.CoordinatorRunId);
+                var request = new CollectiveIntegrationRequest(
+                    context.RepositoryPath, context.OriginatingBranch, integrationBranch, inputs.InputsInOrder);
+                var lockKey = IntegrationBuildLock.ResolveProjectKey(
+                    context.ProjectId?.ToString(), context.RepositoryPath);
+                await using var projectLock = _integrationBuildLock is null
+                    ? null
+                    : await _integrationBuildLock.TryAcquireAsync(
+                        lockKey, _integrationBuildLockTimeout, ct).ConfigureAwait(false);
+                var integration = await BuildIntegrationBranchWithRetryAsync(context, request, ct)
+                    .ConfigureAwait(false);
+                if (integration.Outcome != IntegrationBranchOutcome.Built
+                    || string.IsNullOrWhiteSpace(integration.TreeHash))
+                {
+                    await childWork.CompleteComposedAssemblyAsync(
+                        workPlanId, null,
+                        $"composed_integration_{integration.Outcome}:{integration.Reason}", ct).ConfigureAwait(false);
+                    return;
+                }
+
+                var included = inputs.IncludedSubtaskIds
+                    .Select(id => subtasks.Single(subtask => subtask.Id == id).ChildRunId
+                        ?? throw new InvalidOperationException($"Included subtask {id} has no child run."))
+                    .ToArray();
+                await _runStore.UpdateAssemblyArtifactsAsync(
+                    RunId.Parse(context.CoordinatorRunId), integration.TreeHash,
+                    integration.Diff ?? string.Empty, ct).ConfigureAwait(false);
+                await childWork.CompleteComposedAssemblyAsync(
+                    workPlanId,
+                    new WorkflowComposedAssembly(
+                        integrationBranch, integration.TreeHash, integration.Diff ?? string.Empty, included),
+                    null, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Composed coordinator {RunId} failed during assembly", context.CoordinatorRunId);
+                await childWork.CompleteComposedAssemblyAsync(
+                    workPlanId, null, $"composed_assembly_failed:{ex.Message}", CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
         }
 
         var (workPlanId, planStatus, subtasks, edges) = plan.Value;

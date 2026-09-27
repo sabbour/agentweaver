@@ -102,6 +102,141 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ComposedPlan_ReattachesBeforeDecomposition_WithoutCreatingStaticBranches()
+    {
+        var request = ComposedRequest();
+        var first = await _service.PrepareComposedAsync(request);
+        var second = await BuildService("second-pod", _runtime).PrepareComposedAsync(request);
+
+        second.Reattached.Should().BeTrue();
+        second.WorkPlanId.Should().Be(first.WorkPlanId);
+        second.ChildCoordinatorRunId.Should().Be(first.ChildCoordinatorRunId);
+        second.Branches.Should().BeEmpty();
+        var plan = await GetPlanAsync(first.WorkPlanId);
+        plan.ParentJoinNodeId.Should().BeNull();
+        plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Committed);
+        (await _runStore.GetAsync(RunId.Parse(first.ChildCoordinatorRunId)))!.Task
+            .Should().Be(request.Prompt);
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.OutcomeSpecs.CountAsync()).Should().Be(1);
+        (await db.WorkPlans.CountAsync()).Should().Be(1);
+        (await db.Subtasks.CountAsync()).Should().Be(0);
+        (await _runStore.GetRunsByParentAsync(_parent.Id.ToString())).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ComposedAssembly_CheckpointSurvivesRestart_AndDeliversTypedResultOnce()
+    {
+        _runtime.AllowDispatch = false;
+        var request = ComposedRequest();
+        var attached = await _service.PrepareComposedAsync(request);
+        await _service.ArmContinuationAsync(
+            attached.WorkPlanId,
+            NewRequest(WorkflowChildWorkService.ResumeRequestId(
+                _parent.Id.ToString(), request.ParentWorkflowNodeId, attached.WorkPlanId)),
+            _parent.SubmittingUser);
+        (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+            .Should().Be(WorkflowChildWorkResumeStates.Waiting);
+
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == attached.WorkPlanId);
+            plan.Status = WorkPlanStatus.Assembling;
+            await db.SaveChangesAsync();
+        }
+        var assembly = new WorkflowComposedAssembly(
+            "agentweaver/integration-child", "tree-sha", "diff --git", ["run-child"]);
+        _runtime.ParentResumeActive = false;
+        _runtime.DeliverResult = true;
+        await _service.CompleteComposedAssemblyAsync(attached.WorkPlanId, assembly, null, CancellationToken.None);
+        var checkpoint = await GetPlanAsync(attached.WorkPlanId);
+        checkpoint.Status.Should().Be(WorkPlanStatus.Complete);
+        checkpoint.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Ready);
+        JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+            checkpoint.ParentResumeResultJson!, JsonDefaults.Options)!.Assembly
+            .Should().BeEquivalentTo(assembly);
+
+        _runtime.ParentResumeActive = true;
+        var restarted = BuildService("third-pod", _runtime);
+        await restarted.PrepareRestartRecoveryAsync();
+        await restarted.SweepAsync();
+        await restarted.SweepAsync();
+        _runtime.Deliveries.Should().ContainSingle()
+            .Which.Assembly.Should().BeEquivalentTo(assembly);
+        (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+            .Should().Be(WorkflowChildWorkResumeStates.Delivered);
+    }
+
+    [Fact]
+    public async Task ComposedAssembly_FailedChildPlan_DeliversOneTerminalFailure()
+    {
+        _runtime.AllowDispatch = false;
+        _runtime.DeliverResult = true;
+        var request = ComposedRequest();
+        var attached = await _service.PrepareComposedAsync(request);
+        await _service.ArmContinuationAsync(
+            attached.WorkPlanId,
+            NewRequest(WorkflowChildWorkService.ResumeRequestId(
+                _parent.Id.ToString(), request.ParentWorkflowNodeId, attached.WorkPlanId)),
+            _parent.SubmittingUser);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == attached.WorkPlanId);
+            plan.Status = WorkPlanStatus.Assembling;
+            await db.SaveChangesAsync();
+        }
+
+        (await _service.CompleteComposedAssemblyAsync(
+            attached.WorkPlanId, null, "required_child_failed", CancellationToken.None)).Should().BeFalse();
+        await BuildService("retry-pod", _runtime).SweepAsync();
+
+        _runtime.Deliveries.Should().ContainSingle()
+            .Which.FailureReason.Should().Be("required_child_failed");
+        _runtime.Deliveries[0].Assembly.Should().BeNull();
+        (await GetPlanAsync(attached.WorkPlanId)).Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        (await _runStore.GetAsync(RunId.Parse(attached.ChildCoordinatorRunId)))!
+            .Status.Should().Be(DomainRunStatus.Failed);
+    }
+
+    [Fact]
+    public async Task ComposedAssembly_RestartAfterCheckpointBeforeRunTerminal_RecoversChildAndParent()
+    {
+        _runtime.AllowDispatch = false;
+        _runtime.DeliverResult = true;
+        var request = ComposedRequest();
+        var attached = await _service.PrepareComposedAsync(request);
+        await _service.ArmContinuationAsync(
+            attached.WorkPlanId,
+            NewRequest(WorkflowChildWorkService.ResumeRequestId(
+                _parent.Id.ToString(), request.ParentWorkflowNodeId, attached.WorkPlanId)),
+            _parent.SubmittingUser);
+        var assembly = new WorkflowComposedAssembly("integration", "tree", "diff", []);
+        var checkpoint = new WorkflowChildWorkResult(
+            attached.WorkPlanId, attached.ChildCoordinatorRunId,
+            request.ParentWorkflowId, request.ParentWorkflowNodeId,
+            null, true, WorkPlanStatus.Complete, null, [], "assembled", assembly);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == attached.WorkPlanId);
+            plan.Status = WorkPlanStatus.Complete;
+            plan.ParentResumeResultJson = JsonSerializer.Serialize(checkpoint, JsonDefaults.Options);
+            await db.SaveChangesAsync();
+        }
+
+        await BuildService("recovery-pod", _runtime).SweepAsync();
+        await _service.SweepAsync();
+
+        (await _runStore.GetAsync(RunId.Parse(attached.ChildCoordinatorRunId)))!
+            .Status.Should().Be(DomainRunStatus.Completed);
+        _runtime.Deliveries.Should().ContainSingle()
+            .Which.Assembly.Should().BeEquivalentTo(assembly);
+    }
+
+    [Fact]
     public async Task CrashAfterPlanPersistence_BeforeContinuationArm_ReattachesAndOnlyThenDispatches()
     {
         var (persisted, _) = await _service.EnsurePersistedAsync(Request());
@@ -866,6 +1001,16 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         "join",
         [Branch("research-a"), Branch("research-b")]);
 
+    private WorkflowComposedWorkRequest ComposedRequest() => new(
+        _parent, "workflow-v1", "dynamic-plan", "Derive dependent implementation tasks",
+        new AgentTurnInput(
+            _parent.Id.ToString(), _parent.Task,
+            "C:\\repo\\.agentweaver\\worktrees\\parent", "agentweaver/parent",
+            _parent.RepositoryPath, _parent.OriginatingBranch,
+            ModelSource.GitHubCopilot.ToApiString(), _parent.ModelId,
+            _parent.SubmittingUser, ProjectId: _parent.ProjectId!.ToString()),
+        "parent-tree");
+
     private static StaticWorkflowBranch Branch(string nodeId) => new(
         nodeId,
         nodeId,
@@ -1117,6 +1262,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     private sealed class RecordingRuntime : IWorkflowChildWorkRuntime
     {
         public bool ParentResumeActive { get; set; } = true;
+        public bool AllowDispatch { get; set; } = true;
         public bool AlwaysReportDispatchInactive { get; set; }
         public Action? BeforeDispatchEnabled { get; set; }
         public Action? BeforeParentResumeActiveCheck { get; set; }
@@ -1138,7 +1284,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
                 var callback = BeforeDispatchEnabled;
                 BeforeDispatchEnabled = null;
                 callback?.Invoke();
-                return true;
+                return AllowDispatch;
             }
         }
 
@@ -1155,6 +1301,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         }
 
         public void StartDispatch(CoordinatorDispatchContext context) => Started.Add(context);
+        public void StartAssembly(CoordinatorDispatchContext context) => Started.Add(context);
 
         public void RecordParentStep(string parentRunId, object payload)
         {
@@ -1220,6 +1367,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         public bool IsDispatchActive(string coordinatorRunId) => false;
         public bool IsParentResumeActive(string parentRunId) => false;
         public void StartDispatch(CoordinatorDispatchContext context) { }
+        public void StartAssembly(CoordinatorDispatchContext context) { }
         public void RecordParentStep(string parentRunId, object payload) { }
         public Task<bool> RecordParentReadyStepAsync(
             int workPlanId,
