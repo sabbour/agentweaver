@@ -46,6 +46,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
     [PostgresFact]
     public async Task PostgresLeader_ExcludesPeers_UntilItReleasesLifetimeLock()
     {
+        const long isolatedTestLockKey = 0x4157_5243_5652_5901L;
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?>
             {
@@ -53,16 +54,16 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
                 ["ConnectionStrings:Postgres"] = _fixture.ConnectionString,
             }).Build();
         await using (var leader = await StartupRecoveryLeader.AcquireAsync(
-            configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance))
+            configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
         {
             leader.IsLeader.Should().BeTrue();
             await using var waiter = await StartupRecoveryLeader.AcquireAsync(
-                configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+                configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey);
             waiter.IsLeader.Should().BeFalse("the sweep must never run on two replicas concurrently");
         }
 
         await using (var waiter = await StartupRecoveryLeader.AcquireAsync(
-            configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance))
+            configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
         {
             waiter.IsLeader.Should().BeTrue("the advisory lock is released on leader death");
         }

@@ -14,17 +14,21 @@ public sealed class StartupRecoveryService : BackgroundService
     private readonly TimeSpan _sweepTimeout;
     private readonly TimeSpan _retryInterval;
     private readonly CancellationToken? _applicationStarted;
+    private readonly bool _enabled;
 
     public StartupRecoveryService(
         IConfiguration configuration,
         IServiceProvider services,
         IHostApplicationLifetime lifetime,
+        IHostEnvironment environment,
         ILogger<StartupRecoveryService> logger)
         : this(
             ct => AcquireWithCompletionAsync(configuration, logger, ct),
             services.GetRequiredService<StartupRecoveryStages>().RunAsync,
             logger,
-            applicationStarted: lifetime.ApplicationStarted)
+            applicationStarted: lifetime.ApplicationStarted,
+            enabled: !(environment.IsDevelopment() || environment.IsEnvironment("Testing"))
+                || !configuration.GetValue<bool>("Testing:DisableStartupRecovery"))
     {
     }
 
@@ -41,7 +45,8 @@ public sealed class StartupRecoveryService : BackgroundService
         ILogger<StartupRecoveryService> logger,
         TimeSpan? sweepTimeout = null,
         TimeSpan? retryInterval = null,
-        CancellationToken? applicationStarted = null)
+        CancellationToken? applicationStarted = null,
+        bool enabled = true)
     {
         _acquire = acquire;
         _recover = recover;
@@ -49,11 +54,14 @@ public sealed class StartupRecoveryService : BackgroundService
         _sweepTimeout = sweepTimeout ?? SweepTimeout;
         _retryInterval = retryInterval ?? RetryInterval;
         _applicationStarted = applicationStarted;
+        _enabled = enabled;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await Task.Yield();
+        if (!_enabled)
+            return;
         if (_applicationStarted is { } signal)
             await HostStartup.WaitForStartAsync(signal, stoppingToken).ConfigureAwait(false);
         while (!stoppingToken.IsCancellationRequested)

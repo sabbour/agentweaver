@@ -38,9 +38,16 @@ public sealed class StartupRecoveryLeader : IAsyncDisposable
     /// Tries to become the recovery leader. Returns immediately — no blocking wait.
     /// Callers should check <see cref="IsLeader"/> before running the recovery sweep.
     /// </summary>
-    public static async Task<StartupRecoveryLeader> AcquireAsync(
+    public static Task<StartupRecoveryLeader> AcquireAsync(
         IConfiguration configuration,
         ILogger logger,
+        CancellationToken ct = default) =>
+        AcquireAsync(configuration, logger, AdvisoryLockKey, ct);
+
+    internal static async Task<StartupRecoveryLeader> AcquireAsync(
+        IConfiguration configuration,
+        ILogger logger,
+        long lockKey,
         CancellationToken ct = default)
     {
         var provider = configuration["Database:Provider"]?.ToLowerInvariant() ?? "sqlite";
@@ -68,7 +75,7 @@ public sealed class StartupRecoveryLeader : IAsyncDisposable
 
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT pg_try_advisory_lock(@key)";
-            cmd.Parameters.AddWithValue("key", AdvisoryLockKey);
+            cmd.Parameters.AddWithValue("key", lockKey);
             var acquired = (bool)(await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false))!;
 
             if (!acquired)
@@ -76,7 +83,7 @@ public sealed class StartupRecoveryLeader : IAsyncDisposable
                 logger.LogInformation(
                     "Startup recovery: another replica holds the leader lock (key={Key:#,0}) — " +
                     "waiting to retry recovery leadership",
-                    AdvisoryLockKey);
+                    lockKey);
                 await conn.CloseAsync().ConfigureAwait(false);
                 conn.Dispose();
                 return new StartupRecoveryLeader(isLeader: false, conn: null);
@@ -84,7 +91,7 @@ public sealed class StartupRecoveryLeader : IAsyncDisposable
 
             logger.LogInformation(
                 "Startup recovery: acquired leader lock (key={Key:#,0}) — this pod will run the recovery sweep",
-                AdvisoryLockKey);
+                lockKey);
             return new StartupRecoveryLeader(isLeader: true, conn: conn);
         }
         catch

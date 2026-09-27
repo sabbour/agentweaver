@@ -21,6 +21,20 @@ namespace Agentweaver.Tests;
 public sealed class StartupRecoveryServiceTests
 {
     [Fact]
+    public async Task TestHostInitializationOptOut_PreservesHealthWhileOAuthReconciliationIsPending()
+    {
+        await using var factory = new RecoveryFactory(
+            _ => Task.CompletedTask,
+            ct => Task.Delay(Timeout.InfiniteTimeSpan, ct),
+            bypassInitializationGate: true);
+        using var client = factory.CreateClient();
+
+        factory.Services.GetRequiredService<OAuthStaticClientReconciler>().IsInitialized.Should().BeFalse();
+        (await client.GetAsync("/api/ping")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await client.GetAsync("/api/health")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
     public async Task OAuthReconcileTransientFailure_RetriesWhilePingRemainsLive()
     {
         var attempts = 0;
@@ -153,18 +167,26 @@ public sealed class StartupRecoveryServiceTests
     {
         private readonly Func<IServiceProvider, CancellationToken, Task> _sweep;
         private readonly Func<CancellationToken, Task> _oauth;
+        private readonly bool _bypassInitializationGate;
         private readonly string _directory = Path.Combine(Environment.CurrentDirectory,
             ".startup-recovery-tests", Guid.NewGuid().ToString("N"));
 
-        public RecoveryFactory(Func<CancellationToken, Task> sweep, Func<CancellationToken, Task> oauth)
-            : this((_, ct) => sweep(ct), oauth)
+        public RecoveryFactory(
+            Func<CancellationToken, Task> sweep,
+            Func<CancellationToken, Task> oauth,
+            bool bypassInitializationGate = false)
+            : this((_, ct) => sweep(ct), oauth, bypassInitializationGate)
         {
         }
 
-        public RecoveryFactory(Func<IServiceProvider, CancellationToken, Task> sweep, Func<CancellationToken, Task> oauth)
+        public RecoveryFactory(
+            Func<IServiceProvider, CancellationToken, Task> sweep,
+            Func<CancellationToken, Task> oauth,
+            bool bypassInitializationGate = false)
         {
             _sweep = sweep;
             _oauth = oauth;
+            _bypassInitializationGate = bypassInitializationGate;
             Directory.CreateDirectory(_directory);
         }
 
@@ -179,6 +201,7 @@ public sealed class StartupRecoveryServiceTests
                     ["Coordinator:Checkpoints:Path"] = Path.Combine(_directory, "coordinator"),
                     ["Testing:BypassGitHubOrgAuthorization"] = "true",
                     ["Testing:BypassGitHubTokenAuth"] = "true",
+                    ["Testing:BypassOAuthInitializationGate"] = _bypassInitializationGate.ToString(),
                     ["Auth:Mode"] = "GitHubLegacy",
                     ["Git:Author:Name"] = "Test",
                     ["Git:Author:Email"] = "test@localhost",

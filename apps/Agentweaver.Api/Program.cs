@@ -1296,10 +1296,14 @@ else
     }));
 
     app.UseRouting();
+    var bypassInitializationGate =
+        (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing"))
+        && app.Configuration.GetValue<bool>("Testing:BypassOAuthInitializationGate");
     app.Use(async (context, next) =>
     {
         var path = context.Request.Path;
-        if ((path.StartsWithSegments("/oauth", StringComparison.OrdinalIgnoreCase)
+        if (!bypassInitializationGate
+            && (path.StartsWithSegments("/oauth", StringComparison.OrdinalIgnoreCase)
                 || path.StartsWithSegments("/healthz/workspace", StringComparison.OrdinalIgnoreCase)
                 || path.StartsWithSegments("/api/health", StringComparison.OrdinalIgnoreCase))
             && !context.RequestServices.GetRequiredService<OAuthStaticClientReconciler>().IsInitialized)
