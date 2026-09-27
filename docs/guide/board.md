@@ -53,6 +53,10 @@ Archived prerequisite tasks retain their links and run identity, but block new c
 Ready cards with unmet prerequisites stay in Ready and are skipped before the pickup
 limit is applied. Their card lists each upstream outcome: **integrated**, **accepted
 no change**, **pending**, **failed**, **cancelled**, **delegated**, or **archived**.
+An integrated run must also have a recorded merged commit and tree: otherwise the
+dependent remains Ready with the `upstream_output_identity_unavailable` blocker,
+rather than claiming an unidentified output. Successful collective assembly records
+both identities atomically with its terminal outcome before settling the work plan.
 Delegation is not execution. A completed coordinator run satisfies dependents only
 after integration or an explicitly accepted no-change completion; a failed run must
 recover successfully first. Ready cards without blockers can still wait for a capacity
@@ -64,10 +68,14 @@ share one review/assembly boundary as subtasks *inside* a single coordinator run
 do not model every implementation step as a separate story. The per-project editor
 does not create cross-project links.
 
-The claim records the available commit/tree identity, not a new artifact revision
-store. Until [immutable output revisions](https://github.com/sabbour/agentweaver/issues/1396)
-cover retained output bytes, an archived/replaced producer still has auditable run
-lineage but old content cannot be guaranteed retrievable after workspace cleanup.
+The claim records the accepted producer generation and commit/tree identity, not a new
+artifact revision store. Retrying or archiving a producer does not rewrite an active
+dependent's claimed snapshot. Until
+[immutable output revisions](https://github.com/sabbour/agentweaver/issues/1396)
+publish and retain **collective integration** output (including verified no-change
+receipts) by exact revision, commit/tree identities are not a guarantee that historic
+bytes remain retrievable after workspace cleanup. Do not treat a replacement producer
+run or a moving branch as the originally accepted input.
 
 For REST callers, read `graph_revision` on a task or GET
 `/api/projects/{projectId}/backlog/dependencies/revision`, then POST

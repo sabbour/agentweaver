@@ -389,7 +389,8 @@ public sealed class SqliteBacklogTaskStoreTests
             DateTimeOffset.UtcNow);
         blockedClaim.Should().Be(ClaimReserveResult.Lost);
 
-        (await runStore.TerminalizeForTestAsync(prerequisiteRun.Id, RunStatus.Merged)).Should().BeTrue();
+        await PublishIntegratedAsync(runStore, prerequisiteRun.Id, RunStatus.Merged, "complete",
+            "accepted-commit", "accepted-tree");
 
         (await store.ListReadyForClaimAsync(project.Id, 10)).Select(t => t.Id).Should().Equal(dependentTask.Id);
         (await store.CountReadyForPickupAsync()).Should().Be(1);
@@ -417,10 +418,16 @@ public sealed class SqliteBacklogTaskStoreTests
         await using var _ = testDb;
         var run = MakeCoordinatorRun(project.Id, RunId.New()) with
         {
-            Status = Agentweaver.Api.Contracts.RunStatusExtensions.ParseStatus(status),
-            Result = result,
+            Status = reason == "integrated" ? RunStatus.InProgress
+                : Agentweaver.Api.Contracts.RunStatusExtensions.ParseStatus(status),
+            Result = reason == "integrated" ? null : result,
         };
-        await new SqliteRunStore(testDb.Db).InsertAsync(run);
+        var runs = new SqliteRunStore(testDb.Db);
+        await runs.InsertAsync(run);
+        if (reason == "integrated")
+            await PublishIntegratedAsync(runs, run.Id,
+                Agentweaver.Api.Contracts.RunStatusExtensions.ParseStatus(status), result!,
+                "accepted-commit", "accepted-tree");
         var prerequisite = MakeReadyTask(project.Id, "a") with
         {
             State = BacklogTaskState.Claimed,
@@ -441,6 +448,39 @@ public sealed class SqliteBacklogTaskStoreTests
     }
 
     [Fact]
+    public async Task IntegratedRunWithoutCompleteIdentity_BlocksClaimWithMachineReadableReason()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var runs = new SqliteRunStore(testDb.Db);
+        var sourceRun = MakeCoordinatorRun(project.Id, RunId.New()) with
+        {
+            Status = RunStatus.Completed,
+            Result = "assembly_complete",
+            MergedCommitHash = "accepted-commit",
+        };
+        await runs.InsertAsync(sourceRun);
+        var source = MakeReadyTask(project.Id, "a") with
+        {
+            State = BacklogTaskState.Claimed,
+            RunId = sourceRun.Id,
+            ClaimedAt = DateTimeOffset.UtcNow,
+        };
+        var dependent = MakeReadyTask(project.Id, "b");
+        await store.InsertAsync(source);
+        await store.InsertAsync(dependent);
+        await InsertDependencyAsync(testDb.Db, project.Id, dependent.Id, source.Id);
+
+        (await store.ListDependencyStatusesAsync(project.Id, [dependent.Id]))
+            .Should().ContainSingle(s => !s.IsSatisfied && s.Reason == "upstream_output_identity_unavailable");
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, dependent.Id,
+            MakeCoordinatorRun(project.Id, RunId.New()), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Lost);
+        (await store.GetAsync(project.Id, dependent.Id))!.State.Should().Be(BacklogTaskState.Ready);
+    }
+
+    [Fact]
     public async Task BlockedPrefixBeyondFourPickupWindows_DoesNotHideReadyTail()
     {
         var (testDb, store, project) = await NewStoreWithProjectAsync();
@@ -458,6 +498,39 @@ public sealed class SqliteBacklogTaskStoreTests
 
         (await store.ListReadyForClaimAsync(project.Id, 3)).Select(t => t.Id).Should().Equal(ready.Id);
         (await store.CountReadyForPickupAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ReverseIdTransitiveJoin_FiltersBeforeLimitAndOrdersEligibleTies()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var ids = Enumerable.Range(0, 30).Select(_ => BacklogTaskId.New())
+            .OrderBy(id => id.ToString(), StringComparer.Ordinal).ToArray();
+        var upstream = MakeBacklogTask(project.Id, "source", ids[^1]);
+        var middle = MakeReadyTask(project.Id, "a000", ids[1]);
+        var downstream = MakeReadyTask(project.Id, "a001", ids[0]);
+        await store.InsertAsync(upstream);
+        await store.InsertAsync(middle);
+        await store.InsertAsync(downstream);
+        await InsertDependencyAsync(testDb.Db, project.Id, middle.Id, upstream.Id);
+        await InsertDependencyAsync(testDb.Db, project.Id, downstream.Id, middle.Id);
+        for (var i = 2; i < 27; i++)
+        {
+            var blocked = MakeReadyTask(project.Id, $"a{i:D3}", ids[i]);
+            await store.InsertAsync(blocked);
+            await InsertDependencyAsync(testDb.Db, project.Id, blocked.Id, upstream.Id);
+        }
+        var tieA = MakeReadyTask(project.Id, "z", ids[27]) with { CommittedAt = DateTimeOffset.UtcNow.AddMinutes(-1) };
+        var tieB = MakeReadyTask(project.Id, "z", ids[28]) with { CommittedAt = DateTimeOffset.UtcNow };
+        // Ready order keys are unique per bucket; use distinct keys for the order assertion.
+        tieB = tieB with { OrderKey = "zz" };
+        await store.InsertAsync(tieA);
+        await store.InsertAsync(tieB);
+
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id).Should().Equal(tieA.Id);
+        (await store.ListReadyForClaimAsync(project.Id, 2)).Select(t => t.Id).Should().Equal(tieA.Id, tieB.Id);
+        (await store.CountReadyForPickupAsync()).Should().Be(2);
     }
 
     [Fact]
@@ -579,14 +652,16 @@ public sealed class SqliteBacklogTaskStoreTests
                 .Should().Be(ClaimReserveResult.Won);
             (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, b.Id, bRun, DateTimeOffset.UtcNow))
                 .Should().Be(ClaimReserveResult.Won);
-            (await runs.TerminalizeForTestAsync(aRun.Id, RunStatus.Completed, "assembly_complete")).Should().BeTrue();
+            await PublishIntegratedAsync(runs, aRun.Id, RunStatus.Completed, "assembly_complete",
+                "a-commit", "a-tree");
             (await runs.TerminalizeForTestAsync(bRun.Id, RunStatus.Failed, "assembly_failed")).Should().BeTrue();
             (await store.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
             (await store.ListDependencyStatusesAsync(project.Id, [join.Id]))
                 .Should().ContainSingle(s => s.DependsOnTaskId == b.Id && s.Reason == "failed");
 
             await runs.UpdateStatusAsync(bRun.Id, RunStatus.InProgress, null);
-            (await runs.TerminalizeForTestAsync(bRun.Id, RunStatus.Completed, "assembly_complete")).Should().BeTrue();
+            await PublishIntegratedAsync(runs, bRun.Id, RunStatus.Completed, "assembly_complete",
+                "b-commit", "b-tree");
             (await store.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id).Should().Equal(join.Id);
             var joinRun = MakeCoordinatorRun(project.Id, RunId.New());
             (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, join.Id, joinRun, DateTimeOffset.UtcNow))
@@ -608,6 +683,19 @@ public sealed class SqliteBacklogTaskStoreTests
             (await editClaimed.Should().ThrowAsync<BacklogDependencyEditException>())
                 .Which.Message.Should().Be("task_claimed_or_archived");
         }
+    private static async Task PublishIntegratedAsync(
+        SqliteRunStore runs, RunId id, RunStatus status, string result, string commit, string tree)
+    {
+        var run = await runs.GetAsync(id);
+        (await runs.TryMutateTerminalOutcomeAsync(id,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(status, "run.completed", new { result },
+                    DateTimeOffset.UtcNow, run!.LifecycleGeneration),
+                result,
+                MergedCommitHash: commit,
+                TreeHash: tree))).Should().BeTrue();
+    }
+
     [Fact]
     public async Task TryDelete_WhenTaskIsDependencyTarget_ThrowsFriendlyDependencyException()
     {

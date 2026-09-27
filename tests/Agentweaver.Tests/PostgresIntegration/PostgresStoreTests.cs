@@ -771,6 +771,8 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
             await db.Runs.Where(r => r.RunId == prerequisiteRunId.ToString())
                 .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "completed")
                     .SetProperty(r => r.Result, "complete")
+                    .SetProperty(r => r.MergedCommitHash, "accepted-commit")
+                    .SetProperty(r => r.TreeHash, "accepted-tree")
                     .SetProperty(r => r.LifecycleGeneration, 3));
         }
 
@@ -859,6 +861,35 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task IntegratedRunWithoutTree_BlocksDependentBeforeLimitAndAtClaim()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var source = MakeReadyTask(project.Id, "a");
+        var dependent = MakeReadyTask(project.Id, "b");
+        await store.InsertAsync(source);
+        await store.InsertAsync(dependent);
+        await store.EditDependenciesAsync(project.Id, 0,
+            new BacklogDependencyEdit(dependent.Id, [source.Id], []));
+        var runId = RunId.New();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id, source.Id, MakeCoordinatorRun(project.Id, runId),
+            DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Won);
+        await using (var db = await pg.CreateDbContextAsync())
+            await db.Runs.Where(r => r.RunId == runId.ToString())
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "completed")
+                    .SetProperty(r => r.Result, "assembly_complete")
+                    .SetProperty(r => r.MergedCommitHash, "accepted-commit"));
+
+        (await store.ListDependencyStatusesAsync(project.Id, [dependent.Id]))
+            .Should().ContainSingle(s => !s.IsSatisfied && s.Reason == "upstream_output_identity_unavailable");
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id, dependent.Id, MakeCoordinatorRun(project.Id, RunId.New()),
+            DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Lost);
+    }
+
+    [PostgresFact]
     public async Task ListReadyForClaim_ReturnsByOrderKey_TopN()
     {
         var project = await InsertProjectAsync();
@@ -903,6 +934,52 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
 
         (await store.ListReadyForClaimAsync(project.Id, 3)).Select(t => t.Id).Should().Equal(ready.Id);
         (await store.CountReadyForPickupAsync()).Should().Be(initialReadyCount + 1);
+    }
+
+    [PostgresFact]
+    public async Task ReverseIdTransitiveJoin_FiltersBeforeLimitAndOrdersEligibleTasks()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var ids = Enumerable.Range(0, 30).Select(_ => BacklogTaskId.New())
+            .OrderBy(id => id.ToString(), StringComparer.Ordinal).ToArray();
+        var upstream = MakeBacklogTask(project.Id, "source", ids[^1]);
+        var middle = MakeReadyTask(project.Id, "a000", ids[1]);
+        var downstream = MakeReadyTask(project.Id, "a001", ids[0]);
+        await store.InsertAsync(upstream);
+        await store.InsertAsync(middle);
+        await store.InsertAsync(downstream);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            db.BacklogTaskDependencies.AddRange(new[] { (middle.Id, upstream.Id), (downstream.Id, middle.Id) }
+                .Select(edge => new BacklogTaskDependencyRecord
+                {
+                    ProjectId = project.Id.ToString(),
+                    TaskId = edge.Item1.ToString(),
+                    DependsOnTaskId = edge.Item2.ToString(),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                }));
+            for (var i = 2; i < 27; i++)
+            {
+                var blocked = MakeReadyTask(project.Id, $"a{i:D3}", ids[i]);
+                await store.InsertAsync(blocked);
+                db.BacklogTaskDependencies.Add(new BacklogTaskDependencyRecord
+                {
+                    ProjectId = project.Id.ToString(),
+                    TaskId = blocked.Id.ToString(),
+                    DependsOnTaskId = upstream.Id.ToString(),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+            }
+            await db.SaveChangesAsync();
+        }
+        var first = MakeReadyTask(project.Id, "z", ids[27]);
+        var second = MakeReadyTask(project.Id, "zz", ids[28]);
+        await store.InsertAsync(first);
+        await store.InsertAsync(second);
+
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id).Should().Equal(first.Id);
+        (await store.ListReadyForClaimAsync(project.Id, 2)).Select(t => t.Id).Should().Equal(first.Id, second.Id);
     }
 
     [PostgresFact]

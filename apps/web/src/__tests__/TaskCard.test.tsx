@@ -89,6 +89,23 @@ afterEach(() => {
 });
 
 describe('TaskCard workflow override', () => {
+  it('explains a missing integrated-output identity without claiming the task is ready', () => {
+    render(
+      <Wrapper>
+        <TaskCard {...{
+          card: { ...card, is_blocked: true, prerequisites: [
+            { task_id: 'upstream-1', title: 'First story',
+              reason: 'upstream_output_identity_unavailable', is_satisfied: false },
+          ] },
+          columnId: 'ready', projectId: 'proj-1', onMutated: vi.fn(),
+          onDragStartTask: vi.fn(), onDragEndTask: vi.fn(), isDragging: false,
+        }} />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Needs First story: integrated output identity unavailable')).toBeTruthy();
+    expect(screen.getByText('Blocked')).toBeTruthy();
+  });
+
   it('previews affected dependents before saving prerequisite links', async () => {
     const onMutated = vi.fn();
     vi.mocked(apiClient.editBacklogDependencies).mockResolvedValue({

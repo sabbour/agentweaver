@@ -370,7 +370,9 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
       )}
       {card.prerequisites?.map((prerequisite) => (
         <Caption1 key={prerequisite.task_id} className={styles.meta}>
-          Needs {prerequisite.title}: {prerequisite.reason ?? 'pending'}
+          Needs {prerequisite.title}: {prerequisite.reason === 'upstream_output_identity_unavailable'
+            ? 'integrated output identity unavailable'
+            : prerequisite.reason ?? 'pending'}
         </Caption1>
       ))}
       {!!card.dependents_task_ids?.length && (

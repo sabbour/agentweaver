@@ -1,8 +1,12 @@
 using System.Net.Http.Json;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Mcp;
 using Agentweaver.Mcp.Tools;
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
+using static Agentweaver.Tests.Backlog.BacklogTestData;
 
 namespace Agentweaver.Tests.Backlog;
 
@@ -121,5 +125,42 @@ public sealed class McpBacklogToolsTests : IClassFixture<ProjectsWebApplicationF
         var projection = System.Text.Json.JsonDocument.Parse(await tools.BacklogGetTaskAsync(project, downstream)).RootElement;
         projection.GetProperty("prerequisites")[0].GetProperty("task_id").GetString().Should().Be(upstream);
         projection.GetProperty("is_blocked").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MissingIntegratedOutputIdentity_HasSameBlockerInRestAndMcp()
+    {
+        var project = await CreateProjectAsync();
+        var tools = CreateTools();
+        var upstream = System.Text.Json.JsonDocument.Parse(
+            await tools.BacklogCaptureTaskAsync(project, "upstream")).RootElement.GetProperty("task_id").GetString()!;
+        var downstream = System.Text.Json.JsonDocument.Parse(
+            await tools.BacklogCaptureTaskAsync(project, "downstream")).RootElement.GetProperty("task_id").GetString()!;
+        await tools.BacklogEditDependenciesAsync(project, downstream, 0, add: [upstream]);
+        using var client = _factory.CreateAuthenticatedClient();
+        (await client.PostAsync($"/api/projects/{project}/backlog/tasks/{upstream}/ready", null))
+            .EnsureSuccessStatusCode();
+        var pid = ProjectId.Parse(project);
+        var runs = _factory.Services.GetRequiredService<IRunStore>();
+        var source = RunId.New();
+        (await _factory.Services.GetRequiredService<IBacklogTaskStore>()
+            .TryClaimAndReserveCoordinatorRunAsync(pid, BacklogTaskId.Parse(upstream),
+                MakeCoordinatorRun(pid, source), DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Won);
+        var run = (await runs.GetAsync(source))!;
+        (await runs.TrySetTerminalOutcomeAsync(source,
+            TerminalRunOutcome.Create(RunStatus.Completed, "run.completed",
+                new { result = "assembly_complete" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+            "assembly_complete")).Should().BeTrue();
+
+        var rest = await client.GetFromJsonAsync<System.Text.Json.JsonElement>(
+            $"/api/projects/{project}/backlog/tasks/{downstream}");
+        var mcp = System.Text.Json.JsonDocument.Parse(
+            await tools.BacklogGetTaskAsync(project, downstream)).RootElement;
+        foreach (var projection in new[] { rest, mcp })
+        {
+            projection.GetProperty("prerequisites")[0].GetProperty("reason").GetString()
+                .Should().Be("upstream_output_identity_unavailable");
+            projection.GetProperty("is_blocked").GetBoolean().Should().BeTrue();
+        }
     }
 }

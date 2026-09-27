@@ -25,6 +25,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Tests.Helpers;
 using Agentweaver.Domain;
 using Agentweaver.SandboxExec;
+using static Agentweaver.Tests.Backlog.BacklogTestData;
 using Run = Agentweaver.Domain.Run;
 
 namespace Agentweaver.Tests.Coordinator;
@@ -3319,6 +3320,97 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
         persisted!.Status.Should().Be(RunStatus.Completed);
         persisted.Result.Should().Be("assembly_complete");
+    }
+
+    [Fact]
+    public async Task BacklogCreatedCoordinators_ParallelStoriesJoinAfterVerifiedAssemblyAndRecovery()
+    {
+        var projects = new SqliteProjectStore(_runDb.Db);
+        var backlog = new SqliteBacklogTaskStore(_runDb.Db);
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+        var first = MakeReadyTask(project.Id, "a");
+        var second = MakeReadyTask(project.Id, "b");
+        var join = MakeReadyTask(project.Id, "c");
+        foreach (var task in new[] { first, second, join })
+            await backlog.InsertAsync(task);
+        await backlog.EditDependenciesAsync(project.Id, 0,
+            new BacklogDependencyEdit(join.Id, [first.Id, second.Id], []));
+
+        (await backlog.ListReadyForClaimAsync(project.Id, 3)).Select(t => t.Id)
+            .Should().Equal(first.Id, second.Id);
+        var firstRun = MakeCoordinatorRun(project.Id, RunId.New()) with { RepositoryPath = "repo" };
+        var secondRun = MakeCoordinatorRun(project.Id, RunId.New()) with { RepositoryPath = "repo" };
+        foreach (var (task, run) in new[] { (first, firstRun), (second, secondRun) })
+            (await backlog.TryClaimAndReserveCoordinatorRunAsync(project.Id, task.Id, run, DateTimeOffset.UtcNow))
+                .Should().Be(ClaimReserveResult.Won);
+
+        async Task AssembleAsync(Run run)
+        {
+            var runId = run.Id.ToString();
+            await SeedPlanAsync(runId, [SubtaskStatus.Completed, SubtaskStatus.AssembleReady]);
+            _streamStore.Create(runId, "alice");
+            var assembly = _sut.RunAssemblyAsync(Context(runId), default);
+            await WaitUntilArmedAsync(runId);
+            _reviewGate.TrySubmit(runId, "alice",
+                new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                    TargetFiles: null, Reviewer: "alice"))
+                .Should().Be(AssemblyReviewSubmitResult.Accepted);
+            await assembly;
+            var completed = await _runStore.GetAsync(run.Id);
+            completed!.Status.Should().Be(RunStatus.Completed);
+            completed.Result.Should().Be("assembly_complete");
+            completed.MergedCommitHash.Should().Be("merge-commit");
+            completed.TreeHash.Should().Be("agg-tree");
+        }
+
+        await AssembleAsync(firstRun);
+        (await backlog.ListDependencyStatusesAsync(project.Id, [join.Id]))
+            .Should().Contain(s => s.DependsOnTaskId == first.Id && s.Reason == "integrated");
+        (await backlog.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
+
+        var failed = await _runStore.GetAsync(secondRun.Id);
+        (await _runStore.TrySetTerminalOutcomeAsync(secondRun.Id,
+            TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+                new { reason = "assembly_failed" }, DateTimeOffset.UtcNow, failed!.LifecycleGeneration),
+            "assembly_failed")).Should().BeTrue();
+        (await backlog.ListDependencyStatusesAsync(project.Id, [join.Id]))
+            .Should().Contain(s => s.DependsOnTaskId == second.Id && s.Reason == "failed");
+        (await backlog.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
+
+        await _runStore.UpdateStatusAsync(secondRun.Id, RunStatus.InProgress, null);
+        await AssembleAsync(secondRun);
+        (await backlog.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id).Should().Equal(join.Id);
+
+        var joinRun = MakeCoordinatorRun(project.Id, RunId.New()) with { RepositoryPath = "repo" };
+        (await backlog.TryClaimAndReserveCoordinatorRunAsync(project.Id, join.Id, joinRun, DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Won);
+        var accepted = (await backlog.GetAsync(project.Id, join.Id))!;
+        accepted.ClaimedGraphRevision.Should().Be(1);
+        var inputs = JsonSerializer.Deserialize<BacklogClaimedPrerequisite[]>(
+            accepted.ClaimedPrerequisitesJson!)!;
+        inputs.Select(input => input.RunId).Should().BeEquivalentTo(
+            [firstRun.Id.ToString(), secondRun.Id.ToString()]);
+        inputs.Should().OnlyContain(input => input.Outcome == "integrated");
+        inputs.Should().OnlyContain(input => input.MergedCommitHash == "merge-commit"
+            && input.TreeHash == "agg-tree");
+        inputs.Single(input => input.RunId == secondRun.Id.ToString())
+            .LifecycleGeneration.Should().BeGreaterThan(1);
+
+        await _runStore.UpdateStatusAsync(firstRun.Id, RunStatus.InProgress, null);
+        var revision = (await _runStore.GetAsync(firstRun.Id))!;
+        (await _runStore.TryMutateTerminalOutcomeAsync(firstRun.Id,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted,
+                    new { result = "assembly_complete" }, DateTimeOffset.UtcNow, revision.LifecycleGeneration),
+                "assembly_complete",
+                MergedCommitHash: "replacement-commit",
+                TreeHash: "replacement-tree"))).Should().BeTrue();
+        (await _runStore.GetAsync(firstRun.Id))!.MergedCommitHash.Should().Be("replacement-commit");
+        (await backlog.TryArchiveAsync(project.Id, first.Id, DateTimeOffset.UtcNow)).Should().BeTrue();
+        (await backlog.GetAsync(project.Id, join.Id))!.ClaimedPrerequisitesJson
+            .Should().Be(accepted.ClaimedPrerequisitesJson,
+                "retrying a producer cannot rewrite an already claimed consumer's input");
     }
 
     [Fact]
