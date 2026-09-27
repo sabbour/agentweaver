@@ -91,7 +91,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             request.RepositoryPath,
             request.OriginatingBranch,
             request.IntegrationBranch,
-            request.ChildBranchesInOrder);
+            request.ChildInputsInOrder);
 
     public void PrepareIntegrationBranchRetry(CollectiveIntegrationRequest request) =>
         _worktreeManager.TryCleanIntegrationRetryArtifacts(

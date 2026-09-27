@@ -15,15 +15,17 @@ Feedback returns to coordinator steering and any required reassembly, not straig
 from an agent revision to another human-review screen.
 
 The coordinator verifies each file-producing child's recorded tree against its Git
-branch before assembly. A missing child run, branch, or recorded tree blocks assembly
+branch and assembles from that exact verified commit, even if the branch moves later.
+A missing child run, branch, or recorded tree blocks assembly
 instead of quietly reducing its inputs. A task explicitly declaring no file outputs
 (`[]`) and with no recorded Git output needs no branch; any recorded branch or tree
 must still verify. A committed no-change child with a matching tree remains valid.
 Dependent work also waits for a base containing every required upstream commit; if
 verification fails, recover or retry the named producer rather than launching from the
-original branch. Independent edits to the same path, including a rename or deletion,
-stop integration for explicit resolution. The conflict event identifies the incoming
-branch, paths, and available contributor commit identities; no later child silently overwrites an earlier one. An unresolved
+original branch. Independent edits to the same path, including a rename, deletion,
+or directory/file collision, stop integration for explicit resolution. The conflict
+event identifies the affected paths and both contributors' commit identities; no
+later child silently overwrites an earlier one. An unresolved
 build leaves the previous integration revision unchanged.
 
 This verification does not yet provide a durable immutable output receipt, approval

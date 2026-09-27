@@ -44,6 +44,8 @@ internal enum BranchInclusionOutcome
 /// </summary>
 internal static class DependencyBranchInclusion
 {
+    internal sealed record VerifiedBranch(BranchInclusionOutcome Outcome, IntegrationChildInput? Input);
+
     internal static bool RequiresArtifact(Subtask subtask) =>
         CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(subtask.DeclaredOutputPathsJson).State
         != CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.ValidEmpty;
@@ -53,15 +55,23 @@ internal static class DependencyBranchInclusion
         WorktreeManager worktreeManager,
         string repositoryPath,
         string? worktreeBranch,
+        string? treeHash) => Verify(worktreeManager, repositoryPath, worktreeBranch, treeHash).Outcome;
+
+    internal static VerifiedBranch Verify(
+        WorktreeManager worktreeManager,
+        string repositoryPath,
+        string? worktreeBranch,
         string? treeHash)
     {
         if (string.IsNullOrEmpty(worktreeBranch) || !worktreeManager.BranchExists(repositoryPath, worktreeBranch))
-            return BranchInclusionOutcome.ExcludeMissingBranch;
+            return new(BranchInclusionOutcome.ExcludeMissingBranch, null);
 
-        if (string.IsNullOrWhiteSpace(treeHash)
-            || !worktreeManager.BranchTipMatchesTree(repositoryPath, worktreeBranch, treeHash))
-            return BranchInclusionOutcome.ExcludeTreeMismatch;
+        if (string.IsNullOrWhiteSpace(treeHash))
+            return new(BranchInclusionOutcome.ExcludeTreeMismatch, null);
 
-        return BranchInclusionOutcome.Include;
+        var input = worktreeManager.GetVerifiedChildInput(repositoryPath, worktreeBranch, treeHash);
+        return input is null
+            ? new(BranchInclusionOutcome.ExcludeTreeMismatch, null)
+            : new(BranchInclusionOutcome.Include, input);
     }
 }
