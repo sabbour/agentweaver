@@ -145,11 +145,17 @@ runtime.
 
 ### API restart recovery and health probes
 
-API restart recovery runs after the HTTP listener starts. One Postgres advisory-lock
-leader sweeps interrupted workflow runs, then coordinator runs, then the coordinator
-watchdog; other replicas can answer `/api/ping` without waiting for
-the sweep. The leader keeps its Postgres advisory lock until shutdown after a
-successful sweep; followers retry leadership and only sweep if that process exits.
+API and worker restart recovery run after their listeners start. Separate Postgres
+advisory locks serialize sweeps within each role; a healthy worker cannot prevent
+new API replicas from sweeping after an API-only restart. Each leader releases its
+lock after the sweep and all replicas retry periodically, including after success,
+so expired per-run leases and orphaned plans are reconsidered. The advisory lock
+does not authorize mutations: durable run leases, coordinator plan claims, and
+child-dispatch reservations fence work across API and worker roles. Healthy child
+work on a surviving replica remains associated with its existing run identity.
+An expired coordinator child is restarted under that same child run ID after
+claiming its execution lease; a fresh lease held by another replica is skipped.
+Both API replicas can answer `/api/ping` without waiting for a sweep.
 A sweep has a five-minute deadline and retries after 30 seconds on timeout
 or failure. Look for `Startup recovery sweep started`, `completed`, `exceeded`, or
 `failed` in API logs when diagnosing a restart. Readiness reflects workspace availability and successful initial static OAuth client

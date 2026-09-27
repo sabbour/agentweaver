@@ -505,6 +505,75 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RecoverAsync_ExpiredCoordinatorChild_RestartsOriginalIdentity()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var leaseStore = new RecordingRunLeaseStore(claimed: true, fencingToken: 17);
+        var parentId = RunId.New();
+        var childId = RunId.New();
+        var now = DateTimeOffset.UtcNow;
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId, RepositoryPath = _worktreePath, OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot, Task = "parent", SubmittingUser = "test-user",
+            Status = RunStatus.InProgress, StartedAt = now, AgentName = "Coordinator",
+        });
+        var service = BuildService(runStore, streamStore,
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+            leaseStore: leaseStore);
+        using (var scope = _memoryServiceProvider!.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project", CoordinatorRunId = parentId.ToString(),
+                Goal = "g", DesiredOutcome = "o", Scope = "s", Assumptions = "a",
+                Status = "confirmed", CreatedAt = now, UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id, ProjectId = "project",
+                CoordinatorRunId = parentId.ToString(), Status = WorkPlanStatus.Dispatching,
+                CreatedAt = now, UpdatedAt = now,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            var subtask = new Subtask
+            {
+                WorkPlanId = plan.Id, Title = "child", Scope = "child",
+                AssignedAgent = "agent", SelectedModelId = "model", Phase = "execution",
+                IsolationStrategy = "worktree", Status = SubtaskStatus.Running,
+                ChildRunId = childId.ToString(), CreatedAt = now, UpdatedAt = now,
+            };
+            db.Subtasks.Add(subtask);
+            await db.SaveChangesAsync();
+            await runStore.InsertAsync(new Run
+            {
+                Id = childId, RepositoryPath = _worktreePath, OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot, Task = "child", SubmittingUser = "test-user",
+                Status = RunStatus.InProgress, StartedAt = now,
+                ParentRunId = parentId.ToString(), SubtaskId = subtask.Id.ToString(),
+            });
+        }
+
+        var restarted = new List<RunId>();
+        service.RestartChildRunOverride = (child, _) =>
+        {
+            restarted.Add(child.Id);
+            return Task.CompletedTask;
+        };
+        await service.RecoverAsync(CancellationToken.None);
+
+        restarted.Should().ContainSingle().Which.Should().Be(childId);
+        (await runStore.GetAsync(childId))!.Status.Should().Be(RunStatus.InProgress);
+        leaseStore.ClaimedRunIds.Should().Contain(childId.ToString());
+        leaseStore.ReleasedRunIds.Should().Contain(childId.ToString());
+    }
+
+    [Fact]
     public async Task RecoverAsync_StrandedChildRun_EmitsRetryableTransportFailure()
     {
         var runStore = new SqliteRunStore(_db.Db);

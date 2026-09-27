@@ -6,10 +6,8 @@ using Npgsql;
 namespace Agentweaver.Api.Infrastructure;
 
 /// <summary>
-/// Acquires a Postgres session-level advisory lock so that exactly one replica runs
-/// <c>WorkflowRestartService.RecoverAsync</c> + <c>CoordinatorRunService.RecoverInterruptedRunsAsync</c>
-/// + <c>CoordinatorReconciler.SweepAsync</c>. The leader retains the lock until shutdown
-/// so live replicas do not repeat a completed sweep; a survivor takes over after leader loss.
+/// Serializes recovery sweeps among replicas of the same role. Per-run leases and
+/// coordinator plan claims, not this lock, protect mutations across API and worker roles.
 ///
 /// <para>On SQLite and other non-Postgres providers (local dev / test) the lock is always granted
 /// so single-process recovery still runs.</para>
@@ -22,7 +20,13 @@ public sealed class StartupRecoveryLeader : IAsyncDisposable
 {
     // Stable key for pg_try_advisory_lock(bigint) — chosen once and never changed.
     // Encodes "AWRCVRY\0" (AgentWeaver ReCOVeRY) as a big-endian int64.
-    private const long AdvisoryLockKey = 0x4157_5243_5652_5900L;
+    // The former fleet-wide lifetime key ends in 00. Do not reuse it while
+    // older worker pods may still hold that connection during a rolling upgrade.
+    private const long ApiAdvisoryLockKey = 0x4157_5243_5652_5901L;
+    private const long WorkerAdvisoryLockKey = 0x4157_5243_5652_5902L;
+
+    internal static long LockKeyForRole(IConfiguration configuration) =>
+        AppRole.IsWorker(configuration) ? WorkerAdvisoryLockKey : ApiAdvisoryLockKey;
 
     private DbConnection? _conn;
     /// <summary>True when this process won the advisory-lock race and must run recovery.</summary>
@@ -42,7 +46,7 @@ public sealed class StartupRecoveryLeader : IAsyncDisposable
         IConfiguration configuration,
         ILogger logger,
         CancellationToken ct = default) =>
-        AcquireAsync(configuration, logger, AdvisoryLockKey, ct);
+        AcquireAsync(configuration, logger, LockKeyForRole(configuration), ct);
 
     internal static async Task<StartupRecoveryLeader> AcquireAsync(
         IConfiguration configuration,

@@ -77,8 +77,6 @@ public sealed class StartupRecoveryService : BackgroundService
                     _logger.LogInformation("Startup recovery sweep started");
                     await _recover(timeout.Token).ConfigureAwait(false);
                     _logger.LogInformation("Startup recovery sweep completed");
-                    timeout.CancelAfter(Timeout.InfiniteTimeSpan);
-                    await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

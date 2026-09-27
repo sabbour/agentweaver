@@ -134,18 +134,22 @@ public sealed class WorkflowRestartService
                     try
                     {
                         var restart = RestartChildRunOverride;
+                        var transferLease = restart is null;
                         if (restart is null)
                         {
                             using var restartScope = _scopeFactory.CreateScope();
                             var orchestrator = restartScope.ServiceProvider.GetService<RunOrchestrator>();
                             if (orchestrator is not null)
                                 restart = (childRun, token) =>
-                                    orchestrator.RestartInterruptedChildRunAsync(childRun, token);
+                                    orchestrator.RestartInterruptedChildRunAsync(
+                                        childRun, childRecoveryLease.Claim, token);
                         }
 
                         if (restart is not null)
                         {
                             await restart(run, ct).ConfigureAwait(false);
+                            if (transferLease)
+                                childRecoveryLease.MarkTransferred();
                             _logger.LogInformation(
                                 "Restarted workflow child branch {RunId} under its original durable identity",
                                 run.Id);
@@ -204,6 +208,79 @@ public sealed class WorkflowRestartService
                     "Leaving InProgress run {RunId} untouched because a peer owns its unexpired execution lease",
                     run.Id);
                 continue;
+            }
+
+            if (run.ParentRunId is not null)
+            {
+                using var restartScope = _scopeFactory.CreateScope();
+                var orchestrator = restartScope.ServiceProvider.GetService<RunOrchestrator>();
+                if (orchestrator is not null || RestartChildRunOverride is not null)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var parent = RunId.TryParse(run.ParentRunId, out var parentId)
+                        ? await _runStore.GetAsync(parentId, ct).ConfigureAwait(false)
+                        : null;
+                    var db = restartScope.ServiceProvider.GetService<MemoryDbContext>();
+                    var activePlanChild = false;
+                    if (db is not null)
+                        activePlanChild = await db.WorkPlans.AsNoTracking()
+                            .AnyAsync(plan => plan.CoordinatorRunId == run.ParentRunId
+                                && plan.Status == "dispatching"
+                                && plan.CoordinatorCancellationRequestedAt == null
+                                && db.Subtasks.Any(subtask => subtask.WorkPlanId == plan.Id
+                                    && subtask.ChildRunId == run.Id.ToString()
+                                    && subtask.CancellationRequestedAt == null), ct).ConfigureAwait(false);
+                    if (parent?.Status == RunStatus.InProgress && activePlanChild)
+                    {
+                        try
+                        {
+                            if (RestartChildRunOverride is { } restart)
+                                await restart(run, ct).ConfigureAwait(false);
+                            else
+                            {
+                                var restartDb = db ?? throw new InvalidOperationException(
+                                    "Coordinator child restart requires the plan database.");
+                                var expectedGeneration = parent.LifecycleGeneration;
+                                async Task<bool> IsStillAuthorizedAsync(CancellationToken token)
+                                {
+                                    if (!await _leaseStore.IsLeaseOwnerAsync(
+                                            run.Id.ToString(), recoveryLease.Claim.OwnerId,
+                                            recoveryLease.FencingToken, token).ConfigureAwait(false))
+                                        return false;
+                                    return await restartDb.WorkPlans.AsNoTracking()
+                                        .AnyAsync(plan => plan.CoordinatorRunId == run.ParentRunId
+                                            && plan.Status == "dispatching"
+                                            && plan.CoordinatorCancellationRequestedAt == null
+                                            && restartDb.Subtasks.Any(subtask => subtask.WorkPlanId == plan.Id
+                                                && subtask.ChildRunId == run.Id.ToString()
+                                                && subtask.CancellationRequestedAt == null)
+                                            && restartDb.Runs.Any(candidate => candidate.RunId == run.ParentRunId
+                                                && candidate.Status == "in_progress"
+                                                && candidate.LifecycleGeneration == expectedGeneration),
+                                            token).ConfigureAwait(false);
+                                }
+                                await orchestrator!.RestartInterruptedChildRunAsync(
+                                    run, recoveryLease.Claim, ct, IsStillAuthorizedAsync).ConfigureAwait(false);
+                                recoveryLease.MarkTransferred();
+                            }
+                            _logger.LogInformation(
+                                "Restarted coordinator child {RunId} under its existing execution identity",
+                                run.Id);
+                            continue;
+                        }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Unable to restart coordinator child {RunId}; leaving its identity for a later recovery sweep",
+                                run.Id);
+                            continue;
+                        }
+                    }
+                }
             }
 
             var retryableChildTransportFailure = run.ParentRunId is not null;
