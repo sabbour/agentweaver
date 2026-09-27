@@ -706,16 +706,12 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     // =========================================================================
-    // #240: cross-pod / restart recovery must ADOPT already-completed children,
-    // not re-run them. A mid-flight subtask whose child run reached a durable
-    // SUCCESS terminal (assemble_ready / completed / merged) but whose subtask
-    // row never advanced (the dispatch loop died in the ApplyChildResult window)
-    // must be LEFT in place (dispatched/running + ChildRunId intact) so the
-    // recovery-aware re-arm resolves and adopts it. Only genuinely-incomplete
-    // children (still in progress, or terminal in a FAILURE state) are reset.
+    // Startup recovery must leave plans with subtasks untouched until the
+    // reconciler claims plan ownership. Even an in-progress child can belong
+    // to a healthy worker when only an API replica restarts.
     // =========================================================================
     [Fact]
-    public async Task ResetInFlightSubtasks_AdoptsCompletedChildren_ResetsOnlyIncompleteOnes()
+    public async Task StartupRecovery_DoesNotResetUnclaimedInFlightChildren()
     {
         var coord = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coord);
@@ -732,14 +728,14 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             (SubtaskStatus.Running, (string?)assembleReady),   // 0 → adopt
             (SubtaskStatus.Dispatched, (string?)completed),    // 1 → adopt
             (SubtaskStatus.Running, (string?)merged),          // 2 → adopt
-            (SubtaskStatus.Dispatched, (string?)inProgress),   // 3 → reset (still running)
-            (SubtaskStatus.Running, (string?)failed),          // 4 → reset (failure terminal)
-            (SubtaskStatus.Running, (string?)null),            // 5 → reset (no child)
+            (SubtaskStatus.Dispatched, (string?)inProgress),   // 3 → healthy worker may own
+            (SubtaskStatus.Running, (string?)failed),          // 4 → reconciler must claim
+            (SubtaskStatus.Running, (string?)null),            // 5 → legacy row
             (SubtaskStatus.AssembleReady, (string?)null),      // 6 → untouched (already terminal)
         });
 
         var svc = BuildCoordinatorRunService(_runStore, new RunStreamStore());
-        await svc.ResetInFlightSubtasksAsync(planId, CancellationToken.None);
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
 
         // Adopted: left in-flight with ChildRunId intact so the re-arm resolves the completed child.
         var s0 = await GetSubtaskAsync(ids[0]);
@@ -754,17 +750,17 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         s2.Status.Should().Be(SubtaskStatus.Running, "a merged child must be adopted, not re-run");
         s2.ChildRunId.Should().Be(merged);
 
-        // Reset: genuinely-incomplete work redispatched with a fresh child.
+        // No plan mutation occurs without the reconciler's distributed plan claim.
         var s3 = await GetSubtaskAsync(ids[3]);
-        s3.Status.Should().Be(SubtaskStatus.Pending, "an in-progress child crashed and must redispatch");
-        s3.ChildRunId.Should().BeNull();
+        s3.Status.Should().Be(SubtaskStatus.Dispatched, "a healthy worker-owned child must not be redispatched");
+        s3.ChildRunId.Should().Be(inProgress);
 
         var s4 = await GetSubtaskAsync(ids[4]);
-        s4.Status.Should().Be(SubtaskStatus.Pending, "a failed child must redispatch a fresh attempt");
-        s4.ChildRunId.Should().BeNull();
+        s4.Status.Should().Be(SubtaskStatus.Running, "only the claimed plan owner can recover a failed child");
+        s4.ChildRunId.Should().Be(failed);
 
         var s5 = await GetSubtaskAsync(ids[5]);
-        s5.Status.Should().Be(SubtaskStatus.Pending, "a mid-flight subtask with no child must redispatch");
+        s5.Status.Should().Be(SubtaskStatus.Running, "legacy rows require a correlated-child check by the owner");
         s5.ChildRunId.Should().BeNull();
 
         // Already-terminal subtask is never touched by the reset.

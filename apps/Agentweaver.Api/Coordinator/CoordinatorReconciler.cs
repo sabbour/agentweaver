@@ -123,7 +123,8 @@ public sealed class CoordinatorReconciler
             candidates = await db.WorkPlans
                 .AsNoTracking()
                 .Where(w => w.ParentRunId == null
-                         && (w.Status == WorkPlanStatus.Dispatching
+                         && (w.Status == WorkPlanStatus.Planned
+                             || w.Status == WorkPlanStatus.Dispatching
                              || w.Status == WorkPlanStatus.AwaitingAssembly
                              || w.Status == WorkPlanStatus.Assembling
                              || w.Status == WorkPlanStatus.AssemblySteering
@@ -166,6 +167,7 @@ public sealed class CoordinatorReconciler
 
                 switch (plan.Status)
                 {
+                    case WorkPlanStatus.Planned:
                     case WorkPlanStatus.Dispatching:
                         if (!string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
                             && _dispatch.IsDispatchActive(plan.CoordinatorRunId))
@@ -598,7 +600,7 @@ public sealed class CoordinatorReconciler
                    SET "CoordinatorPodId" = {_myPodId},
                        "UpdatedAt" = {now}
                  WHERE "Id" = {planId}
-                   AND "Status" = {WorkPlanStatus.Dispatching}
+                   AND "Status" IN ({WorkPlanStatus.Planned}, {WorkPlanStatus.Dispatching})
                    AND ("CoordinatorPodId" IS NULL
                         OR "CoordinatorPodId" = {_myPodId}
                         OR "UpdatedAt" < {staleThreshold})
@@ -609,7 +611,7 @@ public sealed class CoordinatorReconciler
 
         int rows = await db.WorkPlans
             .Where(w => w.Id == planId
-                     && w.Status == WorkPlanStatus.Dispatching
+                     && (w.Status == WorkPlanStatus.Planned || w.Status == WorkPlanStatus.Dispatching)
                      && (w.CoordinatorPodId == null
                          || w.CoordinatorPodId == _myPodId
                          || w.UpdatedAt < staleThreshold))

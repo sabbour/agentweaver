@@ -15,11 +15,142 @@ public sealed class EfRunStore : IRunStore
 {
     private readonly IDbContextFactory<MemoryDbContext> _factory;
     private readonly ILogger<EfRunStore>? _logger;
+    private readonly TimeProvider _clock;
 
-    public EfRunStore(IDbContextFactory<MemoryDbContext> factory, ILogger<EfRunStore>? logger = null)
+    public EfRunStore(
+        IDbContextFactory<MemoryDbContext> factory,
+        ILogger<EfRunStore>? logger = null,
+        TimeProvider? clock = null)
     {
         _factory = factory;
         _logger = logger;
+        _clock = clock ?? TimeProvider.System;
+    }
+
+    /// <summary>
+    /// Reserves the canonical child and its execution identity while holding the plan and subtask
+    /// row locks. A launch is authorized only after the child lease is committed.
+    /// </summary>
+    public async Task<ChildDispatchReservation> TryReserveCoordinatorChildAsync(
+        int workPlanId, int subtaskId, string coordinatorPodId, int parentLifecycleGeneration,
+        Run proposedChild, string leaseOwnerId, TimeSpan leaseTtl, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(coordinatorPodId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(leaseOwnerId);
+        if (leaseTtl <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(leaseTtl));
+        if (string.IsNullOrWhiteSpace(proposedChild.ParentRunId)
+            || proposedChild.SubtaskId != subtaskId.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            throw new ArgumentException("Child must identify its coordinator and subtask.", nameof(proposedChild));
+
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        if (!db.Database.IsNpgsql())
+            throw new NotSupportedException("Coordinator child reservations require PostgreSQL row locks.");
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var plan = await db.WorkPlans
+            .FromSqlInterpolated($"SELECT * FROM \"WorkPlans\" WHERE \"Id\" = {workPlanId} FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
+        if (plan is null || plan.CoordinatorRunId != proposedChild.ParentRunId
+            || plan.CoordinatorPodId != coordinatorPodId || plan.Status != "dispatching"
+            || plan.CoordinatorCancellationRequestedAt is not null)
+            return new ChildDispatchReservation(ChildDispatchReservationState.NotOwner);
+
+        var subtask = await db.Subtasks
+            .FromSqlInterpolated($"SELECT * FROM \"Subtasks\" WHERE \"Id\" = {subtaskId} FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
+        if (subtask is null || subtask.WorkPlanId != workPlanId
+            || subtask.CancellationRequestedAt is not null)
+            return new ChildDispatchReservation(ChildDispatchReservationState.NotOwner);
+        if (subtask.Status != "pending")
+            return new ChildDispatchReservation(ChildDispatchReservationState.ExistingActive,
+                subtask.ChildRunId, ExistingStatus: subtask.Status);
+
+        var parent = await db.Runs
+            .FromSqlInterpolated($"SELECT * FROM runs WHERE run_id = {plan.CoordinatorRunId} FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
+        if (parent is null || parent.LifecycleGeneration != parentLifecycleGeneration
+            || parent.Status != RunStatus.InProgress.ToApiString())
+            return new ChildDispatchReservation(ChildDispatchReservationState.NotOwner);
+
+        var childId = subtask.ChildRunId;
+        if (childId is null)
+        {
+            var previous = await db.Runs.AsNoTracking()
+                .Where(r => r.ParentRunId == plan.CoordinatorRunId
+                    && r.SubtaskId == subtaskId.ToString()
+                    && (r.Status == "pending" || r.Status == "in_progress"))
+                .OrderBy(r => r.Status == "pending")
+                .ThenByDescending(r => r.StartedAt)
+                .FirstOrDefaultAsync(ct);
+            if (previous is not null && previous.Status != "pending")
+                return new ChildDispatchReservation(ChildDispatchReservationState.ExistingActive,
+                    previous.RunId, ExistingStatus: previous.Status);
+            childId = previous?.RunId ?? proposedChild.Id.ToString();
+            subtask.ChildRunId = childId;
+            subtask.UpdatedAt = _clock.GetUtcNow();
+        }
+        else if (!RunId.TryParse(childId, out _))
+            throw new InvalidOperationException($"Subtask {subtaskId} has an invalid canonical child run id.");
+
+        var child = await db.Runs
+            .FromSqlInterpolated($"SELECT * FROM runs WHERE run_id = {childId} FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
+        if (child is null)
+        {
+            var pending = proposedChild with
+            {
+                Id = RunId.Parse(childId),
+                Status = RunStatus.Pending,
+                StartedAt = proposedChild.StartedAt == default ? DateTimeOffset.UtcNow : proposedChild.StartedAt,
+                EndedAt = null,
+                Result = null,
+            };
+            child = ToRecord(pending);
+            db.Runs.Add(child);
+            db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, pending, ct));
+        }
+        else if (child.ParentRunId != plan.CoordinatorRunId || child.SubtaskId != subtaskId.ToString())
+            throw new InvalidOperationException($"Child {childId} does not belong to subtask {subtaskId}.");
+        else if (child.Status != RunStatus.Pending.ToApiString())
+            return new ChildDispatchReservation(ChildDispatchReservationState.ExistingActive,
+                childId, ExistingStatus: child.Status);
+
+        if (!await db.ExecutionIdentities.AnyAsync(i => i.RunId == childId, ct)
+            && db.Entry(child).State != EntityState.Added)
+            db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, FromRecord(child), ct));
+
+        var now = _clock.GetUtcNow();
+        if (child.OwnerId is not null && child.LeaseExpiresAt >= now)
+            return new ChildDispatchReservation(ChildDispatchReservationState.LeaseHeld, childId);
+
+        child.OwnerId = leaseOwnerId;
+        child.LeaseExpiresAt = now.Add(leaseTtl);
+        child.HeartbeatAt = now;
+        child.FencingToken++;
+        child.Attempt++;
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return new ChildDispatchReservation(ChildDispatchReservationState.Claimed, childId,
+            child.FencingToken, child.LifecycleGeneration);
+    }
+
+    public async Task<bool> IsCoordinatorChildLaunchAuthorizedAsync(
+        int workPlanId, int subtaskId, string coordinatorPodId, int parentLifecycleGeneration,
+        string childRunId, string leaseOwnerId, long fencingToken, CancellationToken ct)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var now = _clock.GetUtcNow();
+        return await db.WorkPlans.AsNoTracking().AnyAsync(w =>
+            w.Id == workPlanId
+            && w.Status == "dispatching"
+            && w.CoordinatorPodId == coordinatorPodId
+            && w.CoordinatorCancellationRequestedAt == null
+            && db.Subtasks.Any(s => s.Id == subtaskId && s.WorkPlanId == w.Id
+                && s.ChildRunId == childRunId && s.CancellationRequestedAt == null)
+            && db.Runs.Any(p => p.RunId == w.CoordinatorRunId
+                && p.Status == "in_progress" && p.LifecycleGeneration == parentLifecycleGeneration)
+            && db.Runs.Any(c => c.RunId == childRunId && c.OwnerId == leaseOwnerId
+                && c.FencingToken == fencingToken && c.LeaseExpiresAt > now), ct);
     }
 
     public async Task InsertAsync(Run run, CancellationToken ct = default)

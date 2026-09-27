@@ -2039,7 +2039,27 @@ public sealed class CoordinatorRunService
 
             try
             {
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                    var plan = await db.WorkPlans.AsNoTracking()
+                        .Where(w => w.CoordinatorRunId == run.Id.ToString())
+                        .Select(w => new { w.Id, w.Status })
+                        .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+                    if (plan is not null
+                        && (plan.Status != WorkPlanStatus.Planned
+                            || await db.Subtasks.AnyAsync(s => s.WorkPlanId == plan.Id, ct).ConfigureAwait(false)))
+                    {
+                        // The plan reconciler claims dispatch ownership before re-arming. A startup
+                        // scan must not reset children that may still be running on a healthy peer.
+                        continue;
+                    }
+                }
                 await RecoverOneAsync(run, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -2305,7 +2325,6 @@ public sealed class CoordinatorRunService
             // (their child runs were already failed by the generic restart sweep) and re-arm dispatch.
             // assemble_ready / completed / failed / rai_flagged subtasks keep their terminal status.
             case CoordinatorRecoveryAction.Dispatch:
-                await ResetInFlightSubtasksAsync(workPlanId!.Value, ct).ConfigureAwait(false);
                 _dispatchService.StartDispatch(context);
                 _logger.LogInformation("Recovered coordinator run {RunId} into dispatch (status was {Status})", runId, planState.Status);
                 break;
@@ -2909,77 +2928,6 @@ public sealed class CoordinatorRunService
         _logger.LogInformation(
             "Re-armed unattended confirm for recovered backlog-pickup coordinator run {RunId}", run.Id);
     }
-
-    /// <summary>
-    /// Resets subtasks that were mid-flight (<c>dispatched</c> / <c>running</c>) back to
-    /// <c>pending</c> so the dispatch frontier re-launches them with fresh child runs. Terminal
-    /// subtasks (assemble_ready / completed / failed / rai_flagged) are left untouched — their work
-    /// (and child branches) survive the restart and feed collective assembly.
-    ///
-    /// <para>#240 (adopt live children, don't re-run completed subtasks): a mid-flight subtask whose
-    /// CHILD RUN has already reached a durable SUCCESS terminal (<c>assemble_ready</c> /
-    /// <c>completed</c> / <c>merged</c>) — but whose subtask row was never advanced because the owning
-    /// dispatch loop died in the window between the child persisting its result and
-    /// <c>ApplyChildResultAsync</c> updating the row — must NOT be blindly reset to <c>pending</c>: that
-    /// re-runs already-completed work and orphans its committed child branch. Such a subtask is left
-    /// <c>dispatched</c>/<c>running</c> with its <c>ChildRunId</c> intact so the RECOVERY-AWARE re-arm in
-    /// <see cref="CoordinatorDispatchService"/> re-observes it, store-resolves the terminal child, and
-    /// ADOPTS the result (mirroring how the cross-pod <see cref="CoordinatorReconciler"/> takeover path
-    /// already resumes rather than re-runs). Only genuinely-incomplete children (still in progress at
-    /// crash, or terminal in a FAILURE state) are reset for a fresh dispatch.</para>
-    /// </summary>
-    internal async Task ResetInFlightSubtasksAsync(int workPlanId, CancellationToken ct)
-    {
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-        var inFlight = await db.Subtasks
-            .Where(s => s.WorkPlanId == workPlanId
-                && (s.Status == SubtaskStatus.Dispatched || s.Status == SubtaskStatus.Running))
-            .Select(s => new { s.Id, s.ChildRunId })
-            .ToListAsync(ct).ConfigureAwait(false);
-        if (inFlight.Count == 0)
-            return;
-
-        // Adopt (do NOT reset) any in-flight subtask whose child run already reached a durable SUCCESS
-        // terminal — its completed work is recoverable and re-running it is exactly the #240 bug.
-        var adoptedIds = new List<int>();
-        foreach (var s in inFlight)
-        {
-            if (string.IsNullOrEmpty(s.ChildRunId) || !RunId.TryParse(s.ChildRunId, out var childRunId))
-                continue;
-            var child = await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false);
-            if (child is not null && IsChildSuccessTerminal(child.Status))
-                adoptedIds.Add(s.Id);
-        }
-
-        if (adoptedIds.Count > 0)
-            _logger.LogInformation(
-                "Coordinator recovery: adopting {Count} in-flight subtask(s) [{Ids}] in work plan {WorkPlanId} "
-                + "whose child runs already completed durably — re-arm will resolve them instead of re-running (#240)",
-                adoptedIds.Count, string.Join(",", adoptedIds), workPlanId);
-
-        var resetIds = inFlight.Select(s => s.Id).Except(adoptedIds).ToList();
-        if (resetIds.Count == 0)
-            return;
-
-        var now = DateTimeOffset.UtcNow;
-        await db.Subtasks
-            .Where(s => resetIds.Contains(s.Id))
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(s => s.Status, SubtaskStatus.Pending)
-                .SetProperty(s => s.ChildRunId, (string?)null)
-                .SetProperty(s => s.UpdatedAt, now), ct)
-            .ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// True when a child run status represents a durable SUCCESS terminal whose committed work should
-    /// be ADOPTED on recovery rather than re-run. Failure terminals (failed / declined / merge_failed)
-    /// are intentionally excluded so a crashed-and-failed child still redispatches for a fresh attempt.
-    /// </summary>
-    private static bool IsChildSuccessTerminal(RunStatus status) => status is
-        RunStatus.AssembleReady or RunStatus.Completed or RunStatus.Merged;
 
     // -----------------------------------------------------------------------
     // API seams for the HTTP wave (Tank): GET /children + GET /plan. These are read-only

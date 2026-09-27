@@ -374,6 +374,16 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
             subtask.SelectedModelId == provider.Model
             && subtask.SelectedModelId != conflictingRoleModel);
 
+        await using (var ownershipScope = _factory.Services.CreateAsyncScope())
+        {
+            var ownershipDb = ownershipScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var podId = Environment.GetEnvironmentVariable("HOSTNAME") ?? Environment.MachineName;
+            var ownedPlan = ownershipDb.WorkPlans.Single(candidate => candidate.Id == plan.Id);
+            ownedPlan.Status = WorkPlanStatus.Dispatching;
+            ownedPlan.CoordinatorPodId = podId;
+            await ownershipDb.SaveChangesAsync();
+        }
+
         await using var graphScope = _factory.Services.CreateAsyncScope();
         var graphDb = graphScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var subtaskIds = subtasks.Select(subtask => subtask.Id).ToHashSet();
@@ -400,6 +410,11 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
                     provider with { Model = "replacement-model", ApiKey = "replacement-key" },
                     CancellationToken.None);
         }
+
+        // This test dispatches a child explicitly after the automation host has finished
+        // its parent run; restore the parent to the active state required by dispatch fencing.
+        await _factory.Services.GetRequiredService<IRunStore>()
+            .UpdateStatusAsync(run.Id, RunStatus.InProgress, null);
 
         Run? launchedChild = null;
         ResolvedRunModelProviderBoundary? launchedBoundary = null;
@@ -451,7 +466,12 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
             dispatch.StartChildRunOverride = null;
         }
 
-        launchedChild.Should().NotBeNull();
+        var actualPlan = graphDb.WorkPlans.Single(candidate => candidate.Id == plan.Id);
+        var actualSubtask = graphDb.Subtasks.Single(candidate => candidate.Id == subtasks[0].Id);
+        var actualRun = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(run.Id);
+        launchedChild.Should().NotBeNull(
+            $"the test subtask was {actualSubtask.Status} with child {actualSubtask.ChildRunId ?? "<none>"}; " +
+            $"plan was {actualPlan.Status} owned by {actualPlan.CoordinatorPodId ?? "<none>"}; run {actualRun?.Status}");
         launchedChild!.ModelSource.Should().Be(ModelSource.Byok);
         launchedChild.ModelId.Should().Be(provider.Model);
         launchedBoundary.Should().NotBeNull();

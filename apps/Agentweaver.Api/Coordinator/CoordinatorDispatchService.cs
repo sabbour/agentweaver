@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -310,8 +311,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         // Advance the plan to dispatching and publish the FULL topology snapshot (reflecting the new
         // status) so the client can render the graph thin before any child has been launched.
-        if (!coordinatorStopped)
-            await SetWorkPlanStatusAsync(workPlanId.Value, WorkPlanStatus.Dispatching, ct, coordinatorPodId: _myPodId).ConfigureAwait(false);
+        if (!coordinatorStopped && !await TryEnterDispatchAsync(workPlanId.Value, ct).ConfigureAwait(false))
+        {
+            _logger.LogInformation(
+                "Coordinator dispatch: plan {PlanId} is owned by a peer or has left dispatch; not launching children",
+                workPlanId.Value);
+            return;
+        }
 
         // Lease heartbeat (issue #218): while this loop owns the plan, renew the coordinator lease every
         // ~30s from its OWN DI scope + DbContext so a long child turn (implement/debug runs of 5-15+ min)
@@ -351,6 +357,32 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             .ToList();
         foreach (var s in reArmed)
             inFlight[s.Id] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, s.Id, s.ChildRunId!, seq, ct);
+
+        foreach (var s in subtasks.Where(s =>
+                     (s.Status == SubtaskStatus.Dispatched || s.Status == SubtaskStatus.Running)
+                     && string.IsNullOrEmpty(s.ChildRunId)))
+        {
+            ct.ThrowIfCancellationRequested();
+            var correlated = await _runStore.FindActiveChildAsync(
+                context.CoordinatorRunId, s.Id.ToString(), ct).ConfigureAwait(false);
+            if (correlated is not null)
+            {
+                if (!await TryRepairLegacySubtaskAsync(
+                        workPlanId.Value, s.Id, SubtaskStatus.Running, correlated.Id.ToString(), ct)
+                    .ConfigureAwait(false))
+                    return;
+                inFlight[s.Id] = ObserveChildAsync(
+                    context.CoordinatorRunId, workPlanId.Value, s.Id, correlated.Id.ToString(), seq, ct);
+                statusById[s.Id] = SubtaskStatus.Running;
+            }
+            else
+            {
+                if (!await TryRepairLegacySubtaskAsync(
+                        workPlanId.Value, s.Id, SubtaskStatus.Pending, null, ct).ConfigureAwait(false))
+                    return;
+                statusById[s.Id] = SubtaskStatus.Pending;
+            }
+        }
 
         // Back-compat recovery: a pre-upgrade process may have persisted subtasks in the historical
         // PendingCapacity status. Kubernetes now owns pod admission/scheduling (issue #217), so this
@@ -393,6 +425,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // Dispatch the current frontier. Subtasks with non-overlapping file scopes run in
             // parallel; subtasks whose scopes conflict with any in-flight subtask run serially
             // (deferred until the conflicting in-flight task completes).
+            var waitingOnChildLease = false;
             foreach (var subtaskId in SubtaskFrontier.ReadyPending(statusById, edges))
             {
                 if (coordinatorStopped
@@ -433,7 +466,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 }
 
                 var dispatched = await DispatchOneAsync(
-                    context, workPlanId.Value, subtaskId, statusById, edges, seq, ct).ConfigureAwait(false);
+                    context, workPlanId.Value, subtaskId, statusById, edges, seq, ct,
+                    onLeaseHeld: () => waitingOnChildLease = true).ConfigureAwait(false);
 
                 if (dispatched is { } childRunId)
                 {
@@ -443,6 +477,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
             if (inFlight.Count == 0)
             {
+                if (waitingOnChildLease && !coordinatorStopped)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
+                    continue;
+                }
                 if (coordinatorStopped)
                 {
                     await PersistStoppedCoordinatorWorkPlanStatusAsync(
@@ -1001,7 +1040,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         Dictionary<int, string> statusById,
         IReadOnlyCollection<(int SubtaskId, int DependsOnSubtaskId)> edges,
         SeqCounter seq,
-        CancellationToken ct)
+        CancellationToken ct,
+        Action? onLeaseHeld = null)
     {
         // Idempotency guard: if an active child run already exists for this (coordinator, subtask)
         // pair, re-use it instead of creating a second worker.
@@ -1018,8 +1058,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 "(status {Status}); re-observing instead of dispatching a duplicate",
                 subtaskId, existingActive.Id, existingActive.Status);
 
-            var reattached = await UpdateSubtaskAsync(
-                subtaskId, SubtaskStatus.Running, existingActive.Id.ToString(), ct).ConfigureAwait(false);
+            var reattached = await TryUpdateOwnedSubtaskAsync(
+                workPlanId, subtaskId, SubtaskStatus.Running, existingActive.Id.ToString(), ct).ConfigureAwait(false);
+            if (reattached is null)
+                return null;
             statusById[subtaskId] = SubtaskStatus.Running;
             if (reattached is not null)
                 EmitSubtask(context, workPlanId, reattached, EventTypes.SubtaskRunning, seq.Next());
@@ -1038,28 +1080,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 context.CoordinatorRunId, subtaskId.ToString(), ct).ConfigureAwait(false);
             if (existingStaticChild is not null)
             {
-                var reattached = await UpdateSubtaskAsync(
-                    subtaskId, SubtaskStatus.Running, existingStaticChild.Id.ToString(), ct).ConfigureAwait(false);
+                var reattached = await TryUpdateOwnedSubtaskAsync(
+                    workPlanId, subtaskId, SubtaskStatus.Running, existingStaticChild.Id.ToString(), ct).ConfigureAwait(false);
+                if (reattached is null)
+                    return null;
                 statusById[subtaskId] = SubtaskStatus.Running;
                 if (reattached is not null)
                     EmitSubtask(context, workPlanId, reattached, EventTypes.SubtaskRunning, seq.Next());
                 return existingStaticChild.Id.ToString();
             }
-        }
-
-        var childRunId = context.StaticWorkflowChild
-            ? await ReserveStaticChildRunIdAsync(subtaskId, subtask.ChildRunId, ct).ConfigureAwait(false)
-            : RunId.New();
-
-        if (context.StaticWorkflowChild
-            && await _runStore.GetAsync(childRunId, ct).ConfigureAwait(false) is { } reservedExisting)
-        {
-            var reattached = await UpdateSubtaskAsync(
-                subtaskId, SubtaskStatus.Running, reservedExisting.Id.ToString(), ct).ConfigureAwait(false);
-            statusById[subtaskId] = SubtaskStatus.Running;
-            if (reattached is not null)
-                EmitSubtask(context, workPlanId, reattached, EventTypes.SubtaskRunning, seq.Next());
-            return reservedExisting.Id.ToString();
         }
 
         var childTask = await ComposeChildTaskAsync(context, workPlanId, subtask, ct).ConfigureAwait(false);
@@ -1102,9 +1131,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             throw new InvalidOperationException(
                 $"Coordinator dispatch cannot resolve the durable parent run boundary for {context.CoordinatorRunId}.");
 
+        if (await GetStoppedCoordinatorWorkPlanStatusAsync(
+                context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false) is not null)
+            return null;
+
         var childRun = new Run
         {
-            Id = childRunId,
+            Id = RunId.New(),
             RepositoryPath = context.RepositoryPath,
             OriginatingBranch = childBaseBranch,
             ModelSource = coordinatorProviderBoundary.Provider.ToModelSource(),
@@ -1123,25 +1156,76 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (childApprovalSnapshot is not null)
             childRun = childRun.WithApprovalPolicySnapshot(childApprovalSnapshot);
 
+        var efStore = RunStoreChain.Find<EfRunStore>(_runStore);
+        ChildDispatchReservation? reservation = null;
+        RunLeaseClaim? launchLease = null;
+        Func<CancellationToken, Task<bool>>? authorize = null;
+        if (efStore is not null)
+        {
+            var leaseOwner = $"{_myPodId}/child-dispatch/{Guid.NewGuid():N}";
+            reservation = await efStore.TryReserveCoordinatorChildAsync(
+                workPlanId, subtaskId, _myPodId, coordinatorRun.LifecycleGeneration,
+                childRun, leaseOwner, TimeSpan.FromMinutes(5), ct).ConfigureAwait(false);
+            if (reservation.State == ChildDispatchReservationState.LeaseHeld)
+            {
+                onLeaseHeld?.Invoke();
+                return null;
+            }
+            if (reservation.State == ChildDispatchReservationState.NotOwner)
+                return null;
+            if (reservation.ChildRunId is not { } canonicalId)
+                throw new InvalidOperationException($"Coordinator child reservation for subtask {subtaskId} has no child run id.");
+            if (reservation.State == ChildDispatchReservationState.ExistingActive)
+            {
+                statusById[subtaskId] = SubtaskStatus.Running;
+                return canonicalId;
+            }
+            childRun = childRun with { Id = RunId.Parse(canonicalId) };
+            launchLease = new RunLeaseClaim(leaseOwner, reservation.FencingToken);
+            authorize = token => efStore.IsCoordinatorChildLaunchAuthorizedAsync(
+                workPlanId, subtaskId, _myPodId, coordinatorRun.LifecycleGeneration,
+                canonicalId, leaseOwner, reservation.FencingToken, token);
+        }
+        else
+        {
+            var childRunId = await TryReserveChildRunIdAsync(
+                workPlanId, subtaskId, subtask.ChildRunId, ct).ConfigureAwait(false);
+            if (childRunId is null)
+                return null;
+            childRun = childRun with { Id = childRunId.Value };
+            if (await (_runStore ?? throw new InvalidOperationException("Run store is required for child dispatch"))
+                    .GetAsync(childRun.Id, ct).ConfigureAwait(false) is { } reservedExisting)
+            {
+                statusById[subtaskId] = SubtaskStatus.Running;
+                return reservedExisting.Id.ToString();
+            }
+        }
+
         // Cascade the coordinator's per-run options (auto-approve-tools + Autopilot) to the child so
         // the child's runner honors auto-approve and the child's bubbled questions are eligible for
         // Autopilot. Seeded before the child run starts so its first tool call reads the inherited value.
-        CascadeOptionsToChild(context.CoordinatorRunId, childRunId.ToString());
+        CascadeOptionsToChild(context.CoordinatorRunId, childRun.Id.ToString());
 
         // Scope child approval-policy inheritance to the coordinator run. The policy is intentionally
         // shared by its children: "Allow for session" means this orchestration session, not one
         // subtask. DurableToolApprovalGate verifies the persisted project and owner before matching.
         _approvalGate?.RegisterParentRun(
-            childRunId.ToString(),
+            childRun.Id.ToString(),
             context.CoordinatorRunId);
 
         try
         {
             await (StartChildRunOverride?.Invoke(childRun, ct)
-                ?? _orchestrator.StartChildRunAsync(childRun, ct)).ConfigureAwait(false);
+                ?? _orchestrator.StartChildRunAsync(childRun, ct, launchLease, authorize)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested || launchLease is not null)
+        {
+            throw;
         }
         catch (Exception ex)
         {
+            if (authorize is not null && !await authorize(ct).ConfigureAwait(false))
+                throw new OperationCanceledException("Coordinator child dispatch lost its durable owner.");
             _logger.LogError(ex,
                 "Coordinator dispatch: failed to start child run for subtask {SubtaskId} (run {RunId})",
                 subtaskId, context.CoordinatorRunId);
@@ -1153,7 +1237,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             // THEN mark the subtask failed.
             await _orchestrator.MarkChildRunFailedAsync(childRun, ex, ct).ConfigureAwait(false);
 
-            var failed = await UpdateSubtaskAsync(subtaskId, SubtaskStatus.Failed, childRunId.ToString(), ct)
+            var failed = await TryUpdateOwnedSubtaskAsync(
+                    workPlanId, subtaskId, SubtaskStatus.Failed, childRun.Id.ToString(), ct)
                 .ConfigureAwait(false);
             statusById[subtaskId] = SubtaskStatus.Failed;
             if (failed is not null)
@@ -1179,8 +1264,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     .ConfigureAwait(false);
             }
 
-            var cancelled = await UpdateSubtaskAsync(
-                subtaskId, SubtaskStatus.Cancelled, childRun.Id.ToString(), CancellationToken.None)
+            var cancelled = await TryUpdateOwnedSubtaskAsync(
+                workPlanId, subtaskId, SubtaskStatus.Cancelled, childRun.Id.ToString(), CancellationToken.None)
                 .ConfigureAwait(false);
             statusById[subtaskId] = SubtaskStatus.Cancelled;
             if (cancelled is not null)
@@ -1191,8 +1276,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // Only publish the childRunId after StartChildRunAsync has inserted the child Run row and
         // created its stream entry. Otherwise the browser can immediately follow the coordinator
         // subtask event and hit transient 404s for /api/runs/{childRunId} and /stream.
-        var dispatched = await UpdateSubtaskAsync(
-            subtaskId, SubtaskStatus.Dispatched, childRunId.ToString(), ct).ConfigureAwait(false);
+        var dispatched = await TryUpdateOwnedSubtaskAsync(
+            workPlanId, subtaskId, SubtaskStatus.Dispatched, childRun.Id.ToString(), ct).ConfigureAwait(false);
+        if (dispatched is null)
+            return null;
         statusById[subtaskId] = SubtaskStatus.Dispatched;
         if (dispatched is not null)
         {
@@ -1203,28 +1290,34 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         }
 
         // The child workflow is now executing.
-        var running = await UpdateSubtaskAsync(subtaskId, SubtaskStatus.Running, childRunId.ToString(), ct)
+        var running = await TryUpdateOwnedSubtaskAsync(
+            workPlanId, subtaskId, SubtaskStatus.Running, childRun.Id.ToString(), ct)
             .ConfigureAwait(false);
         statusById[subtaskId] = SubtaskStatus.Running;
         if (running is not null)
             EmitSubtask(context, workPlanId, running, EventTypes.SubtaskRunning, seq.Next());
 
-        return childRunId.ToString();
+        return childRun.Id.ToString();
     }
 
-    private async Task<RunId> ReserveStaticChildRunIdAsync(
-        int subtaskId,
+    internal async Task<RunId?> TryReserveChildRunIdAsync(
+        int workPlanId, int subtaskId,
         string? currentChildRunId,
         CancellationToken ct)
     {
-        if (RunId.TryParse(currentChildRunId, out var current))
-            return current;
-
+        ct.ThrowIfCancellationRequested();
         var proposed = RunId.New();
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var reserved = await db.Subtasks
-            .Where(candidate => candidate.Id == subtaskId && candidate.ChildRunId == null)
+            .Where(candidate => candidate.Id == subtaskId
+                && candidate.WorkPlanId == workPlanId
+                && candidate.Status == SubtaskStatus.Pending
+                && candidate.ChildRunId == null
+                && db.WorkPlans.Any(w => w.Id == workPlanId
+                    && w.CoordinatorPodId == _myPodId
+                    && w.Status == WorkPlanStatus.Dispatching
+                    && w.CoordinatorCancellationRequestedAt == null))
             .ExecuteUpdateAsync(updates => updates
                 .SetProperty(candidate => candidate.ChildRunId, proposed.ToString())
                 .SetProperty(candidate => candidate.UpdatedAt, DateTimeOffset.UtcNow), ct)
@@ -1233,14 +1326,22 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             return proposed;
 
         var winner = await db.Subtasks.AsNoTracking()
-            .Where(candidate => candidate.Id == subtaskId)
+            .Where(candidate => candidate.Id == subtaskId
+                && candidate.WorkPlanId == workPlanId
+                && candidate.Status == SubtaskStatus.Pending
+                && db.WorkPlans.Any(w => w.Id == workPlanId
+                    && w.CoordinatorPodId == _myPodId
+                    && w.Status == WorkPlanStatus.Dispatching
+                    && w.CoordinatorCancellationRequestedAt == null))
             .Select(candidate => candidate.ChildRunId)
-            .SingleAsync(ct)
+            .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
-        if (!RunId.TryParse(winner, out var winnerId))
-            throw new InvalidOperationException(
-                $"Static workflow subtask {subtaskId} lost its child-run reservation without a valid winner.");
-        return winnerId;
+        if (winner is null)
+            return null;
+        if (RunId.TryParse(winner, out var winnerId))
+            return winnerId;
+        throw new InvalidOperationException(
+            $"Subtask {subtaskId} lost its child-run reservation without a valid winner.");
     }
 
     private async Task ApplyChildResultAsync(
@@ -2928,6 +3029,64 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         db.Entry(row).State = EntityState.Detached;
         return row;
+    }
+
+    private async Task<Subtask?> TryUpdateOwnedSubtaskAsync(
+        int workPlanId, int subtaskId, string status, string childRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var updated = await db.Subtasks
+            .Where(s => s.Id == subtaskId && s.WorkPlanId == workPlanId
+                && (s.ChildRunId == null || s.ChildRunId == childRunId)
+                && db.WorkPlans.Any(w => w.Id == workPlanId
+                    && w.CoordinatorPodId == _myPodId
+                    && (w.Status == WorkPlanStatus.Dispatching
+                        || (status == SubtaskStatus.Cancelled && w.Status == WorkPlanStatus.Cancelled))))
+            .ExecuteUpdateAsync(u => u
+                .SetProperty(s => s.Status, status)
+                .SetProperty(s => s.ChildRunId, childRunId)
+                .SetProperty(s => s.UpdatedAt, DateTimeOffset.UtcNow), ct)
+            .ConfigureAwait(false);
+        return updated == 1
+            ? await db.Subtasks.AsNoTracking().FirstAsync(s => s.Id == subtaskId, ct).ConfigureAwait(false)
+            : null;
+    }
+
+    private async Task<bool> TryEnterDispatchAsync(int planId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans
+            .Where(w => w.Id == planId
+                        && (w.Status == WorkPlanStatus.Planned || w.Status == WorkPlanStatus.Dispatching)
+                        && (w.CoordinatorPodId == null || w.CoordinatorPodId == _myPodId)
+                        && w.CoordinatorCancellationRequestedAt == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.Dispatching)
+                .SetProperty(w => w.CoordinatorPodId, _myPodId)
+                .SetProperty(w => w.UpdatedAt, DateTimeOffset.UtcNow), ct)
+            .ConfigureAwait(false) == 1;
+    }
+
+    private async Task<bool> TryRepairLegacySubtaskAsync(
+        int workPlanId, int subtaskId, string status, string? childRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks
+            .Where(s => s.Id == subtaskId && s.WorkPlanId == workPlanId
+                && s.ChildRunId == null
+                && (s.Status == SubtaskStatus.Dispatched || s.Status == SubtaskStatus.Running)
+                && db.WorkPlans.Any(w => w.Id == workPlanId
+                    && w.CoordinatorPodId == _myPodId
+                    && w.Status == WorkPlanStatus.Dispatching
+                    && w.CoordinatorCancellationRequestedAt == null))
+            .ExecuteUpdateAsync(u => u
+                .SetProperty(s => s.Status, status)
+                .SetProperty(s => s.ChildRunId, childRunId)
+                .SetProperty(s => s.UpdatedAt, DateTimeOffset.UtcNow), ct)
+            .ConfigureAwait(false) == 1;
     }
 
     private async Task<Subtask?> GetSubtaskAsync(int subtaskId, CancellationToken ct)

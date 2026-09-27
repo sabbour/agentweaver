@@ -99,7 +99,7 @@ public sealed class StartupRecoveryServiceTests
     }
 
     [Fact]
-    public async Task LeaderDeath_TransfersSweep_AndLateWaiterDoesNotRepeatWhileLeaderLives()
+    public async Task LeaderDeath_TransfersSweep_AndCompletedLeaderReleasesLockForNextPass()
     {
         var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -149,8 +149,8 @@ public sealed class StartupRecoveryServiceTests
         await secondCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await using var third = CreateApp(Create());
         await third.StartAsync();
-        await Task.Delay(100);
-        Volatile.Read(ref sweeps).Should().Be(2);
+        await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref sweeps) >= 3));
+        Volatile.Read(ref sweeps).Should().BeGreaterThanOrEqualTo(3);
         Volatile.Read(ref maxConcurrent).Should().Be(1);
         await third.StopAsync();
         await second.StopAsync();
@@ -348,6 +348,37 @@ public sealed class StartupRecoveryServiceTests
         Volatile.Read(ref acquired).Should().Be(2);
         Volatile.Read(ref released).Should().Be(2);
         Volatile.Read(ref sweeps).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task CompletedSweep_ReleasesLockAndRunsAgainOnNextInterval()
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var held = 0;
+        var maxConcurrent = 0;
+        var sweeps = 0;
+        var service = new StartupRecoveryService(
+            _ =>
+            {
+                Interlocked.CompareExchange(ref held, 1, 0).Should().Be(0);
+                return Task.FromResult<(bool, IAsyncDisposable)>((true,
+                    new Lease(() => Interlocked.Exchange(ref held, 0))));
+            },
+            async ct =>
+            {
+                var count = Interlocked.Increment(ref sweeps);
+                Interlocked.Exchange(ref maxConcurrent, Math.Max(Volatile.Read(ref maxConcurrent), Volatile.Read(ref held)));
+                if (count == 2) completed.TrySetResult();
+                await Task.CompletedTask;
+            },
+            NullLogger<StartupRecoveryService>.Instance,
+            retryInterval: TimeSpan.FromMilliseconds(10));
+        await using var app = CreateApp(service);
+        await app.StartAsync();
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await app.StopAsync();
+        Volatile.Read(ref held).Should().Be(0);
+        Volatile.Read(ref maxConcurrent).Should().Be(1);
     }
 
     private static StartupRecoveryService CreateService(

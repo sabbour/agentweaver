@@ -278,24 +278,41 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// The supplied <paramref name="run"/> MUST carry <see cref="Run.ParentRunId"/> (the coordinator
     /// run id) and <see cref="Run.SubtaskId"/>.
     /// </summary>
-    public async Task StartChildRunAsync(Run run, CancellationToken ct)
+    public async Task StartChildRunAsync(
+        Run run,
+        CancellationToken ct,
+        RunLeaseClaim? existingLease = null,
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null)
     {
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
 
+        async Task EnsureAuthorizedAsync()
+        {
+            ct.ThrowIfCancellationRequested();
+            if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+                throw new OperationCanceledException($"Child run {run.Id} dispatch ownership was lost.");
+            ct.ThrowIfCancellationRequested();
+        }
+
         // Reserve the canonical child row before resolving providers or creating a worktree. Every
         // fallible launch path can now terminalize this generation instead of manufacturing a
-        // placeholder failed row after the fact.
-        var reserved = run with
+        // placeholder failed row after the fact. An existing lease identifies an already-reserved row.
+        if (existingLease is null)
         {
-            Status = RunStatus.Pending,
-            StartedAt = run.StartedAt == default ? DateTimeOffset.UtcNow : run.StartedAt,
-            EndedAt = null,
-            Result = null,
-        };
-        await _runStore.InsertAsync(reserved, ct).ConfigureAwait(false);
+            var reserved = run with
+            {
+                Status = RunStatus.Pending,
+                StartedAt = run.StartedAt == default ? DateTimeOffset.UtcNow : run.StartedAt,
+                EndedAt = null,
+                Result = null,
+            };
+            await _runStore.InsertAsync(reserved, ct).ConfigureAwait(false);
+        }
 
+        await EnsureAuthorizedAsync().ConfigureAwait(false);
         var childProvider = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        await EnsureAuthorizedAsync().ConfigureAwait(false);
         await PrepareGitHubCapabilitySnapshotsAsync(
             run,
             ct,
@@ -303,6 +320,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 or EffectiveModelProviderResult.PlatformGitHubCopilot
                 ? childProvider.Provider
                 : null).ConfigureAwait(false);
+        await EnsureAuthorizedAsync().ConfigureAwait(false);
 
         // Provision a per-child worktree. For dependent subtasks the dispatch loop sets
         // OriginatingBranch to the coordinator integration branch, which already contains completed
@@ -310,9 +328,15 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         WorktreeInfo worktreeInfo;
         try
         {
-            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
+            worktreeInfo = existingLease is null
+                ? _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id)
+                : _worktreeManager.EnsureWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
         }
-
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to provision child worktree for run {RunId} (coordinator {CoordinatorRunId})", run.Id, run.ParentRunId);
@@ -331,10 +355,13 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         };
 
         var launchCompleted = false;
+        var ownershipLost = false;
         try
         {
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             await _runStore.UpdateToInProgressAsync(
                 started.Id, started.WorktreePath!, started.WorktreeBranch!, started.StartedAt, ct).ConfigureAwait(false);
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             EmitRunStartedMetrics(started);
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
             entry.RecordNext(
@@ -351,10 +378,12 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             }
             catch (MandatoryContextBudgetExceededException ex)
             {
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
                 await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
                 throw;
             }
 
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             var input = new AgentTurnInput(
                 run.Id.ToString(),
                 context.TaskWithHarvest,
@@ -371,14 +400,22 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 started.StartedAt,
                 ByokProviderFingerprint: childProvider.ByokProviderFingerprint);
 
-            var runCts = new CancellationTokenSource();
+            var runCts = existingLease is null
+                ? new CancellationTokenSource()
+                : CancellationTokenSource.CreateLinkedTokenSource(ct);
             var ctsRegistered = false;
             try
             {
-                var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
+                var streamingRun = await StartWorkflowOrFailAsync(
+                    input, started.Id, entry, runCts.Token, isChild: true,
+                    isAuthorizedAsync: isAuthorizedAsync).ConfigureAwait(false);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
                 var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
-                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt,
+                    existingLease: existingLease);
                 launchCompleted = true;
             }
             catch
@@ -387,9 +424,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 throw;
             }
         }
+        catch (OperationCanceledException) when (existingLease is not null)
+        {
+            ownershipLost = true;
+            _logger.LogInformation(
+                "Child run {RunId} launch stopped after losing dispatch authorization; retaining worktree for the current owner",
+                run.Id);
+            throw;
+        }
         finally
         {
-            if (!launchCompleted)
+            // A successor may already be using this run's worktree after a fence loss.
+            if (!launchCompleted && !ownershipLost && existingLease is null)
                 CleanupWorktreeSafe(run.RepositoryPath, worktreeInfo, run.Id);
         }
     }
@@ -590,8 +636,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// the steered instruction at the child's next turn boundary.
     /// </summary>
     public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false,
-        int? steeringDirectiveId = null, int? steeringAttempt = null, RunLeaseClaim? existingLease = null)
+        int? steeringDirectiveId = null, int? steeringAttempt = null, RunLeaseClaim? existingLease = null,
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null)
     {
+        async Task EnsureAuthorizedAsync()
+        {
+            ct.ThrowIfCancellationRequested();
+            if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+                throw new OperationCanceledException($"Run {run.Id} revision ownership was lost.");
+            ct.ThrowIfCancellationRequested();
+        }
+
+        await EnsureAuthorizedAsync().ConfigureAwait(false);
         if (string.IsNullOrEmpty(run.WorktreePath))
             throw new InvalidOperationException($"Run {run.Id} has no worktree path; cannot start revision.");
         if (string.IsNullOrEmpty(run.WorktreeBranch))
@@ -625,6 +681,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
         catch (MandatoryContextBudgetExceededException ex)
         {
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             await FailPreWorkflowLaunchAsync(run.Id, entry, ex).ConfigureAwait(false);
             throw;
         }
@@ -655,14 +712,15 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             Microsoft.Agents.AI.Workflows.StreamingRun streamingRun;
             using (ct.Register(static state => ((CancellationTokenSource)state!).Cancel(), runCts))
             {
-                ct.ThrowIfCancellationRequested();
-                streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
-                ct.ThrowIfCancellationRequested();
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
+                streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token,
+                    isChild, steeringDirectiveId, steeringAttempt, isAuthorizedAsync).ConfigureAwait(false);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
             }
-            ct.ThrowIfCancellationRequested();
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
             ctsRegistered = true;
-            ct.ThrowIfCancellationRequested();
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             _watchLoop.StartWatching(
                 run.Id.ToString(),
                 streamingRun,
@@ -683,12 +741,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// The original child worktree/branch and persisted task are reused; no replacement Run row is
     /// created. This is the recovery path for active static fan branches after process loss.
     /// </summary>
-    public async Task RestartInterruptedChildRunAsync(Run run, CancellationToken ct)
+    public async Task RestartInterruptedChildRunAsync(
+        Run run, RunLeaseClaim recoveryLease, CancellationToken ct,
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null)
     {
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Run {run.Id} is not a coordinator child.");
         if (_registry.Get(run.Id.ToString()) is not null)
             return;
+        ct.ThrowIfCancellationRequested();
+        if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+            throw new OperationCanceledException($"Child run {run.Id} restart ownership was lost.");
 
         var worktree = _worktreeManager.EnsureWorktree(
             run.RepositoryPath,
@@ -709,7 +772,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             };
         }
 
-        await StartRevisionAsync(run, run.Task, ct, isChild: true).ConfigureAwait(false);
+        await StartRevisionAsync(run, run.Task, ct, isChild: true, existingLease: recoveryLease,
+                isAuthorizedAsync: isAuthorizedAsync)
+            .ConfigureAwait(false);
     }
 
     public async Task RestartInterruptedPinnedWorkflowRunAsync(
@@ -1152,7 +1217,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         CancellationToken ct,
         bool isChild = false,
         int? steeringDirectiveId = null,
-        int? steeringAttempt = null)
+        int? steeringAttempt = null,
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null)
     {
         try
         {
@@ -1166,6 +1232,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
         catch (WorkflowBindException ex)
         {
+            if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+                throw new OperationCanceledException($"Run {runId} launch ownership was lost.");
+            ct.ThrowIfCancellationRequested();
             _logger.LogError(ex, "Workflow binding failed for run {RunId}; transitioning to failed", runId);
             var result = $"workflow_bind_failed: {ex.Message}";
             try
@@ -1199,6 +1268,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
         catch (Exception ex)
         {
+            if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+                throw new OperationCanceledException($"Run {runId} launch ownership was lost.");
+            ct.ThrowIfCancellationRequested();
             _logger.LogError(ex, "Workflow start failed for run {RunId}; transitioning to failed", runId);
             var detail = RedactFailureReason(ex);
             try
