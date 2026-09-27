@@ -116,11 +116,20 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
         var recovered = await new PostgresCheckpointStoreFactory(pg.Factory)
             .GetLatestCheckpointAsync("coordinator", session);
         recovered.Should().NotBeNull();
-        recovered!.CheckpointId.Should().Be(checkpoint.CheckpointId);
-        var restoredPayload = await reader.RetrieveCheckpointAsync(session, recovered);
+        var recoveredRecord = await db.WorkflowCheckpoints.AsNoTracking()
+            .SingleAsync(c => c.StoreName == "coordinator"
+                && c.SessionId == session && c.CheckpointId == recovered!.CheckpointId);
+        recoveredRecord.CreatedAt.Should().BeOnOrAfter(stored.CreatedAt,
+            "the latest checkpoint may be a successor written as the streaming run suspends or disposes");
+        using var recoveredJson = JsonDocument.Parse(recoveredRecord.Payload);
+        var recoveredEdge = recoveredJson.RootElement.GetProperty("workflow").GetProperty("edges")
+            .GetProperty("coordinator-draft")[0];
+        recoveredEdge.EnumerateObject().First().Name.Should().NotBe("$type",
+            "the checkpoint actually selected for resume must exercise jsonb's reordered metadata");
+        var restoredPayload = await reader.RetrieveCheckpointAsync(session, recovered!);
         restoredPayload.GetProperty("workflow").GetProperty("edges")
             .GetProperty("coordinator-draft")[0].EnumerateObject().First().Name.Should().Be("$type");
-        JsonElement.DeepEquals(persisted.RootElement, restoredPayload).Should().BeTrue();
+        JsonElement.DeepEquals(recoveredJson.RootElement, restoredPayload).Should().BeTrue();
 
         ExecutorBinding resumedDraft = new FunctionExecutor<string, string>(
             "coordinator-draft", async (input, _, _) =>
