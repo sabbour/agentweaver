@@ -422,6 +422,77 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
     }
 
     [Fact]
+    public async Task RubberduckPass_FirstHumanReviewCapturesGenerationWithoutPriorReviewRequest()
+    {
+        using var factory = new WorkflowWebApplicationFactory();
+        var services = factory.Services;
+        var repositoryPath = Path.Combine(Path.GetTempPath(), $"agentweaver-rubberduck-review-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repositoryPath);
+        await File.WriteAllTextAsync(Path.Combine(repositoryPath, "seed.txt"), "seed");
+        Repository.Init(repositoryPath);
+        using (var repository = new Repository(repositoryPath))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial commit", signature, signature);
+            if (repository.Head.FriendlyName != "main")
+                repository.Branches.Rename(repository.Head, "main");
+        }
+
+        var runId = RunId.New();
+        var worktrees = services.GetRequiredService<WorktreeManager>();
+        var worktree = worktrees.AddWorktree(repositoryPath, "main", runId);
+        try
+        {
+            var yaml = RubberduckReviewWorkflowYaml();
+            var run = PinnedRun(
+                ExecutableWorkflowPin.CurrentSchemaVersion,
+                "sha256:" + Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(yaml)))
+                    .ToLowerInvariant()) with
+            {
+                Id = runId,
+                RepositoryPath = repositoryPath,
+                WorktreePath = worktree.WorktreePath,
+                WorktreeBranch = worktree.BranchName,
+                ExecutableWorkflowDefinitionYaml = yaml,
+                Task = "rubberduck first human review",
+            };
+            await services.GetRequiredService<IRunStore>().InsertAsync(run);
+            var input = new AgentTurnInput(
+                runId.ToString(), run.Task, worktree.WorktreePath, worktree.BranchName,
+                repositoryPath, "main", run.ModelSource.ToApiString(), run.ModelId, run.SubmittingUser);
+
+            var started = await services.GetRequiredService<RunWorkflowFactory>()
+                .StartAsync(input, runId.ToString(), CancellationToken.None);
+            WorkflowReviewRequest? review = null;
+            var events = new List<string>();
+            await foreach (var evt in started.WatchStreamAsync(CancellationToken.None))
+            {
+                events.Add(evt.ToString() ?? evt.GetType().Name);
+                if (evt is RequestInfoEvent request
+                    && request.Request.TryGetDataAs<WorkflowReviewRequest>(out var value))
+                {
+                    review = value;
+                    break;
+                }
+            }
+
+            review.Should().NotBeNull("workflow events: {0}", string.Join("; ", events));
+            review!.LifecycleGeneration.Should().Be(run.LifecycleGeneration);
+            review.Diff.Should().NotBeNullOrEmpty();
+            started.LastCheckpoint.Should().NotBeNull();
+        }
+        finally
+        {
+            worktrees.RemoveWorktree(repositoryPath, worktree.WorktreePath, worktree.BranchName);
+            foreach (var file in Directory.EnumerateFiles(repositoryPath, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(repositoryPath, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task StartAsync_MissingDurableRun_FailsBeforeWorkflowExecution()
     {
         var runId = RunId.New().ToString();
@@ -569,6 +640,67 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             when: approved
           - from: review
             to: {{agentId}}
+            when: request-changes
+          - from: review
+            to: declined
+            when: declined
+        """;
+
+    private static string RubberduckReviewWorkflowYaml() =>
+        """
+        id: custom
+        name: Rubberduck review
+        version: "1"
+        start: agent
+        nodes:
+          - id: agent
+            type: prompt
+            label: Agent
+            prompt: Do the work.
+          - id: peer-review
+            type: peer_review
+            label: Peer review
+          - id: rubberduck
+            type: check
+            label: Rubberduck
+            gate_kind: rubberduck
+            branches:
+              - pass
+              - revise
+          - id: review
+            type: check
+            label: Human Review
+            gate_kind: human-review
+            branches:
+              - approved
+              - request-changes
+              - declined
+          - id: done
+            type: terminal
+            label: Done
+          - id: declined
+            type: terminal
+            label: Declined
+        edges:
+          - from: agent
+            to: peer-review
+          - from: peer-review
+            to: rubberduck
+            when: pass
+          - from: peer-review
+            to: agent
+            when: request-changes
+          - from: rubberduck
+            to: review
+            when: pass
+          - from: rubberduck
+            to: agent
+            when: revise
+          - from: review
+            to: done
+            when: approved
+          - from: review
+            to: agent
             when: request-changes
           - from: review
             to: declined
