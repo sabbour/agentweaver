@@ -1201,6 +1201,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             config);
 
         leaseStore ??= new SqliteRunLeaseStore(_db.Db);
+        eventStream ??= new RecordingEventStream();
         var watchLoop = new RunWatchLoopService(
             runStore,
             streamStore,
@@ -1212,9 +1213,9 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             config,
             scopeFactory,
             leaseStore,
+            eventStream,
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
-        eventStream ??= new RecordingEventStream();
         var projector = new TerminalOutcomeProjector(
             runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance, streamStore);
         return new WorkflowRestartService(

@@ -69,7 +69,10 @@ public interface IRunStore
         RunId runId,
         TerminalRunMutation mutation,
         CancellationToken ct = default) =>
-        TrySetTerminalOutcomeAsync(runId, mutation.Outcome, mutation.Result, ct);
+        mutation.RequiredLease is not null
+            ? throw new NotSupportedException(
+                $"{GetType().Name} does not implement lease-fenced terminal mutations.")
+            : TrySetTerminalOutcomeAsync(runId, mutation.Outcome, mutation.Result, ct);
 
     /// <summary>Returns durable winners that have not yet been projected into RunEvents.</summary>
     Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(

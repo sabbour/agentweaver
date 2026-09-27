@@ -220,7 +220,11 @@ retry guidance appear only after the run reaches a failed terminal status.
 During an API rollout, a watch connection may close while a workflow is waiting for its
 fan branches. This does not cancel the run: recovery reattaches to the persisted parent,
 work plan, and healthy child runs. Only an explicit stop or a persisted terminal outcome
-can end the run and cancel its active branches.
+can end the run and cancel its active branches. A genuine stream completion without a
+terminal event remains recoverable for two closures; if it occurs a third time in the same run lifecycle,
+the run fails explicitly with `watch_stream_completed_without_terminal_event` and
+closure-count diagnostics instead of retrying indefinitely. Shutdown and lease handoff
+do not count as malformed completions.
 
 ### Topology layout
 
