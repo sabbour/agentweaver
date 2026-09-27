@@ -149,3 +149,17 @@ deletes owned projects, restores the exact prior deployment structures, waits fo
 rollouts, verifies restoration, and releases the Lease. `SIGINT` and `SIGTERM` request
 cancellation and unwind through the same restoration path; they never call
 `process.exit`. Any cleanup mismatch makes the command fail.
+
+## Retained issue #1603 cancellation acceptance
+
+The retained cancellation scenario requires the exact full deployment commit explicitly.
+The public `/api/version` response documents a 7-character Git SHA, so the harness
+accepts that value only when it is a valid prefix of the supplied commit:
+
+```powershell
+node scripts/api-harness/issue-1603-live-retest.mjs `
+  --expected-deployment-sha 0def5f6c0adf49117c3af6d37696ea14e9604f6c
+```
+
+Use `--recorder-auth-root <path>` only when the target-matched recorder session is in
+an existing protected auth root other than the worktree default.
