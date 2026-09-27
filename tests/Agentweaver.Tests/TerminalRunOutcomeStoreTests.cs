@@ -227,7 +227,8 @@ public sealed class TerminalRunOutcomeStoreTests
         var second = new SqliteRunStore(testDb.Db);
         var run = await InsertInProgressAsync(first);
         await first.UpdateReviewReadyAsync(run, "tree", "diff", 1);
-        (await first.TryStartMergingAsync(run, "reviewer")).Should().BeTrue();
+        var revision = (await first.GetLatestOutputRevisionAsync(run))!;
+        (await first.TryStartMergingRevisionAsync(run, revision.RevisionId, "reviewer")).Should().BeTrue();
 
         var results = await Task.WhenAll(
             first.CompleteMergingAsync(run, RunStatus.Merged, DateTimeOffset.UtcNow, "first result", null, mergedCommitHash: "first-sha"),
@@ -238,6 +239,7 @@ public sealed class TerminalRunOutcomeStoreTests
         persisted.Status.Should().Be(results[0] ? RunStatus.Merged : RunStatus.MergeFailed);
         persisted.Result.Should().Be(results[0] ? "first result" : "second result");
         persisted.MergedCommitHash.Should().Be(results[0] ? "first-sha" : null);
+        persisted.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
         persisted.MergeConflicts.Should().Be(results[0] ? null : "[\"conflict.cs\"]");
 
         var winner = (await first.GetUnprojectedTerminalOutcomesAsync()).Should().ContainSingle().Subject;
