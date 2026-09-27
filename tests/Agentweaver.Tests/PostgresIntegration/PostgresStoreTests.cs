@@ -476,14 +476,18 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
-        var first = await store.TryStartMergingAsync(runId);
+        (await store.TryStartMergingAsync(runId)).Should().BeFalse(
+            "a published revision cannot be approved through the legacy CAS");
+        var first = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         first.Should().BeTrue("first CAS must win on awaiting_review run");
 
         var afterFirst = await store.GetAsync(runId);
         afterFirst!.Status.Should().Be(RunStatus.Merging);
+        afterFirst.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
 
-        var second = await store.TryStartMergingAsync(runId);
+        var second = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         second.Should().BeFalse("second CAS must lose because run is already merging");
 
         var afterSecond = await store.GetAsync(runId);
@@ -496,13 +500,16 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
-        await store.TryStartMergingAsync(runId);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         var reverted = await store.RevertMergingAsync(runId);
         reverted.Should().BeTrue();
 
         var run = await store.GetAsync(runId);
         run!.Status.Should().Be(RunStatus.AwaitingReview);
+        run.ApprovedOutputRevisionId.Should().BeNull();
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
     }
 
     [PostgresFact]
@@ -510,7 +517,8 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
-        await store.TryStartMergingAsync(runId);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         var endedAt = DateTimeOffset.UtcNow;
         var result = "merged:abc1234";
@@ -520,6 +528,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         var run = await store.GetAsync(runId);
         run!.Status.Should().Be(RunStatus.Merged);
         run.Result.Should().Be(result);
+        run.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
         run.EndedAt.Should().NotBeNull();
     }
 
@@ -528,7 +537,8 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
-        await store.TryStartMergingAsync(runId);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         var act = () => store.TrySetTerminalStatusAsync(
             runId, RunStatus.Failed, DateTimeOffset.UtcNow, "send_response_failed");

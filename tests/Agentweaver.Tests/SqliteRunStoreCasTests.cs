@@ -15,7 +15,7 @@ namespace Agentweaver.Tests.Api;
 public sealed class SqliteRunStoreCasTests
 {
     // =========================================================================
-    // HM-10a: TryStartMergingAsync returns true on the first call and false on
+    // HM-10a: revision-bound TryStartMerging returns true on the first call and false on
     // a second call, because the second call finds the run in Merging (not
     // AwaitingReview) and the conditional UPDATE matches zero rows.
     // =========================================================================
@@ -25,16 +25,20 @@ public sealed class SqliteRunStoreCasTests
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
-        var first = await store.TryStartMergingAsync(runId);
+        (await store.TryStartMergingAsync(runId)).Should().BeFalse(
+            "a published revision cannot be approved through the legacy CAS");
+        var first = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         first.Should().BeTrue(
             "first CAS must succeed when the run is in awaiting_review");
 
         var runAfterFirst = await store.GetAsync(runId);
         runAfterFirst!.Status.Should().Be(RunStatus.Merging,
             "TryStartMerging must atomically advance awaiting_review to merging");
+        runAfterFirst.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
 
-        var second = await store.TryStartMergingAsync(runId);
+        var second = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         second.Should().BeFalse(
             "second CAS must fail because the run is already in merging, not awaiting_review");
 
@@ -53,14 +57,18 @@ public sealed class SqliteRunStoreCasTests
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
-        await store.TryStartMergingAsync(runId);
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         await store.RevertMergingAsync(runId);
 
         var run = await store.GetAsync(runId);
         run!.Status.Should().Be(RunStatus.AwaitingReview,
             "RevertMerging must return the run to awaiting_review so it can be re-approved");
+        run.ApprovedOutputRevisionId.Should().BeNull();
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue(
+            "the same immutable revision remains available for re-approval");
     }
 
     // =========================================================================
@@ -73,8 +81,9 @@ public sealed class SqliteRunStoreCasTests
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
-        await store.TryStartMergingAsync(runId);
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         var endedAt     = DateTimeOffset.UtcNow;
         var mergeResult = "merged:abc1234deadbeef0123456789abcdef01234567";
@@ -85,12 +94,13 @@ public sealed class SqliteRunStoreCasTests
             "CompleteMerging must advance merging to merged");
         run.Result.Should().Be(mergeResult,
             "CompleteMerging must persist the merge result string");
+        run.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
         run.EndedAt.Should().NotBeNull(
             "CompleteMerging must set the ended_at timestamp");
     }
 
     // =========================================================================
-    // Fix 3 regression: when SendResponseAsync throws after TryStartMergingAsync
+    // Fix 3 regression: when SendResponseAsync throws after revision-bound TryStartMerging
     // succeeds, the recovery path must be able to transition Merging -> Failed via
     // TrySetTerminalStatusAsync so the run is never permanently stranded.
     // =========================================================================
@@ -101,9 +111,10 @@ public sealed class SqliteRunStoreCasTests
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
         // Act step 1: CAS succeeds — run enters Merging, as the approve endpoint does.
-        var casWon = await store.TryStartMergingAsync(runId);
+        var casWon = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         casWon.Should().BeTrue("CAS must succeed on an awaiting_review run");
 
         // Act step 2: SendResponseAsync (simulated) throws. The catch block persists a typed
