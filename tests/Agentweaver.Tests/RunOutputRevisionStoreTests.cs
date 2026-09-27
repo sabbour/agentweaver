@@ -1,5 +1,7 @@
 using System.Text;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -37,6 +39,48 @@ public sealed class RunOutputRevisionStoreTests
         (await store.GetOutputRevisionAsync(id, first.RevisionId))!.DiffBytes.Should().Equal(Encoding.UTF8.GetBytes(diff));
         await FluentActions.Invoking(() => store.PublishReviewReadyAsync(id, first.LifecycleGeneration, "old", "stale", 1))
             .Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task BlockedMergeCannotRepublishReviewedOutputAfterRequestChanges()
+    {
+        await using var db = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(db.Db);
+        var id = await InsertAsync(store);
+        var output = new AgentTurnOutput(
+            id.ToString(), "old-tree", "old-diff", 1, "worktree", "branch", "repo", "main", false);
+        var reviewed = new WorkflowReviewRequest(
+            id.ToString(), output.TreeHash, output.Diff, output.StepCount,
+            LifecycleGeneration: (await store.GetAsync(id))!.LifecycleGeneration);
+        await store.PublishReviewReadyAsync(
+            id, reviewed.LifecycleGeneration!.Value, output.TreeHash, output.Diff, output.StepCount);
+        var original = (await store.GetLatestOutputRevisionAsync(id))!;
+
+        (await store.TryTransitionReviewToInProgressAsync(id)).Should().BeTrue();
+        var blocked = RunWorkflowFactory.RecreateBlockedReviewRequest(output, reviewed);
+        blocked.LifecycleGeneration.Should().Be(original.LifecycleGeneration);
+        (await store.GetAsync(id))!.LifecycleGeneration.Should().Be(original.LifecycleGeneration + 1);
+
+        await FluentActions.Invoking(() => store.PublishReviewReadyAsync(
+                id, blocked.LifecycleGeneration!.Value, blocked.TreeHash, blocked.Diff, blocked.StepCount))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*lifecycle generation*");
+        (await store.GetAsync(id))!.CurrentOutputRevisionId.Should().BeNull();
+        (await store.ListOutputRevisionsAsync(id)).Should().ContainSingle()
+            .Which.RevisionId.Should().Be(original.RevisionId);
+    }
+
+    [Fact]
+    public void BlockedMergeWithoutCapturedReviewGenerationFailsClosed()
+    {
+        var output = new AgentTurnOutput(
+            RunId.New().ToString(), "tree", "diff", 1, "worktree", "branch", "repo", "main", false);
+        var legacy = new WorkflowReviewRequest(output.RunId, output.TreeHash, output.Diff, output.StepCount);
+
+        Action missing = () => RunWorkflowFactory.RecreateBlockedReviewRequest(output, null);
+        Action unfenced = () => RunWorkflowFactory.RecreateBlockedReviewRequest(output, legacy);
+        missing.Should().Throw<InvalidOperationException>().WithMessage("*generation-bound*");
+        unfenced.Should().Throw<InvalidOperationException>().WithMessage("*generation-bound*");
     }
 
     [Fact]
