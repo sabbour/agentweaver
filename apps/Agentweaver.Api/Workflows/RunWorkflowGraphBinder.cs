@@ -211,6 +211,7 @@ internal static class RunWorkflowGraphBinder
         var errors = new List<string>();
         var fanRegion = ValidateSingleFanRegion(definition);
         errors.AddRange(fanRegion.Errors);
+        errors.AddRange(ValidateCoordinatorComposed(definition));
         var outgoingByNode = definition.Edges
             .GroupBy(e => e.From, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
@@ -288,7 +289,54 @@ internal static class RunWorkflowGraphBinder
     public static IReadOnlyList<string> GetTopologyErrors(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        return ValidateSingleFanRegion(definition).Errors;
+        return [.. ValidateSingleFanRegion(definition).Errors, .. ValidateCoordinatorComposed(definition)];
+    }
+
+    private static IReadOnlyList<string> ValidateCoordinatorComposed(WorkflowDefinition definition)
+    {
+        var composed = definition.Nodes
+            .Where(node => node.Type == WorkflowNodeType.CoordinatorComposed)
+            .ToArray();
+        if (composed.Length == 0)
+            return [];
+
+        var errors = new List<string>();
+        if (composed.Length > 1)
+            errors.Add("A workflow may declare at most one coordinator_composed node.");
+
+        var fan = ValidateSingleFanRegion(definition);
+        foreach (var node in composed)
+        {
+            if (string.IsNullOrWhiteSpace(node.Prompt))
+                errors.Add($"coordinator_composed node '{node.Id}' requires a non-empty prompt.");
+            if (node.Steps.Count > 0 || node.Branches.Count > 0 || node.Target is not null)
+                errors.Add($"coordinator_composed node '{node.Id}' cannot declare nested steps, verdict branches, or a target.");
+            if (fan.BranchNodeIds.Contains(node.Id))
+                errors.Add($"coordinator_composed node '{node.Id}' cannot be a static fan branch.");
+
+            var outgoing = definition.Edges.Where(edge =>
+                string.Equals(edge.From, node.Id, StringComparison.Ordinal)).ToArray();
+            if (outgoing.Length != 1 || outgoing[0].When is not null)
+                errors.Add($"coordinator_composed node '{node.Id}' requires exactly one unconditional continuation.");
+
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            var queue = new Queue<string>(outgoing.Select(edge => edge.To));
+            while (queue.TryDequeue(out var current))
+            {
+                if (string.Equals(current, node.Id, StringComparison.Ordinal))
+                {
+                    errors.Add($"coordinator_composed node '{node.Id}' cannot recursively reach itself.");
+                    break;
+                }
+                if (!visited.Add(current))
+                    continue;
+                foreach (var edge in definition.Edges.Where(edge =>
+                    string.Equals(edge.From, current, StringComparison.Ordinal)))
+                    queue.Enqueue(edge.To);
+            }
+        }
+
+        return errors;
     }
 
     private static StaticFanRegionValidation ValidateSingleFanRegion(WorkflowDefinition definition)
@@ -1093,7 +1141,7 @@ internal static class RunWorkflowGraphBinder
         {
             case NodeKind.CoordinatorComposed:
                 throw new WorkflowBindException(
-                    $"Cannot bind node '{node.Id}' (type='{node.Type}'): node type '{node.Type}' is accepted by " +
+                    $"Cannot bind node '{node.Id}' (type='coordinator_composed'): node type 'coordinator_composed' is accepted by " +
                     "the loader but not yet wired to a runtime executor.", node.Id);
         }
     }

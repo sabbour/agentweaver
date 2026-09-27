@@ -68,7 +68,7 @@ internal sealed class NodeExecutorRegistry
 
             case NodeKind.CoordinatorComposed:
                 throw new WorkflowBindException(
-                    $"Cannot bind node '{node.Id}' (type='{node.Type}'): node type '{node.Type}' is accepted by " +
+                    $"Cannot bind node '{node.Id}' (type='coordinator_composed'): node type 'coordinator_composed' is accepted by " +
                     "the loader but not yet wired to a runtime executor.", node.Id);
 
             case NodeKind.Terminal:
