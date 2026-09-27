@@ -52,8 +52,9 @@ For ad-hoc runs or workflows that produce a runnable artifact outside a `build_t
   Everything outside the BEGIN/END markers is hand-written and preserved.
 -->
 
-The Agentweaver MCP server exposes **121 tools** across **14 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
+The Agentweaver MCP server exposes **127 tools** across **15 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
 
+- **Addressed Message:** `agent_message_acknowledge`, `agent_message_claim`, `agent_message_deliver`, `agent_message_get`, `agent_message_list`, `agent_message_send`
 - **Backlog:** `backlog_archive_task`, `backlog_capture_task`, `backlog_decompose_spec`, `backlog_delete_task`, `backlog_edit_dependencies`, `backlog_edit_task`, `backlog_get_board`, `backlog_get_dependency_revision`, `backlog_get_settings`, `backlog_get_task`, `backlog_get_workflow_stages`, `backlog_move_to_backlog`, `backlog_move_to_ready`, `backlog_reorder_task`, `backlog_set_settings`, `send_all_backlog_to_ready`
 - **Blueprint:** `blueprint_generate`, `blueprint_generation_cancel`, `blueprint_generation_result`, `blueprint_generation_retry`, `blueprint_generation_status`, `list_blueprints`, `validate_blueprint`
 - **Catalog:** `catalog_list_roles`, `catalog_list_scenarios`

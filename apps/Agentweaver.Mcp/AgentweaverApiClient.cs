@@ -444,10 +444,28 @@ public sealed class AgentweaverApiClient
     private AuthenticationHeaderValue GetAuthHeader() =>
         new("Bearer", GetEffectiveBrokerToken());
 
+    private void ForwardAddressedMessageRunIdentity(HttpRequestMessage message, string path)
+    {
+        const string runIdHeader = "X-Agentweaver-Run-Id";
+        const string runTokenHeader = "X-Agentweaver-Run-Token";
+        if (!path.Contains("/agent-messages", StringComparison.Ordinal)
+            || _httpContextAccessor?.HttpContext is not { } context
+            || context.User.Identity?.IsAuthenticated != true
+            || !context.Items.ContainsKey(McpBrokerAuthenticationDefaults.ValidatedTokenItem))
+            return;
+        var runId = context.Request.Headers[runIdHeader].ToString();
+        var runToken = context.Request.Headers[runTokenHeader].ToString();
+        if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(runToken))
+            return;
+        message.Headers.TryAddWithoutValidation(runIdHeader, runId);
+        message.Headers.TryAddWithoutValidation(runTokenHeader, runToken);
+    }
+
     public async Task<T> GetAsync<T>(string path, CancellationToken ct = default)
     {
         using var message = new HttpRequestMessage(HttpMethod.Get, path.TrimStart('/'));
         message.Headers.Authorization = GetAuthHeader();
+        ForwardAddressedMessageRunIdentity(message, path);
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, path, ct);
     }
@@ -459,6 +477,7 @@ public sealed class AgentweaverApiClient
             Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
         };
         message.Headers.Authorization = GetAuthHeader();
+        ForwardAddressedMessageRunIdentity(message, path);
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, path, ct);
     }

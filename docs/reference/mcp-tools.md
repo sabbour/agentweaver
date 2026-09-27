@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **121 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **127 tools** across **15 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -26,6 +26,17 @@ All MCP tool failures surface a structured JSON message:
 ```
 
 Common mappings include Agentweaver sign-in guidance for `401`s, resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.
+
+## Addressed Message
+
+| Tool | Description |
+| --- | --- |
+| `agent_message_acknowledge` | Acknowledge a delivered message as received; does not change task or decision state. |
+| `agent_message_claim` | At a recipient turn boundary, lease the oldest pending addressed message. |
+| `agent_message_deliver` | Record delivery only after presenting the claimed message at a safe turn boundary. |
+| `agent_message_get` | Get one addressed message's state and correlation. |
+| `agent_message_list` | List addressed messages and delivery diagnostics visible to this caller. |
+| `agent_message_send` | Persist an addressed message to one teammate's active run; acknowledgment only confirms receipt. |
 
 ## Backlog
 

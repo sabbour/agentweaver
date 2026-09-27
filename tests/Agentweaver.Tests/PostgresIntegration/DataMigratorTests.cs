@@ -64,6 +64,8 @@ public sealed class DataMigratorTests : IDisposable
         var workflowRuns = await db.WorkflowRuns.CountAsync();
         var executionIdentity = await db.ExecutionIdentities
             .SingleAsync(identity => identity.RunId == _seededRecoveredRunId);
+        var addressedMessage = await db.AddressedMessages
+            .SingleAsync(message => message.ProjectId == _seededProjectId);
         var backlogTasks = await db.BacklogTasks.CountAsync();
         var seededProject = await db.Projects.SingleAsync(project => project.ProjectId == _seededProjectId);
         var recoveredRun = await db.Runs.SingleAsync(run => run.RunId == _seededRecoveredRunId);
@@ -103,6 +105,8 @@ public sealed class DataMigratorTests : IDisposable
         executionIdentity.ProjectId.Should().Be(_seededProjectId);
         executionIdentity.InitiatingPrincipalId.Should().Be("bob");
         executionIdentity.ExecutingServiceId.Should().Be("service:agentweaver-api");
+        addressedMessage.Status.Should().Be(AddressedMessageStates.Accepted);
+        addressedMessage.ThreadId.Should().Be("migration-thread");
         packageVersions.Should().ContainSingle();
         packageVersions.Single().CanonicalVersionKey.Should().Be(
             BlueprintPackageLibraryLimits.CanonicalVersionKey(packageVersions.Single().CanonicalVersion));
@@ -483,6 +487,21 @@ public sealed class DataMigratorTests : IDisposable
         var baseId = Random.Shared.Next(100_000, 900_000);
         var created = DateTimeOffset.Parse("2026-09-24T12:34:56.1234560Z");
         var updated = created.AddMinutes(5);
+        db.AddressedMessages.Add(new AddressedMessage
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            ProjectId = projectId,
+            Sender = "Tank",
+            SenderIdentity = "run:migration",
+            Recipient = "Link",
+            SourceRunId = "migration-source",
+            TargetRunId = "migration-target",
+            ThreadId = "migration-thread",
+            IdempotencyKey = "migration-retry",
+            Content = "Preserve this receipt.",
+            CreatedAt = created,
+            ExpiresAt = created.AddDays(1),
+        });
         var activeDecisionId = baseId + 2;
         var supersededDecisionId = baseId + 1;
         var mergedInboxId = baseId + 20;

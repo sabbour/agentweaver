@@ -333,6 +333,110 @@ namespace Agentweaver.Api.Migrations
                     b.ToTable("HeartbeatStatuses");
                 });
 
+            modelBuilder.Entity("Agentweaver.Api.Memory.AddressedMessage", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("AcknowledgedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ClaimOwner")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ClaimedUntil")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("DeliveredAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ExpiresAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Fence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Recipient")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReferenceId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReferenceKind")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReplyToId")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Sender")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SenderIdentity")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceRunId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TargetRunId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ThreadId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "SenderIdentity", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("ProjectId", "ThreadId", "CreatedAt");
+
+                    b.HasIndex("ProjectId", "TargetRunId", "Status", "CreatedAt");
+
+                    b.ToTable("addressed_messages", (string)null);
+                });
+
             modelBuilder.Entity("Agentweaver.Api.Memory.AgentMemory", b =>
                 {
                     b.Property<int>("Id")

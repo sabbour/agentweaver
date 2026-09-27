@@ -15,6 +15,32 @@ public sealed record VerifiedAuthor(
 
 public static class RunAuthorship
 {
+    public static async Task<(VerifiedAuthor? Author, IResult? Failure)> ResolveMessageAsync(
+        HttpContext httpContext,
+        string projectId,
+        IRunSubmittingUserResolver runResolver,
+        IRunAuthorshipCapabilityStore capabilityStore,
+        CancellationToken ct)
+    {
+        var runId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
+        var token = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+        if (httpContext.GetCaller().AuthenticationScheme
+            == AgentweaverAuthenticationSchemes.InternalServiceKey)
+            return await ResolveAsync(httpContext, projectId, null, runResolver, capabilityStore, ct);
+        if (string.IsNullOrWhiteSpace(runId) && string.IsNullOrWhiteSpace(token))
+            return await ResolveAsync(httpContext, projectId, null, runResolver, capabilityStore, ct);
+        if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(token)
+            || !await capabilityStore.ValidateAsync(runId, token, ct))
+            return (null, Forbidden("invalid_run_identity"));
+        var (runProjectId, runAgentName) = await runResolver.GetRunIdentityAsync(runId, ct);
+        if (!string.Equals(runProjectId, projectId, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(runAgentName))
+            return (null, Forbidden("run_identity_scope_mismatch"));
+        return (new VerifiedAuthor(runAgentName, MemorySourceKinds.Run,
+            $"run:{runId}", runId,
+            string.Equals(runAgentName, "coordinator", StringComparison.OrdinalIgnoreCase)), null);
+    }
+
     public static async Task<(VerifiedAuthor? Author, IResult? Failure)> ResolveApproverAsync(
         HttpContext httpContext,
         Project project,

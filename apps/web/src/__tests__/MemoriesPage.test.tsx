@@ -17,6 +17,7 @@ vi.mock('../api/apiClient', () => ({
   apiClient: {
     getDecisions: vi.fn(),
     getDecisionsInbox: vi.fn(),
+    getAddressedMessages: vi.fn(),
     getProjectMemory: vi.fn(),
     getProjectSessions: vi.fn(),
     mergeDecisionInboxEntry: vi.fn(),
@@ -117,6 +118,31 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+describe('MemoriesPage — Addressed messages tab', () => {
+  it('shows delivery correlation and errors without treating acknowledgment as a decision', async () => {
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getAddressedMessages).mockResolvedValue([{
+      id: 'msg-1', projectId: 'proj-001', sender: 'Neo', recipient: 'Trinity',
+      sourceRunId: 'run-a', targetRunId: 'run-b', threadId: 'thread-1',
+      replyToId: null, referenceKind: 'backlog_task', referenceId: 'task-1',
+      idempotencyKey: 'key-1', content: 'Can you check the result?',
+      status: 'undeliverable', createdAt: '2026-09-27T10:00:00Z',
+      expiresAt: '2026-09-28T10:00:00Z', deliveredAt: null,
+      acknowledgedAt: null, failureReason: 'target_cancelled',
+    }]);
+
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Addressed messages' }));
+
+    await waitFor(() => expect(screen.getByText('Can you check the result?')).toBeTruthy());
+    expect(screen.getByText(/Delivery error: target_cancelled/)).toBeTruthy();
+    expect(screen.getByText(/Thread thread-1/)).toBeTruthy();
+    expect(screen.getByText(/backlog_task: task-1/)).toBeTruthy();
+    expect(apiClient.getAddressedMessages).toHaveBeenCalledWith('proj-001');
+  });
 });
 
 function makeSession(id: string, over?: Partial<SessionHistoryDto>): SessionHistoryDto {
