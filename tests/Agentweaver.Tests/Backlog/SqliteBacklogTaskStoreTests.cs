@@ -402,6 +402,212 @@ public sealed class SqliteBacklogTaskStoreTests
         readyClaim.Should().Be(ClaimReserveResult.Won);
     }
 
+    [Theory]
+    [InlineData("completed", "assembly_complete", "integrated", true)]
+    [InlineData("completed", "complete", "integrated", true)]
+    [InlineData("completed", "confirmed", "accepted_no_change", true)]
+    [InlineData("completed", "delegated_to_backlog", "delegated", false)]
+    [InlineData("completed", null, "pending", false)]
+    [InlineData("failed", "cancelled", "cancelled", false)]
+    [InlineData("failed", "assembly_failed", "failed", false)]
+    public async Task PrerequisiteOutcome_ControlsReadinessAndExplainsReason(
+        string status, string? result, string reason, bool satisfied)
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var run = MakeCoordinatorRun(project.Id, RunId.New()) with
+        {
+            Status = Agentweaver.Api.Contracts.RunStatusExtensions.ParseStatus(status),
+            Result = result,
+        };
+        await new SqliteRunStore(testDb.Db).InsertAsync(run);
+        var prerequisite = MakeReadyTask(project.Id, "a") with
+        {
+            State = BacklogTaskState.Claimed,
+            RunId = run.Id,
+            ClaimedAt = DateTimeOffset.UtcNow,
+        };
+        var dependent = MakeReadyTask(project.Id, "b");
+        await store.InsertAsync(prerequisite);
+        await store.InsertAsync(dependent);
+        await InsertDependencyAsync(testDb.Db, project.Id, dependent.Id, prerequisite.Id);
+
+        var dependency = (await store.ListDependencyStatusesAsync(project.Id, [dependent.Id])).Single();
+        dependency.Reason.Should().Be(reason);
+        dependency.IsSatisfied.Should().Be(satisfied);
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id)
+            .Should().Equal(satisfied ? [dependent.Id] : []);
+        (await store.CountReadyForPickupAsync()).Should().Be(satisfied ? 1 : 0);
+    }
+
+    [Fact]
+    public async Task BlockedPrefixBeyondFourPickupWindows_DoesNotHideReadyTail()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var prerequisite = MakeBacklogTask(project.Id, "prerequisite");
+        await store.InsertAsync(prerequisite);
+        for (var i = 0; i < 25; i++)
+        {
+            var blocked = MakeReadyTask(project.Id, $"a{i:D3}");
+            await store.InsertAsync(blocked);
+            await InsertDependencyAsync(testDb.Db, project.Id, blocked.Id, prerequisite.Id);
+        }
+        var ready = MakeReadyTask(project.Id, "z");
+        await store.InsertAsync(ready);
+
+        (await store.ListReadyForClaimAsync(project.Id, 3)).Select(t => t.Id).Should().Equal(ready.Id);
+        (await store.CountReadyForPickupAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task DependencyEditor_RejectsInvalidGraphsWithoutPartialMutation()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var a = MakeReadyTask(project.Id, "a");
+        var b = MakeReadyTask(project.Id, "b");
+        var c = MakeReadyTask(project.Id, "c");
+        await store.InsertAsync(a);
+        await store.InsertAsync(b);
+        await store.InsertAsync(c);
+        var other = MakeProject();
+        await new SqliteProjectStore(testDb.Db).InsertAsync(other);
+        var foreign = MakeReadyTask(other.Id, "foreign");
+        await store.InsertAsync(foreign);
+
+        var first = await store.EditDependenciesAsync(project.Id, 0,
+            new BacklogDependencyEdit(b.Id, [a.Id], []));
+        first.Revision.Should().Be(1);
+        var second = await store.EditDependenciesAsync(project.Id, 1,
+            new BacklogDependencyEdit(c.Id, [b.Id], []));
+        second.Revision.Should().Be(2);
+
+        foreach (var invalid in new[]
+        {
+            new BacklogDependencyEdit(a.Id, [a.Id], []),
+            new BacklogDependencyEdit(a.Id, [BacklogTaskId.New()], []),
+            new BacklogDependencyEdit(a.Id, [foreign.Id], []),
+            new BacklogDependencyEdit(a.Id, [c.Id], []),
+        })
+        {
+            var act = () => store.EditDependenciesAsync(project.Id, 2, invalid);
+            await act.Should().ThrowAsync<BacklogDependencyEditException>();
+            (await store.GetDependencyRevisionAsync(project.Id)).Should().Be(2);
+            (await store.ListDependenciesAsync(project.Id, [a.Id])).Should().BeEmpty();
+        }
+
+        var invalidPreview = () => store.EditDependenciesAsync(project.Id, 2,
+            new BacklogDependencyEdit(b.Id, [], [], [c.Id]), preview: true);
+        await invalidPreview.Should().ThrowAsync<BacklogDependencyEditException>();
+    }
+
+    [Fact]
+    public async Task DependencyEditor_ReplaceRemovePreviewAndConcurrentOppositeEdges()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var a = MakeReadyTask(project.Id, "a");
+        var b = MakeReadyTask(project.Id, "b");
+        var c = MakeReadyTask(project.Id, "c");
+        await store.InsertAsync(a);
+        await store.InsertAsync(b);
+        await store.InsertAsync(c);
+
+        var preview = await store.EditDependenciesAsync(project.Id, 0,
+            new BacklogDependencyEdit(b.Id, [a.Id], []), preview: true);
+        preview.AffectedTaskIds.Should().Contain(b.Id);
+        preview.Revision.Should().Be(1);
+        (await store.GetDependencyRevisionAsync(project.Id)).Should().Be(0);
+
+        var results = await Task.WhenAll(
+            new Func<Task<bool>>[]
+            {
+                async () => await TryEditAsync(store, project.Id, a.Id, b.Id),
+                async () => await TryEditAsync(store, project.Id, b.Id, a.Id),
+            }.Select(f => f()));
+        results.Should().ContainSingle(value => value);
+        (await store.GetDependencyRevisionAsync(project.Id)).Should().Be(1);
+        var target = results[0] ? a.Id : b.Id;
+        var source = results[0] ? b.Id : a.Id;
+        var replaced = await store.EditDependenciesAsync(project.Id, 1,
+            new BacklogDependencyEdit(target, [], [], [c.Id]));
+        replaced.Prerequisites.Should().Equal(c.Id);
+        var removed = await store.EditDependenciesAsync(project.Id, 2,
+            new BacklogDependencyEdit(target, [], [c.Id]));
+        removed.Prerequisites.Should().BeEmpty();
+        (await store.ListDependenciesAsync(project.Id, [target])).Should().BeEmpty();
+        var stale = () => store.EditDependenciesAsync(project.Id, 1,
+            new BacklogDependencyEdit(source, [c.Id], []));
+        (await stale.Should().ThrowAsync<BacklogDependencyEditException>())
+            .Which.Message.Should().Be("stale_graph_revision");
+    }
+
+    private static async Task<bool> TryEditAsync(
+        SqliteBacklogTaskStore store, ProjectId project, BacklogTaskId task, BacklogTaskId prerequisite)
+    {
+        try
+        {
+            await store.EditDependenciesAsync(project, 0,
+                new BacklogDependencyEdit(task, [prerequisite], []));
+            return true;
+        }
+        catch (BacklogDependencyEditException ex) when (ex.Message is "stale_graph_revision" or "dependency_cycle")
+        {
+            return false;
+        }
+    }
+
+        [Fact]
+        public async Task ThreeStories_ParallelBranchesJoinFailureRecoveryAndClaimRevision()
+        {
+            var (testDb, store, project) = await NewStoreWithProjectAsync();
+            await using var _ = testDb;
+            var runs = new SqliteRunStore(testDb.Db);
+            var a = MakeReadyTask(project.Id, "a");
+            var b = MakeReadyTask(project.Id, "b");
+            var join = MakeReadyTask(project.Id, "c");
+            await store.InsertAsync(a);
+            await store.InsertAsync(b);
+            await store.InsertAsync(join);
+            await store.EditDependenciesAsync(project.Id, 0, new BacklogDependencyEdit(join.Id, [a.Id, b.Id], []));
+            (await store.ListReadyForClaimAsync(project.Id, 3)).Select(t => t.Id).Should().Equal(a.Id, b.Id);
+
+            var aRun = MakeCoordinatorRun(project.Id, RunId.New());
+            var bRun = MakeCoordinatorRun(project.Id, RunId.New());
+            (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, a.Id, aRun, DateTimeOffset.UtcNow))
+                .Should().Be(ClaimReserveResult.Won);
+            (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, b.Id, bRun, DateTimeOffset.UtcNow))
+                .Should().Be(ClaimReserveResult.Won);
+            (await runs.TerminalizeForTestAsync(aRun.Id, RunStatus.Completed, "assembly_complete")).Should().BeTrue();
+            (await runs.TerminalizeForTestAsync(bRun.Id, RunStatus.Failed, "assembly_failed")).Should().BeTrue();
+            (await store.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
+            (await store.ListDependencyStatusesAsync(project.Id, [join.Id]))
+                .Should().ContainSingle(s => s.DependsOnTaskId == b.Id && s.Reason == "failed");
+
+            await runs.UpdateStatusAsync(bRun.Id, RunStatus.InProgress, null);
+            (await runs.TerminalizeForTestAsync(bRun.Id, RunStatus.Completed, "assembly_complete")).Should().BeTrue();
+            (await store.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id).Should().Equal(join.Id);
+            var joinRun = MakeCoordinatorRun(project.Id, RunId.New());
+            (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, join.Id, joinRun, DateTimeOffset.UtcNow))
+                .Should().Be(ClaimReserveResult.Won);
+            var claimed = await store.GetAsync(project.Id, join.Id);
+            claimed!.ClaimedGraphRevision.Should().Be(1);
+            var accepted = System.Text.Json.JsonSerializer.Deserialize<BacklogClaimedPrerequisite[]>(
+                claimed.ClaimedPrerequisitesJson!)!;
+            accepted.Select(input => input.RunId).Should().BeEquivalentTo(
+                [aRun.Id.ToString(), bRun.Id.ToString()]);
+            accepted.Should().OnlyContain(input => input.Outcome == "integrated");
+            accepted.Single(input => input.RunId == bRun.Id.ToString())
+                .LifecycleGeneration.Should().BeGreaterThan(1);
+
+            (await store.TryArchiveAsync(project.Id, a.Id, DateTimeOffset.UtcNow)).Should().BeTrue();
+            (await store.GetAsync(project.Id, join.Id))!.ClaimedPrerequisitesJson.Should().Be(claimed.ClaimedPrerequisitesJson);
+            var editClaimed = () => store.EditDependenciesAsync(project.Id, 1,
+                new BacklogDependencyEdit(join.Id, [], [], []));
+            (await editClaimed.Should().ThrowAsync<BacklogDependencyEditException>())
+                .Which.Message.Should().Be("task_claimed_or_archived");
+        }
     [Fact]
     public async Task TryDelete_WhenTaskIsDependencyTarget_ThrowsFriendlyDependencyException()
     {
@@ -418,6 +624,23 @@ public sealed class SqliteBacklogTaskStoreTests
 
         (await act.Should().ThrowAsync<BacklogTaskDependencyException>())
             .Which.Message.Should().Be("task_is_dependency");
+    }
+
+    [Fact]
+    public async Task DeletingUnclaimedDependent_AdvancesGraphRevision()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var upstream = MakeBacklogTask(project.Id, "a");
+        var downstream = MakeBacklogTask(project.Id, "b");
+        await store.InsertAsync(upstream);
+        await store.InsertAsync(downstream);
+        await store.EditDependenciesAsync(project.Id, 0,
+            new BacklogDependencyEdit(downstream.Id, [upstream.Id], []));
+
+        (await store.TryDeleteAsync(project.Id, downstream.Id)).Should().BeTrue();
+        (await store.GetDependencyRevisionAsync(project.Id)).Should().Be(2);
+        (await store.ListDependenciesAsync(project.Id, [downstream.Id])).Should().BeEmpty();
     }
 
     private static async Task InsertDependencyAsync(

@@ -17,6 +17,7 @@ vi.mock('../api/apiClient', () => ({
     listWorkflows: vi.fn(),
     setTaskWorkflowOverride: vi.fn(),
     editBacklogTask: vi.fn(),
+    editBacklogDependencies: vi.fn(),
     deleteBacklogTask: vi.fn(),
     archiveBacklogTask: vi.fn(),
   },
@@ -88,6 +89,63 @@ afterEach(() => {
 });
 
 describe('TaskCard workflow override', () => {
+  it('previews affected dependents before saving prerequisite links', async () => {
+    const onMutated = vi.fn();
+    vi.mocked(apiClient.editBacklogDependencies).mockResolvedValue({
+      revision: 4,
+      prerequisites: ['upstream-1'],
+      affected_task_ids: ['task-1', 'downstream-1'],
+      changed: true,
+    });
+    render(
+      <Wrapper>
+        <TaskCard {...{
+          card: { ...card, graph_revision: 3, prerequisites: [
+            { task_id: 'upstream-1', title: 'First story', reason: 'failed', is_satisfied: false },
+          ], dependents_task_ids: ['downstream-1'] },
+          columnId: 'ready', projectId: 'proj-1', onMutated,
+          onDragStartTask: vi.fn(), onDragEndTask: vi.fn(), isDragging: false,
+        }} />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Needs First story: failed')).toBeTruthy();
+    expect(screen.getByText('Dependents: downstream-1')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit prerequisites' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prerequisite task IDs' }), {
+      target: { value: 'upstream-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await waitFor(() => expect(apiClient.editBacklogDependencies).toHaveBeenCalledWith(
+      'proj-1', 'task-1', { expected_revision: 3, replace: ['upstream-1'] }, true,
+    ));
+    expect(screen.getByText(/downstream-1/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save links' }));
+    await waitFor(() => expect(apiClient.editBacklogDependencies).toHaveBeenCalledWith(
+      'proj-1', 'task-1', { expected_revision: 3, replace: ['upstream-1'] }, false,
+    ));
+    expect(onMutated).toHaveBeenCalled();
+  });
+
+  it('requires a new preview when a dependency edit conflicts', async () => {
+    const { ApiError } = await import('../api/client');
+    vi.mocked(apiClient.editBacklogDependencies)
+      .mockResolvedValueOnce({ revision: 4, prerequisites: [], affected_task_ids: ['task-1'], changed: true })
+      .mockRejectedValueOnce(new ApiError(409, '{"error":"stale_graph_revision"}'));
+    render(
+      <Wrapper>
+        <TaskCard {...{
+          card: { ...card, graph_revision: 3 }, columnId: 'ready', projectId: 'proj-1',
+          onMutated: vi.fn(), onDragStartTask: vi.fn(), onDragEndTask: vi.fn(), isDragging: false,
+        }} />
+      </Wrapper>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit prerequisites' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save links' }).hasAttribute('disabled')).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Save links' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save links' }).hasAttribute('disabled')).toBe(true));
+  });
+
   it('sets a per-task workflow override', async () => {
     vi.mocked(apiClient.listWorkflows).mockResolvedValue(list);
     vi.mocked(apiClient.setTaskWorkflowOverride).mockResolvedValue({ task_id: 'task-1', workflow_override_id: 'nightly' });

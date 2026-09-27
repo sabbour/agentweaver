@@ -761,6 +761,14 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("claimed_at");
 
+                    b.Property<long?>("ClaimedGraphRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("claimed_graph_revision");
+
+                    b.Property<string>("ClaimedPrerequisitesJson")
+                        .HasColumnType("text")
+                        .HasColumnName("claimed_prerequisites_json");
+
                     b.Property<DateTimeOffset?>("CommittedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("committed_at");
@@ -2341,6 +2349,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("bigint")
                         .HasDefaultValue(0L)
                         .HasColumnName("team_revision");
+
+                    b.Property<long>("BacklogGraphRevision")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("backlog_graph_revision");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")

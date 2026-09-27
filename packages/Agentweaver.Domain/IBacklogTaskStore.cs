@@ -35,6 +35,17 @@ public interface IBacklogTaskStore
         IReadOnlyCollection<BacklogTaskId> taskIds,
         CancellationToken ct = default);
 
+    Task<long> GetDependencyRevisionAsync(ProjectId projectId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically previews or changes one task's prerequisite set. Claimed, archived, and
+    /// provisional tasks cannot have their inputs edited. The expected project graph revision
+    /// is checked under a project lock before graph validation; a successful change advances it.
+    /// </summary>
+    Task<BacklogDependencyEditResult> EditDependenciesAsync(
+        ProjectId projectId, long expectedRevision, BacklogDependencyEdit edit,
+        bool preview = false, CancellationToken ct = default);
+
     /// <summary>Ready, unclaimed tasks for a project ordered by (order_key ASC, committed_at ASC,
     /// task_id ASC), capped at <paramref name="limit"/>. Deterministic top-N claim candidates.</summary>
     Task<IReadOnlyList<BacklogTask>> ListReadyForClaimAsync(

@@ -1,4 +1,6 @@
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Backlog;
+using System.Text.Json;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -101,6 +103,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 prerequisite.Title,
                 prerequisite.RunId,
                 RunStatus = run == null ? null : run.Status,
+                RunResult = run == null ? null : run.Result,
                 prerequisite.ArchivedAt,
             }).ToListAsync(ct);
 
@@ -110,8 +113,69 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             row.Title,
             row.RunId is null ? null : RunId.Parse(row.RunId),
             row.RunStatus is null ? null : RunStatusExtensions.ParseStatus(row.RunStatus),
-            row.ArchivedAt is null && row.RunId is not null && string.Equals(row.RunStatus, "merged", StringComparison.Ordinal)))
+            row.ArchivedAt is null && BacklogPrerequisiteOutcome.IsSatisfied(row.RunStatus, row.RunResult),
+            BacklogPrerequisiteOutcome.Reason(row.ArchivedAt is not null, row.RunStatus, row.RunResult)))
             .ToList();
+    }
+
+    public async Task<long> GetDependencyRevisionAsync(ProjectId projectId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.Projects.AsNoTracking()
+            .Where(p => p.ProjectId == projectId.ToString())
+            .Select(p => (long?)p.BacklogGraphRevision)
+            .SingleOrDefaultAsync(ct)
+            ?? throw new BacklogDependencyEditException("project_not_found");
+    }
+
+    public async Task<BacklogDependencyEditResult> EditDependenciesAsync(
+        ProjectId projectId, long expectedRevision, BacklogDependencyEdit edit,
+        bool preview = false, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        var pid = projectId.ToString();
+        var project = await db.Projects
+            .FromSqlInterpolated($"SELECT * FROM projects WHERE project_id = {pid} FOR UPDATE")
+            .SingleOrDefaultAsync(ct)
+            ?? throw new BacklogDependencyEditException("project_not_found");
+        if (project.BacklogGraphRevision != expectedRevision)
+            throw new BacklogDependencyEditException("stale_graph_revision");
+        var tasks = await db.BacklogTasks.AsNoTracking().Where(t => t.ProjectId == pid)
+            .ToDictionaryAsync(t => BacklogTaskId.Parse(t.TaskId),
+                t => t.State is "backlog" or "ready" && t.RunId == null
+                    && t.ArchivedAt == null && !t.IsAutomationInvocationPending, ct);
+        var edges = (await db.BacklogTaskDependencies.AsNoTracking()
+            .Where(d => d.ProjectId == pid).ToListAsync(ct))
+            .Select(d => new BacklogTaskDependency
+            {
+                ProjectId = projectId,
+                TaskId = BacklogTaskId.Parse(d.TaskId),
+                DependsOnTaskId = BacklogTaskId.Parse(d.DependsOnTaskId),
+                CreatedAt = d.CreatedAt,
+            }).ToArray();
+        var (result, before, after) = BacklogDependencyGraph.Project(
+            project.BacklogGraphRevision, edit, tasks, edges);
+        if (preview || !result.Changed)
+            return result;
+        var tid = edit.TaskId.ToString();
+        var removed = before.Except(after).Select(id => id.ToString()).ToArray();
+        if (removed.Length > 0)
+            await db.BacklogTaskDependencies.Where(d => d.ProjectId == pid && d.TaskId == tid
+                    && removed.Contains(d.DependsOnTaskId))
+                .ExecuteDeleteAsync(ct);
+        foreach (var added in after.Except(before))
+            db.BacklogTaskDependencies.Add(new Memory.BacklogTaskDependencyRecord
+            {
+                ProjectId = pid,
+                TaskId = tid,
+                DependsOnTaskId = added.ToString(),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        project.BacklogGraphRevision++;
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return result;
     }
 
     public async Task<IReadOnlyList<BacklogTask>> ListReadyForClaimAsync(
@@ -121,13 +185,16 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         var pid = projectId.ToString();
         var recs = await db.BacklogTasks.AsNoTracking()
             .Where(t => t.ProjectId == pid && t.State == "ready" && t.RunId == null && t.ArchivedAt == null)
+            .Where(t => !db.BacklogTaskDependencies.Any(d => d.ProjectId == pid && d.TaskId == t.TaskId
+                && db.BacklogTasks.Any(p => p.TaskId == d.DependsOnTaskId
+                    && (p.ArchivedAt != null || p.RunId == null
+                        || !db.Runs.Any(r => r.RunId == p.RunId
+                            && (r.Status == "merged" || (r.Status == "completed"
+                                && (r.Result == "assembly_complete" || r.Result == "complete" || r.Result == "confirmed"))))))))
             .OrderBy(t => t.OrderKey).ThenBy(t => t.CommittedAt).ThenBy(t => t.TaskId)
-            .Take(limit * 4)
+            .Take(limit)
             .ToListAsync(ct);
-        var tasks = recs.Select(FromRecord).ToList();
-        var statuses = await ListDependencyStatusesAsync(projectId, tasks.Select(t => t.Id).ToList(), ct);
-        var blocked = statuses.Where(s => !s.IsSatisfied).Select(s => s.TaskId).ToHashSet();
-        return tasks.Where(t => !blocked.Contains(t.Id)).Take(limit).ToList();
+        return recs.Select(FromRecord).ToList();
     }
 
     public async Task<int> CountReadyForPickupAsync(CancellationToken ct = default)
@@ -187,16 +254,30 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
     public async Task<bool> TryDeleteAsync(ProjectId projectId, BacklogTaskId id, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
-        if (await db.BacklogTaskDependencies.AsNoTracking()
-            .AnyAsync(d => d.ProjectId == projectId.ToString() && d.DependsOnTaskId == id.ToString(), ct))
-            throw new BacklogTaskDependencyException("task_is_dependency");
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var pid = projectId.ToString();
+        var project = await db.Projects
+            .FromSqlInterpolated($"SELECT * FROM projects WHERE project_id = {pid} FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
+        if (project is null)
+            return false;
+        if (await db.BacklogTaskDependencies.AsNoTracking()
+            .AnyAsync(d => d.ProjectId == pid && d.DependsOnTaskId == id.ToString(), ct))
+            throw new BacklogTaskDependencyException("task_is_dependency");
         var tid = id.ToString();
+        var hadOutgoingLinks = await db.BacklogTaskDependencies.AsNoTracking()
+            .AnyAsync(d => d.ProjectId == pid && d.TaskId == tid, ct);
         var rows = await db.BacklogTasks
             .Where(t => t.TaskId == tid && t.ProjectId == pid
                 && (t.State == "backlog" || t.State == "ready")
                 && t.RunId == null && t.ArchivedAt == null && !t.IsAutomationInvocationPending)
             .ExecuteDeleteAsync(ct);
+        if (rows > 0 && hadOutgoingLinks)
+        {
+            project.BacklogGraphRevision++;
+            await db.SaveChangesAsync(ct);
+        }
+        await tx.CommitAsync(ct);
         return rows > 0;
     }
 
@@ -221,6 +302,9 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         var pid = projectId.ToString();
         var tid = id.ToString();
 
+        await db.Projects.FromSqlInterpolated(
+            $"SELECT * FROM projects WHERE project_id = {pid} FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
         var task = await db.BacklogTasks
             .FirstOrDefaultAsync(t => t.TaskId == tid && t.ProjectId == pid && t.ArchivedAt == null
                 && !t.IsAutomationInvocationPending, ct);
@@ -379,12 +463,43 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
 
         var pid = projectId.ToString();
         var tid = id.ToString();
-        var dependencyStatuses = await ListDependencyStatusesAsync(projectId, [id], ct);
-        if (dependencyStatuses.Any(s => !s.IsSatisfied))
+        var projectLock = await db.Projects
+            .FromSqlInterpolated($"SELECT * FROM projects WHERE project_id = {pid} FOR UPDATE")
+            .SingleOrDefaultAsync(ct);
+        if (projectLock is null || projectLock.State != "active")
+            return new ClaimReserveOutcome(ClaimReserveResult.ProjectUnavailable);
+        var inputs = await (
+            from dependency in db.BacklogTaskDependencies.AsNoTracking()
+            join prerequisite in db.BacklogTasks.AsNoTracking()
+                on dependency.DependsOnTaskId equals prerequisite.TaskId
+            join run in db.Runs.AsNoTracking()
+                on prerequisite.RunId equals run.RunId into runs
+            from run in runs.DefaultIfEmpty()
+            where dependency.ProjectId == pid && dependency.TaskId == tid
+            orderby dependency.DependsOnTaskId
+            select new
+            {
+                dependency.DependsOnTaskId,
+                prerequisite.ArchivedAt,
+                prerequisite.RunId,
+                Status = run == null ? null : run.Status,
+                Result = run == null ? null : run.Result,
+                Commit = run == null ? null : run.MergedCommitHash,
+                Tree = run == null ? null : run.TreeHash,
+                Generation = run == null ? 0 : run.LifecycleGeneration,
+                WorkflowDigest = run == null ? null : run.ExecutableWorkflowContentDigest,
+            }).ToListAsync(ct);
+        if (inputs.Any(input => input.ArchivedAt is not null
+            || !BacklogPrerequisiteOutcome.IsSatisfied(input.Status, input.Result)))
         {
             await tx.RollbackAsync(ct);
             return new ClaimReserveOutcome(ClaimReserveResult.Lost);
         }
+        var claimedInputs = JsonSerializer.Serialize(inputs.Select(input => new BacklogClaimedPrerequisite(
+            input.DependsOnTaskId, input.RunId!,
+            BacklogPrerequisiteOutcome.Reason(false, input.Status, input.Result),
+            input.Generation, input.Commit, input.Tree, input.WorkflowDigest)).ToArray());
+        var graphRevision = projectLock.BacklogGraphRevision;
 
         // (a) exactly-once, project-scoped claim gate.
         var claimedRows = await db.BacklogTasks
@@ -393,7 +508,9 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.State, "claimed")
                 .SetProperty(t => t.RunId, coordinatorRun.Id.ToString())
-                .SetProperty(t => t.ClaimedAt, claimedAt), ct);
+                .SetProperty(t => t.ClaimedAt, claimedAt)
+                .SetProperty(t => t.ClaimedGraphRevision, graphRevision)
+                .SetProperty(t => t.ClaimedPrerequisitesJson, claimedInputs), ct);
 
         if (claimedRows != 1)
         {
@@ -557,6 +674,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         CommittedAt = t.CommittedAt,
         ClaimedAt = t.ClaimedAt,
         RunId = t.RunId?.ToString(),
+        ClaimedGraphRevision = t.ClaimedGraphRevision,
+        ClaimedPrerequisitesJson = t.ClaimedPrerequisitesJson,
         WorkflowOverrideId = t.WorkflowOverrideId,
         WorkflowDefinitionSnapshotYaml = t.WorkflowDefinitionSnapshotYaml,
         ArchivedAt = t.ArchivedAt,
@@ -582,6 +701,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         CommittedAt = r.CommittedAt,
         ClaimedAt = r.ClaimedAt,
         RunId = r.RunId is null ? null : RunId.Parse(r.RunId),
+        ClaimedGraphRevision = r.ClaimedGraphRevision,
+        ClaimedPrerequisitesJson = r.ClaimedPrerequisitesJson,
         WorkflowOverrideId = r.WorkflowOverrideId,
         WorkflowDefinitionSnapshotYaml = r.WorkflowDefinitionSnapshotYaml,
         ArchivedAt = r.ArchivedAt,

@@ -69,6 +69,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN state TEXT NOT NULL DEFAULT 'active';", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_branch TEXT NOT NULL DEFAULT 'main';", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN team_revision INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN backlog_graph_revision INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_name TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_charter TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN reviewed_by TEXT;", ct);
@@ -241,6 +242,8 @@ public sealed class SqliteDb
             "ALTER TABLE backlog_tasks ADD COLUMN automation_invocation_pending INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN ai_execution_provider_key TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN workflow_definition_snapshot_yaml TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN claimed_graph_revision INTEGER;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN claimed_prerequisites_json TEXT;", ct);
         await TryAlterAsync(connection,
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_parent_promotion_key
@@ -745,6 +748,7 @@ public sealed class SqliteDb
             updated_at              TEXT NOT NULL,
             webhook_secret          TEXT,
             team_revision           INTEGER NOT NULL DEFAULT 0,
+            backlog_graph_revision  INTEGER NOT NULL DEFAULT 0,
             preview_approval_timeout_minutes INTEGER NOT NULL DEFAULT 1440,
             preview_lifetime_minutes INTEGER NOT NULL DEFAULT 1440,
             preview_dns_convergence_timeout_seconds INTEGER NOT NULL DEFAULT 600

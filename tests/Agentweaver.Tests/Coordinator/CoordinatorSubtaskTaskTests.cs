@@ -401,6 +401,40 @@ public sealed class CoordinatorSubtaskTaskTests
     }
 
     [Fact]
+    public void FindDeclaredOutputConflictEdges_ReverseIdDependency_DoesNotCloseCycle()
+    {
+        var earlier = CreateSubtask("execution", declaredOutputPaths: ["shared.cs"], id: 20);
+        var later = CreateSubtask("execution", declaredOutputPaths: ["src/shared.cs"], id: 21);
+
+        CoordinatorDispatchService.FindDeclaredOutputConflictEdges(
+            [earlier, later], new HashSet<(int, int)> { (20, 21) }).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void FindDeclaredOutputConflictEdges_TransitiveReversePath_DoesNotCloseCycle()
+    {
+        var earlier = CreateSubtask("execution", declaredOutputPaths: ["src/shared.cs"], id: 20);
+        var middle = CreateSubtask("execution", declaredOutputPaths: ["other.cs"], id: 21);
+        var later = CreateSubtask("execution", declaredOutputPaths: ["shared.cs"], id: 22);
+
+        CoordinatorDispatchService.FindDeclaredOutputConflictEdges(
+            [earlier, middle, later],
+            new HashSet<(int, int)> { (20, 21), (21, 22) }).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void FindDeclaredOutputConflictEdges_ConflictingScopes_SkipsCycleButKeepsSafeEdge()
+    {
+        var first = CreateSubtask("execution", declaredOutputPaths: ["shared.cs", "readme.md"], id: 20);
+        var second = CreateSubtask("execution", declaredOutputPaths: ["src/shared.cs"], id: 21);
+        var third = CreateSubtask("execution", declaredOutputPaths: ["docs/readme.md"], id: 22);
+
+        CoordinatorDispatchService.FindDeclaredOutputConflictEdges(
+            [first, second, third],
+            new HashSet<(int, int)> { (20, 21) }).Should().Equal((22, 20));
+    }
+
+    [Fact]
     public void FindDeclaredOutputConflictEdges_InvalidStructuredOutputs_ContributeNoEdges()
     {
         var invalid = CreateSubtask("execution", id: 30);

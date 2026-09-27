@@ -102,6 +102,59 @@ public static class BacklogEndpoints
             return task is null ? Results.NotFound() : Results.Ok(await readModelFactory.BuildTaskDtoAsync(task, ct));
         });
 
+        app.MapGet("/api/projects/{projectId}/backlog/dependencies/revision", async (
+            HttpContext httpContext, string projectId, IProjectStore projectStore,
+            IBacklogTaskStore backlogStore, CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(projectId, out var pid))
+                return Results.BadRequest(new { error = "Invalid project id." });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Viewer, ct);
+            if (auth.Error is not null) return auth.Error;
+            return Results.Ok(new { revision = await backlogStore.GetDependencyRevisionAsync(pid, ct) });
+        });
+
+        app.MapPost("/api/projects/{projectId}/backlog/tasks/{taskId}/dependencies", async (
+            HttpContext httpContext, string projectId, string taskId, bool? preview,
+            EditBacklogDependenciesRequest request, IProjectStore projectStore,
+            IBacklogTaskStore backlogStore, CancellationToken ct) =>
+        {
+            if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
+                return Results.BadRequest(new { error = "Invalid id." });
+            if (request.ExpectedRevision < 0)
+                return Results.BadRequest(new { error = "invalid_graph_revision" });
+            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
+            if (auth.Error is not null) return auth.Error;
+            static BacklogTaskId[]? ParseIds(IReadOnlyList<string>? ids) =>
+                ids is null ? null : ids.Select(value =>
+                    BacklogTaskId.TryParse(value, out var id) ? id
+                        : throw new BacklogDependencyEditException("invalid_prerequisite_id")).ToArray();
+            try
+            {
+                var edit = new BacklogDependencyEdit(tid,
+                    ParseIds(request.Add) ?? [], ParseIds(request.Remove) ?? [],
+                    ParseIds(request.Replace));
+                var result = await backlogStore.EditDependenciesAsync(
+                    pid, request.ExpectedRevision, edit, preview ?? false, ct);
+                return Results.Ok(new BacklogDependenciesResponse
+                {
+                    Revision = result.Revision,
+                    Prerequisites = result.Prerequisites.Select(id => id.ToString()).ToArray(),
+                    AffectedTaskIds = result.AffectedTaskIds.Select(id => id.ToString()).ToArray(),
+                    Changed = result.Changed,
+                });
+            }
+            catch (BacklogDependencyEditException ex)
+            {
+                return ex.Message switch
+                {
+                    "project_not_found" or "task_not_found" => Results.NotFound(new { error = ex.Message }),
+                    "stale_graph_revision" or "task_claimed_or_archived" or "dependency_cycle" =>
+                        Results.Conflict(new { error = ex.Message }),
+                    _ => Results.BadRequest(new { error = ex.Message }),
+                };
+            }
+        });
+
         // PATCH /api/projects/{projectId}/backlog/tasks/{taskId} — edit (FR-005)
         app.MapPatch("/api/projects/{projectId}/backlog/tasks/{taskId}", async (
             HttpContext httpContext,

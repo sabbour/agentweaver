@@ -163,6 +163,32 @@ public sealed class BacklogTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
+    [McpServerTool(Name = "backlog_get_dependency_revision"), Description("Get the project dependency graph revision for a safe edit or preview.")]
+    public async Task<string> BacklogGetDependencyRevisionAsync(
+        [Description("Project ID")] string project_id, CancellationToken ct = default)
+    {
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/dependencies/revision", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
+    [McpServerTool(Name = "backlog_edit_dependencies"), Description("Atomically add, remove, or replace a task's prerequisites at an expected project graph revision; preview=true does not mutate.")]
+    public async Task<string> BacklogEditDependenciesAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Task ID")] string task_id,
+        [Description("Expected graph revision from backlog_get_task or backlog_get_dependency_revision")] long expected_revision,
+        [Description("Prerequisite task IDs to add")] string[]? add = null,
+        [Description("Prerequisite task IDs to remove")] string[]? remove = null,
+        [Description("When provided, replace the entire prerequisite set before add/remove")] string[]? replace = null,
+        [Description("Only preview affected tasks; do not change the graph")] bool preview = false,
+        CancellationToken ct = default)
+    {
+        var result = await api.PostAsync<JsonElement>(
+            $"/api/projects/{Uri.EscapeDataString(project_id)}/backlog/tasks/{Uri.EscapeDataString(task_id)}/dependencies?preview={preview.ToString().ToLowerInvariant()}",
+            new { expected_revision, add, remove, replace }, ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
     [McpServerTool(Name = "backlog_archive_task"), Description("Archive a backlog task off the active board. Claimed tasks also archive their linked coordinator run card.")]
     public async Task<string> BacklogArchiveTaskAsync(
         [Description("Project ID")] string project_id,

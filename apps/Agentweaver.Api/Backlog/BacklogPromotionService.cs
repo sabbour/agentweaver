@@ -186,6 +186,15 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
                 await InsertSqliteDependencyAsync(connection, tx, projectId, task.Id, keyToTask[dependencyKey].Id, now, ct).ConfigureAwait(false);
         }
 
+        if (stories.Any(story => story.DependsOnKeys.Count > 0))
+        {
+            await using var revision = connection.CreateCommand();
+            revision.Transaction = tx;
+            revision.CommandText = "UPDATE projects SET backlog_graph_revision = backlog_graph_revision + 1 WHERE project_id = $projectId;";
+            revision.Parameters.AddWithValue("$projectId", projectId.ToString());
+            if (await revision.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+                throw new BacklogDependencyEditException("project_not_found");
+        }
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return new BacklogPromotionResult(created, created.Count);
     }
@@ -202,6 +211,11 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
 
         await using var db = await _dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
         await using var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var pid = projectId.ToString();
+        var graphOwner = await db.Projects
+            .FromSqlInterpolated($"SELECT * FROM projects WHERE project_id = {pid} FOR UPDATE")
+            .SingleOrDefaultAsync(ct).ConfigureAwait(false)
+            ?? throw new BacklogDependencyEditException("project_not_found");
 
         var parentRunId = parentPrdRunId.ToString();
         var keys = stories.Select(s => s.Key.Trim()).ToList();
@@ -294,6 +308,8 @@ public sealed class BacklogPromotionService : IBacklogPromotionService
             }
         }
 
+        if (stories.Any(story => story.DependsOnKeys.Count > 0))
+            graphOwner.BacklogGraphRevision++;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return new BacklogPromotionResult(created, created.Count);

@@ -2757,6 +2757,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IReadOnlySet<(int, int)> existing)
     {
         var additions = new List<(int SubtaskId, int DependsOnSubtaskId)>();
+        var graph = existing.ToHashSet();
         // Ordered (output, owningSubtaskId) pairs seen so far. A list (not a dictionary) is required
         // because ownership lookup uses the shared suffix/filename-aware matcher, not exact equality.
         var seen = new List<(string Output, int SubtaskId)>();
@@ -2779,11 +2780,33 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
                 var owner = seen[ownerIndex].SubtaskId;
                 var edge = (subtask.Id, owner);
-                if (subtask.Id != owner && !existing.Contains(edge) && !additions.Contains(edge))
+                if (subtask.Id != owner && !graph.Contains(edge)
+                    && !Reaches(owner, subtask.Id, graph))
+                {
                     additions.Add(edge);
+                    graph.Add(edge);
+                }
             }
         }
         return additions;
+    }
+
+    private static bool Reaches(int start, int target, IReadOnlySet<(int TaskId, int DependsOnId)> edges)
+    {
+        var visited = new HashSet<int>();
+        var pending = new Stack<int>();
+        pending.Push(start);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            if (current == target)
+                return true;
+            if (!visited.Add(current))
+                continue;
+            foreach (var (_, prerequisite) in edges.Where(e => e.TaskId == current))
+                pending.Push(prerequisite);
+        }
+        return false;
     }
 
     private static bool TryMapTerminalEvent(RunEvent evt, out ChildTerminal terminal)

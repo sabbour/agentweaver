@@ -1528,6 +1528,11 @@ export interface BacklogTaskDto {
   promotion_key?: string | null;
   promotion_reason?: string | null;
   depends_on_task_ids?: string[];
+  dependents_task_ids?: string[];
+  prerequisites?: BlockingDependencyDto[];
+  graph_revision?: number;
+  claimed_graph_revision?: number | null;
+  claimed_prerequisites?: BacklogClaimedPrerequisite[] | null;
   is_blocked?: boolean;
   blocked_reason?: string | null;
   is_ready_to_start?: boolean;
@@ -1539,6 +1544,25 @@ export interface BlockingDependencyDto {
   title: string;
   run_id?: string | null;
   run_status?: string | null;
+  reason?: string;
+  is_satisfied?: boolean;
+}
+
+export interface BacklogClaimedPrerequisite {
+  TaskId: string;
+  RunId: string;
+  Outcome: string;
+  LifecycleGeneration: number;
+  MergedCommitHash: string | null;
+  TreeHash: string | null;
+  ExecutableWorkflowContentDigest: string | null;
+}
+
+export interface BacklogDependenciesResponse {
+  revision: number;
+  prerequisites: string[];
+  affected_task_ids: string[];
+  changed: boolean;
 }
 
 // A Backlog/Ready intake card (board column kind === "intake").
@@ -1558,6 +1582,9 @@ export interface TaskCardDto {
   promotion_key?: string | null;
   promotion_reason?: string | null;
   depends_on_task_ids?: string[];
+  dependents_task_ids?: string[];
+  prerequisites?: BlockingDependencyDto[];
+  graph_revision?: number;
   is_blocked?: boolean;
   blocked_reason?: string | null;
   is_ready_to_start?: boolean;
