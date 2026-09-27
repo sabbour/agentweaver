@@ -134,7 +134,55 @@ public sealed class PostgresJsonCheckpointStore : JsonCheckpointStore
                 $"Checkpoint '{key.CheckpointId}' was not found for session '{sessionId}' in store '{_storeName}'.");
 
         using var doc = JsonDocument.Parse(rec.Payload);
-        return doc.RootElement.Clone();
+        return RestoreMetadataOrder(doc.RootElement);
+    }
+
+    internal static JsonElement RestoreMetadataOrder(JsonElement payload)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+            WriteWithMetadataFirst(payload, writer);
+        using var restored = JsonDocument.Parse(stream.ToArray());
+        return restored.RootElement.Clone();
+    }
+
+    private static void WriteWithMetadataFirst(JsonElement element, Utf8JsonWriter writer)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                // jsonb sorts object keys, but MAF's System.Text.Json polymorphic and
+                // reference metadata must precede ordinary properties on deserialization.
+                if (element.TryGetProperty("$id", out var id))
+                {
+                    writer.WritePropertyName("$id");
+                    WriteWithMetadataFirst(id, writer);
+                }
+                if (element.TryGetProperty("$type", out var type))
+                {
+                    writer.WritePropertyName("$type");
+                    WriteWithMetadataFirst(type, writer);
+                }
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (property.Name is "$id" or "$type")
+                        continue;
+                    writer.WritePropertyName(property.Name);
+                    WriteWithMetadataFirst(property.Value, writer);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var child in element.EnumerateArray())
+                    WriteWithMetadataFirst(child, writer);
+                writer.WriteEndArray();
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
     }
 
     /// <inheritdoc />

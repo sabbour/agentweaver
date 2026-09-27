@@ -75,6 +75,78 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task CoordinatorGateCheckpoint_RestoresAfterJsonbReordersNestedEdgeMetadata()
+    {
+        var session = $"run-{Guid.NewGuid():n}";
+        var writer = new PostgresJsonCheckpointStore(pg.Factory, "coordinator");
+        var reader = new PostgresJsonCheckpointStore(pg.Factory, "coordinator");
+        ExecutorBinding draft = new FunctionExecutor<string, string>(
+            "coordinator-draft", async (input, _, _) =>
+            {
+                await Task.Yield();
+                return input;
+            });
+        ExecutorBinding gate = RequestPort.Create<string, string>("coordinator-confirmation-gate");
+        var workflow = new WorkflowBuilder(draft)
+            .AddEdge(draft, gate)
+            .Build()!;
+
+        CheckpointInfo checkpoint;
+        {
+            await using var run = await InProcessExecution.RunStreamingAsync(
+                workflow, "drafted spec", CheckpointManager.CreateJson(writer), session, CancellationToken.None);
+            await foreach (var evt in run.WatchStreamAsync(CancellationToken.None))
+                if (evt is RequestInfoEvent)
+                    break;
+            run.LastCheckpoint.Should().NotBeNull();
+            checkpoint = run.LastCheckpoint!;
+        }
+
+        await using var db = await pg.CreateDbContextAsync();
+        var stored = await db.WorkflowCheckpoints.AsNoTracking()
+            .SingleAsync(c => c.StoreName == "coordinator"
+                && c.SessionId == session && c.CheckpointId == checkpoint.CheckpointId);
+        using var persisted = JsonDocument.Parse(stored.Payload);
+        var edge = persisted.RootElement.GetProperty("workflow").GetProperty("edges")
+            .GetProperty("coordinator-draft")[0];
+        edge.EnumerateObject().First().Name.Should().NotBe("$type",
+            "PostgreSQL jsonb sorts object keys rather than retaining MAF's metadata-first order");
+        edge.GetProperty("$type").ValueKind.Should().Be(JsonValueKind.Number);
+
+        var recovered = await new PostgresCheckpointStoreFactory(pg.Factory)
+            .GetLatestCheckpointAsync("coordinator", session);
+        recovered.Should().NotBeNull();
+        var recoveredRecord = await db.WorkflowCheckpoints.AsNoTracking()
+            .SingleAsync(c => c.StoreName == "coordinator"
+                && c.SessionId == session && c.CheckpointId == recovered!.CheckpointId);
+        recoveredRecord.CreatedAt.Should().BeOnOrAfter(stored.CreatedAt,
+            "the latest checkpoint may be a successor written as the streaming run suspends or disposes");
+        using var recoveredJson = JsonDocument.Parse(recoveredRecord.Payload);
+        var recoveredEdge = recoveredJson.RootElement.GetProperty("workflow").GetProperty("edges")
+            .GetProperty("coordinator-draft")[0];
+        recoveredEdge.EnumerateObject().First().Name.Should().NotBe("$type",
+            "the checkpoint actually selected for resume must exercise jsonb's reordered metadata");
+        var restoredPayload = await reader.RetrieveCheckpointAsync(session, recovered!);
+        restoredPayload.GetProperty("workflow").GetProperty("edges")
+            .GetProperty("coordinator-draft")[0].EnumerateObject().First().Name.Should().Be("$type");
+        JsonElement.DeepEquals(recoveredJson.RootElement, restoredPayload).Should().BeTrue();
+
+        ExecutorBinding resumedDraft = new FunctionExecutor<string, string>(
+            "coordinator-draft", async (input, _, _) =>
+            {
+                await Task.Yield();
+                return input;
+            });
+        ExecutorBinding resumedGate = RequestPort.Create<string, string>("coordinator-confirmation-gate");
+        var resumeWorkflow = new WorkflowBuilder(resumedDraft)
+            .AddEdge(resumedDraft, resumedGate)
+            .Build()!;
+        await using var restored = await InProcessExecution.ResumeStreamingAsync(
+            resumeWorkflow, recovered, CheckpointManager.CreateJson(reader), CancellationToken.None);
+        restored.Should().NotBeNull();
+    }
+
+    [PostgresFact]
     public async Task RecoveredCoordinatorWrite_RejectsLeaseTakeoverAndGenerationChange()
     {
         var runId = Guid.NewGuid().ToString();

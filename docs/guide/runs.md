@@ -131,8 +131,10 @@ You review the OutcomeSpec in the conversation panel. If it looks right, confirm
 
 A gate shown as **awaiting confirmation** stays usable after an API restart or when your
 request reaches a different replica. The coordinator resumes its persisted checkpoint
-under the run's lease rather than drafting the original spec again. A decision sent to
-the replica holding that lease may return `202` with `status: "queued"`; this means the
+under the run's lease rather than drafting the original spec again. The PostgreSQL store
+restores polymorphic metadata order in saved checkpoints before the workflow reads them,
+including checkpoints written before a replica was replaced. A decision sent to the
+replica holding that lease may return `202` with `status: "queued"`; this means the
 decision is durably recorded, **not** that a revision or work plan has completed. Watch
 the outcome spec and run events for the next state. Conflicting decisions cannot replace
 a queued decision at the same gate.
