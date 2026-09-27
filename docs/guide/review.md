@@ -101,6 +101,32 @@ When review feedback asks for changes, it goes through the coordinator's unified
 
 ## The file panel
 
+### Stored review diffs (ordinary runs)
+
+For an ordinary run that reaches review, Agentweaver stores the UTF-8 diff bytes
+and reviewed Git tree as an immutable output revision in the run database.
+`GET /api/runs/{id}/output-revisions` lists revision identities, digests,
+generation and predecessor links; `GET /api/runs/{id}/output-revisions/{revisionId}`
+returns the exact stored diff. Both require current viewer access to the run.
+Requesting changes creates a new revision without replacing the old diff.
+Storage lasts as long as the run database and its backups; there is no independent
+expiry job. Unknown IDs return `404`; missing or corrupt stored content and
+unsupported schemas return `410` rather than substituting live workspace data.
+
+`POST /api/runs/{id}/review` accepts optional `output_revision_id` on approval.
+When omitted, the server binds approval to the current stored revision before
+queuing it; a stale explicit ID is rejected. The bound ID is checked again at
+merge, including after a deferred workflow resumes. `/commit` similarly binds
+the current revision before staging and refuses to merge if the committed tree
+differs. Runs created before revision storage retain the legacy review path
+without pretending to have a stored revision; new revisions with no executable
+workflow pin are marked `manifest_incomplete`.
+
+This slice stores **diff bytes**, not independent copies of every file. The
+ordinary file panel still reads workspace or, after merge, the recorded Git
+commit. Collective assembly, independent full-file retention, and MCP/UI
+revision-history readers are not yet covered by the output-revision contract.
+
 When a run reaches the review stage, the **file panel** on the left side of the run detail page automatically expands to show the review controls.
 
 The panel has two tabs:

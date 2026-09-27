@@ -981,6 +981,68 @@ app.MapGet("/api/runs/{id}/history", async (
     }
 });
 
+app.MapGet("/api/runs/{id}/output-revisions", async (
+    HttpContext httpContext, string id, IRunStore runStore, CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
+    try
+    {
+        var revisions = await runStore.ListOutputRevisionsAsync(runId, ct);
+        if (run.CurrentOutputRevisionId is not null
+            && revisions.All(r => r.RevisionId != run.CurrentOutputRevisionId))
+            return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+        return Results.Ok(revisions.Select(r => new
+        {
+            revision_id = r.RevisionId, schema_version = r.SchemaVersion,
+            lifecycle_generation = r.LifecycleGeneration, workflow_digest = r.WorkflowDigest,
+            manifest_incomplete = r.ManifestIncomplete, tree_hash = r.TreeHash,
+            diff_sha256 = r.DiffSha256, predecessor_revision_id = r.PredecessorRevisionId,
+            created_at = r.CreatedAt
+        }));
+    }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+    }
+});
+
+app.MapGet("/api/runs/{id}/output-revisions/{revisionId}", async (
+    HttpContext httpContext, string id, string revisionId, IRunStore runStore, CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
+    try
+    {
+        var revision = await runStore.GetOutputRevisionAsync(runId, revisionId, ct);
+        if (revision is null)
+            return run.CurrentOutputRevisionId == revisionId || run.ApprovedOutputRevisionId == revisionId
+                ? Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone)
+                : Results.NotFound(new { error = "output_revision_unavailable" });
+        return Results.Ok(new
+        {
+            revision_id = revision.RevisionId, schema_version = revision.SchemaVersion,
+            lifecycle_generation = revision.LifecycleGeneration, workflow_digest = revision.WorkflowDigest,
+            manifest_incomplete = revision.ManifestIncomplete, tree_hash = revision.TreeHash,
+            diff_sha256 = revision.DiffSha256, predecessor_revision_id = revision.PredecessorRevisionId,
+            created_at = revision.CreatedAt,
+            diff = new System.Text.UTF8Encoding(false, true).GetString(revision.DiffBytes)
+        });
+    }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+    }
+});
+
 app.MapPost("/api/runs/{id}/review", async (
     HttpContext httpContext,
     string id,
@@ -1017,13 +1079,39 @@ app.MapPost("/api/runs/{id}/review", async (
     var caller = httpContext.GetCaller();
 
     // Idempotency: return current state when the terminal decision already matches.
-    if (run.Status == RunStatus.Merged && request.Approved)
+    if (run.Status == RunStatus.Merged && request.Approved
+        && (request.OutputRevisionId is null
+            || request.OutputRevisionId == run.ApprovedOutputRevisionId))
         return Results.Json(new ReviewResponse { RunId = id, Status = run.Status.ToApiString(), MergeResult = run.Result });
     if (run.Status == RunStatus.Declined && !request.Approved)
         return Results.Json(new ReviewResponse { RunId = id, Status = run.Status.ToApiString(), MergeResult = null });
 
     if (run.Status != RunStatus.AwaitingReview)
         return Results.Conflict(new { error = $"Run is in status '{run.Status.ToApiString()}' and cannot be reviewed." });
+
+    if (request.Approved)
+    {
+        RunOutputRevision? revision;
+        try { revision = await runStore.GetLatestOutputRevisionAsync(runId, ct); }
+        catch (RunOutputRevisionUnavailableException ex)
+        {
+            return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+        }
+        if (run.CurrentOutputRevisionId is not null
+            && revision?.RevisionId != run.CurrentOutputRevisionId)
+            return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+        if (revision is not null)
+        {
+            if (!revision.Matches(run, revision.RevisionId)
+                || (request.OutputRevisionId is not null && request.OutputRevisionId != revision.RevisionId))
+                return Results.Conflict(new { error = "Reviewed output revision is stale." });
+            request = request with { OutputRevisionId = revision.RevisionId };
+        }
+        else if (run.CurrentOutputRevisionId is not null)
+            return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+        else if (request.OutputRevisionId is not null)
+            return Results.Conflict(new { error = "Reviewed output revision is unavailable." });
+    }
 
     var streamingRunForReview = workflowRegistry.Get(id);
     var pendingForReview = await pendingStore.GetAsync(id, ct);
@@ -1101,7 +1189,8 @@ app.MapPost("/api/runs/{id}/review", async (
         Approved: request.Approved,
         RequestChanges: request.RequestChanges,
         Feedback: request.Feedback,
-        ReviewedBy: caller.User);
+        ReviewedBy: caller.User,
+        OutputRevisionId: request.Approved ? request.OutputRevisionId : null);
 
     if (streamingRunForReview is null && pendingForReview is { } pendingForDefer)
     {
@@ -1415,7 +1504,24 @@ app.MapPost("/api/runs/{id}/commit", async (
     // TOCTOU races where a concurrent /review decline or /request-changes can race after
     // the git commit lands, and to prevent two simultaneous /commit calls from both succeeding.
     bool acquiredCommitting;
-    try { acquiredCommitting = await runStore.TryTransitionToCommittingAsync(runId, CancellationToken.None); }
+    RunOutputRevision? commitRevision;
+    try { commitRevision = await runStore.GetLatestOutputRevisionAsync(runId, ct); }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+    }
+    if (run.CurrentOutputRevisionId is not null
+        && commitRevision?.RevisionId != run.CurrentOutputRevisionId)
+        return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+    if (commitRevision is null && run.CurrentOutputRevisionId is not null)
+        return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+    try
+    {
+        acquiredCommitting = commitRevision is null
+            ? await runStore.TryTransitionToCommittingAsync(runId, CancellationToken.None)
+            : await runStore.TryTransitionToCommittingRevisionAsync(
+                runId, commitRevision.RevisionId, CancellationToken.None);
+    }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to transition run {RunId} to Committing", runId);
@@ -1439,6 +1545,12 @@ app.MapPost("/api/runs/{id}/commit", async (
         return Results.Problem("Failed to commit worktree changes.", statusCode: 500);
     }
 
+    if (commitRevision is not null && !string.Equals(newTreeHash, commitRevision.TreeHash, StringComparison.Ordinal))
+    {
+        await runStore.TryRevertCommittingAsync(runId, newTreeHash, CancellationToken.None).ConfigureAwait(false);
+        return Results.Conflict(new { error = "Committed output differs from the reviewed revision; request changes and review again." });
+    }
+
     // Persist the new tree hash and execute the merge. Use CancellationToken.None for all
     // post-CAS operations: the run now owns a non-cancellable path to a terminal/retryable state
     // regardless of HTTP request lifetime. The try/catch is a safety net in case a captured ct
@@ -1452,7 +1564,8 @@ app.MapPost("/api/runs/{id}/commit", async (
         // Merge the worktree branch into the originating branch.
         // TryStartMergingAsync inside ExecuteMergeAsync now accepts Committing → Merging.
         var mergeInput = new MergeInput(
-            id, newTreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
+            id, newTreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch,
+            OutputRevisionId: commitRevision?.RevisionId);
         mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, CancellationToken.None).ConfigureAwait(false);
     }
     catch (OperationCanceledException)
@@ -3473,7 +3586,8 @@ static async Task<IResult> ExecuteDirectReviewAsync(
         entry.RecordNext(EventTypes.MergeStarted, new { tree_hash = run.TreeHash });
     }
 
-    var mergeInput = new MergeInput(id, run.TreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
+    var mergeInput = new MergeInput(id, run.TreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch,
+        OutputRevisionId: request.OutputRevisionId);
     var mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, ct).ConfigureAwait(false);
 
     switch (mergeExecResult.Outcome)

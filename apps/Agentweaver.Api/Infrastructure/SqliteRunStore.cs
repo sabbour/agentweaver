@@ -199,27 +199,173 @@ public sealed class SqliteRunStore : IRunStore
 
     public async Task UpdateReviewReadyAsync(
         RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null) =>
+        await PublishReviewReadyCoreAsync(runId, null, treeHash, diff, stepCount, ct, now).ConfigureAwait(false);
+
+    public Task PublishReviewReadyAsync(
+        RunId runId, int expectedLifecycleGeneration, string treeHash, string diff, int stepCount,
+        CancellationToken ct = default, DateTimeOffset? now = null) =>
+        PublishReviewReadyCoreAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now);
+
+    private async Task PublishReviewReadyCoreAsync(
+        RunId runId, int? expectedLifecycleGeneration, string treeHash, string diff, int stepCount,
+        CancellationToken ct, DateTimeOffset? now)
     {
+        if (string.IsNullOrWhiteSpace(treeHash))
+            throw new InvalidOperationException("Review-ready output requires a pinned tree.");
         var ts = now ?? DateTimeOffset.UtcNow;
-        var rows = await ExecuteNonQueryAsync(
+        var bytes = RunOutputRevision.EncodeDiff(diff);
+        var digest = RunOutputRevision.Sha256(bytes);
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText =
             """
-            UPDATE runs
-               SET tree_hash = $treeHash, diff = $diff, status = $status, review_ready_at = $now,
-                   approval_generation = approval_generation +
-                       CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
-             WHERE run_id = $runId
-               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
-            """,
-            cmd =>
-            {
-                cmd.Parameters.AddWithValue("$treeHash", treeHash);
-                cmd.Parameters.AddWithValue("$diff", diff);
-                cmd.Parameters.AddWithValue("$status", RunStatus.AwaitingReview.ToApiString());
-                cmd.Parameters.AddWithValue("$now", Ts(ts));
-                cmd.Parameters.AddWithValue("$runId", runId.ToString());
-            }, ct).ConfigureAwait(false);
-        WarnIfNoRows(rows, runId, "mark review ready");
+            UPDATE runs SET status = status
+            WHERE run_id = $runId AND status IN ('in_progress', 'awaiting_review');
+            """;
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+            throw new InvalidOperationException("Run cannot publish output from its current status.");
+
+        command.CommandText =
+            """
+            SELECT lifecycle_generation, status, review_ready_at, executable_workflow_content_digest,
+                   current_output_revision_id
+            FROM runs WHERE run_id = $runId;
+            """;
+        int generation;
+        string status;
+        string? readyAt;
+        string? workflowDigest;
+        string? currentRevisionId;
+        await using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
+        {
+            await reader.ReadAsync(ct).ConfigureAwait(false);
+            generation = reader.GetInt32(0);
+            status = reader.GetString(1);
+            readyAt = reader.IsDBNull(2) ? null : reader.GetString(2);
+            workflowDigest = reader.IsDBNull(3) ? null : reader.GetString(3);
+            currentRevisionId = reader.IsDBNull(4) ? null : reader.GetString(4);
+        }
+        if (expectedLifecycleGeneration is { } expected && generation != expected)
+            throw new InvalidOperationException("Run lifecycle generation changed before output publication.");
+
+        var existing = await GetGenerationRevisionAsync(connection, tx, runId, generation, ct).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            if (status != "awaiting_review" || currentRevisionId != existing.RevisionId
+                || existing.TreeHash != treeHash || existing.DiffSha256 != digest
+                || existing.WorkflowDigest != workflowDigest || !existing.DiffBytes.AsSpan().SequenceEqual(bytes))
+                throw new InvalidOperationException("Output revision already published with different content or generation is no longer review-ready.");
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+            return;
+        }
+        if (currentRevisionId is not null || (status == "awaiting_review" && readyAt is not null))
+            throw new InvalidOperationException("Review-ready run has no durable output revision.");
+
+        command.CommandText =
+            """
+            SELECT revision_id FROM run_output_revisions
+            WHERE run_id = $runId AND lifecycle_generation < $generation
+            ORDER BY lifecycle_generation DESC LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$generation", generation);
+        var predecessor = (string?)await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
+        command.CommandText =
+            """
+            INSERT INTO run_output_revisions
+                (revision_id, schema_version, run_id, lifecycle_generation, workflow_digest,
+                 manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at)
+            VALUES ($revision, 1, $runId, $generation, $workflow, $incomplete, $tree, $digest,
+                    $predecessor, $bytes, $created);
+            """;
+        command.Parameters.AddWithValue("$revision", Guid.NewGuid().ToString("N"));
+        command.Parameters.AddWithValue("$workflow", (object?)workflowDigest ?? DBNull.Value);
+        command.Parameters.AddWithValue("$incomplete", workflowDigest is null ? 1 : 0);
+        command.Parameters.AddWithValue("$tree", treeHash);
+        command.Parameters.AddWithValue("$digest", digest);
+        command.Parameters.AddWithValue("$predecessor", (object?)predecessor ?? DBNull.Value);
+        command.Parameters.AddWithValue("$bytes", bytes);
+        command.Parameters.AddWithValue("$created", Ts(ts));
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+
+        command.CommandText =
+            """
+            UPDATE runs SET tree_hash = $tree, diff = $diff, status = 'awaiting_review', review_ready_at = $created,
+                current_output_revision_id = $revision,
+                approval_generation = approval_generation + CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END
+            WHERE run_id = $runId AND lifecycle_generation = $generation
+                AND (status = 'in_progress' OR (status = 'awaiting_review' AND review_ready_at IS NULL));
+            """;
+        command.Parameters.AddWithValue("$diff", diff);
+        if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+            throw new InvalidOperationException("Run generation changed during output publication.");
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    private static async Task<RunOutputRevision?> GetGenerationRevisionAsync(
+        SqliteConnection connection, SqliteTransaction? tx, RunId runId, int generation, CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = OutputRevisionSelect +
+            " WHERE run_id = $runId AND lifecycle_generation = $generation;";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$generation", generation);
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? MapOutputRevision(reader) : null;
+    }
+
+    private const string OutputRevisionSelect =
+        "SELECT revision_id, schema_version, run_id, lifecycle_generation, workflow_digest, " +
+        "manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at " +
+        "FROM run_output_revisions";
+
+    private static RunOutputRevision MapOutputRevision(SqliteDataReader reader) =>
+        new(reader.GetString(0), reader.GetInt32(1), new RunId(Guid.Parse(reader.GetString(2))),
+            reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetInt32(5) != 0,
+            reader.GetString(6), reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetFieldValue<byte[]>(9),
+            DateTimeOffset.Parse(reader.GetString(10), CultureInfo.InvariantCulture));
+
+    public async Task<RunOutputRevision?> GetOutputRevisionAsync(
+        RunId runId, string revisionId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = OutputRevisionSelect + " WHERE run_id = $runId AND revision_id = $revision;";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$revision", revisionId);
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? MapOutputRevision(reader) : null;
+    }
+
+    public async Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = OutputRevisionSelect +
+            " WHERE run_id = $runId ORDER BY lifecycle_generation DESC LIMIT 1;";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? MapOutputRevision(reader) : null;
+    }
+
+    public async Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(
+        RunId runId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = OutputRevisionSelect +
+            " WHERE run_id = $runId ORDER BY lifecycle_generation DESC;";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        var revisions = new List<RunOutputRevision>();
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            revisions.Add(MapOutputRevision(reader));
+        return revisions;
     }
 
     /// <summary>
@@ -239,6 +385,7 @@ public sealed class SqliteRunStore : IRunStore
             """
             UPDATE runs
                SET status = 'in_progress', ended_at = NULL, review_ready_at = NULL,
+                   approved_output_revision_id = NULL, current_output_revision_id = NULL,
                    lifecycle_generation = lifecycle_generation + 1
              WHERE run_id = $runId AND status = 'awaiting_review';
             """;
@@ -302,7 +449,9 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             UPDATE runs
-               SET status = 'in_progress', ended_at = NULL, lifecycle_generation = lifecycle_generation + 1
+               SET status = 'in_progress', ended_at = NULL,
+                   current_output_revision_id = NULL, approved_output_revision_id = NULL,
+                   lifecycle_generation = lifecycle_generation + 1
              WHERE run_id = $runId AND status IN ('failed', 'merge_failed', 'assemble_ready');
             """;
         command.Parameters.AddWithValue("$runId", runId.ToString());
@@ -334,22 +483,63 @@ public sealed class SqliteRunStore : IRunStore
     /// false if another request already moved the run out of AwaitingReview.
     /// Must be called BEFORE CommitChanges to prevent TOCTOU races.
     /// </summary>
-    public async Task<bool> TryTransitionToCommittingAsync(
-        RunId runId, CancellationToken ct = default, DateTimeOffset? now = null)
+    public Task<bool> TryTransitionToCommittingAsync(
+        RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        TryTransitionToCommittingCoreAsync(runId, null, ct);
+
+    public Task<bool> TryTransitionToCommittingRevisionAsync(
+        RunId runId, string revisionId, CancellationToken ct = default) =>
+        TryTransitionToCommittingCoreAsync(runId, revisionId, ct);
+
+    private async Task<bool> TryTransitionToCommittingCoreAsync(
+        RunId runId, string? revisionId, CancellationToken ct)
     {
-        var ts = now ?? DateTimeOffset.UtcNow;
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var run = await ReadForRevisionFenceAsync(connection, tx, runId, ct).ConfigureAwait(false);
+        if (run?.Status != RunStatus.AwaitingReview
+            || !await MatchesReviewRevisionAsync(connection, tx, run, revisionId, ct).ConfigureAwait(false))
+            return false;
         await using var command = connection.CreateCommand();
+        command.Transaction = tx;
         command.CommandText =
             """
-            UPDATE runs
-               SET status = 'committing', review_ready_at = NULL
-             WHERE run_id = $runId AND status = 'awaiting_review';
+            UPDATE runs SET status = 'committing', review_ready_at = NULL,
+                approved_output_revision_id = $revision
+            WHERE run_id = $runId AND status = 'awaiting_review'
+              AND lifecycle_generation = $generation AND tree_hash IS $treeHash AND diff IS $diff;
             """;
-        command.Parameters.AddWithValue("$now", Ts(ts));
         command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$revision", (object?)revisionId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$generation", run.LifecycleGeneration);
+        command.Parameters.AddWithValue("$treeHash", (object?)run.TreeHash ?? DBNull.Value);
+        command.Parameters.AddWithValue("$diff", (object?)run.Diff ?? DBNull.Value);
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        return rows > 0;
+        if (rows != 1) return false;
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
+    private static async Task<Run?> ReadForRevisionFenceAsync(
+        SqliteConnection connection, SqliteTransaction tx, RunId runId, CancellationToken ct)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = SelectSql + " WHERE run_id = $runId;";
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false) ? Map(reader) : null;
+    }
+
+    private static async Task<bool> MatchesReviewRevisionAsync(
+        SqliteConnection connection, SqliteTransaction tx, Run run, string? revisionId, CancellationToken ct)
+    {
+        var revision = await GetGenerationRevisionAsync(connection, tx, run.Id, run.LifecycleGeneration, ct)
+            .ConfigureAwait(false);
+        return revision is null
+            ? revisionId is null && run.CurrentOutputRevisionId is null
+            : string.Equals(run.CurrentOutputRevisionId, revision.RevisionId, StringComparison.Ordinal)
+              && revision.Matches(run, revisionId);
     }
 
     /// <summary>
@@ -365,7 +555,7 @@ public sealed class SqliteRunStore : IRunStore
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "UPDATE runs SET status = 'awaiting_review', tree_hash = COALESCE($treeHash, tree_hash), review_ready_at = $now WHERE run_id = $runId AND status = 'committing';";
+            "UPDATE runs SET status = 'awaiting_review', tree_hash = COALESCE($treeHash, tree_hash), review_ready_at = $now, approved_output_revision_id = NULL WHERE run_id = $runId AND status = 'committing';";
         command.Parameters.AddWithValue("$treeHash", (object?)treeHash ?? DBNull.Value);
         command.Parameters.AddWithValue("$now", Ts(ts));
         command.Parameters.AddWithValue("$runId", runId.ToString());
@@ -381,24 +571,45 @@ public sealed class SqliteRunStore : IRunStore
     /// Returns true if the CAS succeeded (this request owns the merge slot),
     /// false if another request already moved the run out of the expected state (MF3).
     /// </summary>
-    public async Task<bool> TryStartMergingAsync(
-        RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null)
+    public Task<bool> TryStartMergingAsync(
+        RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        TryStartMergingCoreAsync(runId, null, reviewer, ct);
+
+    public Task<bool> TryStartMergingRevisionAsync(
+        RunId runId, string revisionId, string? reviewer = null, CancellationToken ct = default) =>
+        TryStartMergingCoreAsync(runId, revisionId, reviewer, ct);
+
+    private async Task<bool> TryStartMergingCoreAsync(
+        RunId runId, string? revisionId, string? reviewer, CancellationToken ct)
     {
-        var ts = now ?? DateTimeOffset.UtcNow;
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        var run = await ReadForRevisionFenceAsync(connection, tx, runId, ct).ConfigureAwait(false);
+        if (run is null || run.Status is not (RunStatus.AwaitingReview or RunStatus.Committing)
+            || (run.Status == RunStatus.Committing
+                && !string.Equals(run.ApprovedOutputRevisionId, revisionId, StringComparison.Ordinal))
+            || !await MatchesReviewRevisionAsync(connection, tx, run, revisionId, ct).ConfigureAwait(false))
+            return false;
         await using var command = connection.CreateCommand();
+        command.Transaction = tx;
         command.CommandText =
             """
             UPDATE runs
-              SET status = 'merging', reviewed_by = $reviewer,
+              SET status = 'merging', reviewed_by = $reviewer, approved_output_revision_id = $revision,
                   review_ready_at = NULL
-             WHERE run_id = $runId AND status IN ('awaiting_review', 'committing');
+             WHERE run_id = $runId AND status IN ('awaiting_review', 'committing')
+               AND lifecycle_generation = $generation AND tree_hash IS $treeHash AND diff IS $diff;
             """;
         command.Parameters.AddWithValue("$reviewer", (object?)reviewer ?? DBNull.Value);
-        command.Parameters.AddWithValue("$now", Ts(ts));
+        command.Parameters.AddWithValue("$revision", (object?)revisionId ?? DBNull.Value);
         command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$generation", run.LifecycleGeneration);
+        command.Parameters.AddWithValue("$treeHash", (object?)run.TreeHash ?? DBNull.Value);
+        command.Parameters.AddWithValue("$diff", (object?)run.Diff ?? DBNull.Value);
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        return rows > 0;
+        if (rows != 1) return false;
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>
@@ -414,7 +625,7 @@ public sealed class SqliteRunStore : IRunStore
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            "UPDATE runs SET status = 'awaiting_review', review_ready_at = $now WHERE run_id = $runId AND status = 'merging';";
+            "UPDATE runs SET status = 'awaiting_review', review_ready_at = $now, approved_output_revision_id = NULL WHERE run_id = $runId AND status = 'merging';";
         command.Parameters.AddWithValue("$now", Ts(ts));
         command.Parameters.AddWithValue("$runId", runId.ToString());
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -449,12 +660,14 @@ public sealed class SqliteRunStore : IRunStore
     public async Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default)
     {
         var rows = await ExecuteNonQueryAsync(
-            "UPDATE runs SET tree_hash = $treeHash WHERE run_id = $runId AND status = 'committing';",
+            "UPDATE runs SET tree_hash = $treeHash WHERE run_id = $runId AND status = 'committing' AND (approved_output_revision_id IS NULL OR tree_hash = $treeHash);",
             cmd =>
             {
                 cmd.Parameters.AddWithValue("$treeHash", newTreeHash);
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
+        if (rows == 0 && (await GetAsync(runId, ct).ConfigureAwait(false))?.ApprovedOutputRevisionId is not null)
+            throw new InvalidOperationException("Committed tree differs from the approved output revision.");
         WarnIfNoRows(rows, runId, "update tree hash after commit");
     }
 
@@ -831,7 +1044,8 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText =
             """
             UPDATE runs
-               SET status = 'in_progress', lifecycle_generation = lifecycle_generation + 1
+               SET status = 'in_progress', current_output_revision_id = NULL,
+                   approved_output_revision_id = NULL, lifecycle_generation = lifecycle_generation + 1
              WHERE run_id = $runId AND status = 'idle';
             """;
         command.Parameters.AddWithValue("$runId", runId.ToString());
@@ -1308,7 +1522,8 @@ public sealed class SqliteRunStore : IRunStore
                executable_workflow_pin_required, executable_workflow_manifest_schema_version,
                executable_workflow_definition_id, executable_workflow_definition_version,
                executable_workflow_source, executable_workflow_content_digest,
-               executable_workflow_definition_yaml, executable_workflow_pinned_at
+               executable_workflow_definition_yaml, executable_workflow_pinned_at,
+               approved_output_revision_id, current_output_revision_id
           FROM runs
         """;
 
@@ -1364,6 +1579,8 @@ public sealed class SqliteRunStore : IRunStore
         ExecutableWorkflowContentDigest = r.IsDBNull(46) ? null : r.GetString(46),
         ExecutableWorkflowDefinitionYaml = r.IsDBNull(47) ? null : r.GetString(47),
         ExecutableWorkflowPinnedAt = r.IsDBNull(48) ? null : DateTimeOffset.Parse(r.GetString(48), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        ApprovedOutputRevisionId = r.IsDBNull(49) ? null : r.GetString(49),
+        CurrentOutputRevisionId = r.IsDBNull(50) ? null : r.GetString(50),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

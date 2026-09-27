@@ -17,6 +17,15 @@ public interface IRunStore
     Task UpdateAssemblyArtifactsAsync(RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Task.CompletedTask;
     Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
+        int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        throw new NotSupportedException($"{GetType().Name} does not support generation-fenced output publication.");
+    Task<RunOutputRevision?> GetOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
+    Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
+    Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(RunId runId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
     Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryParkForChildWorkAsync(
         RunId runId,
@@ -32,8 +41,12 @@ public interface IRunStore
         throw new NotSupportedException($"{GetType().Name} does not implement terminal reopen.");
     Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default);
     Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task<bool> TryTransitionToCommittingRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot bind a reviewed revision for commit.");
     Task<bool> TryRevertCommittingAsync(RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryStartMergingAsync(RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task<bool> TryStartMergingRevisionAsync(RunId runId, string revisionId, string? reviewer = null, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot bind a reviewed revision for merge.");
     Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> CompleteMergingAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null);
     Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default);

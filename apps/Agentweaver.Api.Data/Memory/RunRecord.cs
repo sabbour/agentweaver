@@ -28,6 +28,8 @@ public sealed class RunRecord
     public string? WorkflowRunId { get; set; }
     public string? WorkflowSelectionReason { get; set; }
     public string? MergedCommitHash { get; set; }
+    public string? ApprovedOutputRevisionId { get; set; }
+    public string? CurrentOutputRevisionId { get; set; }
     public string? ParentRunId { get; set; }
     public string? SubtaskId { get; set; }
     public string Origin { get; set; } = "interactive";

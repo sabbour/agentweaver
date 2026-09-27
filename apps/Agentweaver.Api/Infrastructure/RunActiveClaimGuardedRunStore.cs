@@ -73,6 +73,20 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         await inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now).ConfigureAwait(false);
     }
 
+    public Task<RunOutputRevision?> GetOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        inner.GetOutputRevisionAsync(runId, revisionId, ct);
+    public async Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash,
+        string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        await inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now)
+            .ConfigureAwait(false);
+    }
+    public Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default) =>
+        inner.GetLatestOutputRevisionAsync(runId, ct);
+    public Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(RunId runId, CancellationToken ct = default) =>
+        inner.ListOutputRevisionsAsync(runId, ct);
+
     public Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
@@ -108,6 +122,8 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     public Task<bool> TryTransitionToCommittingAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.TryTransitionToCommittingAsync(runId, ct, now);
+    public Task<bool> TryTransitionToCommittingRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        inner.TryTransitionToCommittingRevisionAsync(runId, revisionId, ct);
 
     public Task<bool> TryRevertCommittingAsync(
         RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null) =>
@@ -116,6 +132,8 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     public Task<bool> TryStartMergingAsync(
         RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.TryStartMergingAsync(runId, reviewer, ct, now);
+    public Task<bool> TryStartMergingRevisionAsync(RunId runId, string revisionId, string? reviewer = null, CancellationToken ct = default) =>
+        inner.TryStartMergingRevisionAsync(runId, revisionId, reviewer, ct);
 
     public Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         inner.RevertMergingAsync(runId, ct, now);

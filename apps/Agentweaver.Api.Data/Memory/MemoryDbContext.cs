@@ -74,6 +74,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
     public DbSet<TerminalRunOutcomeRecord> TerminalRunOutcomes => Set<TerminalRunOutcomeRecord>();
     public DbSet<TerminalRunOutcomeProjectionRecord> TerminalRunOutcomeProjections => Set<TerminalRunOutcomeProjectionRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
+    public DbSet<RunOutputRevisionRecord> RunOutputRevisions => Set<RunOutputRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
     public DbSet<ProjectRoleAssignmentRecord> ProjectRoleAssignments => Set<ProjectRoleAssignmentRecord>();
     public DbSet<BacklogTaskRecord> BacklogTasks => Set<BacklogTaskRecord>();
@@ -399,6 +400,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             model.Ignore<ExecutionIdentityRecord>();
             model.Ignore<TerminalRunOutcomeRecord>();
             model.Ignore<RunRevisionRecord>();
+            model.Ignore<RunOutputRevisionRecord>();
             model.Ignore<ProjectRoleAssignmentRecord>();
             model.Ignore<BacklogTaskRecord>();
             model.Ignore<BacklogTaskDependencyRecord>();
@@ -445,6 +447,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.WorkflowRunId).HasColumnName("workflow_run_id");
             e.Property(r => r.WorkflowSelectionReason).HasColumnName("workflow_selection_reason");
             e.Property(r => r.MergedCommitHash).HasColumnName("merged_commit_hash");
+            e.Property(r => r.ApprovedOutputRevisionId).HasColumnName("approved_output_revision_id");
+            e.Property(r => r.CurrentOutputRevisionId).HasColumnName("current_output_revision_id");
             e.Property(r => r.ParentRunId).HasColumnName("parent_run_id");
             e.Property(r => r.SubtaskId).HasColumnName("subtask_id");
             e.Property(r => r.Origin).HasColumnName("origin").HasDefaultValue("interactive");
@@ -524,6 +528,24 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ProjectedAt).HasColumnName("projected_at");
             e.HasIndex(x => new { x.ProjectedAt, x.OccurredAt })
                 .HasDatabaseName("IX_terminal_run_outcomes_unprojected");
+        });
+
+        model.Entity<RunOutputRevisionRecord>(e =>
+        {
+            e.ToTable("run_output_revisions");
+            e.HasKey(r => r.RevisionId);
+            e.Property(r => r.RevisionId).HasColumnName("revision_id");
+            e.Property(r => r.SchemaVersion).HasColumnName("schema_version");
+            e.Property(r => r.RunId).HasColumnName("run_id");
+            e.Property(r => r.LifecycleGeneration).HasColumnName("lifecycle_generation");
+            e.Property(r => r.WorkflowDigest).HasColumnName("workflow_digest");
+            e.Property(r => r.ManifestIncomplete).HasColumnName("manifest_incomplete");
+            e.Property(r => r.TreeHash).HasColumnName("tree_hash");
+            e.Property(r => r.DiffSha256).HasColumnName("diff_sha256");
+            e.Property(r => r.PredecessorRevisionId).HasColumnName("predecessor_revision_id");
+            e.Property(r => r.DiffBytes).HasColumnName("diff_bytes");
+            e.Property(r => r.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(r => new { r.RunId, r.LifecycleGeneration }).IsUnique();
         });
 
         model.Entity<RunRevisionRecord>(e =>

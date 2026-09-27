@@ -104,6 +104,28 @@ public sealed class CommitEndpointMergeTests : IClassFixture<ReviewWebApplicatio
         runResp.MergeConflicts.Should().BeNull("no conflicts occurred");
     }
 
+    [Fact]
+    public async Task Commit_ChangedAfterReview_RejectsUnreviewedTree()
+    {
+        var (run, repoPath) = await SetupRunAwaitingReviewAsync(dir =>
+            File.WriteAllText(Path.Combine(dir, "reviewed.txt"), "reviewed bytes"));
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+        string originHeadBefore;
+        using (var repo = new Repository(repoPath))
+            originHeadBefore = repo.Branches[run.OriginatingBranch]!.Tip.Sha;
+
+        File.WriteAllText(Path.Combine(run.WorktreePath!, "reviewed.txt"), "changed after review");
+        var response = await _ownerClient.PostAsJsonAsync($"/api/runs/{run.Id}/commit", new { });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await store.GetAsync(run.Id))!.Status.Should().Be(RunStatus.AwaitingReview);
+        (await store.GetOutputRevisionAsync(run.Id, revision.RevisionId))!.DiffSha256
+            .Should().Be(revision.DiffSha256);
+        using var repoAfter = new Repository(repoPath);
+        repoAfter.Branches[run.OriginatingBranch]!.Tip.Sha.Should().Be(originHeadBefore);
+    }
+
     // =========================================================================
     // Test 2 — Happy path: the agent's file content is present in the
     // originating branch after the merge.

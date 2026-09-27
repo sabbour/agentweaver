@@ -69,7 +69,8 @@ public sealed record WorkflowReviewRequest(
     string Diff,
     int StepCount,
     /// <summary>True when Rai flagged a safety concern; the reviewer sees this as advisory context.</summary>
-    bool RaiSafetyFlagged = false);
+    bool RaiSafetyFlagged = false,
+    int? LifecycleGeneration = null);
 
 /// <summary>Response provided by the human reviewer through the request port.</summary>
 public sealed record WorkflowReviewDecision(
@@ -85,7 +86,8 @@ public sealed record WorkflowReviewDecision(
     /// dedicated <c>TARGET_FILES:</c> directive line, never from prose). Lets the coordinator scope a
     /// request-changes to the subtasks that actually touched those files instead of every contributor.
     /// Null/empty when the reviewer named no files.</summary>
-    IReadOnlyList<string>? TargetFiles = null);
+    IReadOnlyList<string>? TargetFiles = null,
+    string? OutputRevisionId = null);
 
 /// <summary>Input to the merge executor.</summary>
 public sealed record MergeInput(
@@ -95,7 +97,8 @@ public sealed record MergeInput(
     string WorktreeBranch,
     string RepositoryPath,
     string OriginatingBranch,
-    string? ReviewedBy = null);
+    string? ReviewedBy = null,
+    string? OutputRevisionId = null);
 
 /// <summary>Output from the merge executor (terminal workflow output).</summary>
 public sealed record MergeOutput(string RunId, string Status, string? MergeResult, string? MergeMode = null);

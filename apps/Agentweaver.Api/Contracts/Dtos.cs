@@ -512,6 +512,9 @@ public sealed record ReviewRequest
     /// <summary>Feedback text sent back to the agent for its next iteration.</summary>
     [JsonPropertyName("feedback")]
     public string? Feedback { get; init; }
+
+    [JsonPropertyName("output_revision_id")]
+    public string? OutputRevisionId { get; init; }
 }
 
 /// <summary>

@@ -436,9 +436,15 @@ public sealed class RunWatchLoopService
                         // Retrieve agent output from the request data for the review-ready update.
                         if (rie.Request.TryGetDataAs<WorkflowReviewRequest>(out var reviewReq))
                         {
-                            await _runStore.UpdateReviewReadyAsync(
-                                RunId.Parse(runId), reviewReq.TreeHash, reviewReq.Diff,
-                                reviewReq.StepCount, CancellationToken.None).ConfigureAwait(false);
+                            ct.ThrowIfCancellationRequested();
+                            if (reviewReq.LifecycleGeneration is { } generation)
+                                await _runStore.PublishReviewReadyAsync(
+                                    RunId.Parse(runId), generation, reviewReq.TreeHash, reviewReq.Diff,
+                                    reviewReq.StepCount, ct).ConfigureAwait(false);
+                            else
+                                await _runStore.UpdateReviewReadyAsync(
+                                    RunId.Parse(runId), reviewReq.TreeHash, reviewReq.Diff,
+                                    reviewReq.StepCount, ct).ConfigureAwait(false);
                         }
 
                         entry.MarkAwaitingReview();
