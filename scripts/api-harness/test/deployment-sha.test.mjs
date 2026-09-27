@@ -7,13 +7,18 @@ import {
 } from '../lib/deployment-sha.mjs';
 
 const fullSha = '0def5f6c0adf49117c3af6d37696ea14e9604f6c';
+const longerSha = `${fullSha}0123456789abcdef01234567`;
 
 test('deployment SHA accepts exact full and documented short-prefix matches', () => {
   assert.equal(deploymentShaMatches(fullSha, fullSha), true);
   assert.equal(deploymentShaMatches(fullSha, '0def5f6'), true);
 });
 
-test('deployment SHA rejects mismatched, reverse-prefix, and missing reported values', () => {
+test('deployment SHA rejects a reported SHA that extends the full expected SHA', () => {
+  assert.equal(deploymentShaMatches(fullSha, longerSha), false);
+});
+
+test('deployment SHA rejects mismatched and missing reported values', () => {
   assert.equal(deploymentShaMatches(fullSha, 'f9b7e77'), false);
   assert.throws(
     () => deploymentShaMatches('0def5f6', fullSha),
