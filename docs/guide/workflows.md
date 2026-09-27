@@ -114,8 +114,12 @@ edges.
 
 `coordinator_composed` is reserved for a future dynamic work-plan stage. It is recognized by the
 YAML grammar but is **not authorable or executable**: workflow save, generation, selection, and run
-binding reject it until a durable embedded coordinator can decompose a pre-created work plan and
-assemble without its own review, merge, or Scribe. Validation reports a missing prompt, multiple
+binding reject it. The internal coordinator child-work substrate now supports a correlated plan
+reserved before decomposition, dynamic subtasks, an assembly-only result checkpoint, and durable
+parent delivery. This does **not** make the workflow node runnable: the assembled branch must first
+be applied to the parent's isolated run worktree before a subsequent prompt/review/merge can use it,
+without merging into the user's branch or replaying completed parent work after a crash.
+Validation reports a missing prompt, multiple
 composed nodes, nested steps, recursion, or any continuation other than one unconditional edge.
 Use ordinary sequential edges or a static fan region for supported workflows today.
 

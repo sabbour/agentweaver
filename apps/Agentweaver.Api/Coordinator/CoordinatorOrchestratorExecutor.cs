@@ -131,11 +131,13 @@ public sealed class CoordinatorOrchestratorExecutor
             return new CoordinatorOrchestrationResult(0, 0, []);
         }
 
-        // Idempotency: never re-plan a run that already has a work plan (mirrors the draft upsert).
+        // A composed child reserves its correlated plan before decomposition. Only that empty,
+        // parent-correlated plan may be populated; every other existing plan remains idempotent.
         var existing = await db.WorkPlans
             .FirstOrDefaultAsync(w => w.CoordinatorRunId == input.RunId, ct)
             .ConfigureAwait(false);
-        if (existing is not null)
+        var composed = existing is { ParentRunId: not null, ParentWorkflowNodeId: not null, ParentJoinNodeId: null };
+        if (existing is not null && !composed)
         {
             _logger.LogInformation("Coordinator orchestrate: work plan already exists for run {RunId}; skipping", input.RunId);
             var promoted = await db.BacklogTasks.AsNoTracking()
@@ -149,13 +151,27 @@ public sealed class CoordinatorOrchestratorExecutor
                 .ConfigureAwait(false);
             return new CoordinatorOrchestrationResult(existing.Id, inlineCount, promoted);
         }
+        if (composed && existing!.Status != WorkPlanStatus.Planned)
+            return new CoordinatorOrchestrationResult(
+                existing.Id,
+                await db.Subtasks.CountAsync(s => s.WorkPlanId == existing.Id, ct).ConfigureAwait(false),
+                []);
+        if (composed && await db.Subtasks.AnyAsync(s => s.WorkPlanId == existing!.Id, ct).ConfigureAwait(false))
+            return new CoordinatorOrchestrationResult(
+                existing!.Id,
+                await db.Subtasks.CountAsync(s => s.WorkPlanId == existing.Id, ct).ConfigureAwait(false),
+                []);
 
         // Feature 015 US5: pick the best-fit functional workflow for THIS task from the project's
         // available set and surface it (with rationale + override hint). Single-workflow projects skip
         // selection silently. The resolved workflow DRIVES decomposition, then is validated against
         // the actual decomposition before persistence so an incompatible automatic topology cannot
         // silently bypass a required platform gate.
-        var workflowSelection = await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
+        // The child plan's prompt is its entire dynamic scope. Selecting a project workflow here
+        // could select the containing composed definition and recurse into another coordinator.
+        var workflowSelection = composed
+            ? WorkflowSelection.Empty
+            : await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
 
         var drafts = await DecomposeWithModelAsync(input, spec, workflowSelection.Definition, ct).ConfigureAwait(false)
                      ?? DecomposeDeterministic(spec);
@@ -178,8 +194,9 @@ public sealed class CoordinatorOrchestratorExecutor
         drafts = drafts2;
 
         var workflowCompatibilityWarnings = new List<string>();
-        workflowSelection = await ValidateWorkflowAfterDecompositionAsync(
-            scope, input, spec, workflowSelection, drafts, workflowCompatibilityWarnings, ct).ConfigureAwait(false);
+        if (!composed)
+            workflowSelection = await ValidateWorkflowAfterDecompositionAsync(
+                scope, input, spec, workflowSelection, drafts, workflowCompatibilityWarnings, ct).ConfigureAwait(false);
 
         var partition = await PartitionStoriesAsync(input, spec, drafts, ct).ConfigureAwait(false);
         var promotionService = scope.ServiceProvider.GetRequiredService<IBacklogPromotionService>();
@@ -233,13 +250,19 @@ public sealed class CoordinatorOrchestratorExecutor
 
         await using var planTx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
             db, input.RunId, recoveredFence, ct, scope.ServiceProvider.GetService<SqliteDb>()).ConfigureAwait(false);
-        if (planTx is not null)
+        await using var composedTx = composed && planTx is null
+            ? await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false)
+            : null;
+        if (planTx is not null || composedTx is not null)
         {
             // The earlier idempotency read precedes model planning; another owner may have
             // committed the plan while we were planning. Recheck under the run-row write lock.
             var persistedPlan = await db.WorkPlans.AsNoTracking()
                 .FirstOrDefaultAsync(w => w.CoordinatorRunId == input.RunId, ct).ConfigureAwait(false);
-            if (persistedPlan is not null)
+            if (persistedPlan is not null
+                && (!composed
+                    || persistedPlan.Status != WorkPlanStatus.Planned
+                    || await db.Subtasks.AnyAsync(s => s.WorkPlanId == persistedPlan.Id, ct).ConfigureAwait(false)))
             {
                 var inlineCount = await db.Subtasks.AsNoTracking()
                     .CountAsync(s => s.WorkPlanId == persistedPlan.Id, ct).ConfigureAwait(false);
@@ -254,10 +277,13 @@ public sealed class CoordinatorOrchestratorExecutor
             cycleNote,
             workflowSelection.Definition?.Id,
             inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned,
-            ct)
+            ct,
+            composed ? existing : null)
             .ConfigureAwait(false);
         if (planTx is not null)
             await planTx.CommitAsync(ct).ConfigureAwait(false);
+        if (composedTx is not null)
+            await composedTx.CommitAsync(ct).ConfigureAwait(false);
 
         var workPlanStatus = inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned;
         EmitWorkPlanEvent(
@@ -1850,7 +1876,8 @@ public sealed class CoordinatorOrchestratorExecutor
         string? cycleNote,
         string? workflowId,
         string workPlanStatus,
-        CancellationToken ct)
+        CancellationToken ct,
+        WorkPlan? reservedPlan = null)
     {
         var now = DateTimeOffset.UtcNow;
 
@@ -1860,18 +1887,20 @@ public sealed class CoordinatorOrchestratorExecutor
         if (cycleNote is not null)
             isolationSummary += " " + cycleNote;
 
-        var workPlan = new WorkPlan
+        var workPlan = reservedPlan ?? new WorkPlan
         {
             OutcomeSpecId = spec.Id,
             ProjectId = input.ProjectId,
             CoordinatorRunId = input.RunId,
-            WorkflowId = workflowId,
             Status = workPlanStatus,
-            IsolationSummary = isolationSummary,
             CreatedAt = now,
-            UpdatedAt = now,
         };
-        db.WorkPlans.Add(workPlan);
+        if (reservedPlan is null)
+            db.WorkPlans.Add(workPlan);
+        workPlan.WorkflowId = workflowId;
+        workPlan.Status = workPlanStatus;
+        workPlan.IsolationSummary = isolationSummary;
+        workPlan.UpdatedAt = now;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         // Persist subtasks first so they get ids, then wire up dependency edges by index.

@@ -50,6 +50,14 @@ internal sealed record WorkflowChildWorkRequest(
     AgentTurnInput? IncomingInput = null,
     string? ExecutionBaseTreeHash = null);
 
+internal sealed record WorkflowComposedWorkRequest(
+    DomainRun ParentRun,
+    string ParentWorkflowId,
+    string ParentWorkflowNodeId,
+    string Prompt,
+    AgentTurnInput IncomingInput,
+    string? ExecutionBaseTreeHash);
+
 internal sealed record WorkflowChildWorkAttachment(
     int WorkPlanId,
     string ChildCoordinatorRunId,
@@ -79,7 +87,14 @@ internal sealed record WorkflowChildWorkResult(
     string WorkPlanStatus,
     string? FailureReason,
     IReadOnlyList<WorkflowChildWorkBranch> Branches,
-    string JoinedOutput);
+    string JoinedOutput,
+    WorkflowComposedAssembly? Assembly = null);
+
+internal sealed record WorkflowComposedAssembly(
+    string IntegrationBranch,
+    string TreeHash,
+    string AggregateDiff,
+    IReadOnlyList<string> IncludedChildRunIds);
 
 internal sealed record WorkflowChildWorkPauseRequest(
     int WorkPlanId,
@@ -108,6 +123,7 @@ internal interface IWorkflowChildWorkRuntime
     bool IsDispatchActive(string coordinatorRunId);
     bool IsParentResumeActive(string parentRunId);
     void StartDispatch(CoordinatorDispatchContext context);
+    void StartAssembly(CoordinatorDispatchContext context);
     Task<bool> TryDeliverParentResumeAsync(
         string parentRunId,
         PendingDelivery delivery,
@@ -150,6 +166,9 @@ internal sealed class WorkflowChildWorkRuntime(
     public bool IsParentResumeActive(string parentRunId) => workflowRegistry.Get(parentRunId) is not null;
 
     public void StartDispatch(CoordinatorDispatchContext context) => Dispatch.StartDispatch(context);
+
+    public void StartAssembly(CoordinatorDispatchContext context) =>
+        services.GetRequiredService<ICoordinatorAssembly>().StartAssembly(context);
 
     public async Task<bool> TryDeliverParentResumeAsync(
         string parentRunId,
@@ -311,6 +330,27 @@ internal sealed class WorkflowChildWorkService
         return await GetAttachmentAsync(plan.Id, reattached, ct).ConfigureAwait(false);
     }
 
+    public async Task<WorkflowChildWorkAttachment> PrepareComposedAsync(
+        WorkflowComposedWorkRequest request,
+        CancellationToken ct = default)
+    {
+        if (request.ParentRun.ProjectId is null
+            || string.IsNullOrWhiteSpace(request.ParentWorkflowId)
+            || string.IsNullOrWhiteSpace(request.ParentWorkflowNodeId)
+            || string.IsNullOrWhiteSpace(request.Prompt))
+            throw new ArgumentException("Composed child work requires a project, workflow, node, and prompt.", nameof(request));
+
+        var (plan, reattached) = await EnsurePersistedAsync(
+            new WorkflowChildWorkRequest(
+                request.ParentRun, request.ParentWorkflowId, request.ParentWorkflowNodeId,
+                null, [], request.IncomingInput, request.ExecutionBaseTreeHash),
+            ct, request.Prompt).ConfigureAwait(false);
+        if (plan.ParentJoinNodeId is not null)
+            throw new InvalidOperationException($"Workflow node '{request.ParentWorkflowNodeId}' is already a static fan.");
+        await EnsureChildCoordinatorRunAsync(plan, request.ParentRun, ct).ConfigureAwait(false);
+        return await GetAttachmentAsync(plan.Id, reattached, ct).ConfigureAwait(false);
+    }
+
     public async Task<WorkflowChildWorkAttachment> ArmContinuationAsync(
         int workPlanId,
         ExternalRequest continuation,
@@ -343,7 +383,7 @@ internal sealed class WorkflowChildWorkService
         {
             step = snapshot.Plan.ParentWorkflowNodeId,
             status = "waiting_child_work",
-            label = "Parallel branches",
+            label = snapshot.Plan.ParentJoinNodeId is null ? "Coordinator plan" : "Parallel branches",
             workPlanId,
             childCoordinatorRunId = snapshot.Plan.CoordinatorRunId,
             parentWorkflowId = snapshot.Plan.ParentWorkflowId,
@@ -360,9 +400,11 @@ internal sealed class WorkflowChildWorkService
 
     internal async Task<(WorkPlan Plan, bool Reattached)> EnsurePersistedAsync(
         WorkflowChildWorkRequest request,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? composedPrompt = null)
     {
-        ValidateRequest(request);
+        if (composedPrompt is null)
+            ValidateRequest(request);
         var parentRunId = request.ParentRun.Id.ToString();
 
         using (var scope = _scopeFactory.CreateScope())
@@ -371,7 +413,11 @@ internal sealed class WorkflowChildWorkService
             var existing = await FindCorrelatedPlanAsync(
                 db, parentRunId, request.ParentWorkflowNodeId, ct).ConfigureAwait(false);
             if (existing is not null)
+            {
+                if ((existing.ParentJoinNodeId is null) != (composedPrompt is not null))
+                    throw new InvalidOperationException($"Workflow node '{request.ParentWorkflowNodeId}' changed child-work kind.");
                 return (existing, true);
+            }
         }
 
         try
@@ -386,6 +432,8 @@ internal sealed class WorkflowChildWorkService
                 db, parentRunId, request.ParentWorkflowNodeId, ct).ConfigureAwait(false);
             if (existing is not null)
             {
+                if ((existing.ParentJoinNodeId is null) != (composedPrompt is not null))
+                    throw new InvalidOperationException($"Workflow node '{request.ParentWorkflowNodeId}' changed child-work kind.");
                 await transaction.CommitAsync(ct).ConfigureAwait(false);
                 return (existing, true);
             }
@@ -396,10 +444,12 @@ internal sealed class WorkflowChildWorkService
             {
                 ProjectId = request.ParentRun.ProjectId?.ToString() ?? string.Empty,
                 CoordinatorRunId = childRunId,
-                Goal = $"Execute workflow child work for node '{request.ParentWorkflowNodeId}'.",
-                DesiredOutcome = "Complete every declared static branch and return one ordered result.",
+                Goal = composedPrompt ?? $"Execute workflow child work for node '{request.ParentWorkflowNodeId}'.",
+                DesiredOutcome = composedPrompt ?? "Complete every declared static branch and return one ordered result.",
                 Scope = $"Pinned parent workflow '{request.ParentWorkflowId}', node '{request.ParentWorkflowNodeId}'.",
-                Assumptions = "Static branch declarations are immutable for this parent run and workflow node.",
+                Assumptions = composedPrompt is null
+                    ? "Static branch declarations are immutable for this parent run and workflow node."
+                    : "Decompose into dependent subtasks; assembly returns to the parent without nested review or merge.",
                 Status = "confirmed",
                 ConfirmedBy = request.ParentRun.SubmittingUser,
                 AllowTaskPromotion = false,
@@ -423,9 +473,11 @@ internal sealed class WorkflowChildWorkService
                     ? null
                     : JsonSerializer.Serialize(request.IncomingInput, JsonDefaults.Options),
                 ExecutionBaseTreeHash = request.ExecutionBaseTreeHash,
-                WorkflowId = request.ParentWorkflowId,
+                WorkflowId = composedPrompt is null ? request.ParentWorkflowId : null,
                 Status = WorkPlanStatus.Planned,
-                IsolationSummary = "Static workflow branches; parent continuation must be armed before dispatch.",
+                IsolationSummary = composedPrompt is null
+                    ? "Static workflow branches; parent continuation must be armed before dispatch."
+                    : "Dynamic composed plan; parent continuation must be armed before decomposition.",
                 CreatedAt = now,
                 UpdatedAt = now,
             };
@@ -468,6 +520,8 @@ internal sealed class WorkflowChildWorkService
                 db, parentRunId, request.ParentWorkflowNodeId, ct).ConfigureAwait(false);
             if (winner is null)
                 throw;
+            if ((winner.ParentJoinNodeId is null) != (composedPrompt is not null))
+                throw new InvalidOperationException($"Workflow node '{request.ParentWorkflowNodeId}' changed child-work kind.");
             return (winner, true);
         }
     }
@@ -501,12 +555,71 @@ internal sealed class WorkflowChildWorkService
 
         var child = await EnsureChildCoordinatorRunAsync(snapshot.Plan, parent, ct).ConfigureAwait(false);
         if (TerminalRunOutcome.IsTerminal(child.Status))
+        {
+            if (snapshot.Plan.ParentJoinNodeId is null && snapshot.Plan.Status == WorkPlanStatus.Planned)
+                await FailComposedBeforeDispatchAsync(
+                    workPlanId, "composed_coordinator_terminated_before_dispatch", ct).ConfigureAwait(false);
             return false;
+        }
+
+        var composed = snapshot.Plan.ParentJoinNodeId is null;
+        if (composed && snapshot.Plan.Status is WorkPlanStatus.AwaitingAssembly or WorkPlanStatus.Assembling)
+        {
+            _runtime.StartAssembly(ComposedDispatchContext(snapshot.Plan, child));
+            return true;
+        }
+        if (composed && snapshot.Plan.Status == WorkPlanStatus.Planned)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var goal = await db.OutcomeSpecs.AsNoTracking()
+                .Where(spec => spec.Id == snapshot.Plan.OutcomeSpecId)
+                .Select(spec => spec.Goal)
+                .SingleAsync(ct).ConfigureAwait(false);
+            var incomingInput = DeserializeIncomingInput(snapshot.Plan)
+                ?? throw new InvalidOperationException($"Composed work plan {workPlanId} lost its parent input.");
+            try
+            {
+                var orchestration = await scope.ServiceProvider.GetRequiredService<CoordinatorWorkflowFactory>()
+                    .OrchestrateComposedAsync(new CoordinatorDraftInput(
+                        child.Id.ToString(), snapshot.Plan.ProjectId, goal,
+                        child.SubmittingUser, child.RepositoryPath, child.ModelId,
+                        ModelSource: incomingInput.ModelSource,
+                        ByokProviderFingerprint: incomingInput.ByokProviderFingerprint), ct)
+                    .ConfigureAwait(false);
+                if (orchestration.WorkPlanId != workPlanId || orchestration.InlineSubtaskCount == 0)
+                    throw new InvalidOperationException(
+                        $"Composed coordinator {child.Id} did not populate work plan {workPlanId}.");
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Composed coordinator {RunId} failed to decompose plan {WorkPlanId}",
+                    child.Id, workPlanId);
+                await FailComposedBeforeDispatchAsync(
+                    workPlanId, $"composed_decomposition_failed:{ex.Message}", CancellationToken.None)
+                    .ConfigureAwait(false);
+                return false;
+            }
+            snapshot = await LoadPlanSnapshotAsync(workPlanId, ct).ConfigureAwait(false)
+                ?? throw new InvalidOperationException($"Composed work plan {workPlanId} disappeared after decomposition.");
+            using var countScope = _scopeFactory.CreateScope();
+            var countDb = countScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            if (!await countDb.Subtasks.AnyAsync(subtask => subtask.WorkPlanId == workPlanId, ct)
+                    .ConfigureAwait(false))
+                throw new InvalidOperationException($"Composed work plan {workPlanId} has no dispatchable subtasks.");
+        }
 
         if (!await TryClaimDispatchAsync(workPlanId, ct).ConfigureAwait(false))
             return false;
 
-        parent = await TryGetRunAsync(snapshot.Plan.ParentRunId, ct).ConfigureAwait(false);
+        parent = await TryGetRunAsync(
+            snapshot.Plan.ParentRunId ?? throw new InvalidOperationException(
+                $"Composed work plan {workPlanId} lost its parent correlation."), ct).ConfigureAwait(false);
         if (parent is null || parent.Status != DomainRunStatus.AwaitingReview)
         {
             if (parent is not null && TerminalRunOutcome.IsTerminal(parent.Status))
@@ -527,17 +640,118 @@ internal sealed class WorkflowChildWorkService
         if (!_runtime.IsDispatchActive(snapshot.Plan.CoordinatorRunId))
         {
             var incoming = DeserializeIncomingInput(snapshot.Plan);
-            _runtime.StartDispatch(new CoordinatorDispatchContext(
-                snapshot.Plan.CoordinatorRunId,
-                child.RepositoryPath,
-                child.OriginatingBranch,
-                child.SubmittingUser,
-                child.ProjectId,
-                StaticWorkflowChild: true,
-                StaticParentTask: incoming?.Task));
+            _runtime.StartDispatch(composed
+                ? ComposedDispatchContext(snapshot.Plan, child)
+                : new CoordinatorDispatchContext(
+                    snapshot.Plan.CoordinatorRunId,
+                    child.RepositoryPath,
+                    child.OriginatingBranch,
+                    child.SubmittingUser,
+                    child.ProjectId,
+                    StaticWorkflowChild: true,
+                    StaticParentTask: incoming?.Task));
         }
 
         return true;
+    }
+
+    private static CoordinatorDispatchContext ComposedDispatchContext(WorkPlan plan, DomainRun child) =>
+        new(child.Id.ToString(), child.RepositoryPath, child.OriginatingBranch,
+            child.SubmittingUser, child.ProjectId, ComposedWorkflowChild: true);
+
+    private async Task FailComposedBeforeDispatchAsync(
+        int workPlanId, string failureReason, CancellationToken ct)
+    {
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.WorkPlans
+                .Where(plan => plan.Id == workPlanId
+                    && plan.ParentRunId != null
+                    && plan.ParentJoinNodeId == null
+                    && plan.Status == WorkPlanStatus.Planned
+                    && plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(plan => plan.Status, WorkPlanStatus.Assembling)
+                    .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), ct)
+                .ConfigureAwait(false);
+        }
+        var snapshot = await LoadPlanSnapshotAsync(workPlanId, ct).ConfigureAwait(false);
+        if (snapshot?.Plan.Status == WorkPlanStatus.Assembling)
+            await CompleteComposedAssemblyAsync(workPlanId, null, failureReason, ct).ConfigureAwait(false);
+    }
+
+    internal async Task<bool> CompleteComposedAssemblyAsync(
+        int workPlanId,
+        WorkflowComposedAssembly? assembly,
+        string? failureReason,
+        CancellationToken ct)
+    {
+        var snapshot = await LoadPlanSnapshotAsync(workPlanId, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Composed work plan {workPlanId} was not found.");
+        if (snapshot.Plan.ParentRunId is null || snapshot.Plan.ParentWorkflowNodeId is null
+            || snapshot.Plan.ParentJoinNodeId is not null || snapshot.Plan.ParentWorkflowId is null)
+            throw new InvalidOperationException($"Work plan {workPlanId} is not a composed child.");
+
+        var subtasks = await GetComposedSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+        var branches = await EnrichBranchesAsync(subtasks, ct).ConfigureAwait(false);
+        var succeeded = assembly is not null && failureReason is null;
+        var result = new WorkflowChildWorkResult(
+            workPlanId, snapshot.Plan.CoordinatorRunId, snapshot.Plan.ParentWorkflowId,
+            snapshot.Plan.ParentWorkflowNodeId, null, succeeded,
+            succeeded ? WorkPlanStatus.Complete : WorkPlanStatus.AssemblyFailed,
+            failureReason, branches, succeeded ? BuildJoinedOutput(branches) : string.Empty,
+            assembly);
+        var json = JsonSerializer.Serialize(result, JsonDefaults.Options);
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var now = DateTimeOffset.UtcNow;
+            var completed = await db.WorkPlans
+                .Where(plan => plan.Id == workPlanId
+                    && plan.Status == WorkPlanStatus.Assembling
+                    && plan.ParentResumeResultJson == null
+                    && plan.ParentJoinNodeId == null
+                    && plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(plan => plan.Status, result.WorkPlanStatus)
+                    .SetProperty(plan => plan.AssemblyStage, succeeded ? AssemblyStage.Done : (string?)null)
+                    .SetProperty(plan => plan.AssemblyStatusReason, failureReason)
+                    .SetProperty(plan => plan.ParentResumeResultJson, json)
+                    .SetProperty(plan => plan.CoordinatorPodId, (string?)null)
+                    .SetProperty(plan => plan.UpdatedAt, now), ct).ConfigureAwait(false);
+            if (completed != 1)
+            {
+                var current = await db.WorkPlans.AsNoTracking()
+                    .SingleAsync(plan => plan.Id == workPlanId, ct).ConfigureAwait(false);
+                if (current.Status == WorkPlanStatus.Cancelled
+                    || current.ParentResumeState == WorkflowChildWorkResumeStates.Suppressed)
+                    return false;
+                if (current.ParentResumeResultJson is null)
+                    throw new InvalidOperationException(
+                        $"Composed work plan {workPlanId} left assembly without a result checkpoint (status {current.Status}).");
+                result = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+                    current.ParentResumeResultJson, JsonDefaults.Options)
+                    ?? throw new InvalidOperationException($"Composed work plan {workPlanId} has an invalid result checkpoint.");
+            }
+        }
+
+        await TryPrepareResumeAsync(workPlanId, ct).ConfigureAwait(false);
+        await TryDeliverResumeAsync(workPlanId, $"workflow-composed:{_podId}", ct: ct).ConfigureAwait(false);
+        return result.Succeeded;
+    }
+
+    private async Task<IReadOnlyList<WorkflowChildWorkBranch>> GetComposedSubtasksAsync(
+        int workPlanId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtasks = await db.Subtasks.AsNoTracking()
+            .Where(subtask => subtask.WorkPlanId == workPlanId)
+            .OrderBy(subtask => subtask.Id)
+            .ToListAsync(ct).ConfigureAwait(false);
+        return subtasks.Select((subtask, ordinal) => new WorkflowChildWorkBranch(
+            subtask.Id, subtask.Title, ordinal, subtask.Status, subtask.ChildRunId)).ToArray();
     }
 
     public async Task<bool> TryPrepareResumeAsync(int workPlanId, CancellationToken ct = default)
@@ -568,7 +782,10 @@ internal sealed class WorkflowChildWorkService
             var statusById = snapshot.Branches.ToDictionary(branch => branch.SubtaskId, branch => branch.Status);
             var succeeded = snapshot.Plan.Status == WorkPlanStatus.Complete
                 && AssemblyPlanning.AllEligible(statusById);
-            var branches = await EnrichBranchesAsync(snapshot.Branches, ct).ConfigureAwait(false);
+            var branches = await EnrichBranchesAsync(
+                snapshot.Plan.ParentJoinNodeId is null
+                    ? await GetComposedSubtasksAsync(workPlanId, ct).ConfigureAwait(false)
+                    : snapshot.Branches, ct).ConfigureAwait(false);
             var joinedOutput = BuildJoinedOutput(branches);
             result = new WorkflowChildWorkResult(
                 snapshot.Plan.Id,
@@ -599,10 +816,24 @@ internal sealed class WorkflowChildWorkService
         snapshot = await LoadPlanSnapshotAsync(workPlanId, ct).ConfigureAwait(false);
         if (snapshot?.Plan.ParentResumeResultJson is null)
             return false;
+        if (snapshot.Plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.WorkPlans
+                .Where(plan => plan.Id == workPlanId
+                    && plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting
+                    && plan.ParentResumeResultJson != null)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Ready)
+                    .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), ct).ConfigureAwait(false);
+        }
         result = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
             snapshot.Plan.ParentResumeResultJson,
             JsonDefaults.Options)
             ?? throw new InvalidOperationException($"Work plan {workPlanId} has an invalid parent resume result.");
+        if (snapshot.Plan.ParentJoinNodeId is null)
+            await EnsureComposedTerminalRunAsync(result, ct).ConfigureAwait(false);
 
         var identity = PendingRequestStore.CreateDecisionIdentity(
             snapshot.Plan.ParentResumeRequestId!,
@@ -640,6 +871,24 @@ internal sealed class WorkflowChildWorkService
             identity,
             result,
             parent.SubmittingUser,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task EnsureComposedTerminalRunAsync(WorkflowChildWorkResult result, CancellationToken ct)
+    {
+        var child = await TryGetRunAsync(result.ChildCoordinatorRunId, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                $"Composed coordinator {result.ChildCoordinatorRunId} was not found.");
+        await _runStore.TrySetTerminalOutcomeAsync(
+            child.Id,
+            TerminalRunOutcome.Create(
+                result.Succeeded ? DomainRunStatus.Completed : DomainRunStatus.Failed,
+                result.Succeeded ? EventTypes.RunCompleted : EventTypes.RunFailed,
+                new { result, result.WorkPlanId },
+                DateTimeOffset.UtcNow, child.LifecycleGeneration),
+            result.Succeeded
+                ? JsonSerializer.Serialize(result, JsonDefaults.Options)
+                : result.FailureReason,
             ct).ConfigureAwait(false);
     }
 
@@ -1031,6 +1280,9 @@ internal sealed class WorkflowChildWorkService
                 ct).ConfigureAwait(false);
         if (existing is not null)
         {
+            if (existing.Id != childRunId)
+                throw new InvalidOperationException(
+                    $"Workflow child coordinator {existing.Id} does not match correlated plan {plan.Id} run {childRunId}.");
             await PrepareChildCoordinatorCapabilitiesAsync(existing, ct).ConfigureAwait(false);
             _runtime.EnsureRunStream(existing.Id.ToString(), existing.SubmittingUser);
             return existing;
@@ -1044,7 +1296,9 @@ internal sealed class WorkflowChildWorkService
             RepositoryPath = incoming?.RepositoryPath ?? parentRun.RepositoryPath,
             OriginatingBranch = incoming?.WorktreeBranch ?? parentRun.OriginatingBranch,
             ModelSource = parentRun.ModelSource,
-            Task = $"Execute durable child work for workflow node '{plan.ParentWorkflowNodeId}'.",
+            Task = plan.ParentJoinNodeId is null
+                ? await GetComposedGoalAsync(plan, ct).ConfigureAwait(false)
+                : $"Execute durable child work for workflow node '{plan.ParentWorkflowNodeId}'.",
             SubmittingUser = parentRun.SubmittingUser,
             Status = DomainRunStatus.Pending,
             StartedAt = DateTimeOffset.UtcNow,
@@ -1090,6 +1344,16 @@ internal sealed class WorkflowChildWorkService
         if (!await lifecycle.PrepareForLaunchAsync(child, ct).ConfigureAwait(false))
             throw new InvalidOperationException(
                 $"Workflow child coordinator {child.Id} cannot inherit its parent's run-bound repository capability.");
+    }
+
+    private async Task<string> GetComposedGoalAsync(WorkPlan plan, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.OutcomeSpecs.AsNoTracking()
+            .Where(spec => spec.Id == plan.OutcomeSpecId)
+            .Select(spec => spec.Goal)
+            .SingleAsync(ct).ConfigureAwait(false);
     }
 
     private static AgentTurnInput? DeserializeIncomingInput(WorkPlan plan)
@@ -1552,6 +1816,8 @@ internal sealed class WorkflowChildWorkService
             throw new ArgumentException("Parent workflow id is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.ParentWorkflowNodeId))
             throw new ArgumentException("Parent workflow node id is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.ParentJoinNodeId))
+            throw new ArgumentException("Static workflow child work requires a join node.", nameof(request));
         if (request.Branches.Count < 2)
             throw new ArgumentException("Static workflow child work requires at least two branches.", nameof(request));
         if (request.Branches.Any(branch => string.IsNullOrWhiteSpace(branch.NodeId)))

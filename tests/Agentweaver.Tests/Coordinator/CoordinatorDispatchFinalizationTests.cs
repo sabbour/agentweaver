@@ -94,6 +94,29 @@ public sealed class CoordinatorDispatchFinalizationTests : IDisposable
     }
 
     [Fact]
+    public async Task FinalizeDispatch_ComposedChild_HandsOffToAssemblyInsteadOfStaticJoin()
+    {
+        const string coordinatorRunId = "composed-child";
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var statusById = subtaskIds.ToDictionary(id => id, _ => SubtaskStatus.AssembleReady);
+        var context = new CoordinatorDispatchContext(
+            coordinatorRunId, "repo", "parent-run-branch", "alice", null,
+            ComposedWorkflowChild: true);
+
+        await _sut.FinalizeDispatchAsync(
+            context, workPlanId, statusById, [], new CoordinatorDispatchService.SeqCounter(), default);
+
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.WorkPlans.AsNoTracking().SingleAsync(plan => plan.Id == workPlanId))
+            .Status.Should().Be(WorkPlanStatus.AwaitingAssembly);
+        _assembly.Started.Should().ContainSingle().Which.Should().Be(context);
+        _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Should().Contain(evt => evt.Type == EventTypes.CoordinatorChildrenComplete);
+    }
+
+    [Fact]
     public async Task FinalizeDispatch_PlanAlreadyAssembling_DoesNotResetStatus_OrReHandOff()
     {
         // Multi-replica race: another pod already claimed Phase 3 (plan is `assembling`). This pod's

@@ -50,3 +50,22 @@ review, merge, and Scribe. Neither can safely be used as an embedded workflow st
 - A pre-created but empty WorkPlan must be decomposed rather than mistaken for a finished plan.
 - A crash after integration but before delivering the parent continuation must not reassemble.
 - An edited workflow or generated child workflow containing composition must not recurse.
+
+## Current implementation boundary
+
+The reserved node still fails binding. The internal child-work path reserves and reattaches one
+correlated run/plan, populates an empty composed plan through the normal decomposition path,
+uses the existing dependency dispatcher, and can persist an assembly-only result in the same
+work-plan row before using the established parent-delivery receipt. These contracts have
+focused in-process tests; they are not an executable workflow or a completed acceptance DAG.
+
+**Decision needed before enabling the node:** collective assembly builds a *separate* integration
+branch, while a pinned parent workflow continues in its own run worktree and its existing review
+and merge executors read that worktree branch. Returning only a branch name, diff, or task text
+does not make the assembled files visible to those executors. The ordinary coordinator merge
+would update the user's branch (prohibited for the nested coordinator). Choose a crash-recoverable,
+idempotent transfer of the verified assembled tree into the **parent's isolated worktree branch**
+before parent resume, guarded by the parent's captured pre-composition tree hash; alternatively
+define and test a new parent-worktree identity handoff across every downstream executor and
+cleanup path. Until one of these contracts is implemented, the binder must continue to reject
+`coordinator_composed`, and issue #1544 remains open.
