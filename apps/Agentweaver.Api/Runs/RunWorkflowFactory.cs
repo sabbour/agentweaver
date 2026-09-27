@@ -391,6 +391,37 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     /// </summary>
     internal const string MergeDataScope = "merge-data";
     internal const string MergeDataKey = "agent-output";
+    internal const string ReviewRequestKey = "review-request";
+
+    private async ValueTask<WorkflowReviewRequest> CaptureReviewRequestAsync(
+        AgentTurnOutput output, IWorkflowContext ctx, CancellationToken ct)
+    {
+        var run = await _runStore.GetAsync(RunId.Parse(output.RunId), ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Review-ready run no longer exists.");
+        var request = new WorkflowReviewRequest(
+            output.RunId, output.TreeHash, output.Diff, output.StepCount,
+            RaiSafetyFlagged: output.ContentSafetyFlagged,
+            LifecycleGeneration: run.LifecycleGeneration);
+        await ctx.QueueStateUpdateAsync(MergeDataKey, output, MergeDataScope, ct).ConfigureAwait(false);
+        // A blocked merge must reuse this checkpointed generation, never the run's later generation.
+        await ctx.QueueStateUpdateAsync(ReviewRequestKey, request, MergeDataScope, ct).ConfigureAwait(false);
+        return request;
+    }
+
+    internal static WorkflowReviewRequest RecreateBlockedReviewRequest(
+        AgentTurnOutput? output, WorkflowReviewRequest? reviewed)
+    {
+        if (output is null || reviewed?.LifecycleGeneration is not { } generation || generation < 1
+            || reviewed.RunId != output.RunId || reviewed.TreeHash != output.TreeHash
+            || reviewed.Diff != output.Diff || reviewed.StepCount != output.StepCount
+            || reviewed.RaiSafetyFlagged != output.ContentSafetyFlagged)
+            throw new InvalidOperationException("Blocked merge has no matching generation-bound reviewed output.");
+
+        return new WorkflowReviewRequest(
+            output.RunId, output.TreeHash, output.Diff, output.StepCount,
+            RaiSafetyFlagged: output.ContentSafetyFlagged,
+            LifecycleGeneration: generation);
+    }
 
     /// <summary>Maximum revision iterations before capping (Rai or Review).</summary>
     private const int MaxIterations = 3;
@@ -435,17 +466,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         // RaiSafetyFlagged is passed through so the reviewer sees Rai's verdict as context.
         ExecutorBinding reviewAdapter = new VisualFunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
             "review-adapter", "review-adapter", "Review adapter", "plumbing", "action", true,
-            async (input, ctx, ct) =>
-            {
-                await ctx.QueueStateUpdateAsync(MergeDataKey, input, MergeDataScope, ct)
-                    .ConfigureAwait(false);
-                var run = await _runStore.GetAsync(RunId.Parse(input.RunId), ct).ConfigureAwait(false)
-                    ?? throw new InvalidOperationException("Review-ready run no longer exists.");
-                return new WorkflowReviewRequest(
-                    input.RunId, input.TreeHash, input.Diff, input.StepCount,
-                    RaiSafetyFlagged: input.ContentSafetyFlagged,
-                    LifecycleGeneration: run.LifecycleGeneration);
-            });
+            (input, ctx, ct) => CaptureReviewRequestAsync(input, ctx, ct));
 
         // Adapter: maps WorkflowReviewDecision -> MergeInput by reading the stored
         // AgentTurnOutput from workflow state.
@@ -565,9 +586,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             {
                 var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
                     .ConfigureAwait(false);
-                return new WorkflowReviewRequest(
-                    agentOutput!.RunId, agentOutput.TreeHash, agentOutput.Diff, agentOutput.StepCount,
-                    RaiSafetyFlagged: agentOutput.ContentSafetyFlagged);
+                var reviewed = await ctx.ReadStateAsync<WorkflowReviewRequest>(ReviewRequestKey, MergeDataScope, ct)
+                    .ConfigureAwait(false);
+                return RecreateBlockedReviewRequest(agentOutput, reviewed);
             });
 
         // Store AgentTurnInput in workflow state at workflow start so Scribe adapters
@@ -1258,16 +1279,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             var id = EdgeId("agent-to-review", edge);
             return new VisualFunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
                 id, id, "Review adapter", "plumbing", "action", true,
-                async (output, ctx, ct) =>
-                {
-                    await ctx.QueueStateUpdateAsync(MergeDataKey, output, MergeDataScope, ct).ConfigureAwait(false);
-                    var run = await _factory._runStore.GetAsync(RunId.Parse(output.RunId), ct).ConfigureAwait(false)
-                        ?? throw new InvalidOperationException("Review-ready run no longer exists.");
-                    return new WorkflowReviewRequest(
-                        output.RunId, output.TreeHash, output.Diff, output.StepCount,
-                        RaiSafetyFlagged: output.ContentSafetyFlagged,
-                        LifecycleGeneration: run.LifecycleGeneration);
-                });
+                (output, ctx, ct) => _factory.CaptureReviewRequestAsync(output, ctx, ct));
         }
 
         public ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge)
@@ -1278,12 +1290,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 async (decision, ctx, ct) =>
                 {
                     var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
-                    var run = await _factory._runStore.GetAsync(RunId.Parse(produced!.RunId), ct).ConfigureAwait(false)
-                        ?? throw new InvalidOperationException("Review-ready run no longer exists.");
-                    return new WorkflowReviewRequest(
-                        produced.RunId, produced.TreeHash, produced.Diff, produced.StepCount,
-                        RaiSafetyFlagged: produced.ContentSafetyFlagged,
-                        LifecycleGeneration: run.LifecycleGeneration);
+                    var reviewed = await ctx.ReadStateAsync<WorkflowReviewRequest>(ReviewRequestKey, MergeDataScope, ct)
+                        .ConfigureAwait(false);
+                    return RecreateBlockedReviewRequest(produced, reviewed);
                 });
         }
 
