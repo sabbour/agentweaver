@@ -13,9 +13,10 @@ public static class AddressedMessagesEndpoints
 {
     public static void MapAddressedMessagesEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/projects/{id}/agent-messages");
+        var group = app.MapGroup("/api/projects/{id}")
+            .PlatformOrMcp();
 
-        group.MapPost("", async (string id, SendAddressedMessage request, HttpContext http,
+        group.MapPost("agent-messages", async (string id, SendAddressedMessage request, HttpContext http,
             IProjectStore projects, IConfiguration configuration, AddressedMessageService messages,
             IRunSubmittingUserResolver resolver, IRunAuthorshipCapabilityStore capabilities, CancellationToken ct) =>
         {
@@ -39,7 +40,7 @@ public static class AddressedMessagesEndpoints
             catch (AddressedMessageError error) { return Conflict(error.Code); }
         });
 
-        group.MapGet("", async (string id, string? run_id, int? limit, HttpContext http,
+        group.MapGet("agent-messages", async (string id, string? run_id, int? limit, HttpContext http,
             IProjectStore projects, IConfiguration configuration, AddressedMessageService messages,
             IRunSubmittingUserResolver resolver, IRunAuthorshipCapabilityStore capabilities, CancellationToken ct) =>
         {
@@ -58,7 +59,7 @@ public static class AddressedMessagesEndpoints
             return Results.Ok(await messages.ListAsync(id, run_id, limit ?? 50, ct));
         });
 
-        group.MapGet("/{messageId}", async (string id, string messageId, HttpContext http,
+        group.MapGet("agent-messages/{messageId}", async (string id, string messageId, HttpContext http,
             IProjectStore projects, IConfiguration configuration, AddressedMessageService messages,
             IRunSubmittingUserResolver resolver, IRunAuthorshipCapabilityStore capabilities, CancellationToken ct) =>
         {
@@ -80,7 +81,7 @@ public static class AddressedMessagesEndpoints
             return Results.Ok(message);
         });
 
-        group.MapPost("/claim", async (string id, ClaimAddressedMessage request, HttpContext http,
+        group.MapPost("agent-messages/claim", async (string id, ClaimAddressedMessage request, HttpContext http,
             IProjectStore projects, IConfiguration configuration, AddressedMessageService messages,
             IRunSubmittingUserResolver resolver, IRunAuthorshipCapabilityStore capabilities, CancellationToken ct) =>
         {
@@ -100,7 +101,7 @@ public static class AddressedMessagesEndpoints
             catch (AddressedMessageError error) { return Conflict(error.Code); }
         });
 
-        group.MapPost("/{messageId}/deliver", async (string id, string messageId, DeliverAddressedMessage request,
+        group.MapPost("agent-messages/{messageId}/deliver", async (string id, string messageId, DeliverAddressedMessage request,
             HttpContext http, IProjectStore projects, IConfiguration configuration, AddressedMessageService messages,
             IRunSubmittingUserResolver resolver, IRunAuthorshipCapabilityStore capabilities, CancellationToken ct) =>
         {
@@ -120,7 +121,7 @@ public static class AddressedMessagesEndpoints
             catch (AddressedMessageError error) { return Conflict(error.Code); }
         });
 
-        group.MapPost("/{messageId}/acknowledge", async (string id, string messageId, HttpContext http,
+        group.MapPost("agent-messages/{messageId}/acknowledge", async (string id, string messageId, HttpContext http,
             IProjectStore projects, IConfiguration configuration, AddressedMessageService messages,
             IRunSubmittingUserResolver resolver, IRunAuthorshipCapabilityStore capabilities, CancellationToken ct) =>
         {
