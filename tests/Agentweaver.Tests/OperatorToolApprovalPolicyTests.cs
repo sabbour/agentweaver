@@ -38,6 +38,7 @@ public sealed class OperatorToolApprovalPolicyTests
     [InlineData("blueprint_generation_cancel")]
     [InlineData("blueprint_generation_retry")]
     [InlineData("github_repository_selection_issue")]
+    [InlineData("backlog_edit_dependencies")]
     public void RequiresApproval_is_true_for_unknown_and_mutating_tools(string? toolName)
     {
         OperatorToolApprovalPolicy.RequiresApproval(toolName).Should().BeTrue();
@@ -55,6 +56,7 @@ public sealed class OperatorToolApprovalPolicyTests
     [InlineData("skill_marketplace_sources_list")]
     [InlineData("list_project_workspace")]
     [InlineData("github_repository_selections_list")]
+    [InlineData("backlog_get_dependency_revision")]
     public void RequiresApproval_is_false_for_ungated_read_tools(string toolName)
     {
         OperatorToolApprovalPolicy.RequiresApproval(toolName).Should().BeFalse();

@@ -81,6 +81,7 @@ GET /api/projects/{id}/workspace | PlatformOrMcp
 GET /api/projects/{id}/workspace/files | PlatformOrMcp
 GET /api/projects/{id}/workspace/files/{**path} | PlatformOrMcp
 GET /api/projects/{id}/workspace/refs | PlatformOrMcp
+GET /api/projects/{projectId}/backlog/dependencies/revision | PlatformOrMcp
 GET /api/projects/{projectId}/backlog/settings | PlatformOrMcp
 GET /api/projects/{projectId}/backlog/tasks/{taskId} | PlatformOrMcp
 GET /api/projects/{projectId}/board | PlatformOrMcp
@@ -208,6 +209,7 @@ POST /api/projects/{projectId}/backlog/ready-all | PlatformOrMcp
 POST /api/projects/{projectId}/backlog/tasks | PlatformOrMcp
 POST /api/projects/{projectId}/backlog/tasks/{taskId}/archive | PlatformOrMcp
 POST /api/projects/{projectId}/backlog/tasks/{taskId}/backlog | PlatformOrMcp
+POST /api/projects/{projectId}/backlog/tasks/{taskId}/dependencies | PlatformOrMcp
 POST /api/projects/{projectId}/backlog/tasks/{taskId}/ready | PlatformOrMcp
 POST /api/projects/{projectId}/backlog/tasks/{taskId}/reorder | PlatformOrMcp
 POST /api/projects/{projectId}/team/sync | PlatformOrMcp

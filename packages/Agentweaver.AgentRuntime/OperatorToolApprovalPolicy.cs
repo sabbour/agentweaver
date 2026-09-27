@@ -31,6 +31,7 @@ public static class OperatorToolApprovalPolicy
     private static readonly HashSet<string> ReadOnlyTools = new(StringComparer.Ordinal)
     {
         "backlog_get_board",
+        "backlog_get_dependency_revision",
         "backlog_get_settings",
         "backlog_get_task",
         "backlog_get_workflow_stages",
@@ -118,6 +119,7 @@ public static class OperatorToolApprovalPolicy
         "project_delete",
         "backlog_delete_task",
         "backlog_archive_task",
+        "backlog_edit_dependencies",
         "send_all_backlog_to_ready",
         "run_archive",
         "skill_delete",
@@ -157,6 +159,7 @@ public static class OperatorToolApprovalPolicy
         "backlog_decompose_spec",
         "backlog_edit_task",
         "backlog_get_board",
+        "backlog_get_dependency_revision",
         "backlog_get_settings",
         "backlog_get_task",
         "backlog_get_workflow_stages",
