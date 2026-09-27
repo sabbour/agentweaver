@@ -1546,12 +1546,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        return await db.Subtasks.AsNoTracking()
-            .Where(s => s.WorkPlanId == workPlanId
-                && ids.Contains(s.Id)
-                && s.InfrastructureRetryEligibleAt > DateTimeOffset.UtcNow)
-            .MinAsync(s => s.InfrastructureRetryEligibleAt, ct)
+        var now = DateTimeOffset.UtcNow;
+        var eligibilityTimes = await db.Subtasks.AsNoTracking()
+            .Where(s => s.WorkPlanId == workPlanId && ids.Contains(s.Id))
+            .Select(s => s.InfrastructureRetryEligibleAt)
+            .ToListAsync(ct)
             .ConfigureAwait(false);
+        return eligibilityTimes.Where(eligibleAt => eligibleAt > now).Min();
     }
 
     /// <summary>
@@ -1579,6 +1580,37 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             return context.OriginatingBranch;
         if (_worktreeManager is null)
         {
+            var predecessors = TransitiveDependencies(subtaskId, edges);
+            var subtasks = await ReloadSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
+            var byId = subtasks.ToDictionary(subtask => subtask.Id);
+            var noOutput = true;
+            foreach (var id in predecessors)
+            {
+                if (!statusById.TryGetValue(id, out var status) || !SubtaskStatus.Satisfies(status)
+                    || !byId.TryGetValue(id, out var predecessor)
+                    || DependencyBranchInclusion.RequiresArtifact(predecessor))
+                {
+                    noOutput = false;
+                    break;
+                }
+                if (string.IsNullOrWhiteSpace(predecessor.ChildRunId))
+                    continue;
+                if (!RunId.TryParse(predecessor.ChildRunId, out var runId))
+                {
+                    noOutput = false;
+                    break;
+                }
+                var run = await _runStore.GetAsync(runId, ct).ConfigureAwait(false);
+                if (run is null || !string.IsNullOrWhiteSpace(run.WorktreeBranch)
+                    || !string.IsNullOrWhiteSpace(run.TreeHash)
+                    || !string.IsNullOrWhiteSpace(run.Diff))
+                {
+                    noOutput = false;
+                    break;
+                }
+            }
+            if (noOutput)
+                return context.OriginatingBranch;
             _logger.LogError("Coordinator dispatch: cannot verify upstream outputs for dependent subtask {SubtaskId}; Git verifier unavailable", subtaskId);
             return null;
         }
