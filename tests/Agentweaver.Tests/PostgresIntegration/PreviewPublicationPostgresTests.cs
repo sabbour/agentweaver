@@ -146,7 +146,7 @@ public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
     {
         var run = await CreateRunAsync();
         var store = new EfRunStore(pg.Factory);
-        await store.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await store.TerminalizeForTestAsync(run.Id, RunStatus.Failed)).Should().BeTrue();
         (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
             store, run.Id, "cleanup-owner", CancellationToken.None)).Should().BeTrue();
         (await store.TryReopenTerminalToInProgressAsync(run.Id)).Should().BeFalse();
