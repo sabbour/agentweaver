@@ -113,6 +113,8 @@ GET /api/runs/{id}/history | PlatformOrMcp
 GET /api/runs/{id}/outcome-spec | PlatformOrMcp
 GET /api/runs/{id}/output-revisions | PlatformOrMcp
 GET /api/runs/{id}/output-revisions/{revisionId} | PlatformOrMcp
+GET /api/runs/{id}/output-revisions/{revisionId}/compare/{otherId} | PlatformOrMcp
+GET /api/runs/{id}/output-revisions/{revisionId}/files/{**path} | PlatformOrMcp
 GET /api/runs/{id}/pending-approvals | PlatformOrMcp
 GET /api/runs/{id}/stream | PlatformOrMcp
 GET /api/runs/{id}/terminal-diagnostic | PlatformOrMcp
