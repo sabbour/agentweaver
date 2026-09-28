@@ -3004,8 +3004,7 @@ public sealed class CoordinatorRunService
             plan.ParentJoinNodeId,
             plan.ParentResumeRequestId,
             plan.ParentResumeState,
-            plan.Status == WorkPlanStatus.Complete
-                ? ReadJoinedOutput(plan.ParentResumeResultJson) : null,
+            ReadJoinedOutput(plan.ParentResumeResultJson),
             plan.MergeEffectState,
             plan.MergeRecoveryAction,
             plan.MergeEvidenceJson,
