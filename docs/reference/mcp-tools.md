@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **127 tools** across **15 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **131 tools** across **15 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -161,6 +161,10 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `run_archive` | Archive a run off active project board/list projections. |
 | `run_execution_identity` | Get the authorization-filtered execution identity, delegation, retry, backend, permission-binding, and tool-decision record for a run. |
 | `run_get_file` | Get the content or diff of a specific file changed by a run. |
+| `run_output_compare` | Compare exact retained file identities between two output revisions of one run. |
+| `run_output_file` | Read retained exact file bytes (base64), independent of the current branch or worktree. |
+| `run_output_history` | List immutable output revisions for a run, including collective output identities. |
+| `run_output_revision` | Read the exact immutable output revision and retained file inventory. |
 | `run_retry` | Retry a failed run by creating a fresh run from its original inputs. |
 | `run_review` | Approve or reject a run that is awaiting review. |
 | `run_show_artifacts` | List the files changed by a run. |
