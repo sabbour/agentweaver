@@ -115,7 +115,7 @@ public class PreviewPublicationLeaseRunStoreTests
     }
 
     [Fact]
-    public async Task CleanupDecision_AssembleReadyAfterOwnershipLoss_AllowsCleanup()
+    public async Task CleanupDecision_AssembleReadyAfterOwnershipLoss_DoesNotStopSharedProcess()
     {
         var runId = RunId.New();
         var store = new LeaseRunStore { StoredRun = MakeRun(runId, RunStatus.AssembleReady) };
@@ -123,7 +123,7 @@ public class PreviewPublicationLeaseRunStoreTests
             .Should().BeTrue();
 
         (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
-            store, runId, "losing-owner", CancellationToken.None)).Should().BeTrue();
+            store, runId, "losing-owner", CancellationToken.None)).Should().BeFalse();
     }
 
     [Fact]
@@ -197,10 +197,33 @@ public class PreviewPublicationLeaseRunStoreTests
         public Task<bool> TryRenewPreviewPublicationAsync(
             RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
         {
-            if (Terminal || _leaseOwner != ownerId)
+            if (Terminal || _leaseOwner != ownerId || _leaseUntil <= DateTimeOffset.UtcNow)
                 return Task.FromResult(false);
             _leaseUntil = leaseUntil;
             LeaseExpirations.Add(leaseUntil);
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> TryReserveTerminalPreviewCleanupAsync(
+            RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+        {
+            if (StoredRun is not { } run || !TerminalRunOutcome.IsTerminal(run.Status)
+                || (_leaseOwner is not null && _leaseOwner != ownerId)
+                || _leaseUntil > DateTimeOffset.UtcNow)
+                return Task.FromResult(false);
+            _leaseOwner = ownerId;
+            _leaseUntil = leaseUntil;
+            return Task.FromResult(true);
+        }
+
+        public Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
+            RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+        {
+            if (StoredRun is not { } run || TerminalRunOutcome.IsTerminal(run.Status)
+                || _leaseOwner is not null || _leaseUntil is not null)
+                return Task.FromResult(false);
+            _leaseOwner = ownerId;
+            _leaseUntil = leaseUntil;
             return Task.FromResult(true);
         }
 

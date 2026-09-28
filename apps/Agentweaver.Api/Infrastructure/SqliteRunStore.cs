@@ -452,9 +452,12 @@ public sealed class SqliteRunStore : IRunStore
                SET status = 'in_progress', ended_at = NULL,
                    current_output_revision_id = NULL, approved_output_revision_id = NULL,
                    lifecycle_generation = lifecycle_generation + 1
-             WHERE run_id = $runId AND status IN ('failed', 'merge_failed', 'assemble_ready');
+             WHERE run_id = $runId AND status IN ('failed', 'merge_failed', 'assemble_ready')
+               AND (preview_publication_lease_until IS NULL
+                    OR preview_publication_lease_until <= $now);
             """;
         command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         if (rows == 0)
             return false;
@@ -939,7 +942,56 @@ public sealed class SqliteRunStore : IRunStore
                SET preview_publication_lease_until = $leaseUntil
              WHERE run_id = $runId
                AND preview_publication_lease_owner = $ownerId
+               AND preview_publication_lease_until > $now
                AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled');
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$ownerId", ownerId);
+                cmd.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
+                cmd.Parameters.AddWithValue("$leaseUntil", Ts(leaseUntil));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    public async Task<bool> TryReserveTerminalPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET preview_publication_lease_owner = $ownerId,
+                   preview_publication_lease_until = $leaseUntil
+             WHERE run_id = $runId
+               AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled')
+               AND (preview_publication_lease_owner IS NULL
+                    OR preview_publication_lease_owner = $ownerId)
+               AND (preview_publication_lease_until IS NULL
+                    OR preview_publication_lease_until <= $now);
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$ownerId", ownerId);
+                cmd.Parameters.AddWithValue("$leaseUntil", Ts(leaseUntil));
+                cmd.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+            }, ct).ConfigureAwait(false);
+        return rows > 0;
+    }
+
+    public async Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET preview_publication_lease_owner = $ownerId,
+                   preview_publication_lease_until = $leaseUntil
+             WHERE run_id = $runId
+               AND status NOT IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready', 'cancelled')
+               AND preview_publication_lease_owner IS NULL
+               AND preview_publication_lease_until IS NULL;
             """,
             cmd =>
             {

@@ -6,6 +6,7 @@ using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,141 @@ namespace Agentweaver.Tests.PostgresIntegration;
 [Trait("Category", "PostgresIntegration")]
 public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
 {
+    [PostgresRequiredFact]
+    public async Task CommittedReadyAfterOwnerLoss_ReusesPublishedRouteWithoutSecondReadyPair()
+    {
+        var run = await CreateRunAsync();
+        var runId = run.Id.ToString();
+        var store = new PreviewPublicationLeaseRunStore(new EfRunStore(pg.Factory));
+        var stream = new EfRunEventStream(pg.Factory);
+        var streams = new RunStreamStore(stream);
+        var preview = new RecordingPreviewService();
+        var route = preview.Session(runId, 5173);
+        preview.ExistingSession = route;
+        const string oldOwner = "old-api";
+        const string retryOwner = "new-api";
+        (await store.TryAcquirePreviewPublicationAsync(
+            run.Id, oldOwner, DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeTrue();
+        (await SandboxEndpoints.PublishPreviewReadyAsync(
+            route, new
+            {
+                source = "preview-api", lifecycle_generation = run.LifecycleGeneration,
+                preview_runner_session_id = "shared-session", target_port = 5173,
+                session_id = route.Token, preview_url = route.PreviewUrl,
+            },
+            preview, streams, store, CancellationToken.None, oldOwner, run.LifecycleGeneration))
+            .Should().BeTrue();
+        (await store.TryRenewPreviewPublicationAsync(
+            run.Id, oldOwner, DateTimeOffset.UtcNow.AddMinutes(-1))).Should().BeTrue();
+        (await store.TryAcquirePreviewPublicationAsync(
+            run.Id, retryOwner, DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeTrue();
+
+        var result = await SandboxEndpoints.StartPreviewForRunAsync(
+            runId, 5173, run, preview, null!, streams, NullLogger.Instance,
+            CancellationToken.None, "shared-session", store, publicationLeaseOwner: retryOwner,
+            publicationGeneration: run.LifecycleGeneration);
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
+        preview.StartCalls.Should().Be(0);
+        (await stream.GetPersistedEventsAsync(runId)).Select(e => e.Type).Should().Equal(
+            EventTypes.SandboxPreviewReady, EventTypes.CoordinatorPreviewReady);
+        await store.EndPreviewPublicationAsync(run.Id, retryOwner);
+    }
+
+    [PostgresRequiredFact]
+    public async Task RestartedStore_ReclaimsExpiredOwnerAndFencesReadyEvents()
+    {
+        var run = await CreateRunAsync();
+        var original = new EfRunStore(pg.Factory);
+        const string originalOwner = "lost-api-request";
+        const string retryOwner = "new-api-request";
+        const string session = "same-healthy-preview-session";
+        (await original.TryAcquirePreviewPublicationAsync(
+            run.Id, originalOwner, DateTimeOffset.UtcNow.AddMilliseconds(300))).Should().BeTrue();
+
+        var store = new PreviewPublicationLeaseRunStore(new EfRunStore(pg.Factory));
+        var stream = new EfRunEventStream(pg.Factory);
+        var preview = new RecordingPreviewService();
+        var sessionResult = preview.Session(run.Id.ToString(), 5173);
+        var paused = new PausingPreviewEventStream(stream);
+        var staleAppend = SandboxEndpoints.PublishPreviewReadyAsync(
+            sessionResult, new { preview_runner_session_id = session },
+            preview, new RunStreamStore(paused), store,
+            CancellationToken.None, originalOwner, run.LifecycleGeneration);
+        await paused.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(350);
+        (await store.TryAcquirePreviewPublicationAsync(
+            run.Id, retryOwner, DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeTrue();
+        paused.Resume.SetResult();
+        (await staleAppend.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();
+        (await original.TryRenewPreviewPublicationAsync(
+            run.Id, originalOwner, DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeFalse();
+        await original.EndPreviewPublicationAsync(run.Id, originalOwner);
+        (await store.IsPreviewPublicationOwnerAsync(run.Id, retryOwner)).Should().BeTrue();
+
+        var streams = new RunStreamStore(stream);
+        (await SandboxEndpoints.PublishPreviewReadyAsync(
+            sessionResult, new { preview_runner_session_id = session }, preview, streams, store,
+            CancellationToken.None, retryOwner, run.LifecycleGeneration + 1)).Should().BeFalse();
+        (await stream.GetPersistedEventsAsync(run.Id.ToString())).Should().BeEmpty();
+
+        var result = await SandboxEndpoints.StartPreviewForRunAsync(
+            run.Id.ToString(), 5173, run, preview, null!, streams, NullLogger.Instance,
+            CancellationToken.None, session, store, publicationLeaseOwner: retryOwner,
+            publicationGeneration: run.LifecycleGeneration);
+        ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
+        (await stream.GetPersistedEventsAsync(run.Id.ToString())).Select(e => e.Type).Should().Equal(
+            EventTypes.SandboxPreviewReady, EventTypes.CoordinatorPreviewReady);
+        await store.EndPreviewPublicationAsync(run.Id, retryOwner);
+    }
+
+    [PostgresRequiredFact]
+    public async Task RestartedStore_RefusesLiveCompetingOwner()
+    {
+        var run = await CreateRunAsync();
+        var original = new EfRunStore(pg.Factory);
+        (await original.TryAcquirePreviewPublicationAsync(
+            run.Id, "live-attempt", DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeTrue();
+        var retry = new EfRunStore(pg.Factory);
+        (await retry.TryAcquirePreviewPublicationAsync(
+            run.Id, "different-attempt-same-session", DateTimeOffset.UtcNow.AddMinutes(3)))
+            .Should().BeFalse();
+        (await original.TryRenewPreviewPublicationAsync(
+            run.Id, "live-attempt", DateTimeOffset.UtcNow.AddMinutes(4))).Should().BeTrue();
+    }
+
+    [PostgresRequiredFact]
+    public async Task ExpiredOwnerCannotReserveCleanup_ReplacementHoldsLeaseThroughStop()
+    {
+        var run = await CreateRunAsync();
+        var stale = new EfRunStore(pg.Factory);
+        var replacement = new EfRunStore(pg.Factory);
+        (await stale.TryAcquirePreviewPublicationAsync(
+            run.Id, "stale", DateTimeOffset.UtcNow.AddMinutes(-1))).Should().BeTrue();
+        (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
+            stale, run.Id, "stale", CancellationToken.None)).Should().BeFalse();
+        (await replacement.TryAcquirePreviewPublicationAsync(
+            run.Id, "replacement", DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeTrue();
+        (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
+            replacement, run.Id, "replacement", CancellationToken.None)).Should().BeTrue();
+        (await stale.TryAcquirePreviewPublicationAsync(
+            run.Id, "next", DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeFalse();
+        await stale.EndPreviewPublicationAsync(run.Id, "stale");
+        (await replacement.IsPreviewPublicationOwnerAsync(run.Id, "replacement")).Should().BeTrue();
+    }
+
+    [PostgresRequiredFact]
+    public async Task TerminalCleanupReservation_BlocksReopenUntilReleased()
+    {
+        var run = await CreateRunAsync();
+        var store = new EfRunStore(pg.Factory);
+        await store.UpdateStatusAsync(run.Id, RunStatus.Failed, DateTimeOffset.UtcNow);
+        (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
+            store, run.Id, "cleanup-owner", CancellationToken.None)).Should().BeTrue();
+        (await store.TryReopenTerminalToInProgressAsync(run.Id)).Should().BeFalse();
+        await store.EndPreviewPublicationAsync(run.Id, "cleanup-owner");
+        (await store.TryReopenTerminalToInProgressAsync(run.Id)).Should().BeTrue();
+    }
+
     [PostgresRequiredFact]
     public Task TerminalizationWinsDuringConditionalUpdate_NoReadyEvents() =>
         AssertTerminalizationWinsAsync(RunStatus.Failed, hasLocalEntry: true);
@@ -193,6 +329,8 @@ public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
     private sealed class RecordingPreviewService : ISandboxPreviewService
     {
         public int StopCalls;
+        public int StartCalls;
+        public PreviewSession? ExistingSession;
         public bool Enabled => true;
         public int AllowedPortMin => 3000;
         public int AllowedPortMax => 9000;
@@ -200,14 +338,19 @@ public sealed class PreviewPublicationPostgresTests(PostgresFixture pg)
             new("preview-token", runId, "preview-pod", port, "https://preview.example.test", DateTimeOffset.UtcNow);
         public Task<PreviewSession> StartPreviewAsync(
             string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
-            string? previewRunnerSessionId = null) => Task.FromResult(Session(runId, targetPort));
+            string? previewRunnerSessionId = null)
+        {
+            StartCalls++;
+            return Task.FromResult(Session(runId, targetPort));
+        }
         public Task StopPreviewAsync(string token, CancellationToken ct = default)
         {
             StopCalls++;
             return Task.CompletedTask;
         }
         public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<PreviewSession>>([]);
+            Task.FromResult<IReadOnlyList<PreviewSession>>(
+                ExistingSession is { } session && session.RunId == runId ? [session] : []);
         public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
         public Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(PreviewLifecycleState.Previewable);

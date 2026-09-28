@@ -123,8 +123,21 @@ public interface IRunStore
         RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
         Task.FromResult(false);
 
-    /// <summary>Renews a preview-publication lease only when <paramref name="ownerId"/> still owns it.</summary>
+    /// <summary>Renews only a live lease owned by <paramref name="ownerId"/>.
+    /// An expired owner cannot revive cleanup authority after a replacement becomes eligible.</summary>
     Task<bool> TryRenewPreviewPublicationAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    /// <summary>Reserves a terminal run's process cleanup when no live publication exists.
+    /// The reservation blocks reopening until the bounded stop finishes or its lease expires.</summary>
+    Task<bool> TryReserveTerminalPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    /// <summary>Reserves cleanup of an unpublished process before publication has been claimed.
+    /// Only an active run with no recorded owner or lease can grant it.</summary>
+    Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
         RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
         Task.FromResult(false);
 

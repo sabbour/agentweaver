@@ -429,8 +429,11 @@ public sealed class EfRunStore : IRunStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var id = runId.ToString();
+        var now = DateTimeOffset.UtcNow;
         var rows = await db.Runs
-            .Where(r => r.RunId == id && terminalStatuses.Contains(r.Status))
+            .Where(r => r.RunId == id && terminalStatuses.Contains(r.Status)
+                && (r.PreviewPublicationLeaseUntil == null
+                    || r.PreviewPublicationLeaseUntil <= now))
             .ExecuteUpdateAsync(updates => updates
                 .SetProperty(r => r.Status, RunStatus.InProgress.ToApiString())
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
@@ -808,13 +811,47 @@ public sealed class EfRunStore : IRunStore
         RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
     {
         var id = runId.ToString();
+        var now = DateTimeOffset.UtcNow;
         var terminalStatuses = new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready", "cancelled" };
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rows = await db.Runs
             .Where(r => r.RunId == id
                 && r.PreviewPublicationLeaseOwner == ownerId
+                && r.PreviewPublicationLeaseUntil > now
                 && !terminalStatuses.Contains(r.Status))
             .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.PreviewPublicationLeaseUntil, (DateTimeOffset?)leaseUntil), ct);
+        return rows > 0;
+    }
+
+    public async Task<bool> TryReserveTerminalPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        var now = DateTimeOffset.UtcNow;
+        var terminalStatuses = new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready", "cancelled" };
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rows = await db.Runs
+            .Where(r => r.RunId == id && terminalStatuses.Contains(r.Status)
+                && (r.PreviewPublicationLeaseOwner == null || r.PreviewPublicationLeaseOwner == ownerId)
+                && (r.PreviewPublicationLeaseUntil == null || r.PreviewPublicationLeaseUntil <= now))
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.PreviewPublicationLeaseOwner, ownerId)
+                .SetProperty(r => r.PreviewPublicationLeaseUntil, (DateTimeOffset?)leaseUntil), ct);
+        return rows > 0;
+    }
+
+    public async Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        var terminalStatuses = new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready", "cancelled" };
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rows = await db.Runs
+            .Where(r => r.RunId == id && !terminalStatuses.Contains(r.Status)
+                && r.PreviewPublicationLeaseOwner == null && r.PreviewPublicationLeaseUntil == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.PreviewPublicationLeaseOwner, ownerId)
                 .SetProperty(r => r.PreviewPublicationLeaseUntil, (DateTimeOffset?)leaseUntil), ct);
         return rows > 0;
     }

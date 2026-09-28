@@ -243,7 +243,6 @@ public sealed class PreviewStep
             //    be held open for that. The lease is claimed again once approval is granted.
             await ReleaseLeaseAsync(runId, publicationLeaseOwner, leased).ConfigureAwait(false);
             leased = false;
-            publicationLeaseOwner = started.SessionId;
             var approval = await _previewGate.RequestApprovalAsync(
                 runId, port.Port, ct, request.WorkPlanId, request.TreeHash).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
@@ -289,17 +288,15 @@ public sealed class PreviewStep
                 return;
             }
 
+            var publicationGeneration = (await _runStore.GetAsync(RunId.Parse(runId), ct)
+                .ConfigureAwait(false))?.LifecycleGeneration;
             // Hold the run open again for registration and the preview_ready commit (#1315).
             leased = await TryLeaseAsync(runId, publicationLeaseOwner, ct).ConfigureAwait(false);
             if (!leased)
             {
                 if (await SandboxEndpoints.IsPreviewRunActiveAsync(runId, _runStore, ct).ConfigureAwait(false))
                 {
-                    if (RunId.TryParse(runId, out var parsedRunId))
-                    {
-                        skipProcessCleanup = await _runStore.IsPreviewPublicationOwnerAsync(
-                            parsedRunId, publicationLeaseOwner, ct).ConfigureAwait(false);
-                    }
+                    skipProcessCleanup = true;
                     _logger.LogInformation(
                         "PreviewStep: run {RunId} already has an active publication attempt; joining its outcome.",
                         runId);
@@ -320,8 +317,19 @@ public sealed class PreviewStep
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
-                if (!await EmitReadyAsync(request, registration.Session!, started.SessionId, ct).ConfigureAwait(false))
+                if (!await EmitReadyAsync(
+                    request, registration.Session!, started.SessionId, publicationLeaseOwner,
+                    publicationGeneration ?? throw new InvalidOperationException("Preview run disappeared."),
+                    ct).ConfigureAwait(false))
                 {
+                    if (await SandboxEndpoints.IsPreviewRunActiveAsync(runId, _runStore, ct).ConfigureAwait(false))
+                    {
+                        skipProcessCleanup = true;
+                        _logger.LogInformation(
+                            "PreviewStep: publication for run {RunId} lost its lease before ready was committed.",
+                            runId);
+                        return;
+                    }
                     stopReason = "run_terminal";
                     EmitFailed(request, stopReason, "The run ended before preview publication completed.", started.SessionId);
                     return;
@@ -371,13 +379,15 @@ public sealed class PreviewStep
         finally
         {
             var shouldStopProcess = started is not null && !keepProcess && !skipProcessCleanup;
-            if (shouldStopProcess && leased && RunId.TryParse(runId, out var parsedRunId))
+            var cleanupReserved = false;
+            if (shouldStopProcess && RunId.TryParse(runId, out var parsedRunId))
             {
                 using var ownershipCheck = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 try
                 {
                     shouldStopProcess = await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
                         _runStore, parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
+                    cleanupReserved = shouldStopProcess;
                 }
                 catch (Exception ex)
                 {
@@ -395,7 +405,7 @@ public sealed class PreviewStep
                 await TryStopProcessAsync(
                     runId, bearer, started!.SessionId, stopReason, cleanup.Token).ConfigureAwait(false);
             }
-            await ReleaseLeaseAsync(runId, publicationLeaseOwner, leased).ConfigureAwait(false);
+            await ReleaseLeaseAsync(runId, publicationLeaseOwner, leased || cleanupReserved).ConfigureAwait(false);
         }
     }
 
@@ -568,7 +578,8 @@ public sealed class PreviewStep
     }
 
     private async Task<bool> EmitReadyAsync(
-        PreviewStepRequest r, PreviewSession preview, string previewRunnerSessionId, CancellationToken ct)
+        PreviewStepRequest r, PreviewSession preview, string previewRunnerSessionId,
+        string publicationOwner, int publicationGeneration, CancellationToken ct)
     {
         var keepaliveUrl = $"/api/runs/{r.RunId}/sandbox/preview/{preview.Token}/keepalive";
         var payload = new
@@ -587,7 +598,8 @@ public sealed class PreviewStep
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         };
         return await SandboxEndpoints.PublishPreviewReadyAsync(
-            preview, payload, _previewService, _streamStore, _runStore, ct).ConfigureAwait(false);
+            preview, payload, _previewService, _streamStore, _runStore, ct,
+            publicationOwner, publicationGeneration).ConfigureAwait(false);
     }
 
     private void EmitFailed(PreviewStepRequest r, string reason, string message, string? previewRunnerSessionId = null)
