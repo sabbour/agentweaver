@@ -16,6 +16,7 @@ export const TEST_SHARDS = [
   {
     id: 'orchestration',
     name: 'orchestration',
+    timeoutMinutes: 20,
     filter: normalFilter([
       'Backlog', 'Blueprints', 'Casting', 'Coordinator', 'Graph', 'Notifications',
       'Projects', 'Runs', 'Workflow', 'Workflows',
@@ -68,12 +69,13 @@ export const TEST_SHARDS = [
 
 export function matrix() {
   return JSON.stringify({
-    include: TEST_SHARDS.map(({ id, name, filter, settings, requiresBubblewrap }) => ({
+    include: TEST_SHARDS.map(({ id, name, filter, settings, requiresBubblewrap, timeoutMinutes }) => ({
       id,
       name,
       filter,
       settings: settings ?? '',
       requiresBubblewrap: requiresBubblewrap === true,
+      timeoutMinutes: timeoutMinutes ?? 15,
     })),
   });
 }
