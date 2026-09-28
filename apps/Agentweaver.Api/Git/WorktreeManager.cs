@@ -871,7 +871,9 @@ public sealed class WorktreeManager
     /// child commit in <paramref name="childInputsInOrder"/> (already dependency/topologically
     /// ordered) into it using HEADLESS tree merges (<see cref="ObjectDatabase.MergeCommits"/>) — no
     /// working directory or worktree is checked out. Missing inputs and independent overlapping
-    /// edits stop the build without publishing a partial integration ref. On success it returns
+    /// edits stop the build without publishing a partial integration ref. Canonical Squad
+    /// bookkeeping keeps the integration revision's version at every merge, including fast-forwards.
+    /// On success it returns
     /// the aggregate tree hash and diff vs the originating branch. An empty
     /// <paramref name="childInputsInOrder"/> (every child was a no-change <c>completed</c>) yields
     /// an empty-diff success.
@@ -932,6 +934,9 @@ public sealed class WorktreeManager
             {
                 foreach (var path in new[] { change.Path, change.OldPath }.OfType<string>())
                 {
+                    if (IsSquadConsolidatedStatePath(path))
+                        continue;
+
                     foreach (var (ownedPath, owner) in pathOwners)
                     {
                         if (!PathsOverlap(path, ownedPath)
@@ -957,33 +962,34 @@ public sealed class WorktreeManager
                     inputs);
             }
 
-            // Fast-forward: integration is an ancestor of the child tip.
-            if (string.Equals(mergeBase.Sha, integrationCommit.Sha, StringComparison.Ordinal))
+            var fastForward = string.Equals(mergeBase.Sha, integrationCommit.Sha, StringComparison.Ordinal);
+            var merge = MergeCommitsPreferringSquadStateFromOurs(repo, integrationCommit, childTip);
+            if (merge.Status == MergeTreeStatus.Conflicts)
+            {
+                var conflictingFiles = ExtractConflictingFiles(merge);
+                var contributors = pathOwners
+                    .Where(entry => conflictingFiles.Any(path => PathsOverlap(entry.Key, path)))
+                    .Select(entry => entry.Value)
+                    .ToList();
+                if (contributors.Count == 0)
+                    contributors.AddRange(pathOwners.Values);
+                var inputs = contributors
+                    .GroupBy(owner => owner.Branch, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First().Tip.Sha, StringComparer.Ordinal);
+                inputs[childBranch] = childTip.Sha;
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch, childBranch, conflictingFiles,
+                    $"Child '{childBranch}' conflicts with the integration revision. Resolve the named paths explicitly.",
+                    inputs);
+            }
+
+            // Reuse the child commit only when its tree already preserves our bookkeeping.
+            if (fastForward && string.Equals(merge.Tree.Sha, childTip.Tree.Sha, StringComparison.Ordinal))
             {
                 integrationCommit = childTip;
             }
             else
             {
-                var merge = repo.ObjectDatabase.MergeCommits(integrationCommit, childTip, new MergeTreeOptions());
-                if (merge.Status == MergeTreeStatus.Conflicts)
-                {
-                    var conflictingFiles = ExtractConflictingFiles(merge);
-                    var contributors = pathOwners
-                        .Where(entry => conflictingFiles.Any(path => PathsOverlap(entry.Key, path)))
-                        .Select(entry => entry.Value)
-                        .ToList();
-                    if (contributors.Count == 0)
-                        contributors.AddRange(pathOwners.Values);
-                    var inputs = contributors
-                        .GroupBy(owner => owner.Branch, StringComparer.Ordinal)
-                        .ToDictionary(group => group.Key, group => group.First().Tip.Sha, StringComparer.Ordinal);
-                    inputs[childBranch] = childTip.Sha;
-                    return IntegrationBranchResult.Conflict(
-                        integrationBranch, childBranch, conflictingFiles,
-                        $"Child '{childBranch}' conflicts with the integration revision. Resolve the named paths explicitly.",
-                        inputs);
-                }
-
                 var signature = WithTimestamp();
                 integrationCommit = repo.ObjectDatabase.CreateCommit(
                     signature,
@@ -996,9 +1002,9 @@ public sealed class WorktreeManager
 
             foreach (var change in childChanges)
             {
-                if (change.Path is not null)
+                if (change.Path is not null && !IsSquadConsolidatedStatePath(change.Path))
                     pathOwners[change.Path] = (childBranch, childTip);
-                if (change.OldPath is not null)
+                if (change.OldPath is not null && !IsSquadConsolidatedStatePath(change.OldPath))
                     pathOwners[change.OldPath] = (childBranch, childTip);
             }
         }

@@ -47,6 +47,79 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
         repo.Branches["main"].Tip["alpha.txt"].Should().BeNull();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BuildIntegrationBranch_IdentityDivergence_PreservesOriginAndChildApplication(bool originAdvances)
+    {
+        var repoPath = CreateTempGitRepo();
+        const string identity = ".squad/identity/now.md";
+        CommitOnNewBranch(repoPath, "main", identity, "base\n", "seed identity");
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", identity, "child\n", "child identity");
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "app.txt", "child application\n", "child application");
+        if (originAdvances)
+            CommitOnNewBranch(repoPath, "main", identity, "origin\n", "consolidate identity");
+
+        var result = _manager.BuildIntegrationBranch(
+            repoPath, "main", "agentweaver/integration/identity", ["agentweaver/child-a"]);
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        using var repo = new Repository(repoPath);
+        var tree = repo.Branches["agentweaver/integration/identity"].Tip.Tree;
+        ReadBlob(repo, tree[identity]).Should().Be(originAdvances ? "origin\n" : "base\n");
+        ReadBlob(repo, tree["app.txt"]).Should().Be("child application\n");
+        ReadBlob(repo, repo.Branches["main"].Tip[identity])
+            .Should().Be(originAdvances ? "origin\n" : "base\n");
+        repo.Branches["main"].Tip["app.txt"].Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(".squad/identity/now.md")]
+    [InlineData(".squad/decisions.md")]
+    [InlineData(".squad/agents/scribe/history.md")]
+    public void BuildIntegrationBranch_IndependentBookkeepingEdits_DoNotBlockApplicationAssembly(string ledger)
+    {
+        var repoPath = CreateTempGitRepo();
+        CommitOnNewBranch(repoPath, "main", ledger, "base\n", "seed ledger");
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", ledger, "first child\n", "first ledger");
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "alpha.txt", "alpha\n", "first application");
+        CommitOnNewBranch(repoPath, "agentweaver/child-b", ledger, "second child\n", "second ledger");
+        CommitOnNewBranch(repoPath, "agentweaver/child-b", "beta.txt", "beta\n", "second application");
+        CommitOnNewBranch(repoPath, "main", ledger, "origin\n", "consolidate ledger");
+
+        var result = _manager.BuildIntegrationBranch(
+            repoPath, "main", "agentweaver/integration/siblings",
+            ["agentweaver/child-a", "agentweaver/child-b"]);
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        using var repo = new Repository(repoPath);
+        var tree = repo.Branches["agentweaver/integration/siblings"].Tip.Tree;
+        ReadBlob(repo, tree[ledger]).Should().Be("origin\n");
+        ReadBlob(repo, tree["alpha.txt"]).Should().Be("alpha\n");
+        ReadBlob(repo, tree["beta.txt"]).Should().Be("beta\n");
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_ApplicationConflictAlongsideBookkeeping_StillRequiresResolution()
+    {
+        var repoPath = CreateTempGitRepo();
+        const string identity = ".squad/identity/now.md";
+        CommitOnNewBranch(repoPath, "main", identity, "base\n", "seed identity");
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", identity, "child\n", "child identity");
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "app.txt", "child\n", "child application");
+        CommitOnNewBranch(repoPath, "main", identity, "origin\n", "consolidate identity");
+        CommitOnNewBranch(repoPath, "main", "app.txt", "origin\n", "origin application");
+
+        var result = _manager.BuildIntegrationBranch(
+            repoPath, "main", "agentweaver/integration/app-conflict", ["agentweaver/child-a"]);
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Conflict);
+        result.ConflictingFiles.Should().Contain("app.txt");
+        result.ConflictingFiles.Should().NotContain(identity);
+        using var repo = new Repository(repoPath);
+        repo.Branches["agentweaver/integration/app-conflict"].Should().BeNull();
+    }
+
     [Fact]
     public void BuildIntegrationBranch_EmptyChildList_YieldsEmptyDiffSuccess()
     {

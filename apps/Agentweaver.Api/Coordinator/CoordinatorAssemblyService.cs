@@ -93,6 +93,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     internal const string AssemblyScribeSubtaskId = "assembly-scribe";
     internal const int DefaultFinalScribeMaxConcurrency = 2;
     internal const int DefaultFinalScribeMaxAttempts = 3;
+    private const string NonRetryableScribeFailureSuffix = " (non-retryable)";
     internal const double DefaultFinalScribeTimeoutSeconds = 120;
     private const string FinalScribeMaxConcurrencyConfigurationKey = "Coordinator:FinalScribeMaxConcurrency";
     private const string FinalScribeMaxAttemptsConfigurationKey = "Coordinator:FinalScribeMaxAttempts";
@@ -2174,6 +2175,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
             var scribeSucceeded = true;
             string? failureReason = null;
+            var retryable = false;
             using var scribeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             scribeCts.CancelAfter(_finalScribeTimeout);
             try
@@ -2197,6 +2199,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             {
                 scribeSucceeded = false;
                 failureReason = "scribe_timeout";
+                retryable = true;
                 _logger.LogWarning(
                     "Collective assembly: scribe pass timed out for run {RunId} after {TimeoutSeconds}s; code=scribe_timeout",
                     context.CoordinatorRunId, _finalScribeTimeout.TotalSeconds);
@@ -2205,6 +2208,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             {
                 scribeSucceeded = false;
                 failureReason = ex.Code;
+                retryable = ex.Retryable;
                 _logger.LogWarning(
                     "Collective assembly: scribe pass failed for run {RunId}; code={FailureCode}; retryable={Retryable}",
                     context.CoordinatorRunId, ex.Code, ex.Retryable);
@@ -2212,7 +2216,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             catch (Exception ex)
             {
                 scribeSucceeded = false;
-                failureReason = ScribeFailureClassifier.Classify(ex).Code;
+                var diagnostic = ScribeFailureClassifier.Classify(ex);
+                failureReason = diagnostic.Code;
+                retryable = diagnostic.Retryable;
                 _logger.LogWarning(
                     "Collective assembly: scribe pass failed for run {RunId}; code={FailureCode}",
                     context.CoordinatorRunId, failureReason);
@@ -2227,8 +2233,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 });
                 await _runStore.TrySetTerminalOutcomeAsync(
                     scribeRun.Id,
-                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { code = failureReason }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
-                    failureReason,
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { code = failureReason, retryable }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                    ScribeFailureResult(failureReason!, retryable),
                     ct).ConfigureAwait(false);
                 return;
             }
@@ -2310,16 +2316,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
         catch (Exception ex)
         {
-            var failureCode = ex is ScribeTurnException scribe
-                ? scribe.Code
-                : ScribeFailureClassifier.Classify(ex).Code;
+            var diagnostic = ex is ScribeTurnException scribe
+                ? new ScribeFailureDiagnostic(scribe.Code, scribe.Retryable)
+                : ScribeFailureClassifier.Classify(ex);
             _logger.LogWarning(
                 "Coordinator final scribe failed for run {RunId}; code={FailureCode}",
-                coordinatorRun.Id, failureCode);
+                coordinatorRun.Id, diagnostic.Code);
             await _runStore.TrySetTerminalOutcomeAsync(
                 scribeRun.Id,
-                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { code = failureCode }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
-                failureCode,
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { code = diagnostic.Code, retryable = diagnostic.Retryable }, DateTimeOffset.UtcNow, scribeRun.LifecycleGeneration),
+                ScribeFailureResult(diagnostic.Code, diagnostic.Retryable),
                 ct).ConfigureAwait(false);
         }
     }
@@ -2407,11 +2413,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (attempt.Status is RunStatus.Completed or RunStatus.InProgress)
                 return false;
             if (attempt.Status == RunStatus.Failed)
+            {
+                if (attempt.Result?.EndsWith(NonRetryableScribeFailureSuffix, StringComparison.Ordinal) == true)
+                    return false;
                 failedAttempts++;
+            }
         }
 
         return failedAttempts < Math.Max(1, maxAttempts);
     }
+
+    private static string ScribeFailureResult(string code, bool retryable) =>
+        retryable ? code : code + NonRetryableScribeFailureSuffix;
 
     private async Task<Run?> TryGetCoordinatorRunAsync(string coordinatorRunId, CancellationToken ct)
     {
