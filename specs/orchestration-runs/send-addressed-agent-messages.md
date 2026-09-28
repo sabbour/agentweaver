@@ -42,7 +42,18 @@ The decision inbox stores shared proposals, not recipient-specific delivery or a
 - Worker-turn replay retains the same message ID; physical presentation can recur if a
   worker crashes after showing the prompt but before committing the receipt. The
   runtime does not claim exactly-once model observation.
-- Idle wake remains blocked on a reusable recovery-owner hook: durable fenced wake
-  request scoped to an authorized project/run, with concurrency admission, a turn
-  budget, and persisted observable failure. The mailbox must not dispatch paid turns
-  independently.
+- Idle wake remains blocked on a reusable recovery-owner hook. The heartbeat's
+  `CoordinatorPickupService` can only reserve a **new coordinator run** for a Ready
+  backlog task; it cannot wake the existing recipient run. The
+  `RunOrchestrator.RestartInterruptedChildRunAsync` path replays an interrupted
+  child's task and is not authorized to start an extra turn for an idle, live
+  recipient. `RunWorkflowRegistry` holds only process-local active workflows.
+  The scheduling/recovery owner needs a durable, project- and recipient-run-scoped
+  `RequestWake`/`ClaimWake`/`CompleteWake` contract and an execution entry point
+  that resumes that **same** eligible run for a safe extra turn. Admission must
+  persist before acceptance; enforce active membership, run/project ownership,
+  an explicit concurrent-wake cap and turn budget; fence and lease the claim;
+  and persist terminal failure/retry state. It must recover a crash before or
+  after claim/presentation without creating another logical delivery. Until
+  that owner interface exists, an accepted message can wait for a natural turn
+  boundary, but no endpoint may report that it scheduled an idle wake.

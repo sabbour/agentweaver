@@ -56,9 +56,13 @@ during that turn is held as an intent until delivery commits; reclaim after a cr
 clears the intent. After a crash before the mark,
 the claim can be reclaimed and presented with the same logical ID, including if the
 model already saw it; physical presentation is not exactly once. **Scheduled idle
-wake is not connected:** the existing recovery owner has no durable fenced,
-authorized, concurrency- and turn-bounded wake-dispatch hook. No separate scheduler
-or paid wake loop is introduced; use list/get to inspect accepted messages.
+wake is not connected:** heartbeat pickup reserves new coordinator runs, not turns
+on an existing recipient run; interrupted-child restart replays the child's task,
+and the live workflow registry is process-local. The scheduling/recovery owner
+needs a durable, fenced wake-request and same-run safe-turn entry point with
+project/member authorization, concurrency and turn budgets, and observable
+terminal failure/retry. No separate scheduler or paid wake loop is introduced;
+use list/get to inspect accepted messages awaiting a natural turn boundary.
 
 Human notifications surface activity to operators; they are not addressed messages
 or acknowledgment receipts. Backlog/work-plan references link existing tasks without
