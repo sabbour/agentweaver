@@ -146,10 +146,13 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             plan.Status = WorkPlanStatus.Assembling;
             await db.SaveChangesAsync();
         }
+
         var assembly = new WorkflowComposedAssembly(
             "agentweaver/integration-child", "tree-sha", "diff --git", ["run-child"]);
         _runtime.ParentResumeActive = false;
         _runtime.DeliverResult = true;
+        await _service.StageComposedAssemblyAsync(attached.WorkPlanId, assembly, CancellationToken.None);
+        await MarkParentTreeTransferredAsync(assembly.TreeHash);
         await _service.CompleteComposedAssemblyAsync(attached.WorkPlanId, assembly, null, CancellationToken.None);
         var checkpoint = await GetPlanAsync(attached.WorkPlanId);
         checkpoint.Status.Should().Be(WorkPlanStatus.Complete);
@@ -167,6 +170,114 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             .Which.Assembly.Should().BeEquivalentTo(assembly);
         (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
             .Should().Be(WorkflowChildWorkResumeStates.Delivered);
+    }
+
+    [Fact]
+    public async Task ComposedAssembly_StagedBeforeTransfer_NeverResumesParentUntilTransferCompletes()
+    {
+        _runtime.AllowDispatch = false;
+        _runtime.DeliverResult = true;
+        var request = ComposedRequest();
+        var attached = await _service.PrepareComposedAsync(request);
+        await _service.ArmContinuationAsync(
+            attached.WorkPlanId,
+            NewRequest(WorkflowChildWorkService.ResumeRequestId(
+                _parent.Id.ToString(), request.ParentWorkflowNodeId, attached.WorkPlanId)),
+            _parent.SubmittingUser);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == attached.WorkPlanId);
+            plan.Status = WorkPlanStatus.Assembling;
+            await db.SaveChangesAsync();
+        }
+        var assembled = new WorkflowComposedAssembly("integration", "tree", "diff", ["child"]);
+        await _service.StageComposedAssemblyAsync(attached.WorkPlanId, assembled, CancellationToken.None);
+        await BuildService("restarted", _runtime).SweepAsync();
+
+        (await GetPlanAsync(attached.WorkPlanId)).Status.Should().Be(WorkPlanStatus.Assembling);
+        (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+            .Should().Be(WorkflowChildWorkResumeStates.Waiting);
+        _runtime.Deliveries.Should().BeEmpty();
+        (await _service.GetStagedComposedAssemblyAsync(attached.WorkPlanId, CancellationToken.None))!
+            .Should().BeEquivalentTo(assembled);
+
+        var premature = () => _service.CompleteComposedAssemblyAsync(
+            attached.WorkPlanId, assembled, null, CancellationToken.None);
+        await premature.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*before the verified parent tree is installed*");
+        await MarkParentTreeTransferredAsync(assembled.TreeHash);
+        await _service.CompleteComposedAssemblyAsync(attached.WorkPlanId, assembled, null, CancellationToken.None);
+        await BuildService("restarted-again", _runtime).SweepAsync();
+        _runtime.Deliveries.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ComposedAssembly_LateFailureCannotOverwriteStagedSuccess()
+    {
+        _runtime.AllowDispatch = false;
+        var request = ComposedRequest();
+        var attached = await _service.PrepareComposedAsync(request);
+        await _service.ArmContinuationAsync(
+            attached.WorkPlanId,
+            NewRequest(WorkflowChildWorkService.ResumeRequestId(
+                _parent.Id.ToString(), request.ParentWorkflowNodeId, attached.WorkPlanId)),
+            _parent.SubmittingUser);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == attached.WorkPlanId);
+            plan.Status = WorkPlanStatus.Assembling;
+            await db.SaveChangesAsync();
+        }
+        var assembled = new WorkflowComposedAssembly("integration", "transferred-tree", "diff", ["child"]);
+        await _service.StageComposedAssemblyAsync(attached.WorkPlanId, assembled, CancellationToken.None);
+        await MarkParentTreeTransferredAsync(assembled.TreeHash);
+
+        (await _service.CompleteComposedAssemblyAsync(
+            attached.WorkPlanId, null, "metadata_update_failed", CancellationToken.None))
+            .Should().BeFalse();
+
+        var planAfterFailure = await GetPlanAsync(attached.WorkPlanId);
+        planAfterFailure.Status.Should().Be(WorkPlanStatus.Assembling);
+        planAfterFailure.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Waiting);
+        (await _service.GetStagedComposedAssemblyAsync(
+            attached.WorkPlanId, CancellationToken.None))!.Should().BeEquivalentTo(assembled);
+        _runtime.Deliveries.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ComposedAssembly_CrashAfterTransferBeforeRunUpdate_ReconcilesOnlyStagedTree()
+    {
+        _runtime.AllowDispatch = false;
+        var request = ComposedRequest();
+        var attached = await _service.PrepareComposedAsync(request);
+        await _service.ArmContinuationAsync(
+            attached.WorkPlanId,
+            NewRequest(WorkflowChildWorkService.ResumeRequestId(
+                _parent.Id.ToString(), request.ParentWorkflowNodeId, attached.WorkPlanId)),
+            _parent.SubmittingUser);
+        await _runStore.UpdateWorktreeAsync(
+            _parent.Id, request.IncomingInput.WorktreePath,
+            Agentweaver.Api.Git.WorktreeManager.BranchNameFor(_parent.Id));
+        await _runStore.UpdateAssemblyArtifactsAsync(_parent.Id, "parent-tree", string.Empty);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == attached.WorkPlanId);
+            plan.Status = WorkPlanStatus.Assembling;
+            await db.SaveChangesAsync();
+        }
+        var assembled = new WorkflowComposedAssembly("integration", "transferred-tree", "diff", []);
+        await _service.StageComposedAssemblyAsync(attached.WorkPlanId, assembled, CancellationToken.None);
+
+        var persistedParent = (await _runStore.GetAsync(_parent.Id))!;
+        (await _service.TryRestoreTransferredParentTreeAsync(
+            persistedParent, "unrelated-tree", CancellationToken.None)).Should().BeFalse();
+        (await _runStore.GetAsync(_parent.Id))!.TreeHash.Should().Be("parent-tree");
+        (await BuildService("after-crash", _runtime).TryRestoreTransferredParentTreeAsync(
+            persistedParent, assembled.TreeHash, CancellationToken.None)).Should().BeTrue();
+        (await _runStore.GetAsync(_parent.Id))!.TreeHash.Should().Be(assembled.TreeHash);
     }
 
     [Fact]
@@ -1010,6 +1121,14 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             ModelSource.GitHubCopilot.ToApiString(), _parent.ModelId,
             _parent.SubmittingUser, ProjectId: _parent.ProjectId!.ToString()),
         "parent-tree");
+
+    private async Task MarkParentTreeTransferredAsync(string treeHash)
+    {
+        await _runStore.UpdateWorktreeAsync(
+            _parent.Id, ComposedRequest().IncomingInput.WorktreePath,
+            Agentweaver.Api.Git.WorktreeManager.BranchNameFor(_parent.Id));
+        await _runStore.UpdateAssemblyArtifactsAsync(_parent.Id, treeHash, "assembled");
+    }
 
     private static StaticWorkflowBranch Branch(string nodeId) => new(
         nodeId,

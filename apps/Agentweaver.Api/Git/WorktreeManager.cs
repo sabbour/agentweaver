@@ -707,6 +707,54 @@ public sealed class WorktreeManager
         }
     }
 
+    public void TransferComposedTree(
+        string repositoryPath,
+        string parentWorktreePath,
+        RunId parentRunId,
+        string expectedBaseTree,
+        string integrationBranch,
+        string assembledTree)
+    {
+        if (!PodLocalExecutionWorkspace.IsGitObjectId(expectedBaseTree)
+            || !PodLocalExecutionWorkspace.IsGitObjectId(assembledTree))
+            throw new InvalidOperationException("Composed transfer requires valid captured tree identities.");
+
+        using var repository = new Repository(repositoryPath);
+        using var worktree = new Repository(parentWorktreePath);
+        var target = repository.Branches[integrationBranch]?.Tip
+            ?? throw new InvalidOperationException("The assembled integration branch is unavailable.");
+        if (!string.Equals(target.Tree.Sha, assembledTree, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The assembled integration branch no longer has its verified tree.");
+
+        var current = worktree.Head.Tip
+            ?? throw new InvalidOperationException("The parent worktree has no HEAD.");
+        if (worktree.Info.IsHeadDetached
+            || !string.Equals(worktree.Head.FriendlyName, BranchNameFor(parentRunId), StringComparison.Ordinal))
+            throw new InvalidOperationException("Composed transfer target is not the isolated parent branch.");
+        if (worktree.RetrieveStatus(new StatusOptions
+            {
+                IncludeUntracked = true,
+                IncludeIgnored = false,
+                RecurseUntrackedDirs = true,
+                RecurseIgnoredDirs = false,
+            }).Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0))
+            throw new InvalidOperationException("Composed transfer refused a dirty parent worktree.");
+        if (string.Equals(current.Tree.Sha, assembledTree, StringComparison.OrdinalIgnoreCase))
+            return;
+        if (!string.Equals(current.Tree.Sha, expectedBaseTree, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The parent tree changed after composition began.");
+        if (!string.Equals(
+                repository.ObjectDatabase.FindMergeBase(current, target)?.Sha,
+                current.Sha,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The assembled commit does not descend from the parent revision.");
+
+        RunGit(parentWorktreePath, "merge", "--ff-only", target.Sha);
+        using var verified = new Repository(parentWorktreePath);
+        if (!string.Equals(verified.Head.Tip?.Tree.Sha, assembledTree, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Composed transfer did not install the verified tree.");
+    }
+
     public string CommitChanges(string worktreePath, RunId runId)
     {
         using var repo = new Repository(worktreePath);

@@ -377,7 +377,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               `when` guards the edge on a verdict (e.g. approved, request-changes, declined, pass, revise).
 
             NODE TYPES — use only the following supported types. Do NOT use serial; ordinary edges between
-            nodes express sequential execution. Do NOT use coordinator_composed.
+            nodes express sequential execution.
 
             - prompt: an agent turn. The unit of work. Required: `role` (from the roles list below),
               `prompt` (the task instruction for the agent).
@@ -397,6 +397,11 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               to the fan_out id and one unconditional continuation. Each branch prompt MUST declare
               `independent: true` and one or more exact repository-relative files in
               `declared_output_paths`.
+            - coordinator_composed: one optional dynamic coordinator stage for a runtime-derived dependent
+              DAG whose task count, dependencies, roles, and outputs cannot be known while authoring.
+              Required: `prompt`. It cannot declare target, steps, branches, or conditions, and it has
+              exactly one unconditional incoming edge from a prompt node and one unconditional continuation.
+              Do not use it for static or independently known work.
             - merge / scribe: platform-owned final actions. DO NOT author these nodes; the coordinator
               appends its merge-and-scribe tail after authored gates.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
@@ -427,6 +432,10 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               overlapping paths are sequential. File-vs-directory prefixes and path comparisons are
               case-insensitive. Package/dependency manifests, migrations, and generated shared artifacts
               are never fan outputs.
+            - Use coordinator_composed only when the request explicitly requires runtime decomposition
+              into dependent tasks whose shape is unknown until execution. Declare at most one, never put
+              it inside a fan region, require a preceding prompt node, and never emit another
+              coordinator_composed stage in its prompt.
             - Do not use fan topology for generic implementation/refactoring. Generated fan branches
               are limited to research, analysis, documentation, and other
               content-only outputs (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`, `.csv`, `.tsv`).
@@ -519,7 +528,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               workflow into a different process.
             - {{builtInRule}}
             - Keep the output valid and runnable. Do NOT use serial; ordinary edges between nodes express
-              sequential execution. Do NOT use coordinator_composed.
+              sequential execution.
             - You MAY preserve or add one static fan_out/fan_in wait-all region only when it has at
               least two one-node prompt branches that are independently executable. Every branch MUST
               declare `independent: true` and exact repository-relative files in
@@ -534,6 +543,11 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               outputs, and implementation/refactoring prompts are sequential. Generated fan outputs
               are limited to `.md`, `.markdown`, `.txt`, `.rst`, `.adoc`, `.csv`, and `.tsv`.
               Never guess independence.
+            - You MAY preserve or add at most one coordinator_composed node only when the requested edit
+              explicitly needs a runtime-derived dependent DAG whose task count, dependencies, roles, and
+              outputs are unknown while authoring. It requires a prompt, cannot declare target/steps/branches,
+              cannot be inside a fan region, and must have exactly one unconditional incoming edge from a
+              prompt node and one unconditional continuation.
             - Do NOT add merge or scribe nodes to generated/custom workflows; the coordinator appends
               its hardcoded tail after authored gates.
             - publish is unsupported. Never replace a requested publication with a prompt or another node.

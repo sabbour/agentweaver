@@ -1400,6 +1400,12 @@ export interface WorkPlanResponse {
   parentResumeRequestId?: string | null;
   parentResumeState?: string | null;
   joinedOutput?: string | null;
+  composedAssembly?: {
+    integrationBranch: string;
+    treeHash: string;
+    aggregateDiff: string;
+    includedChildRunIds: string[];
+  } | null;
   statusReason?: string | null;
   assemblyStage?: string | null;
   assemblyTerminalStage?: string | null;

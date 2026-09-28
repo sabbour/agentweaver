@@ -3004,10 +3004,13 @@ public sealed class CoordinatorRunService
             plan.ParentJoinNodeId,
             plan.ParentResumeRequestId,
             plan.ParentResumeState,
-            ReadJoinedOutput(plan.ParentResumeResultJson),
+            plan.Status == WorkPlanStatus.Complete
+                ? ReadJoinedOutput(plan.ParentResumeResultJson) : null,
             plan.MergeEffectState,
             plan.MergeRecoveryAction,
-            plan.MergeEvidenceJson);
+            plan.MergeEvidenceJson,
+            plan.Status == WorkPlanStatus.Complete
+                ? ReadComposedAssembly(plan.ParentResumeResultJson) : null);
     }
 
     /// <summary>
@@ -3091,6 +3094,17 @@ public sealed class CoordinatorRunService
         return JsonSerializer.Deserialize<WorkflowChildWorkResult>(
             resultJson,
             JsonDefaults.Options)?.JoinedOutput;
+    }
+
+    private static ComposedAssemblyView? ReadComposedAssembly(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson))
+            return null;
+        var assembly = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+            resultJson, JsonDefaults.Options)?.Assembly;
+        return assembly is null ? null : new ComposedAssemblyView(
+            assembly.IntegrationBranch, assembly.TreeHash, assembly.AggregateDiff,
+            assembly.IncludedChildRunIds);
     }
 
     private async Task<int> ResolveStepCountAsync(string runId, Run? child, CancellationToken ct)
@@ -3492,7 +3506,14 @@ public sealed record CoordinatorWorkPlanView(
     string? JoinedOutput = null,
     string? MergeEffectState = null,
     string? MergeRecoveryAction = null,
-    string? MergeEvidence = null);
+    string? MergeEvidence = null,
+    ComposedAssemblyView? ComposedAssembly = null);
+
+public sealed record ComposedAssemblyView(
+    string IntegrationBranch,
+    string TreeHash,
+    string AggregateDiff,
+    IReadOnlyList<string> IncludedChildRunIds);
 
 /// <summary>A subtask row in <see cref="CoordinatorWorkPlanView"/>.</summary>
 public sealed record CoordinatorSubtaskView(

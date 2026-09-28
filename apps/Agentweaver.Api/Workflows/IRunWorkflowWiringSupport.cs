@@ -98,6 +98,14 @@ internal interface IRunWorkflowWiringSupport
     /// result is the authored terminal output.</summary>
     ExecutorBinding FanInToTerminalAdapter(WorkflowEdge edge);
 
+    /// <summary><c>WorkflowChildWorkResult → AgentTurnInput</c>: append the composed coordinator's
+    /// typed assembly identity before the next parent prompt continues in the transferred worktree.</summary>
+    ExecutorBinding ComposedToAgentAdapter(WorkflowEdge edge);
+
+    /// <summary><c>WorkflowChildWorkResult → WorkflowComposedCompletedOutput</c>: complete a workflow
+    /// whose composed assembly is the authored terminal output.</summary>
+    ExecutorBinding ComposedToTerminalAdapter(WorkflowEdge edge);
+
     /// <summary>A direct <c>Agent → Scribe</c> completion sub-path: an input adapter
     /// (<c>AgentTurnOutput → ScribeTurnInput</c>), a dedicated scribe executor, and the scribe-output
     /// executor that becomes a graph output. For workflows that record an outcome without a merge.</summary>

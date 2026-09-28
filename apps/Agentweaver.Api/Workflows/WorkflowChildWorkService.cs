@@ -117,6 +117,12 @@ internal sealed record WorkflowFanCompletedOutput(
     int WorkPlanId,
     string ChildCoordinatorRunId);
 
+internal sealed record WorkflowComposedCompletedOutput(
+    string RunId,
+    int WorkPlanId,
+    string ChildCoordinatorRunId,
+    WorkflowComposedAssembly Assembly);
+
 internal interface IWorkflowChildWorkRuntime
 {
     bool DispatchEnabled { get; }
@@ -251,8 +257,8 @@ internal sealed class WorkflowChildWorkRuntime(
 }
 
 /// <summary>
-/// Durable parent-to-child work substrate for static workflow fan regions. It persists correlation,
-/// declared branches, and the parent continuation before coordinator dispatch is allowed.
+/// Durable parent-to-child work substrate for static fan regions and dynamic composed stages. It
+/// persists correlation, work-plan identity, and the parent continuation before dispatch is allowed.
 /// </summary>
 internal sealed class WorkflowChildWorkService
 {
@@ -693,6 +699,37 @@ internal sealed class WorkflowChildWorkService
             || snapshot.Plan.ParentJoinNodeId is not null || snapshot.Plan.ParentWorkflowId is null)
             throw new InvalidOperationException($"Work plan {workPlanId} is not a composed child.");
 
+        if (snapshot.Plan.Status == WorkPlanStatus.Assembling
+            && failureReason is not null
+            && snapshot.Plan.ParentResumeResultJson is not null)
+        {
+            var stagedResult = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+                snapshot.Plan.ParentResumeResultJson, JsonDefaults.Options);
+            if (stagedResult?.Succeeded == true && stagedResult.Assembly is not null)
+            {
+                _logger.LogWarning(
+                    "Preserving staged composed assembly for work plan {WorkPlanId} after late failure: {FailureReason}",
+                    workPlanId, failureReason);
+                return false;
+            }
+        }
+
+        if (snapshot.Plan.Status == WorkPlanStatus.Assembling
+            && assembly is not null && failureReason is null)
+        {
+            var staged = await GetStagedComposedAssemblyAsync(workPlanId, ct).ConfigureAwait(false);
+            var parent = await TryGetRunAsync(snapshot.Plan.ParentRunId, ct).ConfigureAwait(false);
+            if (staged is null
+                || staged.IntegrationBranch != assembly.IntegrationBranch
+                || staged.TreeHash != assembly.TreeHash
+                || staged.AggregateDiff != assembly.AggregateDiff
+                || !staged.IncludedChildRunIds.SequenceEqual(assembly.IncludedChildRunIds)
+                || parent?.TreeHash != assembly.TreeHash
+                || parent.WorktreeBranch != Git.WorktreeManager.BranchNameFor(parent.Id))
+                throw new InvalidOperationException(
+                    $"Composed work plan {workPlanId} cannot resume before the verified parent tree is installed.");
+        }
+
         var subtasks = await GetComposedSubtasksAsync(workPlanId, ct).ConfigureAwait(false);
         var branches = await EnrichBranchesAsync(subtasks, ct).ConfigureAwait(false);
         var succeeded = assembly is not null && failureReason is null;
@@ -710,7 +747,6 @@ internal sealed class WorkflowChildWorkService
             var completed = await db.WorkPlans
                 .Where(plan => plan.Id == workPlanId
                     && plan.Status == WorkPlanStatus.Assembling
-                    && plan.ParentResumeResultJson == null
                     && plan.ParentJoinNodeId == null
                     && plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting)
                 .ExecuteUpdateAsync(updates => updates
@@ -727,7 +763,7 @@ internal sealed class WorkflowChildWorkService
                 if (current.Status == WorkPlanStatus.Cancelled
                     || current.ParentResumeState == WorkflowChildWorkResumeStates.Suppressed)
                     return false;
-                if (current.ParentResumeResultJson is null)
+                if (current.ParentResumeResultJson is null || current.Status == WorkPlanStatus.Assembling)
                     throw new InvalidOperationException(
                         $"Composed work plan {workPlanId} left assembly without a result checkpoint (status {current.Status}).");
                 result = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
@@ -739,6 +775,89 @@ internal sealed class WorkflowChildWorkService
         await TryPrepareResumeAsync(workPlanId, ct).ConfigureAwait(false);
         await TryDeliverResumeAsync(workPlanId, $"workflow-composed:{_podId}", ct: ct).ConfigureAwait(false);
         return result.Succeeded;
+    }
+
+    internal async Task<WorkflowComposedAssembly?> GetStagedComposedAssemblyAsync(int workPlanId, CancellationToken ct)
+    {
+        var snapshot = await LoadPlanSnapshotAsync(workPlanId, ct).ConfigureAwait(false);
+        if (snapshot?.Plan.Status != WorkPlanStatus.Assembling
+            || snapshot.Plan.ParentResumeResultJson is null)
+            return null;
+        var result = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+            snapshot.Plan.ParentResumeResultJson, JsonDefaults.Options);
+        if (result?.Succeeded != true || result.Assembly is null
+            || result.WorkPlanId != workPlanId)
+            throw new InvalidOperationException($"Composed assembly {workPlanId} has an invalid staged result.");
+        return result.Assembly;
+    }
+
+    internal async Task<bool> TryRestoreTransferredParentTreeAsync(
+        DomainRun parent, string currentTree, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(parent.WorktreeBranch)
+            || parent.WorktreeBranch != Git.WorktreeManager.BranchNameFor(parent.Id))
+            return false;
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var candidates = await db.WorkPlans.AsNoTracking()
+            .Where(plan => plan.ParentRunId == parent.Id.ToString()
+                && plan.ParentJoinNodeId == null
+                && plan.ParentResumeResultJson != null)
+            .ToListAsync(ct).ConfigureAwait(false);
+        foreach (var plan in candidates)
+        {
+            if (parent.TreeHash != plan.ExecutionBaseTreeHash
+                || plan.Status is not (WorkPlanStatus.Assembling or WorkPlanStatus.Complete)
+                || plan.ParentResumeState == WorkflowChildWorkResumeStates.Suppressed)
+                continue;
+            var result = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+                plan.ParentResumeResultJson!, JsonDefaults.Options);
+            if (result?.Succeeded != true || result.Assembly is null
+                || result.WorkPlanId != plan.Id || result.ChildCoordinatorRunId != plan.CoordinatorRunId
+                || !string.Equals(result.Assembly.TreeHash, currentTree, StringComparison.OrdinalIgnoreCase))
+                continue;
+            await _runStore.UpdateAssemblyArtifactsAsync(
+                parent.Id, currentTree, result.Assembly.AggregateDiff, ct).ConfigureAwait(false);
+            return true;
+        }
+        return false;
+    }
+
+    internal async Task StageComposedAssemblyAsync(
+        int workPlanId, WorkflowComposedAssembly assembly, CancellationToken ct)
+    {
+        var snapshot = await LoadPlanSnapshotAsync(workPlanId, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Composed work plan {workPlanId} was not found.");
+        if (snapshot.Plan.ParentRunId is null || snapshot.Plan.ParentJoinNodeId is not null
+            || snapshot.Plan.ParentWorkflowId is null || snapshot.Plan.ParentWorkflowNodeId is null
+            || snapshot.Plan.Status != WorkPlanStatus.Assembling)
+            throw new InvalidOperationException($"Work plan {workPlanId} cannot stage a composed result.");
+        var branches = await EnrichBranchesAsync(
+            await GetComposedSubtasksAsync(workPlanId, ct).ConfigureAwait(false), ct).ConfigureAwait(false);
+        var result = new WorkflowChildWorkResult(
+            workPlanId, snapshot.Plan.CoordinatorRunId, snapshot.Plan.ParentWorkflowId,
+            snapshot.Plan.ParentWorkflowNodeId, null, true, WorkPlanStatus.Complete,
+            null, branches, BuildJoinedOutput(branches), assembly);
+        var json = JsonSerializer.Serialize(result, JsonDefaults.Options);
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var staged = await db.WorkPlans
+            .Where(plan => plan.Id == workPlanId && plan.Status == WorkPlanStatus.Assembling
+                && plan.ParentResumeResultJson == null
+                && plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(plan => plan.ParentResumeResultJson, json)
+                .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), ct).ConfigureAwait(false);
+        if (staged == 0)
+        {
+            var existing = await GetStagedComposedAssemblyAsync(workPlanId, ct).ConfigureAwait(false);
+            if (existing is null
+                || existing.IntegrationBranch != assembly.IntegrationBranch
+                || existing.TreeHash != assembly.TreeHash
+                || existing.AggregateDiff != assembly.AggregateDiff
+                || !existing.IncludedChildRunIds.SequenceEqual(assembly.IncludedChildRunIds))
+                throw new InvalidOperationException($"Composed assembly {workPlanId} changed while staging.");
+        }
     }
 
     private async Task<IReadOnlyList<WorkflowChildWorkBranch>> GetComposedSubtasksAsync(
@@ -851,7 +970,7 @@ internal sealed class WorkflowChildWorkService
                     parentRunId = snapshot.Plan.ParentRunId,
                     step = result.ParentJoinNodeId ?? result.ParentWorkflowNodeId,
                     status = "child_work_ready",
-                    label = "Join parallel branches",
+                    label = result.Assembly is null ? "Join parallel branches" : "Composed coordinator",
                     workPlanId = result.WorkPlanId,
                     childCoordinatorRunId = result.ChildCoordinatorRunId,
                     parentWorkflowId = result.ParentWorkflowId,
@@ -860,6 +979,7 @@ internal sealed class WorkflowChildWorkService
                     succeeded = true,
                     branchCount = result.Branches.Count,
                     joinedOutput = result.JoinedOutput,
+                    assembly = result.Assembly,
                     timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
                 },
                     ct).ConfigureAwait(false))

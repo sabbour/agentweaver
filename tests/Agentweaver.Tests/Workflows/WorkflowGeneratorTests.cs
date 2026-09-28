@@ -638,7 +638,10 @@ public sealed class WorkflowGeneratorTests
         prompt.Should().Contain("declared_output_paths");
         prompt.Should().Contain("Never guess a write scope");
         prompt.Should().Contain("Do not use fan topology for generic implementation/refactoring");
-        prompt.Should().Contain("Do NOT use coordinator_composed");
+        prompt.Should().Contain("Use coordinator_composed only when the request explicitly requires runtime decomposition");
+        prompt.Should().Contain("Declare at most one");
+        prompt.Should().Contain("exactly one unconditional incoming edge from a");
+        prompt.Should().Contain("prompt node and one unconditional continuation");
         prompt.Should().NotContain("Do NOT use fan_out, fan_in");
         CountOccurrences(prompt, "merge-and-scribe tail").Should().Be(1);
         CountOccurrences(prompt, "MANDATORY BUILD & TEST STEP").Should().Be(1);
@@ -1498,7 +1501,10 @@ public sealed class WorkflowGeneratorTests
         runner.LastTask.Should().Contain("independent: true");
         runner.LastTask.Should().Contain("declared_output_paths");
         runner.LastTask.Should().Contain("Never guess independence");
-        runner.LastTask.Should().Contain("Do NOT use coordinator_composed");
+        runner.LastTask.Should().Contain("MAY preserve or add at most one coordinator_composed node");
+        runner.LastTask.Should().Contain("runtime-derived dependent DAG");
+        runner.LastTask.Should().Contain("exactly one unconditional incoming edge from a");
+        runner.LastTask.Should().Contain("prompt node and one unconditional continuation");
     }
 
     [Fact]

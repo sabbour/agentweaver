@@ -112,16 +112,24 @@ The former `serial` node type is no longer supported or advertised because it ha
 older YAML that still declares `type: serial` is rejected with guidance to replace it with ordinary
 edges.
 
-`coordinator_composed` is reserved for a future dynamic work-plan stage. It is recognized by the
-YAML grammar but is **not authorable or executable**: workflow save, generation, selection, and run
-binding reject it. The internal coordinator child-work substrate now supports a correlated plan
-reserved before decomposition, dynamic subtasks, an assembly-only result checkpoint, and durable
-parent delivery. This does **not** make the workflow node runnable: the assembled branch must first
-be applied to the parent's isolated run worktree before a subsequent prompt/review/merge can use it,
-without merging into the user's branch or replaying completed parent work after a crash.
-Validation reports a missing prompt, multiple
-composed nodes, nested steps, recursion, or any continuation other than one unconditional edge.
-Use ordinary sequential edges or a static fan region for supported workflows today.
+`coordinator_composed` runs one dynamic work-plan stage whose task count, dependencies, roles, and
+outputs cannot be known while authoring. It requires a non-empty `prompt`, cannot declare
+`target`, `steps`, or `branches`, cannot appear inside a static fan region, and must have exactly
+one unconditional continuation to a `prompt` or `terminal` node. A workflow can contain at most
+one composed stage, and the generated child plan cannot recursively select another composed
+workflow.
+
+The parent workflow checkpoints before decomposition while the coordinator persists a correlated
+child run and work plan, executes the runtime-derived dependency graph, and assembles the result.
+The typed completion includes the child run and work-plan identities, integration branch, verified
+tree hash, aggregate diff, and included child runs. Before the parent continues, Agentweaver stages
+and fast-forwards that verified tree into the parent's isolated run branch. Transfer rejects a
+dirty, moved, or diverged parent tree, never updates the user's branch, and reconciles a restart
+between the Git transfer and durable run-tree update. Failure and cancellation remain failures;
+they do not produce a success-shaped continuation.
+
+Use this node only for genuinely runtime-dependent work. Prefer ordinary sequential edges when the
+steps are known while authoring, or a static fan region when the branches are known and independent.
 
 Every newly generated or saved `check` node must declare an explicit canonical `gate_kind`
 (`rai`, `human-review`, or `rubberduck`). Historical persisted workflows whose check ids are `rai`,
@@ -183,7 +191,7 @@ execution owner is lost after the fan continuation was delivered, recovery fails
 previously parked parent) rather than replaying non-idempotent synthesis or reporting an
 inactive AgentHost dispatch.
 Nested fans, dynamic branches, quorum/first-success joins, and `coordinator_composed` remain
-unsupported.
+unsupported for authored workflows.
 
 ```yaml
 start: parallel-research

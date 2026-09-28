@@ -46,6 +46,9 @@ internal sealed record RunWorkflowBindings(
     ExecutorBinding? FanPauseBinding,
     ExecutorBinding? FanInBinding,
     ExecutorBinding? FanFailureBinding,
+    ExecutorBinding? ComposedBinding,
+    ExecutorBinding? ComposedPauseBinding,
+    ExecutorBinding? ComposedFailureBinding,
     int MaxIterations,
     IRunWorkflowWiringSupport Wiring);
 
@@ -165,6 +168,8 @@ internal static class RunWorkflowGraphBinder
         // Each logical edge expands to its raw executor wiring + predicate.
         if (fanRegion.IsValid)
             WireStaticFanRegion(ctx, fanRegion);
+        if (definition.Nodes.Any(node => node.Type == WorkflowNodeType.CoordinatorComposed))
+            WireCoordinatorComposed(ctx);
 
         foreach (var edge in definition.Edges)
         {
@@ -186,12 +191,12 @@ internal static class RunWorkflowGraphBinder
     /// <summary>
     /// Binder DRY-RUN (no executors required): validates that every node in <paramref name="definition"/>
     /// maps to a node kind the binder can wire to a runtime executor, and that every edge references a
-    /// declared node. Throws <see cref="WorkflowBindException"/> for the first node/edge that would fail
-    /// closed at BUILD time (e.g. fan_out / fan_in / coordinator_composed, which the loader accepts
-    /// but have no runtime executor; or a dangling edge reference). <c>peer_review</c> is accepted when
-    /// reached from a producer, but cannot be the entry node because its runtime executor consumes
-    /// <c>AgentTurnOutput</c>. Lets callers (save, set-default, generator) reject loader-valid-but-bind-
-    /// invalid workflows up front without standing up the full executor graph (which needs DI bindings).
+    /// declared node. Throws <see cref="WorkflowBindException"/> for the first node or edge that would
+    /// fail closed at build time, such as malformed fan/composed topology or a dangling edge reference.
+    /// <c>peer_review</c> is accepted when reached from a producer, but cannot be the entry node because
+    /// its runtime executor consumes <c>AgentTurnOutput</c>. Lets callers (save, set-default, generator)
+    /// reject loader-valid-but-bind-invalid workflows up front without standing up the full executor
+    /// graph, which needs DI bindings.
     /// </summary>
     public static void ValidateBindable(WorkflowDefinition definition)
     {
@@ -313,6 +318,18 @@ internal static class RunWorkflowGraphBinder
                 errors.Add($"coordinator_composed node '{node.Id}' cannot declare nested steps, verdict branches, or a target.");
             if (fan.BranchNodeIds.Contains(node.Id))
                 errors.Add($"coordinator_composed node '{node.Id}' cannot be a static fan branch.");
+
+            var incoming = definition.Edges.Where(edge =>
+                string.Equals(edge.To, node.Id, StringComparison.Ordinal)).ToArray();
+            if (incoming.Length != 1
+                || incoming[0].When is not null
+                || definition.Nodes.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Id, incoming[0].From, StringComparison.Ordinal))?.Type
+                    != WorkflowNodeType.Prompt)
+            {
+                errors.Add(
+                    $"coordinator_composed node '{node.Id}' requires exactly one unconditional incoming edge from a prompt node.");
+            }
 
             var outgoing = definition.Edges.Where(edge =>
                 string.Equals(edge.From, node.Id, StringComparison.Ordinal)).ToArray();
@@ -523,6 +540,28 @@ internal static class RunWorkflowGraphBinder
         ctx.G.WithOutputFrom(b.FanFailureBinding);
     }
 
+    private static void WireCoordinatorComposed(WireContext ctx)
+    {
+        var b = ctx.B;
+        var node = ctx.Definition.Nodes.Single(candidate =>
+            candidate.Type == WorkflowNodeType.CoordinatorComposed);
+        if (b.ComposedBinding is null
+            || b.ComposedPauseBinding is null
+            || b.ComposedFailureBinding is null)
+        {
+            throw new WorkflowBindException(
+                $"Cannot bind coordinator_composed node '{node.Id}': the runtime composed executors were not built.",
+                node.Id);
+        }
+
+        ctx.G.AddEdge(b.ComposedBinding, b.ComposedPauseBinding)
+            .AddEdge<WorkflowChildWorkResult>(
+                b.ComposedPauseBinding,
+                b.ComposedFailureBinding,
+                output => output is null || !output.Succeeded || output.Assembly is null);
+        ctx.G.WithOutputFrom(b.ComposedFailureBinding);
+    }
+
     public static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
@@ -557,16 +596,21 @@ internal static class RunWorkflowGraphBinder
     }
 
     /// <summary>
-    /// The graph entry plumbing supplies <see cref="AgentTurnInput"/>. Verdict-style peer-review and
-    /// build-test nodes instead consume a produced <see cref="AgentTurnOutput"/>; they can only be reached
-    /// through a producer edge and its output adapter, never directly from <c>start</c>.
+    /// The graph entry plumbing supplies <see cref="AgentTurnInput"/>, but verdict-style gates require a
+    /// produced <see cref="AgentTurnOutput"/> and composed stages require a preceding prompt by contract.
     /// </summary>
     private static string? GetStartTopologyError(WorkflowNode startNode) =>
-        NodeClassifier.Classify(startNode) == NodeKind.PeerReview
-            ? $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): peer_review and build_test " +
-              "verdict gates require an AgentTurnOutput from a preceding producer, but workflow entry supplies " +
-              "AgentTurnInput. Choose a prompt node as start and route its successful output to this gate."
-            : null;
+        NodeClassifier.Classify(startNode) switch
+        {
+            NodeKind.PeerReview =>
+                $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): peer_review and build_test " +
+                "verdict gates require an AgentTurnOutput from a preceding producer, but workflow entry supplies " +
+                "AgentTurnInput. Choose a prompt node as start and route its successful output to this gate.",
+            NodeKind.CoordinatorComposed =>
+                $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): coordinator_composed " +
+                "requires one unconditional incoming edge from a preceding prompt node.",
+            _ => null,
+        };
 
     /// <summary>Resolves the executor a definition's START node is entered at.</summary>
     private static ExecutorBinding ResolveEntry(WireContext ctx, WorkflowNode startNode) =>
@@ -654,7 +698,11 @@ internal static class RunWorkflowGraphBinder
             && ((fromKind == NodeKind.Agent && toKind == NodeKind.FanOut)
                 || (fromKind == NodeKind.FanIn
                     && toKind is NodeKind.Agent or NodeKind.Terminal));
-        if (!isFanRuntimeTransition
+        var isComposedRuntimeTransition = string.IsNullOrWhiteSpace(edge.When)
+            && ((fromKind == NodeKind.Agent && toKind == NodeKind.CoordinatorComposed)
+                || (fromKind == NodeKind.CoordinatorComposed
+                    && toKind is NodeKind.Agent or NodeKind.Terminal));
+        if (!isFanRuntimeTransition && !isComposedRuntimeTransition
             && !WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
             return false;
 
@@ -796,6 +844,45 @@ internal static class RunWorkflowGraphBinder
                     b.FanInBinding,
                     terminal,
                     output => output is not null && output.Succeeded);
+                ctx.DirectTerminalOutputs.Add(terminal);
+                return true;
+            }
+
+            case (NodeKind.Agent, NodeKind.CoordinatorComposed, null):
+            {
+                if (b.ComposedBinding is null)
+                    return false;
+                var adapter = s.SequentialAgentAdapter(edge);
+                g.AddEdge<AgentTurnOutput>(
+                        s.ResolveAgentNode(fromNode),
+                        adapter,
+                        IsSuccessfulAgentTurn)
+                    .AddEdge(adapter, b.ComposedBinding);
+                return true;
+            }
+
+            case (NodeKind.CoordinatorComposed, NodeKind.Agent, null):
+            {
+                if (b.ComposedPauseBinding is null)
+                    return false;
+                var adapter = s.ComposedToAgentAdapter(edge);
+                g.AddEdge<WorkflowChildWorkResult>(
+                        b.ComposedPauseBinding,
+                        adapter,
+                        output => output is { Succeeded: true, Assembly: not null })
+                    .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
+            case (NodeKind.CoordinatorComposed, NodeKind.Terminal, null):
+            {
+                if (b.ComposedPauseBinding is null)
+                    return false;
+                var terminal = s.ComposedToTerminalAdapter(edge);
+                g.AddEdge<WorkflowChildWorkResult>(
+                    b.ComposedPauseBinding,
+                    terminal,
+                    output => output is { Succeeded: true, Assembly: not null });
                 ctx.DirectTerminalOutputs.Add(terminal);
                 return true;
             }
@@ -1137,13 +1224,6 @@ internal static class RunWorkflowGraphBinder
     /// <summary>Fails closed for node types accepted by the loader but not yet wired to a runtime executor.</summary>
     private static void RejectUnwiredKind(WorkflowNode node, NodeKind kind)
     {
-        switch (kind)
-        {
-            case NodeKind.CoordinatorComposed:
-                throw new WorkflowBindException(
-                    $"Cannot bind node '{node.Id}' (type='coordinator_composed'): node type 'coordinator_composed' is accepted by " +
-                    "the loader but not yet wired to a runtime executor.", node.Id);
-        }
     }
 
     /// <summary>
@@ -1175,6 +1255,9 @@ internal static class RunWorkflowGraphBinder
         if (when is null
             && ((fromKind == NodeKind.Agent && toKind == NodeKind.FanOut)
                 || (fromKind == NodeKind.FanIn
+                    && toKind is NodeKind.Agent or NodeKind.Terminal)
+                || (fromKind == NodeKind.Agent && toKind == NodeKind.CoordinatorComposed)
+                || (fromKind == NodeKind.CoordinatorComposed
                     && toKind is NodeKind.Agent or NodeKind.Terminal)))
             return true;
 

@@ -1,14 +1,17 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Threading.Channels;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
@@ -152,19 +155,36 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         var input = new CoordinatorDraftInput(
             runId, projectId, "Derive a dependent work plan", "octocat",
             project!.WorkingDirectory, "test-model");
-        var factory = _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
-        var first = await factory.OrchestrateComposedAsync(input, CancellationToken.None);
-        var second = await factory.OrchestrateComposedAsync(input, CancellationToken.None);
+        var executor = new CoordinatorOrchestratorExecutor(
+            new DependentDagWorkflowAgentFactory(),
+            _factory.Services.GetRequiredService<RunStreamStore>(),
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            _factory.Services.GetRequiredService<ILoggerFactory>(),
+            _factory.Services.GetRequiredService<IStoryIndependenceClassifier>(),
+            _factory.Services.GetRequiredService<IAssemblyGateCodeClassifier>(),
+            "gpt-5-mini",
+            null,
+            null);
+        var first = await executor.OrchestrateAsync(input, CancellationToken.None);
+        var second = await _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>()
+            .OrchestrateComposedAsync(input, CancellationToken.None);
 
         first.WorkPlanId.Should().Be(planId);
         second.WorkPlanId.Should().Be(planId);
         second.InlineSubtaskCount.Should().Be(first.InlineSubtaskCount);
-        first.InlineSubtaskCount.Should().BeGreaterThan(0);
+        first.InlineSubtaskCount.Should().Be(2);
         using var verifyScope = _factory.Services.CreateScope();
         var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await verify.WorkPlans.CountAsync(plan => plan.CoordinatorRunId == runId)).Should().Be(1);
         (await verify.Subtasks.CountAsync(subtask => subtask.WorkPlanId == planId))
             .Should().Be(first.InlineSubtaskCount);
+        var subtasks = await verify.Subtasks.AsNoTracking()
+            .Where(subtask => subtask.WorkPlanId == planId)
+            .OrderBy(subtask => subtask.Id)
+            .ToListAsync();
+        var dependency = await verify.SubtaskDependencies.AsNoTracking().SingleAsync();
+        dependency.SubtaskId.Should().Be(subtasks[1].Id);
+        dependency.DependsOnSubtaskId.Should().Be(subtasks[0].Id);
         (await verify.WorkPlans.SingleAsync(plan => plan.Id == planId))
             .WorkflowId.Should().BeNull("the child must not select a recursive authored workflow");
     }
@@ -465,5 +485,64 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         }
 
         return [];
+    }
+
+    private sealed class DependentDagWorkflowAgentFactory : IWorkflowAgentFactory
+    {
+        private readonly DependentDagWorkflowTurnAgent _agent = new();
+
+        public IWorkflowTurnAgent CreateWorkerAgent() => _agent;
+        public IWorkflowTurnAgent CreateRaiAgent() => _agent;
+        public IWorkflowTurnAgent CreateRubberduckAgent() => _agent;
+        public IWorkflowTurnAgent CreateBuildTestAgent() => _agent;
+        public IWorkflowTurnAgent CreateScribeAgent() => _agent;
+    }
+
+    private sealed class DependentDagWorkflowTurnAgent : IWorkflowTurnAgent
+    {
+        public Task SetupAsync(
+            string workingDirectory,
+            string repositoryPath,
+            string runId,
+            string? modelId,
+            string? systemPromptContext,
+            ChannelWriter<RunEvent>? streamWriter,
+            string? projectId,
+            string? agentName,
+            string? apiBaseUrl,
+            string? apiKey,
+            CancellationToken ct,
+            string? userId = null) => Task.CompletedTask;
+
+        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
+            Task.FromResult(
+                """
+                [
+                  {
+                    "story_key": "schema",
+                    "title": "Create schema",
+                    "scope": "Create generated/schema.txt.",
+                    "role": "lead-architect",
+                    "complexity": "low",
+                    "phase": "implementation",
+                    "isolation": "worktree",
+                    "declared_output_paths": ["generated/schema.txt"],
+                    "depends_on": []
+                  },
+                  {
+                    "story_key": "consumer",
+                    "title": "Consume schema",
+                    "scope": "Read generated/schema.txt and create generated/consumer.txt.",
+                    "role": "lead-architect",
+                    "complexity": "low",
+                    "phase": "implementation",
+                    "isolation": "worktree",
+                    "declared_output_paths": ["generated/consumer.txt"],
+                    "depends_on": [1]
+                  }
+                ]
+                """);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
