@@ -295,6 +295,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("OwnerUser")
                         .HasColumnType("text");
 
+                    b.Property<string>("OutputRevisionId")
+                        .HasColumnType("text");
+
                     b.Property<string>("Reviewer")
                         .HasColumnType("text");
 
@@ -2338,6 +2341,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("allowed_workflow_ids");
 
+                    b.Property<long>("BacklogGraphRevision")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L)
+                        .HasColumnName("backlog_graph_revision");
+
                     b.Property<string>("BlueprintGenerationModel")
                         .HasColumnType("text")
                         .HasColumnName("blueprint_generation_model");
@@ -2453,12 +2462,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("bigint")
                         .HasDefaultValue(0L)
                         .HasColumnName("team_revision");
-
-                    b.Property<long>("BacklogGraphRevision")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint")
-                        .HasDefaultValue(0L)
-                        .HasColumnName("backlog_graph_revision");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -2710,6 +2713,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("revision_id");
 
+                    b.Property<bool>("AcceptedNoChange")
+                        .HasColumnType("boolean")
+                        .HasColumnName("accepted_no_change");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
@@ -2731,6 +2738,18 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("manifest_incomplete");
 
+                    b.Property<string>("MergeEffectId")
+                        .HasColumnType("text")
+                        .HasColumnName("merge_effect_id");
+
+                    b.Property<string>("MergedCommitHash")
+                        .HasColumnType("text")
+                        .HasColumnName("merged_commit_hash");
+
+                    b.Property<string>("OutputKind")
+                        .HasColumnType("text")
+                        .HasColumnName("output_kind");
+
                     b.Property<string>("PredecessorRevisionId")
                         .HasColumnType("text")
                         .HasColumnName("predecessor_revision_id");
@@ -2749,14 +2768,25 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("tree_hash");
 
+                    b.Property<byte[]>("TreeContent")
+                        .HasColumnType("bytea")
+                        .HasColumnName("tree_content");
+
+                    b.Property<string>("TreeContentSha256")
+                        .HasColumnType("text")
+                        .HasColumnName("tree_content_sha256");
+
+                    b.Property<string>("WorkPlanId")
+                        .HasColumnType("text")
+                        .HasColumnName("work_plan_id");
+
                     b.Property<string>("WorkflowDigest")
                         .HasColumnType("text")
                         .HasColumnName("workflow_digest");
 
                     b.HasKey("RevisionId");
 
-                    b.HasIndex("RunId", "LifecycleGeneration")
-                        .IsUnique();
+                    b.HasIndex("RunId", "LifecycleGeneration");
 
                     b.ToTable("run_output_revisions", (string)null);
                 });
@@ -2781,14 +2811,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasDefaultValue(1)
                         .HasColumnName("approval_generation");
 
-                    b.Property<string>("ApprovedOutputRevisionId")
-                        .HasColumnType("text")
-                        .HasColumnName("approved_output_revision_id");
-
-                    b.Property<string>("CurrentOutputRevisionId")
-                        .HasColumnType("text")
-                        .HasColumnName("current_output_revision_id");
-
                     b.Property<DateTimeOffset?>("ApprovalPolicyCapturedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("approval_policy_captured_at");
@@ -2809,6 +2831,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("approval_policy_source");
 
+                    b.Property<string>("ApprovedOutputRevisionId")
+                        .HasColumnType("text")
+                        .HasColumnName("approved_output_revision_id");
+
                     b.Property<DateTimeOffset?>("ArchivedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("archived_at");
@@ -2818,6 +2844,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("integer")
                         .HasDefaultValue(0)
                         .HasColumnName("attempt");
+
+                    b.Property<string>("CurrentOutputRevisionId")
+                        .HasColumnType("text")
+                        .HasColumnName("current_output_revision_id");
 
                     b.Property<string>("Diff")
                         .HasColumnType("text")
@@ -2917,6 +2947,24 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("originating_branch");
+
+                    b.Property<string>("ExecutionInputCommitHash")
+                        .HasColumnType("text")
+                        .HasColumnName("execution_input_commit_hash");
+
+                    b.Property<string>("ExecutionInputCompositeId")
+                        .HasColumnType("text")
+                        .HasColumnName("execution_input_composite_id");
+
+                    b.Property<bool>("ExecutionInputRequired")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("execution_input_required");
+
+                    b.Property<string>("ExecutionInputSourceCommitHash")
+                        .HasColumnType("text")
+                        .HasColumnName("execution_input_source_commit_hash");
 
                     b.Property<string>("OwnerId")
                         .HasColumnType("text")

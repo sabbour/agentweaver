@@ -106,6 +106,22 @@ describe('TaskCard workflow override', () => {
     expect(screen.getByText('Blocked')).toBeTruthy();
   });
 
+  it('distinguishes a missing collective revision from a missing commit identity', () => {
+    render(
+      <Wrapper>
+        <TaskCard {...{
+          card: { ...card, is_blocked: true, prerequisites: [
+            { task_id: 'upstream-1', title: 'First story',
+              reason: 'upstream_output_revision_unavailable', is_satisfied: false },
+          ] },
+          columnId: 'ready', projectId: 'proj-1', onMutated: vi.fn(),
+          onDragStartTask: vi.fn(), onDragEndTask: vi.fn(), isDragging: false,
+        }} />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Needs First story: immutable integrated output revision unavailable')).toBeTruthy();
+  });
+
   it('previews affected dependents before saving prerequisite links', async () => {
     const onMutated = vi.fn();
     vi.mocked(apiClient.editBacklogDependencies).mockResolvedValue({

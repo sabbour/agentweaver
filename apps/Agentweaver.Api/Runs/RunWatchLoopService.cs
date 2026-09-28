@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Api.Sandbox;
@@ -442,23 +443,42 @@ public sealed class RunWatchLoopService
                     // WorkflowRestartService only reads briefly on startup to repopulate.
                     if (!await _pendingStore.ExistsForRequestAsync(runId, rie.Request.RequestId, ct).ConfigureAwait(false))
                     {
-                        // Workflow paused at review-gate.
-                        await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
-
-                        // Update SQLite: InProgress -> AwaitingReview.
-                        // Retrieve agent output from the request data for the review-ready update.
+                        // Publish retained output before exposing a pending human review.
                         if (rie.Request.TryGetDataAs<WorkflowReviewRequest>(out var reviewReq))
                         {
                             ct.ThrowIfCancellationRequested();
+                            var runRecord = await _runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false)
+                                ?? throw new RunOutputRevisionUnavailableException("run_missing");
+                            var retainedTree = reviewReq.TreeHash.Length == 40
+                                && reviewReq.TreeHash.All(Uri.IsHexDigit)
+                                ? RunOutputTreeCapture.Capture(runRecord.RepositoryPath, reviewReq.TreeHash)
+                                : null;
+                            if (retainedTree is null && runRecord.ExecutableWorkflowPinRequired)
+                                throw new RunOutputRevisionUnavailableException("unsupported_tree_identity");
                             if (reviewReq.LifecycleGeneration is { } generation)
-                                await _runStore.PublishReviewReadyAsync(
-                                    RunId.Parse(runId), generation, reviewReq.TreeHash, reviewReq.Diff,
-                                    reviewReq.StepCount, ct).ConfigureAwait(false);
+                            {
+                                if (retainedTree is null)
+                                    await _runStore.PublishReviewReadyAsync(
+                                        RunId.Parse(runId), generation, reviewReq.TreeHash, reviewReq.Diff,
+                                        reviewReq.StepCount, ct).ConfigureAwait(false);
+                                else
+                                    await _runStore.PublishReviewReadyAsync(
+                                        RunId.Parse(runId), generation, reviewReq.TreeHash, reviewReq.Diff,
+                                        reviewReq.StepCount, ct, null, retainedTree).ConfigureAwait(false);
+                            }
                             else
-                                await _runStore.UpdateReviewReadyAsync(
-                                    RunId.Parse(runId), reviewReq.TreeHash, reviewReq.Diff,
-                                    reviewReq.StepCount, ct).ConfigureAwait(false);
+                            {
+                                if (retainedTree is null)
+                                    await _runStore.UpdateReviewReadyAsync(
+                                        RunId.Parse(runId), reviewReq.TreeHash, reviewReq.Diff,
+                                        reviewReq.StepCount, ct).ConfigureAwait(false);
+                                else
+                                    await _runStore.UpdateReviewReadyAsync(
+                                        RunId.Parse(runId), reviewReq.TreeHash, reviewReq.Diff,
+                                        reviewReq.StepCount, ct, null, retainedTree).ConfigureAwait(false);
+                            }
                         }
+                        await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
 
                         entry.MarkAwaitingReview();
 

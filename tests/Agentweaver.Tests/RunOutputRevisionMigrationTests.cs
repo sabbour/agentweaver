@@ -25,6 +25,16 @@ public sealed class RunOutputRevisionMigrationTests
         script.Should().Contain("reject_run_output_revision_mutation");
         script.Should().Contain("ADD approved_output_revision_id text");
         script.Should().Contain("ADD current_output_revision_id text");
+        var collectiveMigration = db.Database.GetMigrations()
+            .Single(migration => migration.EndsWith("_AddCollectiveOutputRevisions", StringComparison.Ordinal));
+        var collectiveScript = db.GetService<IMigrator>().GenerateScript(
+            "20260927171809_AddRunOutputRevisionsPostgres", collectiveMigration);
+        collectiveScript.Should().Contain("ADD output_kind text");
+        collectiveScript.Should().Contain("ADD merged_commit_hash text");
+        collectiveScript.Should().Contain("ADD merge_effect_id text");
+        collectiveScript.Should().Contain("ADD accepted_no_change boolean");
+        collectiveScript.Should().Contain("ADD tree_content bytea");
+        collectiveScript.Should().Contain("ADD tree_content_sha256 text");
         db.Model.FindEntityType(typeof(RunOutputRevisionRecord))!.GetTableName()
             .Should().Be("run_output_revisions");
     }

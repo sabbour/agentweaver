@@ -40,7 +40,9 @@ public sealed class SqliteRunStore : IRunStore
                               launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
                               approval_policy_source,
                               approval_policy_captured_at, approval_policy_settings_updated_at,
-                              approval_policy_inherited_from_run_id)
+                              approval_policy_inherited_from_run_id,
+                              execution_input_required, execution_input_source_commit_hash,
+                              execution_input_commit_hash, execution_input_composite_id)
             VALUES ($runId, $repo, $branch, $modelSource, $task,
                     $user, $status, $approvalGeneration, $startedAt, $endedAt, $result,
                     $worktreePath, $worktreeBranch, $projectId, $modelId,
@@ -55,7 +57,9 @@ public sealed class SqliteRunStore : IRunStore
                     $launchAutoApproveTools, $launchAutopilot, $approvalPolicySnapshotId,
                     $approvalPolicySource,
                     $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt,
-                    $approvalPolicyInheritedFromRunId);
+                    $approvalPolicyInheritedFromRunId,
+                    $executionInputRequired, $executionInputSourceCommitHash,
+                    $executionInputCommitHash, $executionInputCompositeId);
             """;
         command.Parameters.AddWithValue("$runId", run.Id.ToString());
         command.Parameters.AddWithValue("$repo", run.RepositoryPath);
@@ -96,6 +100,10 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$approvalPolicyCapturedAt", NullableTs(run.ApprovalPolicyCapturedAt));
         command.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", NullableTs(run.ApprovalPolicySettingsUpdatedAt));
         command.Parameters.AddWithValue("$approvalPolicyInheritedFromRunId", (object?)run.ApprovalPolicyInheritedFromRunId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executionInputRequired", run.ExecutionInputRequired ? 1 : 0);
+        command.Parameters.AddWithValue("$executionInputSourceCommitHash", (object?)run.ExecutionInputSourceCommitHash ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executionInputCommitHash", (object?)run.ExecutionInputCommitHash ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executionInputCompositeId", (object?)run.ExecutionInputCompositeId ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         await CreateExecutionIdentityAsync(
             connection,
@@ -114,6 +122,46 @@ public sealed class SqliteRunStore : IRunStore
 
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false) ? Map(reader) : null;
+    }
+
+    public async Task<bool> TryBindExecutionInputAsync(
+        RunId runId,
+        int expectedLifecycleGeneration,
+        string sourceCommitHash,
+        string executionCommitHash,
+        string compositeId,
+        CancellationToken ct = default)
+    {
+        var rows = await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET execution_input_required = 1,
+                   execution_input_source_commit_hash = $sourceCommitHash,
+                   execution_input_commit_hash = $executionCommitHash,
+                   execution_input_composite_id = $compositeId
+             WHERE run_id = $runId
+               AND lifecycle_generation = $generation
+               AND execution_input_required = 1
+               AND (
+                    (execution_input_source_commit_hash IS NULL
+                     AND execution_input_commit_hash IS NULL
+                     AND execution_input_composite_id IS NULL)
+                    OR
+                    (execution_input_source_commit_hash = $sourceCommitHash
+                     AND execution_input_commit_hash = $executionCommitHash
+                     AND execution_input_composite_id = $compositeId)
+               );
+            """,
+            command =>
+            {
+                command.Parameters.AddWithValue("$runId", runId.ToString());
+                command.Parameters.AddWithValue("$generation", expectedLifecycleGeneration);
+                command.Parameters.AddWithValue("$sourceCommitHash", sourceCommitHash);
+                command.Parameters.AddWithValue("$executionCommitHash", executionCommitHash);
+                command.Parameters.AddWithValue("$compositeId", compositeId);
+            },
+            ct).ConfigureAwait(false);
+        return rows == 1;
     }
 
     public async Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default)
@@ -137,6 +185,12 @@ public sealed class SqliteRunStore : IRunStore
             """
             UPDATE runs
                SET status = $status, ended_at = $endedAt,
+                   current_output_revision_id = CASE WHEN $status = 'in_progress'
+                       AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                       THEN NULL ELSE current_output_revision_id END,
+                   approved_output_revision_id = CASE WHEN $status = 'in_progress'
+                       AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                       THEN NULL ELSE approved_output_revision_id END,
                    approval_generation = approval_generation +
                        CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END,
                    lifecycle_generation = lifecycle_generation +
@@ -161,6 +215,12 @@ public sealed class SqliteRunStore : IRunStore
             """
             UPDATE runs
                SET status = $status, ended_at = $endedAt, result = $result,
+                   current_output_revision_id = CASE WHEN $status = 'in_progress'
+                       AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                       THEN NULL ELSE current_output_revision_id END,
+                   approved_output_revision_id = CASE WHEN $status = 'in_progress'
+                       AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                       THEN NULL ELSE approved_output_revision_id END,
                    approval_generation = approval_generation +
                        CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END,
                    lifecycle_generation = lifecycle_generation +
@@ -197,22 +257,32 @@ public sealed class SqliteRunStore : IRunStore
         WarnIfNoRows(rows, runId, "persist assembly artifacts");
     }
 
+    public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount,
+        CancellationToken ct = default, DateTimeOffset? now = null) =>
+        UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now, null);
+
     public async Task UpdateReviewReadyAsync(
-        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default,
-        DateTimeOffset? now = null) =>
-        await PublishReviewReadyCoreAsync(runId, null, treeHash, diff, stepCount, ct, now).ConfigureAwait(false);
+        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct,
+        DateTimeOffset? now, byte[]? treeContent) =>
+        await PublishReviewReadyCoreAsync(runId, null, treeHash, diff, stepCount, ct, now, treeContent).ConfigureAwait(false);
+
+    public Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash,
+        string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now, null);
 
     public Task PublishReviewReadyAsync(
         RunId runId, int expectedLifecycleGeneration, string treeHash, string diff, int stepCount,
-        CancellationToken ct = default, DateTimeOffset? now = null) =>
-        PublishReviewReadyCoreAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now);
+        CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        PublishReviewReadyCoreAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now, treeContent);
 
     private async Task PublishReviewReadyCoreAsync(
         RunId runId, int? expectedLifecycleGeneration, string treeHash, string diff, int stepCount,
-        CancellationToken ct, DateTimeOffset? now)
+        CancellationToken ct, DateTimeOffset? now, byte[]? treeContent)
     {
         if (string.IsNullOrWhiteSpace(treeHash))
             throw new InvalidOperationException("Review-ready output requires a pinned tree.");
+        if (treeContent is not null)
+            RunOutputTree.Decode(treeContent);
         var ts = now ?? DateTimeOffset.UtcNow;
         var bytes = RunOutputRevision.EncodeDiff(diff);
         var digest = RunOutputRevision.Sha256(bytes);
@@ -257,7 +327,8 @@ public sealed class SqliteRunStore : IRunStore
         {
             if (status != "awaiting_review" || currentRevisionId != existing.RevisionId
                 || existing.TreeHash != treeHash || existing.DiffSha256 != digest
-                || existing.WorkflowDigest != workflowDigest || !existing.DiffBytes.AsSpan().SequenceEqual(bytes))
+                || existing.WorkflowDigest != workflowDigest || !existing.DiffBytes.AsSpan().SequenceEqual(bytes)
+                || !(existing.TreeContent ?? []).AsSpan().SequenceEqual(treeContent ?? []))
                 throw new InvalidOperationException("Output revision already published with different content or generation is no longer review-ready.");
             await tx.CommitAsync(ct).ConfigureAwait(false);
             return;
@@ -277,9 +348,10 @@ public sealed class SqliteRunStore : IRunStore
             """
             INSERT INTO run_output_revisions
                 (revision_id, schema_version, run_id, lifecycle_generation, workflow_digest,
-                 manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at)
+                 manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at,
+                 tree_content, tree_content_sha256)
             VALUES ($revision, 1, $runId, $generation, $workflow, $incomplete, $tree, $digest,
-                    $predecessor, $bytes, $created);
+                    $predecessor, $bytes, $created, $treeContent, $treeContentDigest);
             """;
         command.Parameters.AddWithValue("$revision", Guid.NewGuid().ToString("N"));
         command.Parameters.AddWithValue("$workflow", (object?)workflowDigest ?? DBNull.Value);
@@ -289,6 +361,9 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$predecessor", (object?)predecessor ?? DBNull.Value);
         command.Parameters.AddWithValue("$bytes", bytes);
         command.Parameters.AddWithValue("$created", Ts(ts));
+        command.Parameters.AddWithValue("$treeContent", (object?)treeContent ?? DBNull.Value);
+        command.Parameters.AddWithValue("$treeContentDigest", treeContent is null
+            ? DBNull.Value : RunOutputRevision.Sha256(treeContent));
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
 
         command.CommandText =
@@ -320,7 +395,9 @@ public sealed class SqliteRunStore : IRunStore
 
     private const string OutputRevisionSelect =
         "SELECT revision_id, schema_version, run_id, lifecycle_generation, workflow_digest, " +
-        "manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at " +
+        "manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at, " +
+        "output_kind, merged_commit_hash, work_plan_id, merge_effect_id, accepted_no_change, " +
+        "tree_content, tree_content_sha256 " +
         "FROM run_output_revisions";
 
     private static RunOutputRevision MapOutputRevision(SqliteDataReader reader) =>
@@ -328,7 +405,13 @@ public sealed class SqliteRunStore : IRunStore
             reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetInt32(5) != 0,
             reader.GetString(6), reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.IsDBNull(9) ? null : reader.GetFieldValue<byte[]>(9),
-            DateTimeOffset.Parse(reader.GetString(10), CultureInfo.InvariantCulture));
+            DateTimeOffset.Parse(reader.GetString(10), CultureInfo.InvariantCulture),
+            reader.IsDBNull(11) ? null : reader.GetString(11),
+            reader.IsDBNull(12) ? null : reader.GetString(12),
+            reader.IsDBNull(13) ? null : reader.GetString(13),
+            reader.IsDBNull(14) ? null : reader.GetString(14), reader.GetInt32(15) != 0,
+            reader.IsDBNull(16) ? null : reader.GetFieldValue<byte[]>(16),
+            reader.IsDBNull(17) ? null : reader.GetString(17));
 
     public async Task<RunOutputRevision?> GetOutputRevisionAsync(
         RunId runId, string revisionId, CancellationToken ct = default)
@@ -347,7 +430,7 @@ public sealed class SqliteRunStore : IRunStore
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = OutputRevisionSelect +
-            " WHERE run_id = $runId ORDER BY lifecycle_generation DESC LIMIT 1;";
+            " WHERE run_id = $runId ORDER BY lifecycle_generation DESC, rowid DESC LIMIT 1;";
         command.Parameters.AddWithValue("$runId", runId.ToString());
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         return await reader.ReadAsync(ct).ConfigureAwait(false) ? MapOutputRevision(reader) : null;
@@ -359,13 +442,116 @@ public sealed class SqliteRunStore : IRunStore
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = OutputRevisionSelect +
-            " WHERE run_id = $runId ORDER BY lifecycle_generation DESC;";
+            " WHERE run_id = $runId ORDER BY lifecycle_generation DESC, rowid DESC;";
         command.Parameters.AddWithValue("$runId", runId.ToString());
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var revisions = new List<RunOutputRevision>();
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
             revisions.Add(MapOutputRevision(reader));
         return revisions;
+    }
+
+    public async Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(treeHash) || string.IsNullOrWhiteSpace(workPlanId))
+            throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
+        RunOutputTree.Decode(treeContent);
+        var bytes = RunOutputRevision.EncodeDiff(diff);
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText = """
+            UPDATE runs SET status=status
+             WHERE run_id=$runId AND lifecycle_generation=$generation
+               AND status IN ('in_progress','awaiting_review');
+            """;
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$generation", generation);
+        if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+            throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
+        command.CommandText = """
+            SELECT tree_hash, diff, executable_workflow_content_digest, current_output_revision_id
+              FROM runs WHERE run_id=$runId;
+            """;
+        string? previousId;
+        string? digest;
+        await using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
+        {
+            await reader.ReadAsync(ct).ConfigureAwait(false);
+            if (reader.IsDBNull(0) || reader.GetString(0) != treeHash
+                || reader.IsDBNull(1) || reader.GetString(1) != diff)
+                throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
+            digest = reader.IsDBNull(2) ? null : reader.GetString(2);
+            previousId = reader.IsDBNull(3) ? null : reader.GetString(3);
+        }
+        if (previousId is not null)
+        {
+            var previous = await GetOutputRevisionAsync(runId, previousId, ct).ConfigureAwait(false)
+                ?? throw new RunOutputRevisionUnavailableException("missing_content");
+            if (previous.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
+                && previous.LifecycleGeneration == generation && previous.WorkPlanId == workPlanId
+                && previous.TreeHash == treeHash && previous.WorkflowDigest == digest
+                && previous.DiffBytes.AsSpan().SequenceEqual(bytes)
+                && (previous.TreeContent ?? []).AsSpan().SequenceEqual(treeContent))
+            {
+                await tx.CommitAsync(ct).ConfigureAwait(false);
+                return previous;
+            }
+        }
+        var revisionId = Guid.NewGuid().ToString("N");
+        command.CommandText = """
+            INSERT INTO run_output_revisions
+                (revision_id,schema_version,run_id,lifecycle_generation,workflow_digest,
+                 manifest_incomplete,tree_hash,diff_sha256,predecessor_revision_id,diff_bytes,
+                 created_at,output_kind,work_plan_id,tree_content,tree_content_sha256)
+            VALUES ($revision,4,$runId,$generation,$workflow,$incomplete,$tree,$sha,
+                    $previous,$bytes,$created,'collective',$plan,$content,$contentSha);
+            UPDATE runs SET current_output_revision_id=$revision,approved_output_revision_id=NULL
+             WHERE run_id=$runId AND lifecycle_generation=$generation;
+            """;
+        command.Parameters.AddWithValue("$revision", revisionId);
+        command.Parameters.AddWithValue("$workflow", (object?)digest ?? DBNull.Value);
+        command.Parameters.AddWithValue("$incomplete", digest is null ? 1 : 0);
+        command.Parameters.AddWithValue("$tree", treeHash);
+        command.Parameters.AddWithValue("$sha", RunOutputRevision.Sha256(bytes));
+        command.Parameters.AddWithValue("$previous", (object?)previousId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$bytes", bytes);
+        command.Parameters.AddWithValue("$created", Ts(DateTimeOffset.UtcNow));
+        command.Parameters.AddWithValue("$plan", workPlanId);
+        command.Parameters.AddWithValue("$content", treeContent);
+        command.Parameters.AddWithValue("$contentSha", RunOutputRevision.Sha256(treeContent));
+        await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return (await GetOutputRevisionAsync(runId, revisionId, ct).ConfigureAwait(false))!;
+    }
+
+    public async Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE runs SET approved_output_revision_id=$revision
+             WHERE run_id=$runId AND lifecycle_generation=$generation
+               AND status IN ('in_progress','awaiting_review')
+               AND current_output_revision_id=$revision
+               AND EXISTS (
+                   SELECT 1 FROM run_output_revisions v
+                    WHERE v.revision_id=$revision AND v.run_id=$runId
+                      AND v.lifecycle_generation=$generation AND v.schema_version=4
+                      AND v.tree_hash=runs.tree_hash AND v.diff_sha256=$diffSha
+                      AND v.workflow_digest IS runs.executable_workflow_content_digest);
+            """;
+        var run = await GetAsync(runId, ct).ConfigureAwait(false);
+        if (run?.Diff is null) return false;
+        command.Parameters.AddWithValue("$runId", runId.ToString());
+        command.Parameters.AddWithValue("$generation", generation);
+        command.Parameters.AddWithValue("$revision", revisionId);
+        command.Parameters.AddWithValue("$diffSha", RunOutputRevision.Sha256(RunOutputRevision.EncodeDiff(run.Diff)));
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 1;
     }
 
     /// <summary>
@@ -768,6 +954,15 @@ public sealed class SqliteRunStore : IRunStore
               worktree_branch=COALESCE($worktreeBranch, worktree_branch),
               diff=COALESCE($diff, diff)
              WHERE run_id=$runId AND lifecycle_generation=$generation
+               AND ($collectiveTree IS NULL OR tree_hash=$collectiveTree)
+               AND ($approved IS NULL OR
+                    (current_output_revision_id=$approved AND approved_output_revision_id=$approved
+                     AND tree_hash=$treeHash AND EXISTS (
+                        SELECT 1 FROM run_output_revisions v WHERE v.revision_id=$approved
+                          AND v.run_id=$runId AND v.lifecycle_generation=$generation
+                          AND v.schema_version=4 AND v.tree_hash=runs.tree_hash
+                          AND v.diff_sha256=$approvedDiffSha
+                          AND v.workflow_digest IS runs.executable_workflow_content_digest)))
                AND ($expectedStatus IS NULL OR status=$expectedStatus)
                AND ($leaseOwner IS NULL OR EXISTS (
                    SELECT 1 FROM run_execution_leases lease
@@ -792,12 +987,175 @@ public sealed class SqliteRunStore : IRunStore
         update.Parameters.AddWithValue("$diff", (object?)mutation.Diff ?? DBNull.Value);
         update.Parameters.AddWithValue("$runId", runId.ToString());
         update.Parameters.AddWithValue("$generation", mutation.Outcome.ExpectedLifecycleGeneration);
+        update.Parameters.AddWithValue("$collectiveTree", (object?)mutation.CollectiveOutput?.TreeHash ?? DBNull.Value);
+        var approvedId = mutation.ApprovedCollectiveRevisionId;
+        if (approvedId is not null
+            && (mutation.CollectiveOutput is null || mutation.NoChangeOutput is not null
+                || mutation.Outcome.Status != RunStatus.Completed || mutation.TreeHash is null
+                || mutation.MergedCommitHash is null))
+            throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
+        var current = approvedId is null ? null : await GetAsync(runId, ct).ConfigureAwait(false);
+        RunOutputRevision? approvedRevision = null;
+        if (approvedId is not null)
+        {
+            approvedRevision = await GetOutputRevisionAsync(runId, approvedId, ct).ConfigureAwait(false);
+            if (approvedRevision is null || approvedRevision.SchemaVersion != RunOutputRevision.CollectiveCandidateSchemaVersion
+                || approvedRevision.TreeHash != mutation.TreeHash)
+                return false;
+            approvedRevision.ResolveFiles();
+        }
+        update.Parameters.AddWithValue("$approved", (object?)approvedId ?? DBNull.Value);
+        update.Parameters.AddWithValue("$approvedDiffSha", current?.Diff is null
+            ? DBNull.Value : RunOutputRevision.Sha256(RunOutputRevision.EncodeDiff(current.Diff)));
         update.Parameters.AddWithValue("$expectedStatus", expected is null ? DBNull.Value : expected.Value.ToApiString());
         update.Parameters.AddWithValue("$leaseOwner", (object?)mutation.RequiredLease?.OwnerId ?? DBNull.Value);
         update.Parameters.AddWithValue("$fencingToken", (object?)mutation.RequiredLease?.FencingToken ?? DBNull.Value);
         update.Parameters.AddWithValue("$parentGeneration", (object?)mutation.ExpectedParentLifecycleGeneration ?? DBNull.Value);
         update.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
         if (await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0) return false;
+        if (mutation.CollectiveOutput is { } output)
+        {
+            if (output.TreeContent is null)
+                throw new RunOutputRevisionUnavailableException("missing_content");
+            RunOutputTree.Decode(output.TreeContent);
+            if (approvedRevision is not null
+                && (approvedRevision.WorkPlanId != output.WorkPlanId
+                    || approvedRevision.TreeContent is null
+                    || !approvedRevision.TreeContent.AsSpan().SequenceEqual(output.TreeContent)))
+                throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
+            if (mutation.Outcome.Status != RunStatus.Completed
+                || string.IsNullOrWhiteSpace(output.CommitHash)
+                || string.IsNullOrWhiteSpace(output.TreeHash)
+                || string.IsNullOrWhiteSpace(output.WorkPlanId)
+                || string.IsNullOrWhiteSpace(output.MergeEffectId)
+                || (mutation.TreeHash is not null && mutation.TreeHash != output.TreeHash))
+                throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
+            await using var publish = connection.CreateCommand();
+            publish.Transaction = tx;
+            publish.CommandText =
+                """
+                SELECT diff, executable_workflow_content_digest, executable_workflow_pin_required,
+                       current_output_revision_id, tree_hash
+                FROM runs WHERE run_id = $runId AND lifecycle_generation = $generation;
+                """;
+            publish.Parameters.AddWithValue("$runId", runId.ToString());
+            publish.Parameters.AddWithValue("$generation", mutation.Outcome.ExpectedLifecycleGeneration);
+            string diff;
+            string? workflowDigest;
+            await using (var reader = await publish.ExecuteReaderAsync(ct).ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(ct).ConfigureAwait(false)
+                    || reader.IsDBNull(0)
+                    || (approvedId is null ? !reader.IsDBNull(3) : reader.IsDBNull(3) || reader.GetString(3) != approvedId)
+                    || reader.IsDBNull(4) || reader.GetString(4) != output.TreeHash
+                    || (reader.GetInt32(2) != 0 && reader.IsDBNull(1)))
+                    throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
+                diff = reader.GetString(0);
+                workflowDigest = reader.IsDBNull(1) ? null : reader.GetString(1);
+            }
+            string? predecessor;
+            if (approvedId is not null)
+            {
+                predecessor = approvedId;
+            }
+            else
+            {
+                publish.CommandText =
+                    """
+                    SELECT revision_id FROM run_output_revisions
+                    WHERE run_id = $runId AND lifecycle_generation < $generation
+                    ORDER BY lifecycle_generation DESC LIMIT 1;
+                    """;
+                predecessor = (string?)await publish.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            }
+            var revisionId = Guid.NewGuid().ToString("N");
+            var bytes = RunOutputRevision.EncodeDiff(diff);
+            publish.CommandText =
+                """
+                INSERT INTO run_output_revisions
+                    (revision_id, schema_version, run_id, lifecycle_generation, workflow_digest,
+                     manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes,
+                     created_at, output_kind, merged_commit_hash, work_plan_id, merge_effect_id,
+                     accepted_no_change, tree_content, tree_content_sha256)
+                VALUES ($revision, 2, $runId, $generation, $workflow, $incomplete, $tree, $digest,
+                        $predecessor, $bytes, $created, 'collective', $commit, $plan, $effect,
+                        $noChange, $treeContent, $treeContentDigest);
+                UPDATE runs SET current_output_revision_id = $revision
+                WHERE run_id = $runId AND lifecycle_generation = $generation
+                  AND (($approved IS NULL AND current_output_revision_id IS NULL)
+                       OR current_output_revision_id = $approved);
+                """;
+            publish.Parameters.AddWithValue("$revision", revisionId);
+            publish.Parameters.AddWithValue("$workflow", (object?)workflowDigest ?? DBNull.Value);
+            publish.Parameters.AddWithValue("$incomplete", workflowDigest is null ? 1 : 0);
+            publish.Parameters.AddWithValue("$tree", output.TreeHash);
+            publish.Parameters.AddWithValue("$digest", RunOutputRevision.Sha256(bytes));
+            publish.Parameters.AddWithValue("$predecessor", (object?)predecessor ?? DBNull.Value);
+            publish.Parameters.AddWithValue("$bytes", bytes);
+            publish.Parameters.AddWithValue("$created", Ts(mutation.Outcome.OccurredAt));
+            publish.Parameters.AddWithValue("$commit", output.CommitHash);
+            publish.Parameters.AddWithValue("$plan", output.WorkPlanId);
+            publish.Parameters.AddWithValue("$effect", output.MergeEffectId);
+            publish.Parameters.AddWithValue("$noChange", output.AcceptedNoChange ? 1 : 0);
+            publish.Parameters.AddWithValue("$treeContent", output.TreeContent);
+            publish.Parameters.AddWithValue("$treeContentDigest", RunOutputRevision.Sha256(output.TreeContent));
+            publish.Parameters.AddWithValue("$approved", (object?)approvedId ?? DBNull.Value);
+            await publish.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        if (mutation.NoChangeOutput is { } receipt)
+        {
+            if (mutation.CollectiveOutput is not null || mutation.Outcome.Status != RunStatus.Completed
+                || string.IsNullOrWhiteSpace(receipt.CommitHash) || string.IsNullOrWhiteSpace(receipt.TreeHash))
+                throw new RunOutputRevisionUnavailableException("invalid_no_change_manifest");
+            RunOutputTree.Decode(receipt.TreeContent);
+            await using var publish = connection.CreateCommand();
+            publish.Transaction = tx;
+            publish.CommandText = """
+                SELECT executable_workflow_content_digest, executable_workflow_pin_required,
+                       current_output_revision_id, diff
+                FROM runs WHERE run_id=$runId AND lifecycle_generation=$generation;
+                """;
+            publish.Parameters.AddWithValue("$runId", runId.ToString());
+            publish.Parameters.AddWithValue("$generation", mutation.Outcome.ExpectedLifecycleGeneration);
+            string? workflowDigest;
+            await using (var reader = await publish.ExecuteReaderAsync(ct).ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(ct).ConfigureAwait(false) || !reader.IsDBNull(2)
+                    || (!reader.IsDBNull(3) && reader.GetString(3).Length != 0)
+                    || (reader.GetInt32(1) != 0 && reader.IsDBNull(0)))
+                    throw new RunOutputRevisionUnavailableException("invalid_no_change_manifest");
+                workflowDigest = reader.IsDBNull(0) ? null : reader.GetString(0);
+            }
+            publish.CommandText = """
+                SELECT revision_id FROM run_output_revisions
+                 WHERE run_id=$runId ORDER BY created_at DESC LIMIT 1;
+                """;
+            var predecessor = (string?)await publish.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            var revisionId = Guid.NewGuid().ToString("N");
+            publish.CommandText = """
+                INSERT INTO run_output_revisions
+                    (revision_id, schema_version, run_id, lifecycle_generation, workflow_digest,
+                     manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes,
+                     created_at, output_kind, merged_commit_hash, accepted_no_change, tree_content, tree_content_sha256)
+                VALUES ($revision, 3, $runId, $generation, $workflow, $incomplete, $tree, $digest,
+                        $predecessor, $bytes, $created, 'no_change', $commit, 1, $treeContent, $treeDigest);
+                UPDATE runs SET current_output_revision_id=$revision, tree_hash=$tree,
+                                merged_commit_hash=$commit, diff=''
+                 WHERE run_id=$runId AND lifecycle_generation=$generation AND current_output_revision_id IS NULL;
+                """;
+            publish.Parameters.AddWithValue("$revision", revisionId);
+            publish.Parameters.AddWithValue("$workflow", (object?)workflowDigest ?? DBNull.Value);
+            publish.Parameters.AddWithValue("$incomplete", workflowDigest is null ? 1 : 0);
+            publish.Parameters.AddWithValue("$tree", receipt.TreeHash);
+            publish.Parameters.AddWithValue("$digest", RunOutputRevision.Sha256([]));
+            publish.Parameters.AddWithValue("$predecessor", (object?)predecessor ?? DBNull.Value);
+            publish.Parameters.AddWithValue("$bytes", Array.Empty<byte>());
+            publish.Parameters.AddWithValue("$created", Ts(mutation.Outcome.OccurredAt));
+            publish.Parameters.AddWithValue("$commit", receipt.CommitHash);
+            publish.Parameters.AddWithValue("$treeContent", receipt.TreeContent);
+            publish.Parameters.AddWithValue("$treeDigest", RunOutputRevision.Sha256(receipt.TreeContent));
+            await publish.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
         await using var insert = connection.CreateCommand();
         insert.Transaction = tx;
         insert.CommandText = "INSERT INTO terminal_run_outcomes (run_id,lifecycle_generation,status,event_type,payload_json,occurred_at) VALUES ($runId,$generation,$status,$eventType,$payload,$occurredAt);";
@@ -1365,7 +1723,9 @@ public sealed class SqliteRunStore : IRunStore
                               executable_workflow_manifest_schema_version,
                               executable_workflow_definition_id, executable_workflow_definition_version,
                               executable_workflow_source, executable_workflow_content_digest,
-                              executable_workflow_definition_yaml, executable_workflow_pinned_at)
+                              executable_workflow_definition_yaml, executable_workflow_pinned_at,
+                              execution_input_required, execution_input_source_commit_hash,
+                              execution_input_commit_hash, execution_input_composite_id)
             SELECT $runId, $repo, $branch, $modelSource, $task,
                    $user, $status, $startedAt, NULL, NULL,
                    NULL, NULL, $projectId, $modelId,
@@ -1378,7 +1738,9 @@ public sealed class SqliteRunStore : IRunStore
                    $executableWorkflowManifestSchemaVersion,
                    $executableWorkflowDefinitionId, $executableWorkflowDefinitionVersion,
                    $executableWorkflowSource, $executableWorkflowContentDigest,
-                   $executableWorkflowDefinitionYaml, $executableWorkflowPinnedAt
+                   $executableWorkflowDefinitionYaml, $executableWorkflowPinnedAt,
+                   $executionInputRequired, $executionInputSourceCommitHash,
+                   $executionInputCommitHash, $executionInputCompositeId
             WHERE EXISTS (
                 SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
             );
@@ -1410,6 +1772,10 @@ public sealed class SqliteRunStore : IRunStore
             "$executableWorkflowPinRequired",
             run.ExecutableWorkflowPinRequired || (run.ParentRunId is null && run.ProjectId is not null) ? 1 : 0);
         AddExecutableWorkflowPinParameters(command, run);
+        command.Parameters.AddWithValue("$executionInputRequired", run.ExecutionInputRequired ? 1 : 0);
+        command.Parameters.AddWithValue("$executionInputSourceCommitHash", (object?)run.ExecutionInputSourceCommitHash ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executionInputCommitHash", (object?)run.ExecutionInputCommitHash ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executionInputCompositeId", (object?)run.ExecutionInputCompositeId ?? DBNull.Value);
         var rows = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         if (rows > 0)
         {
@@ -1575,7 +1941,9 @@ public sealed class SqliteRunStore : IRunStore
                executable_workflow_definition_id, executable_workflow_definition_version,
                executable_workflow_source, executable_workflow_content_digest,
                executable_workflow_definition_yaml, executable_workflow_pinned_at,
-               approved_output_revision_id, current_output_revision_id
+               approved_output_revision_id, current_output_revision_id,
+               execution_input_required, execution_input_source_commit_hash,
+               execution_input_commit_hash, execution_input_composite_id
           FROM runs
         """;
 
@@ -1633,6 +2001,10 @@ public sealed class SqliteRunStore : IRunStore
         ExecutableWorkflowPinnedAt = r.IsDBNull(48) ? null : DateTimeOffset.Parse(r.GetString(48), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         ApprovedOutputRevisionId = r.IsDBNull(49) ? null : r.GetString(49),
         CurrentOutputRevisionId = r.IsDBNull(50) ? null : r.GetString(50),
+        ExecutionInputRequired = !r.IsDBNull(51) && r.GetInt32(51) != 0,
+        ExecutionInputSourceCommitHash = r.IsDBNull(52) ? null : r.GetString(52),
+        ExecutionInputCommitHash = r.IsDBNull(53) ? null : r.GetString(53),
+        ExecutionInputCompositeId = r.IsDBNull(54) ? null : r.GetString(54),
     };
 
     private static string Ts(DateTimeOffset v) => v.ToString("O", CultureInfo.InvariantCulture);

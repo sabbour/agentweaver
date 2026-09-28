@@ -32,6 +32,7 @@ import type { AgentStep } from '../components/ui/agentic';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
+import { OutputRevisionHistory } from '../components/OutputRevisionHistory';
 import { EffectivePermissionsPanel } from '../components/EffectivePermissionsPanel';
 import { ExecutionIdentityPanel } from '../components/ExecutionIdentityPanel';
 import { FailureDiagnosticDetails } from '../components/FailureDiagnosticDetails';
@@ -5190,6 +5191,7 @@ export function CoordinatorRunPage() {
           flushBody
         >
           <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} liveUpdateKey={artifactsLiveUpdateKey} previewStatusSlot={previewStatusSlot} />
+          <OutputRevisionHistory runId={runId} />
         </SlidePanel>
       )}
 

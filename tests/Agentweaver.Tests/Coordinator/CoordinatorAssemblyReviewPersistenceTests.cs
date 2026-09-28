@@ -32,7 +32,7 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
     {
         const string coordinatorRunId = "coord-review-reset";
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
-            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/old", "old-tree", default);
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/old", "old-tree", "revision-old", default);
         await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
             _scopeFactory,
             coordinatorRunId,
@@ -41,7 +41,8 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
                 RequestChanges: false,
                 Feedback: "old approval",
                 TargetFiles: null,
-                Reviewer: "alice"),
+                Reviewer: "alice",
+                OutputRevisionId: "revision-old"),
             default);
 
         using (var scope = _provider.CreateScope())
@@ -54,7 +55,7 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
         }
 
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
-            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/new", "new-tree", default);
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/new", "new-tree", "revision-new", default);
 
         using var assertScope = _provider.CreateScope();
         var assertDb = assertScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -74,7 +75,7 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
     {
         const string coordinatorRunId = "coord-review-not-pending";
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
-            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/pending", "tree", default);
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/pending", "tree", "revision-pending", default);
 
         var result = await CoordinatorAssemblyReviewPersistence.PersistDecisionForPendingRequestAsync(
             _scopeFactory,

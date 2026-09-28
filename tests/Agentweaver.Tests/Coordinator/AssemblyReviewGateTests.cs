@@ -15,7 +15,8 @@ namespace Agentweaver.Tests.Coordinator;
 public sealed class AssemblyReviewGateTests
 {
     private static AssemblyReviewDecision Approve(string reviewer = "alice") =>
-        new(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: reviewer);
+        new(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null,
+            Reviewer: reviewer, OutputRevisionId: "revision-1");
 
     [Fact]
     public void ArmAsync_does_not_complete_on_its_own_even_with_a_tiny_configured_timeout()
@@ -43,7 +44,7 @@ public sealed class AssemblyReviewGateTests
     public async Task TrySubmit_completes_the_armed_gate_with_the_decision()
     {
         var gate = new AssemblyReviewGate();
-        var task = gate.ArmAsync("run-2", "alice", CancellationToken.None);
+        var task = gate.ArmAsync("run-2", "alice", CancellationToken.None, "revision-1");
 
         var result = gate.TrySubmit("run-2", "alice", Approve());
 
@@ -71,7 +72,7 @@ public sealed class AssemblyReviewGateTests
     public void TrySubmit_from_a_non_owner_is_forbidden_and_leaves_the_gate_armed()
     {
         var gate = new AssemblyReviewGate();
-        var task = gate.ArmAsync("run-4", "alice", CancellationToken.None);
+        var task = gate.ArmAsync("run-4", "alice", CancellationToken.None, "revision-1");
 
         var result = gate.TrySubmit("run-4", "mallory", Approve("mallory"));
 
@@ -84,7 +85,7 @@ public sealed class AssemblyReviewGateTests
     public void Second_TrySubmit_after_consumption_reports_not_armed()
     {
         var gate = new AssemblyReviewGate();
-        _ = gate.ArmAsync("run-5", "alice", CancellationToken.None);
+        _ = gate.ArmAsync("run-5", "alice", CancellationToken.None, "revision-1");
 
         gate.TrySubmit("run-5", "alice", Approve()).Should().Be(AssemblyReviewSubmitResult.Accepted);
         gate.TrySubmit("run-5", "alice", Approve()).Should().Be(AssemblyReviewSubmitResult.NotArmed);
@@ -95,11 +96,26 @@ public sealed class AssemblyReviewGateTests
     {
         var gate = new AssemblyReviewGate();
         // Gate owner is the captured GitHub login (backlog-pickup identity shape).
-        var task = gate.ArmAsync("run-6", "octocat", CancellationToken.None);
+        var task = gate.ArmAsync("run-6", "octocat", CancellationToken.None, "revision-1");
 
         var result = gate.TrySubmit("run-6", callerUser: "api-key-principal", Approve(), callerGitHubLogin: "octocat");
 
         result.Should().Be(AssemblyReviewSubmitResult.Accepted);
         task.IsCompletedSuccessfully.Should().BeTrue();
+    }
+
+    [Fact]
+    public void StaleAndMissingIdsNeverConsumeTheCurrentGate()
+    {
+        var gate = new AssemblyReviewGate();
+        var task = gate.ArmAsync("run-retry", "alice", CancellationToken.None, "revision-2");
+
+        gate.TrySubmit("run-retry", "alice", Approve() with { OutputRevisionId = null })
+            .Should().Be(AssemblyReviewSubmitResult.StaleRevision);
+        gate.TrySubmit("run-retry", "alice", Approve())
+            .Should().Be(AssemblyReviewSubmitResult.StaleRevision);
+        task.IsCompleted.Should().BeFalse();
+        gate.TrySubmit("run-retry", "alice", Approve() with { OutputRevisionId = "revision-2" })
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
     }
 }

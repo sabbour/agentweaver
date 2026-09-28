@@ -106,19 +106,48 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 RunResult = run == null ? null : run.Result,
                 Commit = run == null ? null : run.MergedCommitHash,
                 Tree = run == null ? null : run.TreeHash,
+                RevisionId = run == null ? null : run.CurrentOutputRevisionId,
+                ApprovedRevisionId = run == null ? null : run.ApprovedOutputRevisionId,
+                Generation = run == null ? 0 : run.LifecycleGeneration,
                 prerequisite.ArchivedAt,
             }).ToListAsync(ct);
+        var revisionIds = rows.Where(row => row.RevisionId is not null)
+            .Select(row => row.RevisionId!).ToArray();
+        var revisions = await db.RunOutputRevisions.AsNoTracking()
+            .Where(r => revisionIds.Contains(r.RevisionId))
+            .ToDictionaryAsync(r => r.RevisionId, ct);
 
-        return rows.Select(row => new BacklogDependencyStatus(
-            BacklogTaskId.Parse(row.TaskId),
-            BacklogTaskId.Parse(row.DependsOnTaskId),
-            row.Title,
-            row.RunId is null ? null : RunId.Parse(row.RunId),
-            row.RunStatus is null ? null : RunStatusExtensions.ParseStatus(row.RunStatus),
-            row.ArchivedAt is null && BacklogPrerequisiteOutcome.IsSatisfied(
-                row.RunStatus, row.RunResult, row.Commit, row.Tree),
-            BacklogPrerequisiteOutcome.Reason(
-                row.ArchivedAt is not null, row.RunStatus, row.RunResult, row.Commit, row.Tree)))
+        return rows.Select(row =>
+        {
+            var revision = row.RevisionId is not null && revisions.TryGetValue(row.RevisionId, out var found)
+                ? found : null;
+            var available = revision is { ManifestIncomplete: false, DiffBytes: not null,
+                TreeContent: not null, TreeContentSha256: not null }
+                && (revision.OutputKind == "collective" && (revision.SchemaVersion == RunOutputRevision.CollectiveSchemaVersion
+                   && revision.MergedCommitHash == row.Commit && revision.MergeEffectId is not null
+                   || revision.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
+                   && revision.MergedCommitHash is null && row.ApprovedRevisionId == revision.RevisionId)
+                    || revision.OutputKind == "no_change"
+                    && revision.SchemaVersion == RunOutputRevision.NoChangeSchemaVersion
+                    && revision.AcceptedNoChange && row.RunResult == "confirmed"
+                    && revision.MergedCommitHash == row.Commit)
+                && revision.RunId == row.RunId && revision.LifecycleGeneration == row.Generation
+                && revision.TreeHash == row.Tree
+                && revision.WorkPlanId is not null
+                && RunOutputRevision.Sha256(revision.DiffBytes!) == revision.DiffSha256
+                && RunOutputRevision.Sha256(revision.TreeContent!) == revision.TreeContentSha256;
+            return new BacklogDependencyStatus(
+                BacklogTaskId.Parse(row.TaskId),
+                BacklogTaskId.Parse(row.DependsOnTaskId),
+                row.Title,
+                row.RunId is null ? null : RunId.Parse(row.RunId),
+                row.RunStatus is null ? null : RunStatusExtensions.ParseStatus(row.RunStatus),
+                row.ArchivedAt is null && BacklogPrerequisiteOutcome.IsSatisfied(
+                    row.RunStatus, row.RunResult, row.Commit, row.Tree, available),
+                BacklogPrerequisiteOutcome.Reason(
+                    row.ArchivedAt is not null, row.RunStatus, row.RunResult, row.Commit, row.Tree,
+                    available, available && revision!.AcceptedNoChange));
+        })
             .ToList();
     }
 
@@ -193,11 +222,26 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 && db.BacklogTasks.Any(p => p.TaskId == d.DependsOnTaskId
                     && (p.ArchivedAt != null || p.RunId == null
                         || !db.Runs.Any(r => r.RunId == p.RunId
-                            && ((r.Status == "completed" && r.Result == "confirmed")
-                                || ((r.Status == "merged" || (r.Status == "completed"
-                                    && (r.Result == "assembly_complete" || r.Result == "complete")))
+                            && ((r.Status == "merged" || (r.Status == "completed"
+                                    && (r.Result == "assembly_complete" || r.Result == "complete" || r.Result == "confirmed")))
                                     && r.MergedCommitHash != null && r.MergedCommitHash.Trim() != ""
-                                    && r.TreeHash != null && r.TreeHash.Trim() != "")))))))
+                                    && r.TreeHash != null && r.TreeHash.Trim() != ""
+                                    && (r.Status != "completed" || db.RunOutputRevisions.Any(v =>
+                                        v.RevisionId == r.CurrentOutputRevisionId
+                                        && v.RunId == r.RunId && v.LifecycleGeneration == r.LifecycleGeneration
+                                        && ((v.SchemaVersion == RunOutputRevision.CollectiveSchemaVersion
+                                                && v.MergedCommitHash == r.MergedCommitHash)
+                                            || (v.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
+                                                && v.MergedCommitHash == null
+                                                && r.ApprovedOutputRevisionId == v.RevisionId)
+                                            || (v.SchemaVersion == RunOutputRevision.NoChangeSchemaVersion
+                                                && r.Result == "confirmed" && v.AcceptedNoChange
+                                                && v.MergedCommitHash == r.MergedCommitHash))
+                                        && (v.OutputKind == "collective" || v.OutputKind == "no_change")
+                                        && !v.ManifestIncomplete
+                                        && v.DiffBytes != null && v.TreeContent != null
+                                        && v.TreeContentSha256 != null
+                                        && v.TreeHash == r.TreeHash))))))))
             .OrderBy(t => t.OrderKey).ThenBy(t => t.CommittedAt).ThenBy(t => t.TaskId)
             .Take(limit)
             .ToListAsync(ct);
@@ -519,18 +563,56 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 Tree = run == null ? null : run.TreeHash,
                 Generation = run == null ? 0 : run.LifecycleGeneration,
                 WorkflowDigest = run == null ? null : run.ExecutableWorkflowContentDigest,
+                RevisionId = run == null ? null : run.CurrentOutputRevisionId,
+                ApprovedRevisionId = run == null ? null : run.ApprovedOutputRevisionId,
             }).ToListAsync(ct);
+        var revisionIds = inputs.Where(input => input.RevisionId is not null)
+            .Select(input => input.RevisionId!).ToArray();
+        var revisions = await db.RunOutputRevisions.AsNoTracking()
+            .Where(r => revisionIds.Contains(r.RevisionId)).ToDictionaryAsync(r => r.RevisionId, ct);
         if (inputs.Any(input => input.ArchivedAt is not null
             || !BacklogPrerequisiteOutcome.IsSatisfied(
-                input.Status, input.Result, input.Commit, input.Tree)))
+                input.Status, input.Result, input.Commit, input.Tree,
+                input.RevisionId is not null
+                    && revisions.TryGetValue(input.RevisionId, out var revision)
+                    && ((revision.SchemaVersion == RunOutputRevision.CollectiveSchemaVersion
+                            && revision.MergedCommitHash == input.Commit)
+                        || (revision.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
+                            && revision.MergedCommitHash is null
+                            && input.ApprovedRevisionId == revision.RevisionId)
+                        || (revision.SchemaVersion == RunOutputRevision.NoChangeSchemaVersion
+                            && input.Result == "confirmed"
+                            && revision.AcceptedNoChange
+                            && revision.MergedCommitHash == input.Commit))
+                    && (revision.OutputKind == "collective" || revision.OutputKind == "no_change")
+                    && !revision.ManifestIncomplete
+                    && revision.RunId == input.RunId && revision.LifecycleGeneration == input.Generation
+                    && revision.TreeHash == input.Tree
+                    && revision.DiffBytes is not null && revision.TreeContent is not null
+                    && revision.TreeContentSha256 is not null)))
         {
             await tx.RollbackAsync(ct);
             return new ClaimReserveOutcome(ClaimReserveResult.Lost);
         }
+        foreach (var input in inputs.Where(input => input.Status == "completed"
+            && input.Result is "assembly_complete" or "complete" or "confirmed"))
+        {
+            var revision = revisions[input.RevisionId!];
+            _ = new RunOutputRevision(revision.RevisionId, revision.SchemaVersion,
+                RunId.Parse(revision.RunId), revision.LifecycleGeneration, revision.WorkflowDigest,
+                revision.ManifestIncomplete, revision.TreeHash, revision.DiffSha256,
+                revision.PredecessorRevisionId, revision.DiffBytes, revision.CreatedAt,
+                revision.OutputKind, revision.MergedCommitHash, revision.WorkPlanId,
+                revision.MergeEffectId, revision.AcceptedNoChange,
+                revision.TreeContent, revision.TreeContentSha256).ResolveFiles();
+        }
         var claimedInputs = JsonSerializer.Serialize(inputs.Select(input => new BacklogClaimedPrerequisite(
             input.DependsOnTaskId, input.RunId!,
-            BacklogPrerequisiteOutcome.Reason(false, input.Status, input.Result, input.Commit, input.Tree),
-            input.Generation, input.Commit, input.Tree, input.WorkflowDigest)).ToArray());
+            BacklogPrerequisiteOutcome.Reason(false, input.Status, input.Result, input.Commit, input.Tree,
+                input.Status == "completed" && input.Result is "assembly_complete" or "complete" or "confirmed",
+                input.RevisionId is not null && revisions.TryGetValue(input.RevisionId, out var revision)
+                    && revision.AcceptedNoChange),
+            input.Generation, input.Commit, input.Tree, input.WorkflowDigest, input.RevisionId)).ToArray());
         var graphRevision = projectLock.BacklogGraphRevision;
 
         // (a) exactly-once, project-scoped claim gate.
@@ -577,6 +659,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         // (c) persist the coordinator run and immutable policy snapshot atomically with the claim.
         var persistedRun = coordinatorRun with
         {
+            ExecutionInputRequired = inputs.Count > 0,
             Origin = RunOrigin.BacklogPickup,
             LaunchAutoApproveTools = approvalSnapshot.Policy.AutoApproveTools,
             LaunchAutopilot = approvalSnapshot.Policy.Autopilot,
@@ -590,6 +673,10 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
             RunId = coordinatorRun.Id.ToString(),
             RepositoryPath = coordinatorRun.RepositoryPath,
             OriginatingBranch = coordinatorRun.OriginatingBranch,
+            ExecutionInputRequired = inputs.Count > 0,
+            ExecutionInputSourceCommitHash = coordinatorRun.ExecutionInputSourceCommitHash,
+            ExecutionInputCommitHash = coordinatorRun.ExecutionInputCommitHash,
+            ExecutionInputCompositeId = coordinatorRun.ExecutionInputCompositeId,
             ModelSource = coordinatorRun.ModelSource.ToApiString(),
             Task = coordinatorRun.Task,
             SubmittingUser = coordinatorRun.SubmittingUser,

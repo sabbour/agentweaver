@@ -42,6 +42,13 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     public Task<Run?> GetAsync(RunId runId, CancellationToken ct = default) =>
         inner.GetAsync(runId, ct);
 
+    public Task<bool> TryBindExecutionInputAsync(
+        RunId runId, int expectedLifecycleGeneration, string sourceCommitHash,
+        string executionCommitHash, string compositeId, CancellationToken ct = default) =>
+        inner.TryBindExecutionInputAsync(
+            runId, expectedLifecycleGeneration, sourceCommitHash,
+            executionCommitHash, compositeId, ct);
+
     public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default) =>
         inner.GetByStatusAsync(status, ct);
 
@@ -66,11 +73,18 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         await inner.UpdateAssemblyArtifactsAsync(runId, treeHash, diff, ct).ConfigureAwait(false);
     }
 
-    public async Task UpdateReviewReadyAsync(
-        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null)
+    public async Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount,
+        CancellationToken ct = default, DateTimeOffset? now = null)
     {
         await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
         await inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now).ConfigureAwait(false);
+    }
+
+    public async Task UpdateReviewReadyAsync(
+        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        await inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now, treeContent).ConfigureAwait(false);
     }
 
     public Task<RunOutputRevision?> GetOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
@@ -82,10 +96,25 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         await inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now)
             .ConfigureAwait(false);
     }
+
+    public async Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash,
+        string diff, int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        await inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now, treeContent)
+            .ConfigureAwait(false);
+    }
     public Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default) =>
         inner.GetLatestOutputRevisionAsync(runId, ct);
     public Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(RunId runId, CancellationToken ct = default) =>
         inner.ListOutputRevisionsAsync(runId, ct);
+    public Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct = default) =>
+        inner.PublishCollectiveCandidateAsync(runId, generation, workPlanId, treeHash, diff, treeContent, ct);
+    public Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
+        inner.ApproveCollectiveCandidateAsync(runId, generation, revisionId, ct);
 
     public Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>

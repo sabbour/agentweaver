@@ -12,7 +12,11 @@ public sealed record ExecutionIdentityProjection(
     [property: JsonPropertyName("backend")] ExecutionBackendSummary? Backend,
     [property: JsonPropertyName("launch_permission_binding")] ExecutionPermissionBindingSummary? LaunchPermissionBinding,
     [property: JsonPropertyName("permission_binding")] ExecutionPermissionBindingSummary? PermissionBinding,
-    [property: JsonPropertyName("decisions")] IReadOnlyList<ExecutionDecisionSummary> Decisions);
+    [property: JsonPropertyName("decisions")] IReadOnlyList<ExecutionDecisionSummary> Decisions)
+{
+    [JsonPropertyName("execution_manifest")]
+    public ExecutionManifestInventory? ExecutionManifest { get; init; }
+}
 
 public sealed record ExecutionDescriptorSummary(
     [property: JsonPropertyName("descriptor_id")] string DescriptorId,

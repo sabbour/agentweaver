@@ -691,6 +691,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 workPlanId,
                 integrationBranch = record?.IntegrationBranch,
                 treeHash = record?.AggregateTreeHash,
+                outputRevisionId = record?.OutputRevisionId,
                 reason,
             });
             _logger.LogWarning(
@@ -1029,6 +1030,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // assembly failure must not discard completed child work or its artifacts.
         await _runStore.UpdateAssemblyArtifactsAsync(
             RunId.Parse(context.CoordinatorRunId), aggregateTreeHash, aggregateDiff, ct).ConfigureAwait(false);
+        var candidate = await PublishCollectiveCandidateAsync(
+            context, workPlanId, aggregateTreeHash, aggregateDiff, ct).ConfigureAwait(false);
         var assemblyGates = await ResolveAssemblyGatesAsync(workPlanId, ct).ConfigureAwait(false);
         var assemblyProvider = await ResolveAssemblyProviderBoundaryAsync(context.CoordinatorRunId, ct)
             .ConfigureAwait(false);
@@ -1276,6 +1279,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     context.SubmittingUser,
                     integrationBranch,
                     aggregateTreeHash,
+                    candidate.RevisionId,
                     ct).ConfigureAwait(false);
                 await _assemblyStore.SetStatusAndStageAsync(
                     workPlanId, WorkPlanStatus.InReview, gate.StageId, ct).ConfigureAwait(false);
@@ -1285,6 +1289,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     workPlanId,
                     integrationBranch,
                     treeHash = aggregateTreeHash,
+                    outputRevisionId = candidate.RevisionId,
                     includedSubtaskIds,
                     gateId = gate.Id,
                     gateKind = gate.GateKind,
@@ -1402,7 +1407,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             _scopeFactory, context.CoordinatorRunId, ct).ConfigureAwait(false);
         if (persisted is null
             || string.IsNullOrEmpty(persisted.IntegrationBranch)
-            || string.IsNullOrEmpty(persisted.AggregateTreeHash))
+            || string.IsNullOrEmpty(persisted.AggregateTreeHash)
+            || string.IsNullOrEmpty(persisted.OutputRevisionId))
         {
             await _assemblyStore.SetStatusAndStageAsync(
                 workPlanId, WorkPlanStatus.AwaitingAssembly, null, ct).ConfigureAwait(false);
@@ -1436,7 +1442,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         await MarkCoordinatorAwaitingReviewAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
-        var decisionTask = _reviewGate.ArmAsync(context.CoordinatorRunId, context.SubmittingUser, ct);
+        var pending = await CoordinatorAssemblyReviewPersistence.GetAsync(
+            _scopeFactory, context.CoordinatorRunId, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(pending?.OutputRevisionId))
+            throw new RunOutputRevisionUnavailableException("collective_output_revision_unavailable");
+        var decisionTask = _reviewGate.ArmAsync(
+            context.CoordinatorRunId, context.SubmittingUser, ct, pending.OutputRevisionId);
         _ = PollDeferredAssemblyReviewDecisionAsync(context, ct);
         try
         {
@@ -1468,8 +1479,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         AssemblyReviewDecision decision,
         CancellationToken ct)
     {
+        var candidate = await RequireCurrentCandidateAsync(
+            context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct).ConfigureAwait(false);
+        if (decision.OutputRevisionId != candidate.RevisionId)
+            throw new RunOutputRevisionUnavailableException("stale_collective_decision");
         if (decision.Approved)
         {
+            if (!await _runStore.ApproveCollectiveCandidateAsync(
+                    candidate.RunId, candidate.LifecycleGeneration, candidate.RevisionId, ct).ConfigureAwait(false))
+                throw new RunOutputRevisionUnavailableException("stale_collective_decision");
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewApproved, new
             {
                 workPlanId,
@@ -1523,8 +1541,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         string aggregateTreeHash,
         CancellationToken ct)
     {
+        var candidate = await RequireCurrentCandidateAsync(
+            context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct).ConfigureAwait(false);
+        if (decision.OutputRevisionId is not null && decision.OutputRevisionId != candidate.RevisionId)
+            throw new RunOutputRevisionUnavailableException("stale_collective_decision");
         if (decision.Approved)
         {
+            if (!await _runStore.ApproveCollectiveCandidateAsync(
+                    candidate.RunId, candidate.LifecycleGeneration, candidate.RevisionId, ct).ConfigureAwait(false))
+                throw new RunOutputRevisionUnavailableException("stale_collective_decision");
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewApproved, new
             {
                 workPlanId,
@@ -1764,10 +1789,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
         if (run is null)
             return;
-
         var state = await _assemblyStore.GetAsync(workPlanId, ct).ConfigureAwait(false);
         if (state is null)
             return;
+        var approvedCandidate = await RequireCurrentCandidateAsync(
+            context.CoordinatorRunId, workPlanId,
+            state.MergeEffectId is not null && string.IsNullOrEmpty(aggregateTreeHash)
+                ? run.TreeHash ?? string.Empty : aggregateTreeHash, ct).ConfigureAwait(false);
+        if (run.ApprovedOutputRevisionId != approvedCandidate.RevisionId)
+            throw new RunOutputRevisionUnavailableException("stale_collective_approval");
 
         var recoveringPreparedEffect = state.MergeEffectId is not null;
         PreparedGitMergeIntent intent;
@@ -1831,6 +1861,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 ?? throw new InvalidOperationException("Persisted merge intent was invalid.");
         }
         var startingEffectState = state.MergeEffectState ?? MergeEffectState.Prepared;
+        var retainedTree = _pipeline.CaptureOutputTree(context.RepositoryPath, intent.IntendedTree);
+        if (approvedCandidate.TreeHash != intent.IntendedTree
+            || !approvedCandidate.TreeContent!.AsSpan().SequenceEqual(retainedTree))
+            throw new RunOutputRevisionUnavailableException("stale_collective_approval");
 
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyMergeStarted, new
@@ -2002,6 +2036,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (run?.LifecycleGeneration == intent.LifecycleGeneration
             && run.Status == RunStatus.Completed)
         {
+            await RequireCollectiveOutputAsync(run, workPlanId, intent.EffectId, ct).ConfigureAwait(false);
             if (merge.Outcome == CollectiveMergeOutcome.AppliedNow)
             {
                 await RunCoordinatorScribeAsync(
@@ -2040,7 +2075,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
         if (run?.LifecycleGeneration == intent.LifecycleGeneration
             && run.Status == RunStatus.Completed)
+        {
+            await RequireCollectiveOutputAsync(run, workPlanId, intent.EffectId, ct).ConfigureAwait(false);
             return;
+        }
         if (run is null
             || run.LifecycleGeneration != intent.LifecycleGeneration
             || run.Status != RunStatus.InProgress)
@@ -2057,7 +2095,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // ── Complete ─────────────────────────────────────────────────────────────────────────────
         if (!await TerminalizeCoordinatorRunAsync(
                 context.CoordinatorRunId, RunStatus.Completed, "assembly_complete", ct,
-                merge.CommitHash, intent.IntendedTree).ConfigureAwait(false))
+                merge.CommitHash, intent.IntendedTree,
+                collectiveOutput: new CollectiveOutputPublication(
+                    workPlanId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    intent.EffectId,
+                    merge.CommitHash
+                    ?? throw new RunOutputRevisionUnavailableException("collective_output_revision_unavailable"),
+                    intent.IntendedTree,
+                    AcceptedNoChange: false,
+                    approvedCandidate.TreeContent
+                    ?? throw new RunOutputRevisionUnavailableException("missing_content")),
+                approvedCollectiveRevisionId: approvedCandidate.RevisionId)
+                .ConfigureAwait(false))
         {
             _logger.LogWarning(
                 "Collective assembly: terminal output identity was not published for run {RunId}; leaving plan {WorkPlanId} for recovery",
@@ -2101,7 +2150,18 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             return false;
 
         var run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
-        return run is not null
+        if (run is null || run.ApprovedOutputRevisionId is null
+            || run.ApprovedOutputRevisionId != run.CurrentOutputRevisionId
+            || run.TreeHash != intent.IntendedTree)
+            return false;
+        var revision = await _runStore.ResolveOutputRevisionAsync(
+            run.Id, run.ApprovedOutputRevisionId, ct).ConfigureAwait(false);
+        return revision.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
+            && revision.LifecycleGeneration == intent.LifecycleGeneration
+            && revision.TreeHash == intent.IntendedTree
+            && revision.DiffSha256 == RunOutputRevision.Sha256(RunOutputRevision.EncodeDiff(run.Diff ?? ""))
+            && revision.TreeContent!.AsSpan().SequenceEqual(
+                _pipeline.CaptureOutputTree(context.RepositoryPath, intent.IntendedTree))
             && run.Status == RunStatus.InProgress
             && run.LifecycleGeneration == intent.LifecycleGeneration
             && string.Equals(
@@ -3250,6 +3310,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         string aggregateTreeHash,
         CancellationToken ct)
     {
+        var candidate = await RequireCurrentCandidateAsync(
+            context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct).ConfigureAwait(false);
         var won = await _assemblyStore.TryEscalateToInReviewAsync(workPlanId, ct).ConfigureAwait(false);
         var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
         var integrationBranch = IntegrationBranchName(context.CoordinatorRunId);
@@ -3268,13 +3330,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             {
                 await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
                     _scopeFactory, context.CoordinatorRunId, context.SubmittingUser,
-                    integrationBranch, aggregateTreeHash, ct).ConfigureAwait(false);
+                    integrationBranch, aggregateTreeHash, candidate.RevisionId, ct).ConfigureAwait(false);
                 await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
                 {
                     workPlanId,
                     integrationBranch,
                     treeHash = aggregateTreeHash,
+                    outputRevisionId = candidate.RevisionId,
                     gateKind = "human-review",
                     escalated = true,
                     reason,
@@ -3295,6 +3358,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             context.SubmittingUser,
             integrationBranch,
             aggregateTreeHash,
+            candidate.RevisionId,
             ct).ConfigureAwait(false);
 
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
@@ -3303,6 +3367,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             workPlanId,
             integrationBranch,
             treeHash = aggregateTreeHash,
+            outputRevisionId = candidate.RevisionId,
             gateKind = "human-review",
             escalated = true,
             reason,
@@ -4206,6 +4271,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         string? feedback,
         CancellationToken ct)
     {
+        var candidate = await RequireCurrentCandidateAsync(
+            context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct).ConfigureAwait(false);
         var won = await _assemblyStore.TryEscalateToInReviewAsync(workPlanId, ct).ConfigureAwait(false);
         if (!won)
             return;
@@ -4213,7 +4280,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var integrationBranch = IntegrationBranchName(context.CoordinatorRunId);
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _scopeFactory, context.CoordinatorRunId, context.SubmittingUser,
-            integrationBranch, aggregateTreeHash, ct).ConfigureAwait(false);
+            integrationBranch, aggregateTreeHash, candidate.RevisionId, ct).ConfigureAwait(false);
         await MarkCoordinatorAwaitingReviewAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.InReview, edges, ct)
@@ -4223,6 +4290,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             workPlanId,
             integrationBranch,
             treeHash = aggregateTreeHash,
+            outputRevisionId = candidate.RevisionId,
             gateKind = "human-review",
             escalated = true,
             reason = "rai_red",
@@ -4323,7 +4391,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// </summary>
     private async Task<bool> TerminalizeCoordinatorRunAsync(
         string coordinatorRunId, RunStatus status, string result, CancellationToken ct,
-        string? mergedCommitHash = null, string? treeHash = null)
+        string? mergedCommitHash = null, string? treeHash = null,
+        CollectiveOutputPublication? collectiveOutput = null,
+        string? approvedCollectiveRevisionId = null)
     {
         if (!RunId.TryParse(coordinatorRunId, out var id))
             return false;
@@ -4338,9 +4408,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                         new { result }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
                     result,
                     MergedCommitHash: mergedCommitHash,
-                    TreeHash: treeHash),
+                    TreeHash: treeHash,
+                    CollectiveOutput: collectiveOutput,
+                    ApprovedCollectiveRevisionId: approvedCollectiveRevisionId),
                 ct).ConfigureAwait(false);
         }
+
         return await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
             id,
             status,
@@ -4349,6 +4422,54 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             DateTimeOffset.UtcNow,
             result,
             ct).ConfigureAwait(false);
+    }
+
+    private async Task RequireCollectiveOutputAsync(
+        Run run, int workPlanId, string effectId, CancellationToken ct)
+    {
+        if (run.CurrentOutputRevisionId is null)
+            throw new RunOutputRevisionUnavailableException("collective_output_revision_unavailable");
+        var revision = await _runStore.ResolveOutputRevisionAsync(run.Id, run.CurrentOutputRevisionId, ct)
+            .ConfigureAwait(false);
+        if (revision?.OutputKind != "collective"
+            || revision.WorkPlanId != workPlanId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            || (revision.SchemaVersion == RunOutputRevision.CollectiveSchemaVersion
+                ? revision.MergeEffectId != effectId || revision.MergedCommitHash != run.MergedCommitHash
+                : revision.SchemaVersion != RunOutputRevision.CollectiveCandidateSchemaVersion
+                    || run.ApprovedOutputRevisionId != revision.RevisionId
+                    || string.IsNullOrEmpty(run.MergedCommitHash))
+            || revision.TreeHash != run.TreeHash)
+            throw new RunOutputRevisionUnavailableException("collective_output_revision_unavailable");
+    }
+
+    private async Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        CoordinatorDispatchContext context, int workPlanId, string treeHash, string diff, CancellationToken ct)
+    {
+        var run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false)
+            ?? throw new RunOutputRevisionUnavailableException("run_missing");
+        var content = _pipeline.CaptureOutputTree(context.RepositoryPath, treeHash);
+        return await _runStore.PublishCollectiveCandidateAsync(
+            run.Id, run.LifecycleGeneration,
+            workPlanId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            treeHash, diff, content, ct).ConfigureAwait(false);
+    }
+
+    private async Task<RunOutputRevision> RequireCurrentCandidateAsync(
+        string runId, int workPlanId, string treeHash, CancellationToken ct)
+    {
+        var run = await TryGetCoordinatorRunAsync(runId, ct).ConfigureAwait(false);
+        if (run is null || run.CurrentOutputRevisionId is null || run.TreeHash != treeHash)
+            throw new RunOutputRevisionUnavailableException("collective_output_revision_unavailable");
+        var revision = await _runStore.ResolveOutputRevisionAsync(
+            run.Id, run.CurrentOutputRevisionId, ct).ConfigureAwait(false);
+        if (revision.SchemaVersion != RunOutputRevision.CollectiveCandidateSchemaVersion
+            || revision.LifecycleGeneration != run.LifecycleGeneration
+            || revision.WorkPlanId != workPlanId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            || revision.TreeHash != treeHash
+            || revision.DiffSha256 != RunOutputRevision.Sha256(RunOutputRevision.EncodeDiff(run.Diff ?? ""))
+            || revision.WorkflowDigest != run.ExecutableWorkflowContentDigest)
+            throw new RunOutputRevisionUnavailableException("collective_output_revision_unavailable");
+        return revision;
     }
 
     private async Task MarkCoordinatorAwaitingReviewAsync(string coordinatorRunId, CancellationToken ct)

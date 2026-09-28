@@ -207,6 +207,22 @@ unauthorized project runs are returned as not found to prevent enumeration. The
 permission binding shown at read time is current evidence, not authority restored from
 the immutable launch descriptor.
 
+The same response includes an `execution_manifest` inventory (`schema_version: 1`).
+Each input names its binding: `bound` refers to an existing persisted run pin,
+snapshot, output revision, immutable prerequisite composition, or Git commit;
+`current_state` means the runtime has not retained the consumed revision;
+`unavailable` means required evidence is missing or incompatible. Backlog runs
+bind `source_revision` and `prerequisite_outputs` to the exact source and
+materialized commits used for launch and recovery. The pinned workflow YAML also supplies the executable
+graph, while the stored run charter, launch approval snapshot, execution descriptor,
+and observed launch permission binding are separately identified. Blueprint, team,
+skills, resources, current capability policy, consumed source
+base, and knowledge are explicitly current-state inputs, not replay guarantees.
+Current access and revocation checks always apply. Output entries identify the
+retained review diff separately from full-file tree content; a diff alone does not
+prove historical file bytes. `compatibility: unavailable` on legacy, corrupt, or
+unsupported pinned inputs is not a successful fallback to live configuration.
+
 Use **Enter focus mode** to hide the global navigation and Start task row while
 keeping the run tree, selected task, messages, changes, and files available.
 Use **Exit focus mode** to restore the shell. Focus mode is temporary: it resets

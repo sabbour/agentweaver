@@ -104,7 +104,8 @@ public sealed class RunFailureExplanationServiceTests
             sqlite.Db,
             configuration,
             eventStream,
-            new FixedPermissionBindingProvider(binding));
+            new FixedPermissionBindingProvider(binding),
+            new SqliteRunStore(sqlite.Db));
         var service = new RunFailureExplanationService(
             new RunTerminalDiagnosticReader(memory),
             identityReader,
@@ -261,7 +262,8 @@ public sealed class RunFailureExplanationServiceTests
             sqlite.Db,
             configuration,
             stream,
-            new FixedPermissionBindingProvider(binding ?? CreateBinding(run, run.LifecycleGeneration)));
+            new FixedPermissionBindingProvider(binding ?? CreateBinding(run, run.LifecycleGeneration)),
+            new SqliteRunStore(sqlite.Db));
         var service = new RunFailureExplanationService(
             new RunTerminalDiagnosticReader(memory),
             identityReader,

@@ -6,6 +6,10 @@ public sealed class RunRecord
     public string RunId { get; set; } = "";
     public string RepositoryPath { get; set; } = "";
     public string OriginatingBranch { get; set; } = "";
+    public bool ExecutionInputRequired { get; set; }
+    public string? ExecutionInputSourceCommitHash { get; set; }
+    public string? ExecutionInputCommitHash { get; set; }
+    public string? ExecutionInputCompositeId { get; set; }
     public string ModelSource { get; set; } = "";
     public string Task { get; set; } = "";
     public string SubmittingUser { get; set; } = "";

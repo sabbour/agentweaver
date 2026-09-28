@@ -887,11 +887,17 @@ public sealed class SqliteToPostgresMigrator
 
         if (await HasTableAsync(conn, "run_output_revisions", ct))
         {
+            var hasCollectiveColumns = await HasColumnAsync(conn, "run_output_revisions", "output_kind", ct);
+            var hasRetainedTree = await HasColumnAsync(conn, "run_output_revisions", "tree_content", ct);
             await using var outputCommand = conn.CreateCommand();
             outputCommand.CommandText =
-                """
+                $"""
                 SELECT revision_id, schema_version, run_id, lifecycle_generation, workflow_digest,
-                       manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at
+                       manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at,
+                       {(hasCollectiveColumns
+                           ? "output_kind, merged_commit_hash, work_plan_id, merge_effect_id, accepted_no_change"
+                           : "NULL, NULL, NULL, NULL, 0")},
+                        {(hasRetainedTree ? "tree_content, tree_content_sha256" : "NULL, NULL")}
                 FROM run_output_revisions ORDER BY run_id, lifecycle_generation;
                 """;
             var outputRevisions = new List<RunOutputRevisionRecord>();
@@ -903,7 +909,13 @@ public sealed class SqliteToPostgresMigrator
                         reader.GetString(0), reader.GetInt32(1), new RunId(Guid.Parse(reader.GetString(2))),
                         reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetInt32(5) != 0,
                         reader.GetString(6), reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
-                        reader.IsDBNull(9) ? null : reader.GetFieldValue<byte[]>(9), ParseTs(reader.GetString(10)));
+                        reader.IsDBNull(9) ? null : reader.GetFieldValue<byte[]>(9), ParseTs(reader.GetString(10)),
+                        reader.IsDBNull(11) ? null : reader.GetString(11),
+                        reader.IsDBNull(12) ? null : reader.GetString(12),
+                        reader.IsDBNull(13) ? null : reader.GetString(13),
+                        reader.IsDBNull(14) ? null : reader.GetString(14), reader.GetInt32(15) != 0,
+                        reader.IsDBNull(16) ? null : reader.GetFieldValue<byte[]>(16),
+                        reader.IsDBNull(17) ? null : reader.GetString(17));
                     outputRevisions.Add(new RunOutputRevisionRecord
                     {
                         RevisionId = revision.RevisionId,
@@ -915,7 +927,14 @@ public sealed class SqliteToPostgresMigrator
                         TreeHash = revision.TreeHash,
                         DiffSha256 = revision.DiffSha256,
                         PredecessorRevisionId = revision.PredecessorRevisionId,
+                        OutputKind = revision.OutputKind,
+                        MergedCommitHash = revision.MergedCommitHash,
+                        WorkPlanId = revision.WorkPlanId,
+                        MergeEffectId = revision.MergeEffectId,
+                        AcceptedNoChange = revision.AcceptedNoChange,
                         DiffBytes = revision.DiffBytes,
+                        TreeContent = revision.TreeContent,
+                        TreeContentSha256 = revision.TreeContentSha256,
                         CreatedAt = revision.CreatedAt
                     });
                 }
@@ -954,7 +973,10 @@ public sealed class SqliteToPostgresMigrator
                         existing.RevisionId, existing.SchemaVersion, new RunId(Guid.Parse(existing.RunId)),
                         existing.LifecycleGeneration, existing.WorkflowDigest, existing.ManifestIncomplete,
                         existing.TreeHash, existing.DiffSha256, existing.PredecessorRevisionId,
-                        existing.DiffBytes, existing.CreatedAt);
+                        existing.DiffBytes, existing.CreatedAt, existing.OutputKind,
+                        existing.MergedCommitHash, existing.WorkPlanId,
+                        existing.MergeEffectId, existing.AcceptedNoChange,
+                        existing.TreeContent, existing.TreeContentSha256);
                     if (verified.RunId.ToString() != revision.RunId
                         || existing.LifecycleGeneration != revision.LifecycleGeneration
                         || existing.DiffSha256 != revision.DiffSha256
@@ -962,6 +984,13 @@ public sealed class SqliteToPostgresMigrator
                         || existing.WorkflowDigest != revision.WorkflowDigest
                         || existing.ManifestIncomplete != revision.ManifestIncomplete
                         || existing.PredecessorRevisionId != revision.PredecessorRevisionId
+                        || existing.OutputKind != revision.OutputKind
+                        || existing.MergedCommitHash != revision.MergedCommitHash
+                        || existing.WorkPlanId != revision.WorkPlanId
+                        || existing.MergeEffectId != revision.MergeEffectId
+                        || existing.AcceptedNoChange != revision.AcceptedNoChange
+                        || existing.TreeContentSha256 != revision.TreeContentSha256
+                        || !(existing.TreeContent ?? []).AsSpan().SequenceEqual(revision.TreeContent ?? [])
                         || existing.CreatedAt != revision.CreatedAt
                         || !verified.DiffBytes.AsSpan().SequenceEqual(revision.DiffBytes))
                         throw new InvalidOperationException("Conflicting output revision in destination database.");
@@ -1466,6 +1495,18 @@ public sealed class SqliteToPostgresMigrator
         var lifecycleGeneration = await HasColumnAsync(conn, "runs", "lifecycle_generation", ct)
             ? "lifecycle_generation"
             : "1 AS lifecycle_generation";
+        var executionInputRequired = await HasColumnAsync(conn, "runs", "execution_input_required", ct)
+            ? "COALESCE(execution_input_required, 0)"
+            : "0 AS execution_input_required";
+        var executionInputSourceCommitHash = await HasColumnAsync(conn, "runs", "execution_input_source_commit_hash", ct)
+            ? "execution_input_source_commit_hash"
+            : "NULL AS execution_input_source_commit_hash";
+        var executionInputCommitHash = await HasColumnAsync(conn, "runs", "execution_input_commit_hash", ct)
+            ? "execution_input_commit_hash"
+            : "NULL AS execution_input_commit_hash";
+        var executionInputCompositeId = await HasColumnAsync(conn, "runs", "execution_input_composite_id", ct)
+            ? "execution_input_composite_id"
+            : "NULL AS execution_input_composite_id";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             $"""
@@ -1487,7 +1528,11 @@ public sealed class SqliteToPostgresMigrator
                   {executableWorkflowPinnedAt},
                   {approvedRevisionId},
                   {lifecycleGeneration},
-                  {currentOutputRevisionId}
+                  {currentOutputRevisionId},
+                  {executionInputRequired},
+                  {executionInputSourceCommitHash},
+                  {executionInputCommitHash},
+                  {executionInputCompositeId}
               FROM runs;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1539,6 +1584,10 @@ public sealed class SqliteToPostgresMigrator
                 ApprovedOutputRevisionId = reader.IsDBNull(41) ? null : reader.GetString(41),
                 LifecycleGeneration = reader.GetInt32(42),
                 CurrentOutputRevisionId = reader.IsDBNull(43) ? null : reader.GetString(43),
+                ExecutionInputRequired = reader.GetInt32(44) != 0,
+                ExecutionInputSourceCommitHash = reader.IsDBNull(45) ? null : reader.GetString(45),
+                ExecutionInputCommitHash = reader.IsDBNull(46) ? null : reader.GetString(46),
+                ExecutionInputCompositeId = reader.IsDBNull(47) ? null : reader.GetString(47),
             });
         }
         return results;

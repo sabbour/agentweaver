@@ -424,6 +424,38 @@ export interface RetriableReviewErrorBody {
   status: string;
 }
 
+export interface OutputRevision {
+  revision_id: string;
+  schema_version: number;
+  lifecycle_generation: number;
+  workflow_digest: string | null;
+  manifest_incomplete: boolean;
+  tree_hash: string;
+  diff_sha256: string;
+  tree_content_sha256: string | null;
+  predecessor_revision_id: string | null;
+  output_kind: string | null;
+  merged_commit_hash: string | null;
+  accepted_no_change: boolean;
+  created_at: string;
+  diff?: string;
+  files?: Array<{ path: string; mode: number; size: number; sha256: string }> | null;
+}
+
+export interface OutputRevisionFile {
+  revision_id: string;
+  path: string;
+  mode: number;
+  sha256: string;
+  content_base64: string;
+}
+
+export interface OutputRevisionComparison {
+  before_revision_id: string;
+  after_revision_id: string;
+  changes: Array<{ path: string; before_sha256: string | null; after_sha256: string | null }>;
+}
+
 export interface WorkspaceFileEntry {
   path: string;
   status: 'added' | 'modified' | 'deleted';

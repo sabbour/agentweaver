@@ -2,6 +2,7 @@ using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -664,7 +665,9 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     // Dormancy CAS (HITL resumability v2): InProgress -> Idle park and
     // Idle -> InProgress wake, each single-winner across replicas.
     // ─────────────────────────────────────────────────────────────────────────
-    private async Task<RunId> InsertInProgressRunAsync(EfRunStore store)
+    private async Task<RunId> InsertInProgressRunAsync(
+        EfRunStore store,
+        bool executionInputRequired = false)
     {
         var runId = RunId.New();
         await store.InsertAsync(new Run
@@ -672,6 +675,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
             Id = runId,
             RepositoryPath = "/repo",
             OriginatingBranch = "main",
+            ExecutionInputRequired = executionInputRequired,
             ModelSource = ModelSource.GitHubCopilot,
             Task = "idle cas test",
             SubmittingUser = "alice",
@@ -679,6 +683,27 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
             StartedAt = DateTimeOffset.UtcNow,
         });
         return runId;
+    }
+
+    [PostgresFact]
+    public async Task ExecutionInputBindingIsDurableIdempotentAndConflictSafe()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var runId = await InsertInProgressRunAsync(store, executionInputRequired: true);
+        var generation = (await store.GetAsync(runId))!.LifecycleGeneration;
+
+        (await store.TryBindExecutionInputAsync(
+            runId, generation, "source", "materialized", "sha256:composite")).Should().BeTrue();
+        (await store.TryBindExecutionInputAsync(
+            runId, generation, "source", "materialized", "sha256:composite")).Should().BeTrue();
+        (await store.TryBindExecutionInputAsync(
+            runId, generation, "other", "other", "sha256:other")).Should().BeFalse();
+
+        var persisted = await store.GetAsync(runId);
+        persisted!.ExecutionInputRequired.Should().BeTrue();
+        persisted.ExecutionInputSourceCommitHash.Should().Be("source");
+        persisted.ExecutionInputCommitHash.Should().Be("materialized");
+        persisted.ExecutionInputCompositeId.Should().Be("sha256:composite");
     }
 
     [PostgresFact]
@@ -947,6 +972,39 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
         (await store.TryClaimAndReserveCoordinatorRunAsync(
             project.Id, dependent.Id, MakeCoordinatorRun(project.Id, RunId.New()),
             DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Lost);
+    }
+
+    [PostgresFact]
+    public async Task ConfirmedNoChangeWithRetainedReceiptCanBeClaimed()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var runs = new EfRunStore(pg.Factory);
+        var source = MakeReadyTask(project.Id, "no-change-source");
+        var dependent = MakeReadyTask(project.Id, "no-change-dependent");
+        await store.InsertAsync(source);
+        await store.InsertAsync(dependent);
+        await store.EditDependenciesAsync(project.Id, 0,
+            new BacklogDependencyEdit(dependent.Id, [source.Id], []));
+        var id = RunId.New();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, source.Id,
+            MakeCoordinatorRun(project.Id, id), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Won);
+        await runs.PinDefaultExecutableWorkflowForTestAsync(id);
+        var producer = (await runs.GetAsync(id))!;
+        (await runs.TryMutateTerminalOutcomeAsync(id, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, "run.completed",
+                new { result = "confirmed" }, DateTimeOffset.UtcNow, producer.LifecycleGeneration),
+            "confirmed", NoChangeOutput: new NoChangeOutputPublication(
+                "base-commit", "base-tree", RunOutputTree.Encode([]))))).Should().BeTrue();
+
+        (await store.ListDependencyStatusesAsync(project.Id, [dependent.Id]))
+            .Should().ContainSingle(status => status.IsSatisfied && status.Reason == "accepted_no_change");
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id)
+            .Should().Contain(dependent.Id);
+        (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, dependent.Id,
+            MakeCoordinatorRun(project.Id, RunId.New()), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Won);
     }
 
     [PostgresFact]

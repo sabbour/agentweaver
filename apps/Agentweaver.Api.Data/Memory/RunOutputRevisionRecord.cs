@@ -11,6 +11,13 @@ public sealed class RunOutputRevisionRecord
     public string TreeHash { get; set; } = "";
     public string DiffSha256 { get; set; } = "";
     public string? PredecessorRevisionId { get; set; }
+    public string? OutputKind { get; set; }
+    public string? MergedCommitHash { get; set; }
+    public string? WorkPlanId { get; set; }
+    public string? MergeEffectId { get; set; }
+    public bool AcceptedNoChange { get; set; }
     public byte[]? DiffBytes { get; set; }
+    public byte[]? TreeContent { get; set; }
+    public string? TreeContentSha256 { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }

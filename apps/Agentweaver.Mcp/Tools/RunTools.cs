@@ -434,6 +434,48 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
+    [McpServerTool(Name = "run_output_history"), Description("List immutable output revisions for a run, including collective output identities.")]
+    public async Task<string> RunOutputHistoryAsync(
+        [Description("Run ID")] string run_id, CancellationToken ct = default)
+    {
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(run_id)}/output-revisions", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
+    [McpServerTool(Name = "run_output_revision"), Description("Read the exact immutable output revision and retained file inventory.")]
+    public async Task<string> RunOutputRevisionAsync(
+        [Description("Run ID")] string run_id,
+        [Description("Exact output revision ID")] string revision_id, CancellationToken ct = default)
+    {
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(run_id)}/output-revisions/{Uri.EscapeDataString(revision_id)}", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
+    [McpServerTool(Name = "run_output_file"), Description("Read retained exact file bytes (base64), independent of the current branch or worktree.")]
+    public async Task<string> RunOutputFileAsync(
+        [Description("Run ID")] string run_id,
+        [Description("Exact output revision ID")] string revision_id,
+        [Description("File path in the retained output tree")] string path, CancellationToken ct = default)
+    {
+        var encodedPath = string.Join("/", path.TrimStart('/').Split('/', '\\').Select(Uri.EscapeDataString));
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(run_id)}/output-revisions/{Uri.EscapeDataString(revision_id)}/files/{encodedPath}", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
+    [McpServerTool(Name = "run_output_compare"), Description("Compare exact retained file identities between two output revisions of one run.")]
+    public async Task<string> RunOutputCompareAsync(
+        [Description("Run ID")] string run_id,
+        [Description("Earlier output revision ID")] string before_revision_id,
+        [Description("Later output revision ID")] string after_revision_id, CancellationToken ct = default)
+    {
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(run_id)}/output-revisions/{Uri.EscapeDataString(before_revision_id)}/compare/{Uri.EscapeDataString(after_revision_id)}", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
     [McpServerTool(Name = "run_retry"), Description("Retry a failed run by creating a fresh run from its original inputs.")]
     public async Task<string> RunRetryAsync(
         [Description("Run ID")] string run_id,

@@ -44,6 +44,13 @@ public sealed class PreviewPublicationLeaseRunStore(
 
     public IRunStore Inner { get; } = inner;
 
+    public Task<bool> TryBindExecutionInputAsync(
+        RunId runId, int expectedLifecycleGeneration, string sourceCommitHash,
+        string executionCommitHash, string compositeId, CancellationToken ct = default) =>
+        Inner.TryBindExecutionInputAsync(
+            runId, expectedLifecycleGeneration, sourceCommitHash,
+            executionCommitHash, compositeId, ct);
+
     /// <summary>Test constructor: shrinks the wait so a deferral test does not take minutes.</summary>
     internal PreviewPublicationLeaseRunStore(
         IRunStore inner,
@@ -235,20 +242,35 @@ public sealed class PreviewPublicationLeaseRunStore(
         RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Inner.UpdateAssemblyArtifactsAsync(runId, treeHash, diff, ct);
 
-    public Task UpdateReviewReadyAsync(
-        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default,
-        DateTimeOffset? now = null) =>
+    public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount,
+        CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now);
+
+    public Task UpdateReviewReadyAsync(
+        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct,
+        DateTimeOffset? now, byte[]? treeContent) =>
+        Inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now, treeContent);
 
     public Task<RunOutputRevision?> GetOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
         Inner.GetOutputRevisionAsync(runId, revisionId, ct);
     public Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
-        int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
-        Inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now);
+         int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
+         Inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now);
+
+    public Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
+        int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        Inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now, treeContent);
     public Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default) =>
         Inner.GetLatestOutputRevisionAsync(runId, ct);
     public Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(RunId runId, CancellationToken ct = default) =>
         Inner.ListOutputRevisionsAsync(runId, ct);
+    public Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct = default) =>
+        Inner.PublishCollectiveCandidateAsync(runId, generation, workPlanId, treeHash, diff, treeContent, ct);
+    public Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
+        Inner.ApproveCollectiveCandidateAsync(runId, generation, revisionId, ct);
 
     public Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>

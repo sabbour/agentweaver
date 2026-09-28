@@ -17,6 +17,22 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
 {
     private const int SqliteConstraint = 19;   // SQLITE_CONSTRAINT
     private const int MaxOrderKeyRetries = 5;
+    private const string CollectiveRevisionExistsSql =
+        """
+        EXISTS (SELECT 1 FROM run_output_revisions v
+                WHERE v.revision_id = r.current_output_revision_id
+                  AND v.run_id = r.run_id AND v.lifecycle_generation = r.lifecycle_generation
+                  AND ((v.schema_version = 2 AND v.merged_commit_hash = r.merged_commit_hash)
+                       OR (v.schema_version = 4 AND v.merged_commit_hash IS NULL
+                           AND r.approved_output_revision_id = v.revision_id)
+                       OR (v.schema_version = 3 AND r.result = 'confirmed'
+                           AND v.accepted_no_change = 1
+                           AND v.merged_commit_hash = r.merged_commit_hash))
+                  AND v.output_kind IN ('collective', 'no_change')
+                  AND v.manifest_incomplete = 0 AND v.diff_bytes IS NOT NULL
+                  AND v.tree_content IS NOT NULL AND v.tree_content_sha256 IS NOT NULL
+                  AND v.tree_hash = r.tree_hash)
+        """;
 
     private readonly SqliteDb _db;
 
@@ -134,10 +150,28 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                    r.result,
                    prerequisite.archived_at,
                    r.merged_commit_hash,
-                   r.tree_hash
+                   r.tree_hash,
+                   v.revision_id,
+                   v.accepted_no_change,
+                   v.diff_sha256,
+                   v.diff_bytes,
+                   v.tree_content_sha256,
+                   v.tree_content
               FROM backlog_task_dependencies d
               JOIN backlog_tasks prerequisite ON prerequisite.task_id = d.depends_on_task_id
               LEFT JOIN runs r ON r.run_id = prerequisite.run_id
+              LEFT JOIN run_output_revisions v ON v.revision_id = r.current_output_revision_id
+                   AND v.run_id = r.run_id AND v.lifecycle_generation = r.lifecycle_generation
+                   AND ((v.schema_version = 2 AND v.merged_commit_hash = r.merged_commit_hash)
+                        OR (v.schema_version = 4 AND v.merged_commit_hash IS NULL
+                            AND r.approved_output_revision_id = v.revision_id)
+                        OR (v.schema_version = 3 AND r.result = 'confirmed'
+                            AND v.accepted_no_change = 1
+                            AND v.merged_commit_hash = r.merged_commit_hash))
+                   AND v.output_kind IN ('collective', 'no_change')
+                   AND v.manifest_incomplete = 0 AND v.diff_bytes IS NOT NULL
+                   AND v.tree_content IS NOT NULL AND v.tree_content_sha256 IS NOT NULL
+                   AND v.tree_hash = r.tree_hash
              WHERE d.project_id = $projectId
                AND d.task_id IN ({taskPlaceholders})
              ORDER BY d.task_id, d.depends_on_task_id;
@@ -148,6 +182,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
+            var revisionAvailable = !reader.IsDBNull(9)
+                && RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(12)) == reader.GetString(11)
+                && !reader.IsDBNull(13) && !reader.IsDBNull(14)
+                && RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(14)) == reader.GetString(13);
             results.Add(new BacklogDependencyStatus(
                 BacklogTaskId.Parse(reader.GetString(0)),
                 BacklogTaskId.Parse(reader.GetString(1)),
@@ -158,13 +196,14 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                     reader.IsDBNull(4) ? null : reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
                     reader.IsDBNull(7) ? null : reader.GetString(7),
-                    reader.IsDBNull(8) ? null : reader.GetString(8)),
+                    reader.IsDBNull(8) ? null : reader.GetString(8), revisionAvailable),
                 BacklogPrerequisiteOutcome.Reason(
                     !reader.IsDBNull(6),
                     reader.IsDBNull(4) ? null : reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
                     reader.IsDBNull(7) ? null : reader.GetString(7),
-                    reader.IsDBNull(8) ? null : reader.GetString(8))));
+                    reader.IsDBNull(8) ? null : reader.GetString(8), revisionAvailable,
+                    revisionAvailable && reader.GetInt32(10) != 0)));
         }
 
         return results;
@@ -272,7 +311,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = SelectSql +
-            """
+            $"""
              WHERE project_id = $projectId AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
                AND NOT EXISTS (
                     SELECT 1
@@ -284,10 +323,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                            prerequisite.archived_at IS NOT NULL
                            OR prerequisite.run_id IS NULL
                            OR r.run_id IS NULL
-                           OR COALESCE(((r.status = 'completed' AND r.result = 'confirmed') OR
-                               ((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete')))
+                           OR COALESCE(((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed')))
                                 AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
-                                AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL)), 0) = 0
+                                AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL
+                                AND (r.status != 'completed' OR {CollectiveRevisionExistsSql})), 0) = 0
                        )
                )
              ORDER BY order_key ASC, committed_at ASC, task_id ASC
@@ -303,7 +342,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            """
+            $"""
             SELECT COUNT(*)
               FROM backlog_tasks bt
               JOIN projects p ON p.project_id = bt.project_id
@@ -319,10 +358,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                            prerequisite.archived_at IS NOT NULL
                            OR prerequisite.run_id IS NULL
                            OR r.run_id IS NULL
-                           OR COALESCE(((r.status = 'completed' AND r.result = 'confirmed') OR
-                               ((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete')))
+                           OR COALESCE(((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed')))
                                 AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
-                                AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL)), 0) = 0
+                                AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL
+                                AND (r.status != 'completed' OR {CollectiveRevisionExistsSql})), 0) = 0
                        )
                );
             """;
@@ -698,10 +737,23 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 """
                 SELECT d.depends_on_task_id, p.run_id, p.archived_at,
                        r.status, r.result, r.merged_commit_hash, r.tree_hash,
-                       r.lifecycle_generation, r.executable_workflow_content_digest
+                       r.lifecycle_generation, r.executable_workflow_content_digest,
+                       v.revision_id, v.diff_sha256, v.diff_bytes, v.accepted_no_change,
+                       v.tree_content_sha256, v.tree_content
                   FROM backlog_task_dependencies d
                   JOIN backlog_tasks p ON p.task_id = d.depends_on_task_id
                   LEFT JOIN runs r ON r.run_id = p.run_id
+                  LEFT JOIN run_output_revisions v ON v.revision_id = r.current_output_revision_id
+                       AND v.run_id = r.run_id AND v.lifecycle_generation = r.lifecycle_generation
+                       AND ((v.schema_version = 2 AND v.merged_commit_hash = r.merged_commit_hash)
+                            OR (v.schema_version = 4 AND v.merged_commit_hash IS NULL
+                                AND r.approved_output_revision_id = v.revision_id)
+                            OR (v.schema_version = 3 AND r.result = 'confirmed'
+                                AND v.accepted_no_change = 1
+                                AND v.merged_commit_hash = r.merged_commit_hash))
+                       AND v.output_kind IN ('collective', 'no_change')
+                       AND v.manifest_incomplete = 0 AND v.diff_bytes IS NOT NULL
+                       AND v.tree_hash = r.tree_hash
                  WHERE d.project_id = $projectId AND d.task_id = $taskId
                  ORDER BY d.depends_on_task_id;
                 """;
@@ -715,17 +767,26 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                 if (!reader.IsDBNull(2) || !BacklogPrerequisiteOutcome.IsSatisfied(
                         status, result,
                         reader.IsDBNull(5) ? null : reader.GetString(5),
-                        reader.IsDBNull(6) ? null : reader.GetString(6)))
+                        reader.IsDBNull(6) ? null : reader.GetString(6),
+                        !reader.IsDBNull(9)))
                     return new ClaimReserveOutcome(ClaimReserveResult.Lost);
+                if (!reader.IsDBNull(9)
+                    && (RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(11)) != reader.GetString(10)
+                        || RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(14)) != reader.GetString(13)))
+                    throw new RunOutputRevisionUnavailableException("corrupt_content");
+                if (!reader.IsDBNull(9))
+                    RunOutputTree.Decode(reader.GetFieldValue<byte[]>(14));
                 claimedInputs.Add(new BacklogClaimedPrerequisite(
                     reader.GetString(0), reader.GetString(1),
                     BacklogPrerequisiteOutcome.Reason(false, status, result,
                         reader.IsDBNull(5) ? null : reader.GetString(5),
-                        reader.IsDBNull(6) ? null : reader.GetString(6)),
+                        reader.IsDBNull(6) ? null : reader.GetString(6),
+                        !reader.IsDBNull(9), !reader.IsDBNull(9) && reader.GetInt32(12) != 0),
                     reader.GetInt32(7),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
                     reader.IsDBNull(6) ? null : reader.GetString(6),
-                    reader.IsDBNull(8) ? null : reader.GetString(8)));
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.IsDBNull(9) ? null : reader.GetString(9)));
             }
         }
 
@@ -734,7 +795,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         {
             claim.Transaction = tx;
             claim.CommandText =
-                """
+                $"""
                 UPDATE backlog_tasks
                    SET state = 'claimed', run_id = $runId, claimed_at = $claimedAt,
                        claimed_graph_revision = $graphRevision,
@@ -751,10 +812,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                                prerequisite.archived_at IS NOT NULL
                                OR prerequisite.run_id IS NULL
                                OR r.run_id IS NULL
-                               OR COALESCE(((r.status = 'completed' AND r.result = 'confirmed') OR
-                                   ((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete')))
+                               OR COALESCE(((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed')))
                                     AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
-                                    AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL)), 0) = 0
+                                    AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL
+                                    AND (r.status != 'completed' OR {CollectiveRevisionExistsSql})), 0) = 0
                            )
                    );
                 """;
@@ -821,7 +882,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                                   executable_workflow_pin_required, executable_workflow_manifest_schema_version,
                                   executable_workflow_definition_id, executable_workflow_definition_version,
                                   executable_workflow_source, executable_workflow_content_digest,
-                                  executable_workflow_definition_yaml, executable_workflow_pinned_at)
+                                  executable_workflow_definition_yaml, executable_workflow_pinned_at,
+                                  execution_input_required)
                 SELECT $runId, $repo, $branch, $modelSource, $task,
                        $user, $status, $startedAt, $endedAt, $result,
                        NULL, NULL, $projectId, $modelId,
@@ -832,7 +894,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                        $executableWorkflowPinRequired, $executableWorkflowManifestSchemaVersion,
                        $executableWorkflowDefinitionId, $executableWorkflowDefinitionVersion,
                        $executableWorkflowSource, $executableWorkflowContentDigest,
-                       $executableWorkflowDefinitionYaml, $executableWorkflowPinnedAt
+                       $executableWorkflowDefinitionYaml, $executableWorkflowPinnedAt,
+                       $executionInputRequired
                 WHERE EXISTS (
                     SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
                 );
@@ -868,6 +931,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             insertRun.Parameters.AddWithValue("$executableWorkflowContentDigest", (object?)coordinatorRun.ExecutableWorkflowContentDigest ?? DBNull.Value);
             insertRun.Parameters.AddWithValue("$executableWorkflowDefinitionYaml", (object?)coordinatorRun.ExecutableWorkflowDefinitionYaml ?? DBNull.Value);
             insertRun.Parameters.AddWithValue("$executableWorkflowPinnedAt", coordinatorRun.ExecutableWorkflowPinnedAt is { } pinnedAt ? Ts(pinnedAt) : DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executionInputRequired", claimedInputs.Count > 0 ? 1 : 0);
             var runRows = await insertRun.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (runRows != 1)
             {

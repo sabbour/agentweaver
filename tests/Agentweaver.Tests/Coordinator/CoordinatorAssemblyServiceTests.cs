@@ -391,6 +391,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
         // Autonomous budget already exhausted → the decider returns Proceed.
         await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6);
+        await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "tree-abc", "verified-diff");
 
         var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -444,6 +445,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6);
 
         var touched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        await _runStore.UpdateAssemblyArtifactsAsync(
+            RunId.Parse(coordinatorRunId), "tree-approve", "verified-diff");
+        await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "tree-approve", "verified-diff");
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var route = InvokeRouteAssemblyGateThroughSteeringAsync(
@@ -453,7 +457,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         // The escalation opens the human-review gate; the human APPROVES → assembly completes (merge).
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
-            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice"));
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId));
         await route;
 
         var types = EventTypes_(coordinatorRunId);
@@ -573,6 +577,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         // left `executing`. A status-only recovery would silently mark it applied (drop the escalation).
         await SetPlanSteeringStateAsync(workPlanId, status: WorkPlanStatus.AssemblySteering, steeringIterations: 6);
         var directiveId = await SeedExecutingProceedDirectiveAsync(coordinatorRunId, subtaskIds, "tree-crash");
+        await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "tree-crash", "verified-diff");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var redrove = await InvokeDriveOutstandingSteeringExecutionAsync(
@@ -602,7 +607,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await SetPlanReviewStateAsync(workPlanId);
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _scopeFactory, coordinatorRunId, "alice",
-            IntegrationBranchName_(coordinatorRunId), "tree-open", default);
+            IntegrationBranchName_(coordinatorRunId), "tree-open", "revision-open", default);
         var directiveId = await SeedExecutingProceedDirectiveAsync(coordinatorRunId, subtaskIds, "tree-open");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -1057,6 +1062,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         // Round MaxRecoveryAttempts+1: the per-subtask recovery budget is now exhausted → the decider's
         // policy flips to Proceed → this gate ESCALATES to human review (the bounded loop terminates).
+        await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "tree-final", "verified-diff");
         var finalTouched = subtaskIds.ToDictionary(id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var route = InvokeRouteAssemblyGateThroughSteeringAsync(
@@ -1396,7 +1402,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -1422,7 +1428,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -1533,7 +1539,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -1568,7 +1574,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task PersistAssemblyReviewDecision_WritesLatestDecisionToDurableReviewState()
+    public async Task PersistAssemblyReviewDecision_RejectsUnboundAndDuplicateDecisions()
     {
         const string coordinatorRunId = "coord-deferred-duplicate";
         var decision = new AssemblyReviewDecision(
@@ -1590,9 +1596,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var rows = await db.AssemblyReviews.AsNoTracking()
             .Where(d => d.CoordinatorRunId == coordinatorRunId)
             .ToListAsync();
-        rows.Should().ContainSingle();
-        rows[0].DecisionJson.Should().Contain("\"Approved\":false");
-        rows[0].DecisionJson.Should().Contain("duplicate decline");
+        rows.Should().BeEmpty("a decision without a durable candidate must not create a review gate");
     }
 
     // ── Happy path: event sequence + node-flip ──────────────────────────────────────────────────
@@ -1615,7 +1619,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -1677,7 +1681,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"));
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId));
         await run;
     }
 
@@ -1713,7 +1717,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 0);
 
         var view = await steering.SteerAsync(
-            coordinatorRunId, "redirect", null, "Please fix the signup validation.", "alice", ct: cts.Token);
+            coordinatorRunId, "redirect", null, "Please fix the signup validation.", "alice", ct: cts.Token,
+            outputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId);
 
         view.Kind.Should().Be("redirect");
         view.Status.Should().Be(SteeringStatus.Relayed,
@@ -1755,7 +1760,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 0);
 
         var view = await steering.SteerAsync(
-            coordinatorRunId, "amend", null, "Also cover the empty-email edge case.", "alice", ct: cts.Token);
+            coordinatorRunId, "amend", null, "Also cover the empty-email edge case.", "alice",
+            ct: cts.Token,
+            outputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId);
 
         view.Kind.Should().Be("amend");
         view.Status.Should().Be(SteeringStatus.Relayed);
@@ -1813,7 +1820,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         // Clean up the still-parked loop so the test disposes deterministically.
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
     }
@@ -1841,9 +1848,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await _runStore.UpdateStatusAsync(
             RunId.Parse(coordinatorRunId), RunStatus.AwaitingReview, null, CancellationToken.None);
         await SetPlanReviewStateAsync(workPlanId);
+        var revisionId = await SeedCollectiveCandidateAsync(
+            coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recover", "agg-tree",
-            CancellationToken.None);
+            revisionId, CancellationToken.None);
         // The RACE WINNER already submitted its decision to the durable record → the loser's redirect
         // resolves as NotPending/AlreadySubmitted (redundant).
         await SeedDeferredAssemblyDecisionAsync(coordinatorRunId,
@@ -1852,7 +1861,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var steering = NewSteeringWithReviewGate();
         var view = await steering.SteerAsync(
-            coordinatorRunId, "redirect", null, "Please also fix the signup validation.", "alice");
+            coordinatorRunId, "redirect", null, "Please also fix the signup validation.", "alice",
+            outputRevisionId: revisionId);
 
         view.Kind.Should().Be("redirect");
         view.Status.Should().Be(SteeringStatus.Superseded,
@@ -1900,7 +1910,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
 
         await run;
@@ -2043,6 +2053,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var (workPlanId, _) = await SeedPlanAsync(
             coordinatorRunId,
             new[] { SubtaskStatus.AssembleReady });
+        await SeedCoordinatorRunAsync(coordinatorRunId);
         await SeedPreparedMergeAsync(workPlanId, coordinatorRunId);
         var effectId = $"{coordinatorRunId}:g1:collective-merge";
 
@@ -2144,23 +2155,41 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                 default);
 
             var runId = RunId.Parse(coordinatorRunId);
+            await _runStore.PinDefaultExecutableWorkflowForTestAsync(runId);
             var run = (await _runStore.GetAsync(runId))!;
-            (await _runStore.TrySetTerminalOutcomeAsync(
+            var approved = (await _runStore.GetOutputRevisionAsync(
+                runId, run.ApprovedOutputRevisionId!))!;
+            (await _runStore.TryMutateTerminalOutcomeAsync(
                 runId,
-                TerminalRunOutcome.Create(
-                    RunStatus.Completed,
-                    EventTypes.RunCompleted,
-                    new { result = "assembly_complete" },
-                    DateTimeOffset.UtcNow,
-                    run.LifecycleGeneration),
-                "assembly_complete")).Should().BeTrue();
+                new TerminalRunMutation(
+                    TerminalRunOutcome.Create(
+                        RunStatus.Completed, EventTypes.RunCompleted,
+                        new { result = "assembly_complete" },
+                        DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    "assembly_complete", MergedCommitHash: "merge-commit", TreeHash: "agg-tree",
+                    CollectiveOutput: new CollectiveOutputPublication(
+                        workPlanId.ToString(), effectId, "merge-commit", "agg-tree", false,
+                        approved.TreeContent),
+                    ApprovedCollectiveRevisionId: run.ApprovedOutputRevisionId))).Should().BeTrue();
+            var completed = (await _runStore.GetAsync(runId))!;
+            completed.CurrentOutputRevisionId.Should().NotBe(run.ApprovedOutputRevisionId);
+            completed.MergedCommitHash.Should().Be("merge-commit");
+            (await _runStore.GetOutputRevisionAsync(runId, completed.CurrentOutputRevisionId!))!
+                .WorkPlanId.Should().Be(workPlanId.ToString());
+            var revision = (await _runStore.GetOutputRevisionAsync(runId, completed.CurrentOutputRevisionId!))!;
+            revision.OutputKind.Should().Be("collective");
+            revision.SchemaVersion.Should().Be(RunOutputRevision.CollectiveSchemaVersion);
+            revision.TreeHash.Should().Be(completed.TreeHash);
+            revision.PredecessorRevisionId.Should().Be(completed.ApprovedOutputRevisionId);
+            revision.MergeEffectId.Should().Be(effectId);
         };
 
         await _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
 
-        _pipeline.Scribes.Should().Be(1, "the unique CAS winner still owns the non-replayable post-merge effect");
+        _pipeline.Scribes.Should().Be(1, "the merge winner already ran Scribe before terminal CAS");
         var state = await _assemblyStore.GetAsync(workPlanId, default);
-        state!.Status.Should().Be(WorkPlanStatus.Complete);
+        state!.Status.Should().Be(WorkPlanStatus.Complete, "run: {0}",
+            (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))?.Result);
         state.MergeEffectState.Should().Be(MergeEffectState.Applied);
     }
 
@@ -2227,7 +2256,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -2261,13 +2290,14 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         // Empty aggregate diff ⇒ IntegrationBranchResult.HasChanges == false.
         _pipeline.IntegrationResult = IntegrationBranchResult.Success(
-            "agentweaver/integration/coord-empty", treeHash: string.Empty, diff: string.Empty);
+            "agentweaver/integration/coord-empty",
+            treeHash: "4b825dc642cb6eb9a060e54bf8d69288fbee4904", diff: string.Empty);
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -2276,6 +2306,30 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _pipeline.LastRaiRequest.Should().NotBeNull();
         _pipeline.LastRaiRequest!.WorktreePath.Should().BeEmpty(
             "with no changes the RAI reviewer request carries no worktree (diff-text-only)");
+    }
+
+    [Fact]
+    public async Task RaiRed_MissingCandidate_DoesNotParkUnreviewablePlan()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId, new[] { SubtaskStatus.AssembleReady });
+        var before = (await _assemblyStore.GetAsync(workPlanId, default))!.Status;
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "ParkRaiRedAtHumanReviewAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        Func<Task> act = () => (Task)method.Invoke(_sut,
+        [
+            Context(coordinatorRunId), workPlanId, Array.Empty<(int, int)>(),
+            "agg-tree", new Dictionary<int, IReadOnlySet<string>>(), "red", CancellationToken.None,
+        ])!;
+
+        await act.Should().ThrowAsync<RunOutputRevisionUnavailableException>()
+            .WithMessage("collective_output_revision_unavailable");
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(before);
+        (await CoordinatorAssemblyReviewPersistence.GetAsync(_scopeFactory, coordinatorRunId, default))
+            .Should().BeNull();
     }
 
     [Fact]
@@ -2289,6 +2343,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
         await InvokeEnsureFinalPreviewOutcomeBeforeApprovalAsync(coordinatorRunId, workPlanId, "agg-tree");
+        await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
         await InvokeApplyAuthoredGateDecisionAsync(
             Context(coordinatorRunId),
             workPlanId,
@@ -2371,6 +2426,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         await InvokeEnsurePreviewApplicabilityRecordedAsync(coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
         await InvokeEnsureFinalPreviewOutcomeBeforeApprovalAsync(coordinatorRunId, workPlanId, "agg-tree");
+        await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
         await InvokeApplyAuthoredGateDecisionAsync(
             Context(coordinatorRunId),
             workPlanId,
@@ -2621,8 +2677,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         await SeedCoordinatorRunAsync(coordinatorRunId);
         await SetPlanReviewStateAsync(workPlanId);
+        var revisionId = await SeedCollectiveCandidateAsync(
+            coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
-            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recover", "agg-tree", CancellationToken.None);
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recover", "agg-tree", revisionId, CancellationToken.None);
         await SeedDeferredAssemblyDecisionAsync(coordinatorRunId,
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice"));
         _streamStore.Create(coordinatorRunId, "alice");
@@ -2643,15 +2701,17 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         await SeedCoordinatorRunAsync(coordinatorRunId);
         await SetPlanReviewStateAsync(workPlanId);
+        var revisionId = await SeedCollectiveCandidateAsync(
+            coordinatorRunId, workPlanId, "agg-tree", "aggregate diff");
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
-            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recover", "agg-tree", CancellationToken.None);
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recover", "agg-tree", revisionId, CancellationToken.None);
         _streamStore.Create(coordinatorRunId, "alice");
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
         _pipeline.IntegrationBuilds.Should().Be(0, "recovery should re-arm the review gate from persisted state");
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
-            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice"))
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -3002,7 +3062,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: false, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -3030,7 +3090,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -3074,7 +3134,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -3119,7 +3179,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -3177,7 +3237,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -3207,7 +3267,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _streamStore.Create(coordinatorRunId, "alice");
         await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _scopeFactory, coordinatorRunId, "alice",
-            "agentweaver/integration/" + coordinatorRunId, "deadbeef", default);
+            "agentweaver/integration/" + coordinatorRunId, "deadbeef", "revision-failed", default);
 
         const string reason = "assembly_rearm_exhausted after 3 attempts";
         await _sut.FailAssemblyAsync(Context(coordinatorRunId), reason, default);
@@ -3316,13 +3376,25 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
         var persisted = await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default);
-        persisted!.Status.Should().Be(RunStatus.Completed);
+        persisted!.Status.Should().Be(RunStatus.Completed, "run: {0}", persisted.Result);
         persisted.Result.Should().Be("assembly_complete");
+        var output = (await _runStore.GetOutputRevisionAsync(persisted.Id, persisted.CurrentOutputRevisionId!))!;
+        output.OutputKind.Should().Be("collective");
+        output.SchemaVersion.Should().Be(RunOutputRevision.CollectiveSchemaVersion);
+        output.MergedCommitHash.Should().Be("merge-commit");
+        output.PredecessorRevisionId.Should().Be(persisted.ApprovedOutputRevisionId);
+        var approved = (await _runStore.GetOutputRevisionAsync(
+            persisted.Id, persisted.ApprovedOutputRevisionId!))!;
+        approved.SchemaVersion.Should().Be(RunOutputRevision.CollectiveCandidateSchemaVersion);
+        approved.MergedCommitHash.Should().BeNull("the reviewed candidate remains immutable before merge");
+        persisted.MergedCommitHash.Should().Be("merge-commit");
+        output.TreeHash.Should().Be("agg-tree");
+        output.DiffBytes.Should().NotBeNull();
     }
 
     [Fact]
@@ -3345,8 +3417,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var firstRun = MakeCoordinatorRun(project.Id, RunId.New()) with { RepositoryPath = "repo" };
         var secondRun = MakeCoordinatorRun(project.Id, RunId.New()) with { RepositoryPath = "repo" };
         foreach (var (task, run) in new[] { (first, firstRun), (second, secondRun) })
+        {
             (await backlog.TryClaimAndReserveCoordinatorRunAsync(project.Id, task.Id, run, DateTimeOffset.UtcNow))
                 .Should().Be(ClaimReserveResult.Won);
+            await _runStore.PinDefaultExecutableWorkflowForTestAsync(run.Id);
+        }
 
         async Task AssembleAsync(Run run)
         {
@@ -3357,7 +3432,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             await WaitUntilArmedAsync(runId);
             _reviewGate.TrySubmit(runId, "alice",
                 new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                    TargetFiles: null, Reviewer: "alice"))
+                    TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId))
                 .Should().Be(AssemblyReviewSubmitResult.Accepted);
             await assembly;
             var completed = await _runStore.GetAsync(run.Id);
@@ -3365,6 +3440,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             completed.Result.Should().Be("assembly_complete");
             completed.MergedCommitHash.Should().Be("merge-commit");
             completed.TreeHash.Should().Be("agg-tree");
+            completed.CurrentOutputRevisionId.Should().NotBeNull();
+            (await _runStore.GetOutputRevisionAsync(run.Id, completed.CurrentOutputRevisionId!))!
+                .OutputKind.Should().Be("collective");
         }
 
         await AssembleAsync(firstRun);
@@ -3396,7 +3474,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             [firstRun.Id.ToString(), secondRun.Id.ToString()]);
         inputs.Should().OnlyContain(input => input.Outcome == "integrated");
         inputs.Should().OnlyContain(input => input.MergedCommitHash == "merge-commit"
-            && input.TreeHash == "agg-tree");
+            && input.TreeHash == "agg-tree" && input.OutputRevisionId != null);
         inputs.Single(input => input.RunId == secondRun.Id.ToString())
             .LifecycleGeneration.Should().BeGreaterThan(1);
 
@@ -3593,7 +3671,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await WaitUntilArmedAsync(coordinatorRunId);
         _reviewGate.TrySubmit(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"))
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
 
@@ -3787,7 +3865,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             new Dictionary<int, IReadOnlySet<string>>(),
             decision,
             SteeringSource.BuildTest,
-            string.Empty,
+            "agg-tree",
             CancellationToken.None,
         ])!;
         return await task.ConfigureAwait(false);
@@ -4001,6 +4079,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         plan.IntegrationBranch = "agentweaver/integration/recover";
         plan.UpdatedAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync();
+        await _runStore.UpdateAssemblyArtifactsAsync(
+            RunId.Parse(plan.CoordinatorRunId), "agg-tree", "verified-diff");
     }
 
     private async Task SetSubtaskStatusAsync(int subtaskId, string status)
@@ -4174,8 +4254,11 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
     private async Task SeedDeferredAssemblyDecisionAsync(string coordinatorRunId, AssemblyReviewDecision decision)
     {
+        var pending = await CoordinatorAssemblyReviewPersistence.GetAsync(
+            _scopeFactory, coordinatorRunId, CancellationToken.None);
         await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
-            _scopeFactory, coordinatorRunId, decision, CancellationToken.None);
+            _scopeFactory, coordinatorRunId,
+            decision with { OutputRevisionId = pending?.OutputRevisionId }, CancellationToken.None);
     }
 
     private async Task SeedCoordinatorRunAsync(
@@ -4197,6 +4280,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             ModelId = modelId,
             ProjectId = projectId,
         });
+        await _runStore.PinDefaultExecutableWorkflowForTestAsync(RunId.Parse(coordinatorRunId));
     }
 
     private async Task SeedChildRunAsync(
@@ -4317,6 +4401,28 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         plan.MergePreparedAt = DateTimeOffset.UtcNow;
         plan.UpdatedAt = owner is null ? DateTimeOffset.UtcNow : DateTimeOffset.UtcNow.AddMinutes(1);
         await db.SaveChangesAsync();
+        await _runStore.UpdateAssemblyArtifactsAsync(
+            RunId.Parse(coordinatorRunId), "agg-tree", "verified-diff");
+        var runId = RunId.Parse(coordinatorRunId);
+        await _runStore.PinDefaultExecutableWorkflowForTestAsync(runId);
+        var run = (await _runStore.GetAsync(runId))!;
+        var candidate = await _runStore.PublishCollectiveCandidateAsync(
+            runId, run.LifecycleGeneration, workPlanId.ToString(), "agg-tree", "verified-diff",
+            _pipeline.CaptureOutputTree("repo", "agg-tree"));
+        (await _runStore.ApproveCollectiveCandidateAsync(
+            runId, run.LifecycleGeneration, candidate.RevisionId)).Should().BeTrue();
+    }
+
+    private async Task<string> SeedCollectiveCandidateAsync(
+        string coordinatorRunId, int workPlanId, string treeHash, string diff)
+    {
+        var id = RunId.Parse(coordinatorRunId);
+        await _runStore.UpdateAssemblyArtifactsAsync(id, treeHash, diff);
+        var run = (await _runStore.GetAsync(id))!;
+        var candidate = await _runStore.PublishCollectiveCandidateAsync(
+            id, run.LifecycleGeneration, workPlanId.ToString(), treeHash, diff,
+            _pipeline.CaptureOutputTree("repo", treeHash));
+        return candidate.RevisionId;
     }
 
     private async Task CancelRunAsync(string coordinatorRunId)
@@ -4345,6 +4451,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
     private sealed class FakePipeline : ICollectiveAssemblyPipeline
     {
+        public byte[] CaptureOutputTree(string repositoryPath, string treeHash) =>
+            RunOutputTree.Encode([new RunOutputTree.File("fixture.txt", 33188, System.Text.Encoding.UTF8.GetBytes(treeHash))]);
         public int IntegrationBuilds;
         public int IntegrationRetryPreparations;
         public int BuildTests;

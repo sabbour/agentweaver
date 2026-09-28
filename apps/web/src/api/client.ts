@@ -446,6 +446,26 @@ export class AgentweaverApiClient {
     return this.request<WorkspaceFileContent>('GET', `/runs/${encodeURIComponent(runId)}/files/${encoded}/content`);
   }
 
+  getOutputRevisionHistory(runId: string): Promise<import('./types').OutputRevision[]> {
+    return this.request<import('./types').OutputRevision[]>('GET', `/runs/${encodeURIComponent(runId)}/output-revisions`);
+  }
+
+  getOutputRevision(runId: string, revisionId: string): Promise<import('./types').OutputRevision> {
+    return this.request<import('./types').OutputRevision>(
+      'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(revisionId)}`);
+  }
+
+  getOutputRevisionFile(runId: string, revisionId: string, path: string): Promise<import('./types').OutputRevisionFile> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return this.request<import('./types').OutputRevisionFile>(
+      'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(revisionId)}/files/${encoded}`);
+  }
+
+  compareOutputRevisions(runId: string, before: string, after: string): Promise<import('./types').OutputRevisionComparison> {
+    return this.request<import('./types').OutputRevisionComparison>(
+      'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(before)}/compare/${encodeURIComponent(after)}`);
+  }
+
   getRunWorkspace(runId: string): Promise<WorkspaceNode[]> {
     return this.request<WorkspaceNode[]>('GET', `/runs/${encodeURIComponent(runId)}/workspace`);
   }

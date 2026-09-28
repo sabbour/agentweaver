@@ -151,16 +151,17 @@ public sealed class WorktreeManager
 
             if (!branchExists)
             {
-                var origin = repo.Branches[originatingBranch]
+                var origin = repo.Branches[originatingBranch]?.Tip
+                    ?? repo.Lookup<Commit>(originatingBranch)
                     ?? throw new RunSubmissionValidationException(
-                        $"Originating branch '{Truncate(originatingBranch, 200)}' was not found.");
+                        $"Starting revision '{Truncate(originatingBranch, 200)}' was not found.");
 
                 // Resolve the originating branch to a concrete commit SHA while the repo handle is open.
                 // Passing the resolved SHA (NOT the raw branch string) to `git worktree add` preserves the
                 // case-insensitive branch resolution LibGit2Sharp gives us (e.g. originatingBranch="main"
                 // resolving against a HEAD named "Main"), which callers/tests rely on and which the
                 // case-sensitive git CLI would otherwise fail to reproduce.
-                startSha = origin.Tip.Sha;
+                startSha = origin.Sha;
             }
         }
         // Dispose the LibGit2Sharp repo handle (exit the using block) BEFORE invoking the git CLI to

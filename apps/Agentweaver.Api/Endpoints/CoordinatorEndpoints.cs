@@ -721,7 +721,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                 request.Instruction ?? string.Empty,
                 caller.User,
                 run.ProjectId is null ? caller.GitHubLogin : run.SubmittingUser,
-                ct);
+                ct, request.OutputRevisionId);
 
             var statusCode = directive.Status == SteeringStatus.Deferred
                 ? StatusCodes.Status202Accepted
@@ -732,6 +732,10 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         catch (SteeringValidationException ex)
         {
             return BadRequestError("steering_invalid", ex.Message);
+        }
+        catch (RunOutputRevisionUnavailableException ex)
+        {
+            return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (SteeringRecoveryExhaustedException ex)
         {
@@ -825,7 +829,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             RequestChanges: request.RequestChanges,
             Feedback: request.Feedback,
             TargetFiles: request.TargetFiles,
-            Reviewer: CallerDisplayName(caller));
+            Reviewer: CallerDisplayName(caller),
+            OutputRevisionId: request.OutputRevisionId);
 
         var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
             scopeFactory,
@@ -856,6 +861,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                     },
                     statusCode: StatusCodes.Status202Accepted),
             AssemblyReviewDeliveryResult.Forbidden => ForbiddenError(),
+            AssemblyReviewDeliveryResult.StaleRevision =>
+                Results.Conflict(new { error = "stale_output_revision", message = "Review the current output revision before deciding." }),
             _ => NoAssemblyReviewPending(),
         };
     }
