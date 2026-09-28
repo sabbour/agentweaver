@@ -101,6 +101,7 @@ test(".NET tests run as stable independent shards", () => {
   assert.match(jobs, /node scripts\/ci\/dotnet-test-shards\.mjs matrix/);
   assert.match(jobs, /dotnet-test-shards:/);
   assert.match(jobs, /strategy:\n\s+fail-fast: false\n\s+matrix: \$\{\{ fromJSON\(needs\.dotnet-test-plan\.outputs\.matrix\) \}\}/);
+  assert.match(jobs, /dotnet-test-shards:[\s\S]*?timeout-minutes: \$\{\{ matrix\.timeoutMinutes \}\}/);
   assert.match(jobs, /name: \.NET tests/);
   assert.match(jobs, /--logger "trx;LogFileName=\$\{\{ matrix\.id \}\}\.trx"/);
   assert.doesNotMatch(jobs, /Run full \.NET test suite/);

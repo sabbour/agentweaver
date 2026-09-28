@@ -21,4 +21,9 @@ test('test shard definitions produce a stable CI matrix', () => {
     JSON.parse(matrix()).include.map((shard) => shard.id),
     TEST_SHARDS.map((shard) => shard.id),
   );
+  assert.deepEqual(
+    Object.fromEntries(JSON.parse(matrix()).include.map(({ id, timeoutMinutes }) => [id, timeoutMinutes])),
+    Object.fromEntries(TEST_SHARDS.map(({ id }) => [id, id === 'orchestration' ? 20 : 15])),
+    'only the long-running orchestration shard receives a larger job timeout',
+  );
 });

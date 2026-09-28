@@ -156,7 +156,7 @@ jobs:
     needs: dotnet-test-plan
     if: needs.dotnet-test-plan.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.timeoutMinutes }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.dotnet-test-plan.outputs.matrix) }}
