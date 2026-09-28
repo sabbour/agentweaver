@@ -25,17 +25,16 @@ must never introduce a cycle.
 
 ### Out
 - cross-project links or a replacement graph store
-- guaranteed retention of historical artifact bytes before #1396 finishes
 - editing the inputs of already claimed work
 
 ## Acceptance criteria
 
-- [ ] Prerequisite results distinguish integration, accepted no-change, failure, cancellation, and delegation.
-- [ ] Ready selection filters unmet dependencies before its limit in both stores.
-- [ ] Derived overlap edges are acyclic, even through transitive paths.
-- [ ] Link edits reject invalid and cyclic graphs without partial writes; concurrent opposite edits cannot both win.
+- [x] Prerequisite results distinguish integration, accepted no-change, failure, cancellation, and delegation.
+- [x] Ready selection filters unmet dependencies before its limit in both stores.
+- [x] Derived overlap edges are acyclic, even through transitive paths.
+- [x] Link edits reject invalid and cyclic graphs without partial writes; concurrent opposite edits cannot both win.
 - [x] Claimed tasks retain accepted prerequisite run/generation and commit/tree identities; web, REST, and MCP show the graph and waits.
-- [ ] Exact-revision retained collective output and no-change receipts remain dependent on #1396.
+- [x] Exact-revision retained collective output and no-change receipts are available through #1396.
 
 ## Notable edge cases
 

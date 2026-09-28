@@ -546,6 +546,42 @@ public sealed class SqliteBacklogTaskStoreTests
     }
 
     [Fact]
+    public async Task ConfirmedOutcomeWithCollectiveRevisionCannotMasqueradeAsNoChangeReceipt()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var runs = new SqliteRunStore(testDb.Db);
+        var producer = MakeCoordinatorRun(project.Id, RunId.New());
+        await runs.InsertAsync(producer);
+        await PublishIntegratedAsync(runs, producer.Id, RunStatus.Completed, "assembly_complete",
+            "producer-commit", "producer-tree", acceptedNoChange: true);
+        await using (var connection = await testDb.Db.OpenConnectionAsync())
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE runs SET result = 'confirmed' WHERE run_id = $id;";
+            command.Parameters.AddWithValue("$id", producer.Id.ToString());
+            (await command.ExecuteNonQueryAsync()).Should().Be(1);
+        }
+        var first = MakeReadyTask(project.Id, "first") with
+        {
+            State = BacklogTaskState.Claimed, RunId = producer.Id, ClaimedAt = DateTimeOffset.UtcNow,
+        };
+        var next = MakeReadyTask(project.Id, "next");
+        await store.InsertAsync(first);
+        await store.InsertAsync(next);
+        await InsertDependencyAsync(testDb.Db, project.Id, next.Id, first.Id);
+
+        (await store.ListDependencyStatusesAsync(project.Id, [next.Id]))
+            .Should().ContainSingle(status => !status.IsSatisfied
+                && status.Reason == "upstream_output_revision_unavailable");
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
+        (await store.CountReadyForPickupAsync()).Should().Be(0);
+        (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, next.Id,
+            MakeCoordinatorRun(project.Id, RunId.New()), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Lost);
+    }
+
+    [Fact]
     public async Task BlockedPrefixBeyondFourPickupWindows_DoesNotHideReadyTail()
     {
         var (testDb, store, project) = await NewStoreWithProjectAsync();
@@ -749,7 +785,8 @@ public sealed class SqliteBacklogTaskStoreTests
                 .Which.Message.Should().Be("task_claimed_or_archived");
         }
     private static async Task PublishIntegratedAsync(
-        SqliteRunStore runs, RunId id, RunStatus status, string result, string commit, string tree)
+        SqliteRunStore runs, RunId id, RunStatus status, string result, string commit, string tree,
+        bool acceptedNoChange = false)
     {
         var run = await runs.GetAsync(id);
         var collective = status == RunStatus.Completed;
@@ -771,7 +808,7 @@ public sealed class SqliteBacklogTaskStoreTests
                 MergedCommitHash: commit,
                 TreeHash: tree,
                 CollectiveOutput: collective
-                    ? new CollectiveOutputPublication("1", $"effect-{id}", commit, tree, false,
+                    ? new CollectiveOutputPublication("1", $"effect-{id}", commit, tree, acceptedNoChange,
                         RunOutputTree.Encode([new RunOutputTree.File("receipt.txt", 33188,
                             System.Text.Encoding.UTF8.GetBytes(tree))]))
                     : null))).Should().BeTrue();

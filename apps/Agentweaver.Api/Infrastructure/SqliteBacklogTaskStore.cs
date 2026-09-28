@@ -22,6 +22,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         EXISTS (SELECT 1 FROM run_output_revisions v
                 WHERE v.revision_id = r.current_output_revision_id
                   AND v.run_id = r.run_id AND v.lifecycle_generation = r.lifecycle_generation
+                  AND (r.result != 'confirmed' OR (v.schema_version = 3 AND v.output_kind = 'no_change'))
                   AND ((v.schema_version = 2 AND v.merged_commit_hash = r.merged_commit_hash)
                        OR (v.schema_version = 4 AND v.merged_commit_hash IS NULL
                            AND r.approved_output_revision_id = v.revision_id)
@@ -152,7 +153,9 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                    r.merged_commit_hash,
                    r.tree_hash,
                    v.revision_id,
-                   v.accepted_no_change,
+                   CASE WHEN v.schema_version = 3 AND v.output_kind = 'no_change'
+                             AND v.accepted_no_change = 1
+                        THEN 1 ELSE 0 END AS accepted_no_change,
                    v.diff_sha256,
                    v.diff_bytes,
                    v.tree_content_sha256,
@@ -196,7 +199,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                     reader.IsDBNull(4) ? null : reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
                     reader.IsDBNull(7) ? null : reader.GetString(7),
-                    reader.IsDBNull(8) ? null : reader.GetString(8), revisionAvailable),
+                    reader.IsDBNull(8) ? null : reader.GetString(8), revisionAvailable,
+                    revisionAvailable && reader.GetInt32(10) != 0),
                 BacklogPrerequisiteOutcome.Reason(
                     !reader.IsDBNull(6),
                     reader.IsDBNull(4) ? null : reader.GetString(4),
@@ -768,7 +772,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                         status, result,
                         reader.IsDBNull(5) ? null : reader.GetString(5),
                         reader.IsDBNull(6) ? null : reader.GetString(6),
-                        !reader.IsDBNull(9)))
+                        !reader.IsDBNull(9),
+                        !reader.IsDBNull(9) && reader.GetInt32(12) != 0))
                     return new ClaimReserveOutcome(ClaimReserveResult.Lost);
                 if (!reader.IsDBNull(9)
                     && (RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(11)) != reader.GetString(10)
