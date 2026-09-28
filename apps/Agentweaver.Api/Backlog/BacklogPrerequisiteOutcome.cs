@@ -3,10 +3,11 @@ namespace Agentweaver.Api.Backlog;
 public static class BacklogPrerequisiteOutcome
 {
     public static bool IsSatisfied(string? status, string? result, string? commit, string? tree,
-        bool hasCollectiveRevision = false) =>
+        bool hasCollectiveRevision = false, bool acceptedNoChange = false) =>
         IsIntegrated(status, result)
             && !string.IsNullOrWhiteSpace(commit) && !string.IsNullOrWhiteSpace(tree)
-            && (status != "completed" || hasCollectiveRevision);
+            && (status != "completed" || hasCollectiveRevision)
+            && (status != "completed" || result != "confirmed" || acceptedNoChange);
 
     public static string Reason(bool archived, string? status, string? result, string? commit, string? tree,
         bool hasCollectiveRevision = false, bool acceptedNoChange = false)

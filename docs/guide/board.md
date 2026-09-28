@@ -98,7 +98,8 @@ Collective review is bound to an immutable candidate published before the review
 request; approval of a replaced candidate is stale.
 New accepted no-change completions retain a tree and receipt and can satisfy a
 prerequisite; historical completions without a receipt stay blocked with
-`upstream_output_revision_unavailable`.
+`upstream_output_revision_unavailable`. A `confirmed` result cannot borrow an
+ordinary collective revision as a no-change receipt.
 
 For REST callers, read `graph_revision` on a task or GET
 `/api/projects/{projectId}/backlog/dependencies/revision`, then POST

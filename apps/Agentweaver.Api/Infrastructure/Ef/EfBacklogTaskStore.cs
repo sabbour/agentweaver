@@ -136,6 +136,10 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 && (revision.OutputKind != "collective" || revision.WorkPlanId is not null)
                 && RunOutputRevision.Sha256(revision.DiffBytes!) == revision.DiffSha256
                 && RunOutputRevision.Sha256(revision.TreeContent!) == revision.TreeContentSha256;
+            var acceptedNoChange = available
+                && revision!.SchemaVersion == RunOutputRevision.NoChangeSchemaVersion
+                && revision.OutputKind == "no_change"
+                && revision.AcceptedNoChange;
             return new BacklogDependencyStatus(
                 BacklogTaskId.Parse(row.TaskId),
                 BacklogTaskId.Parse(row.DependsOnTaskId),
@@ -143,10 +147,11 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 row.RunId is null ? null : RunId.Parse(row.RunId),
                 row.RunStatus is null ? null : RunStatusExtensions.ParseStatus(row.RunStatus),
                 row.ArchivedAt is null && BacklogPrerequisiteOutcome.IsSatisfied(
-                    row.RunStatus, row.RunResult, row.Commit, row.Tree, available),
+                    row.RunStatus, row.RunResult, row.Commit, row.Tree, available,
+                    acceptedNoChange),
                 BacklogPrerequisiteOutcome.Reason(
                     row.ArchivedAt is not null, row.RunStatus, row.RunResult, row.Commit, row.Tree,
-                    available, available && revision!.AcceptedNoChange));
+                    available, acceptedNoChange));
         })
             .ToList();
     }
@@ -229,6 +234,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                                     && (r.Status != "completed" || db.RunOutputRevisions.Any(v =>
                                         v.RevisionId == r.CurrentOutputRevisionId
                                         && v.RunId == r.RunId && v.LifecycleGeneration == r.LifecycleGeneration
+                                        && (r.Result != "confirmed" || (v.SchemaVersion == RunOutputRevision.NoChangeSchemaVersion
+                                            && v.OutputKind == "no_change"))
                                         && ((v.SchemaVersion == RunOutputRevision.CollectiveSchemaVersion
                                                 && v.MergedCommitHash == r.MergedCommitHash)
                                             || (v.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
@@ -575,6 +582,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 input.Status, input.Result, input.Commit, input.Tree,
                 input.RevisionId is not null
                     && revisions.TryGetValue(input.RevisionId, out var revision)
+                    && (input.Result != "confirmed" || (revision.SchemaVersion == RunOutputRevision.NoChangeSchemaVersion
+                        && revision.OutputKind == "no_change"))
                     && ((revision.SchemaVersion == RunOutputRevision.CollectiveSchemaVersion
                             && revision.MergedCommitHash == input.Commit)
                         || (revision.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
@@ -589,7 +598,10 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                     && revision.RunId == input.RunId && revision.LifecycleGeneration == input.Generation
                     && revision.TreeHash == input.Tree
                     && revision.DiffBytes is not null && revision.TreeContent is not null
-                    && revision.TreeContentSha256 is not null)))
+                    && revision.TreeContentSha256 is not null,
+                input.RevisionId is not null
+                    && revisions.TryGetValue(input.RevisionId, out var acceptedRevision)
+                    && acceptedRevision.AcceptedNoChange)))
         {
             await tx.RollbackAsync(ct);
             return new ClaimReserveOutcome(ClaimReserveResult.Lost);
