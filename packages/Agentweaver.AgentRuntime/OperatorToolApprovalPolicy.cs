@@ -66,6 +66,10 @@ public static class OperatorToolApprovalPolicy
         "run_execution_identity",
         "run_failure_diagnostic",
         "run_get_file",
+        "run_output_compare",
+        "run_output_file",
+        "run_output_history",
+        "run_output_revision",
         "run_show_artifacts",
         "run_status",
         "run_watch",
@@ -239,6 +243,10 @@ public static class OperatorToolApprovalPolicy
 
         // Runs: reads (submit/task/retry/review/archive are gated).
         "run_get_file",
+        "run_output_compare",
+        "run_output_file",
+        "run_output_history",
+        "run_output_revision",
         "run_show_artifacts",
         "run_status",
         "run_watch",

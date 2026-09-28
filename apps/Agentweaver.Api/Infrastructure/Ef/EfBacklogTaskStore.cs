@@ -133,7 +133,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                     && revision.MergedCommitHash == row.Commit)
                 && revision.RunId == row.RunId && revision.LifecycleGeneration == row.Generation
                 && revision.TreeHash == row.Tree
-                && revision.WorkPlanId is not null
+                && (revision.OutputKind != "collective" || revision.WorkPlanId is not null)
                 && RunOutputRevision.Sha256(revision.DiffBytes!) == revision.DiffSha256
                 && RunOutputRevision.Sha256(revision.TreeContent!) == revision.TreeContentSha256;
             return new BacklogDependencyStatus(

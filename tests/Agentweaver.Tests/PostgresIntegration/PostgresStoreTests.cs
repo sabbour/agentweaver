@@ -831,6 +831,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
     {
         var project = await InsertProjectAsync();
         var store = new EfBacklogTaskStore(pg.Factory);
+        var runs = new EfRunStore(pg.Factory);
         var prerequisite = MakeReadyTask(project.Id, "prerequisite");
         var dependent = MakeReadyTask(project.Id, "dependent");
         await store.InsertAsync(prerequisite);
@@ -851,15 +852,13 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
         (await store.TryClaimAndReserveCoordinatorRunAsync(
             project.Id, prerequisite.Id, MakeCoordinatorRun(project.Id, prerequisiteRunId),
             DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Won);
-        await using (var db = await pg.CreateDbContextAsync())
-        {
-            await db.Runs.Where(r => r.RunId == prerequisiteRunId.ToString())
-                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "completed")
-                    .SetProperty(r => r.Result, "complete")
-                    .SetProperty(r => r.MergedCommitHash, "accepted-commit")
-                    .SetProperty(r => r.TreeHash, "accepted-tree")
-                    .SetProperty(r => r.LifecycleGeneration, 3));
-        }
+        await runs.PinDefaultExecutableWorkflowForTestAsync(prerequisiteRunId);
+        var producer = (await runs.GetAsync(prerequisiteRunId))!;
+        (await runs.TryMutateTerminalOutcomeAsync(prerequisiteRunId, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, "run.completed",
+                new { result = "confirmed" }, DateTimeOffset.UtcNow, producer.LifecycleGeneration),
+            "confirmed", NoChangeOutput: new NoChangeOutputPublication(
+                "accepted-commit", "accepted-tree", RunOutputTree.Encode([]))))).Should().BeTrue();
 
         var gate = "aw_claim_gate_" + Guid.NewGuid().ToString("N");
         var lockKey = Random.Shared.NextInt64(1, long.MaxValue);
@@ -927,7 +926,7 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
                 claimed!.ClaimedPrerequisitesJson!)!;
             snapshot.Should().ContainSingle().Which.Should().Match<BacklogClaimedPrerequisite>(
                 input => input.RunId == prerequisiteRunId.ToString()
-                    && input.LifecycleGeneration == 3);
+                    && input.LifecycleGeneration == producer.LifecycleGeneration);
             await using var db = await pg.CreateDbContextAsync();
             (await db.Runs.CountAsync(r => r.RunId == dependentRunId.ToString())).Should().Be(1);
         }
