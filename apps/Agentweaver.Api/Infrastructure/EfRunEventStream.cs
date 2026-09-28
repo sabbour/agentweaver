@@ -328,6 +328,12 @@ public sealed class EfRunEventStream : IRunEventStream
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default)
         => await AppendConditionalAsync(runId, events, requiredLease: null, ct).ConfigureAwait(false);
 
+    public Task<IReadOnlyList<RunEvent>> AppendWhilePreviewPublicationOwnedAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore,
+        string ownerId, int lifecycleGeneration, CancellationToken ct = default)
+        => AppendConditionalAsync(runId, events, requiredLease: null, ct,
+            publicationOwner: ownerId, publicationGeneration: lifecycleGeneration);
+
     public async Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedAsync(
         string runId,
         IReadOnlyList<RunEvent> events,
@@ -340,7 +346,9 @@ public sealed class EfRunEventStream : IRunEventStream
         string runId,
         IReadOnlyList<RunEvent> events,
         RunLeaseFence? requiredLease,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? publicationOwner = null,
+        int? publicationGeneration = null)
     {
         var terminalStatuses = Endpoints.EndpointHelpers.TerminalRunStatuses
             .Append(RunStatus.AssembleReady).Select(s => s.ToApiString()).ToArray();
@@ -365,6 +373,14 @@ public sealed class EfRunEventStream : IRunEventStream
                         && r.FencingToken == requiredLease.FencingToken
                         && r.LifecycleGeneration == requiredLease.LifecycleGeneration
                         && r.LeaseExpiresAt > now);
+                }
+                if (publicationOwner is not null)
+                {
+                    var now = DateTimeOffset.UtcNow;
+                    activeRuns = activeRuns.Where(r =>
+                        r.PreviewPublicationLeaseOwner == publicationOwner
+                        && r.PreviewPublicationLeaseUntil > now
+                        && r.LifecycleGeneration == publicationGeneration);
                 }
                 var active = await activeRuns
                     .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, r => r.Status), ct)

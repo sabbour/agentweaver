@@ -87,6 +87,13 @@ public interface IRunEventStream
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support conditional event batches.");
 
+    /// <summary>Commits preview-ready events only while this attempt owns the live publication lease
+    /// for the same run generation. Ownership and append must be atomic across API replicas.</summary>
+    Task<IReadOnlyList<RunEvent>> AppendWhilePreviewPublicationOwnedAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore,
+        string ownerId, int lifecycleGeneration, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support publication-fenced event batches.");
+
     /// <summary>
     /// Appends events only while the exact coordinator lease and lifecycle generation remain current.
     /// PostgreSQL and SQLite implementations fence the lease check and append in one transaction.

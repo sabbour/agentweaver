@@ -111,6 +111,13 @@ the observed session ID. If registration times out, check `run_status` and retry
 confirming that the sandbox is still running. On non-Kubernetes backends, it provides local
 run instructions instead.
 
+If an API restart interrupts publication, retry with the same healthy preview session and
+port. A live publication attempt still returns a conflict; once its short renewable lease
+expires, a retry returns the already-published healthy route when its ready outcome was
+committed, or takes ownership without restarting the preview process otherwise. A superseded
+attempt cannot publish its ready events or release the retry's lease. A terminal run or
+unhealthy preview session remains an explicit error.
+
 The supervised preview process accepts either a worktree-relative working directory or the canonical absolute path of the worktree (or one of its subdirectories). Paths outside the run worktree, traversal escapes, and symlink or junction escapes remain blocked by the sandbox policy.
 
 ## The OutcomeSpec confirmation

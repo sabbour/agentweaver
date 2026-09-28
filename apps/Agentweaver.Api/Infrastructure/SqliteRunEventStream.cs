@@ -579,11 +579,17 @@ public sealed class SqliteRunEventStream : IRunEventStream
         RunLeaseFence lease,
         CancellationToken ct = default)
     {
-        return AppendWhileRunLeaseOwnedCoreAsync(runId, events, lease, ct);
+        return AppendWhileRunLeaseOwnedCoreAsync(runId, events, lease, null, null, ct);
     }
 
+    public Task<IReadOnlyList<RunEvent>> AppendWhilePreviewPublicationOwnedAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore,
+        string ownerId, int lifecycleGeneration, CancellationToken ct = default) =>
+        AppendWhileRunLeaseOwnedCoreAsync(runId, events, null, ownerId, lifecycleGeneration, ct);
+
     private async Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedCoreAsync(
-        string runId, IReadOnlyList<RunEvent> events, RunLeaseFence lease, CancellationToken ct)
+        string runId, IReadOnlyList<RunEvent> events, RunLeaseFence? lease,
+        string? publicationOwner, int? publicationGeneration, CancellationToken ct)
     {
         if (events.Count == 0)
             return [];
@@ -602,7 +608,13 @@ public sealed class SqliteRunEventStream : IRunEventStream
         using (var owned = connection.CreateCommand())
         {
             owned.Transaction = tx;
-            owned.CommandText = """
+            owned.CommandText = lease is null ? """
+                UPDATE runs SET status=status
+                 WHERE run_id=$runId AND lifecycle_generation=$generation
+                   AND status NOT IN ('merged','declined','failed','completed','merge_failed','assemble_ready','cancelled')
+                   AND preview_publication_lease_owner=$owner
+                   AND preview_publication_lease_until>$now;
+                """ : """
                 UPDATE runs SET status=status
                  WHERE run_id=$runId AND lifecycle_generation=$generation
                    AND status NOT IN ('merged','declined','failed','completed','merge_failed','assemble_ready','cancelled')
@@ -611,9 +623,12 @@ public sealed class SqliteRunEventStream : IRunEventStream
                           AND lease_expires_at>$now);
                 """;
             owned.Parameters.AddWithValue("$runId", runId);
-            owned.Parameters.AddWithValue("$generation", lease.LifecycleGeneration);
-            owned.Parameters.AddWithValue("$owner", lease.OwnerId);
-            owned.Parameters.AddWithValue("$token", lease.FencingToken);
+            owned.Parameters.AddWithValue("$generation", lease?.LifecycleGeneration ?? publicationGeneration
+                ?? throw new ArgumentException("Publication generation is required."));
+            owned.Parameters.AddWithValue("$owner", lease?.OwnerId ?? publicationOwner
+                ?? throw new ArgumentException("Publication owner is required."));
+            if (lease is not null)
+                owned.Parameters.AddWithValue("$token", lease.FencingToken);
             owned.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
             if (await owned.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0)
                 return [];

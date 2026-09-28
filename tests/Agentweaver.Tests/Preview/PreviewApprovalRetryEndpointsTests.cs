@@ -731,6 +731,118 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         }
     }
 
+    [Fact]
+    public async Task AgentPreview_RestartedPublication_ReclaimsExpiredLeaseForSameSession()
+    {
+        var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
+        var preview = new RetainedPreviewService(runner)
+        {
+            StartEntered = new(TaskCreationOptions.RunContinuationsAsynchronously),
+            ContinueStart = new(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IPreviewRunnerHttpClient>(runner);
+            services.AddSingleton<ISandboxPreviewService>(preview);
+        }));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, _) = await CreateRunAsync(RunStatus.InProgress, services: factory.Services);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        const string previousOwner = "retained-process";
+        (await runStore.TryAcquirePreviewPublicationAsync(
+            RunId.Parse(runId), previousOwner, DateTimeOffset.UtcNow.AddMinutes(-1))).Should().BeTrue();
+
+        var request = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
+        {
+            target_port = 5173,
+            preview_runner_session_id = previousOwner,
+        });
+        var approvalId = await WaitForApprovalAsync(streams, runId);
+        (await factory.Services.GetRequiredService<IToolApprovalGate>()
+            .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
+
+        await preview.StartEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            (await runStore.TryRenewPreviewPublicationAsync(
+                RunId.Parse(runId), previousOwner, DateTimeOffset.UtcNow.AddMinutes(3)))
+                .Should().BeFalse("the restarted request must use a fresh owner, not the shared process session");
+        }
+        finally
+        {
+            preview.ContinueStart.SetResult();
+        }
+        (await request.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+        preview.StartCalls.Should().Be(1);
+        runner.StopCalls.Should().Be(0);
+        var events = await factory.Services.GetRequiredService<IRunEventStream>()
+            .GetPersistedEventsAsync(runId);
+        events.Where(e => e.Type is EventTypes.SandboxPreviewReady or EventTypes.CoordinatorPreviewReady)
+            .Select(e => e.Type).Should().Equal(
+                EventTypes.SandboxPreviewReady, EventTypes.CoordinatorPreviewReady);
+    }
+
+    [Fact]
+    public async Task AgentPreview_ReadyCommittedBeforeRestart_ReusesPublishedRouteWithoutDuplicateReady()
+    {
+        var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
+        var preview = new RetainedPreviewService(runner);
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IPreviewRunnerHttpClient>(runner);
+            services.AddSingleton<ISandboxPreviewService>(preview);
+        }));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, _) = await CreateRunAsync(RunStatus.InProgress, services: factory.Services);
+        var streams = factory.Services.GetRequiredService<RunStreamStore>();
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        const string sessionId = "retained-process";
+        const string oldOwner = "orphaned-owner";
+        var parsedRunId = RunId.Parse(runId);
+        var generation = (await runStore.GetAsync(parsedRunId))!.LifecycleGeneration;
+        var route = new PreviewSession(
+            "gateway-token", runId, "pod", 5173, "https://preview.example.test", DateTimeOffset.UtcNow);
+        preview.SeedPublishedSession(route);
+        (await runStore.TryAcquirePreviewPublicationAsync(
+            parsedRunId, oldOwner, DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeTrue();
+        (await SandboxEndpoints.PublishPreviewReadyAsync(
+            route,
+            new
+            {
+                source = "preview-api", lifecycle_generation = generation,
+                preview_runner_session_id = sessionId, target_port = 5173,
+                session_id = route.Token, preview_url = route.PreviewUrl,
+            },
+            preview, streams, runStore, CancellationToken.None, oldOwner, generation))
+            .Should().BeTrue("the prior API committed ready before losing its response");
+        (await runStore.TryRenewPreviewPublicationAsync(
+            parsedRunId, oldOwner, DateTimeOffset.UtcNow.AddMinutes(-1)))
+            .Should().BeTrue("the API died before it could release its lease");
+
+        var request = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
+        {
+            target_port = 5173,
+            preview_runner_session_id = sessionId,
+        });
+        var approvalId = await WaitForApprovalAsync(streams, runId);
+        (await factory.Services.GetRequiredService<IToolApprovalGate>()
+            .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
+        var response = await request.WaitAsync(TimeSpan.FromSeconds(5));
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var returned = await response.Content.ReadFromJsonAsync<JsonElement>();
+        returned.GetProperty("session_id").GetString().Should().Be(route.Token);
+        returned.GetProperty("preview_url").GetString().Should().Be(route.PreviewUrl);
+        preview.StartCalls.Should().Be(0, "the committed route must be reused, not published again");
+        runner.StopCalls.Should().Be(0);
+        var events = await factory.Services.GetRequiredService<IRunEventStream>()
+            .GetPersistedEventsAsync(runId);
+        events.Count(e => e.Type == EventTypes.SandboxPreviewReady).Should().Be(1);
+        events.Count(e => e.Type == EventTypes.CoordinatorPreviewReady).Should().Be(1);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -994,23 +1106,33 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         public int StopCalls;
         public int HealthCallsAtStart;
         public string? SessionId;
+        public TaskCompletionSource? StartEntered;
+        public TaskCompletionSource? ContinueStart;
+        private PreviewSession? _publishedSession;
         public bool Enabled => true;
         public int AllowedPortMin => 3000;
         public int AllowedPortMax => 9000;
 
-        public Task<PreviewSession> StartPreviewAsync(
+        public async Task<PreviewSession> StartPreviewAsync(
             string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
             string? previewRunnerSessionId = null)
         {
             HealthCallsAtStart = _requireHealthCheck ? _runner.HealthCalls : -1;
             StartCalls++;
             SessionId = previewRunnerSessionId;
-            return Task.FromResult(new PreviewSession(
-                "gateway-token", runId, "pod", targetPort, "https://preview.example.test", DateTimeOffset.UtcNow));
+            StartEntered?.TrySetResult();
+            if (ContinueStart is not null)
+                await ContinueStart.Task.WaitAsync(ct);
+            var session = new PreviewSession(
+                "gateway-token", runId, "pod", targetPort, "https://preview.example.test", DateTimeOffset.UtcNow);
+            return session;
         }
 
+        public void SeedPublishedSession(PreviewSession session) => _publishedSession = session;
+
         public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<PreviewSession>>([]);
+            Task.FromResult<IReadOnlyList<PreviewSession>>(
+                _publishedSession is { } session && session.RunId == runId ? [session] : []);
         public Task KeepAliveAsync(string token, CancellationToken ct = default) => Task.CompletedTask;
         public Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult(PreviewLifecycleState.Previewable);

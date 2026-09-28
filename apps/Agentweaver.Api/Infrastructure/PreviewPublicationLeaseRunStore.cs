@@ -201,6 +201,14 @@ public sealed class PreviewPublicationLeaseRunStore(
         RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
         Inner.TryRenewPreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
 
+    public Task<bool> TryReserveTerminalPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Inner.TryReserveTerminalPreviewCleanupAsync(runId, ownerId, leaseUntil, ct);
+
+    public Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        Inner.TryReserveUnclaimedPreviewCleanupAsync(runId, ownerId, leaseUntil, ct);
+
     public Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default) =>
         Inner.EndPreviewPublicationAsync(runId, ct);
 

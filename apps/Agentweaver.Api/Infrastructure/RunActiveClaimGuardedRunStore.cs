@@ -289,6 +289,14 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
         inner.TryRenewPreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
 
+    public Task<bool> TryReserveTerminalPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        inner.TryReserveTerminalPreviewCleanupAsync(runId, ownerId, leaseUntil, ct);
+
+    public Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        inner.TryReserveUnclaimedPreviewCleanupAsync(runId, ownerId, leaseUntil, ct);
+
     public Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default) =>
         inner.EndPreviewPublicationAsync(runId, ct);
 
