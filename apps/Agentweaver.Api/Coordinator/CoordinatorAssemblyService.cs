@@ -768,6 +768,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             var (workPlanId, status, subtasks, edges) = plan;
             using var scope = _serviceProvider.CreateScope();
             var childWork = scope.ServiceProvider.GetRequiredService<WorkflowChildWorkService>();
+            var composedPlan = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+                .WorkPlans.AsNoTracking().SingleAsync(candidate => candidate.Id == workPlanId, ct)
+                .ConfigureAwait(false);
 
             if (status is WorkPlanStatus.Complete or WorkPlanStatus.AssemblyFailed)
             {
@@ -789,6 +792,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
             try
             {
+                var staged = await childWork.GetStagedComposedAssemblyAsync(workPlanId, ct)
+                    .ConfigureAwait(false);
+                if (staged is not null)
+                {
+                    await TransferToComposedParentAsync(composedPlan, staged, ct).ConfigureAwait(false);
+                    await childWork.CompleteComposedAssemblyAsync(workPlanId, staged, null, ct)
+                        .ConfigureAwait(false);
+                    return;
+                }
+
                 var statusById = subtasks.ToDictionary(subtask => subtask.Id, subtask => subtask.Status);
                 if (subtasks.Count == 0 || !AssemblyPlanning.AllEligible(statusById))
                 {
@@ -837,11 +850,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 await _runStore.UpdateAssemblyArtifactsAsync(
                     RunId.Parse(context.CoordinatorRunId), integration.TreeHash,
                     integration.Diff ?? string.Empty, ct).ConfigureAwait(false);
-                await childWork.CompleteComposedAssemblyAsync(
-                    workPlanId,
-                    new WorkflowComposedAssembly(
-                        integrationBranch, integration.TreeHash, integration.Diff ?? string.Empty, included),
-                    null, ct).ConfigureAwait(false);
+                var assembled = new WorkflowComposedAssembly(
+                    integrationBranch, integration.TreeHash, integration.Diff ?? string.Empty, included);
+                await childWork.StageComposedAssemblyAsync(workPlanId, assembled, ct).ConfigureAwait(false);
+                await TransferToComposedParentAsync(composedPlan, assembled, ct).ConfigureAwait(false);
+                await childWork.CompleteComposedAssemblyAsync(workPlanId, assembled, null, ct)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -855,6 +869,53 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     workPlanId, null, $"composed_assembly_failed:{ex.Message}", CancellationToken.None)
                     .ConfigureAwait(false);
             }
+        }
+
+        async Task TransferToComposedParentAsync(
+            WorkPlan composedPlan, WorkflowComposedAssembly assembled, CancellationToken ct)
+        {
+            if (_worktreeManager is null
+                || !RunId.TryParse(composedPlan.ParentRunId, out var parentId)
+                || string.IsNullOrWhiteSpace(composedPlan.ExecutionBaseTreeHash)
+                || string.IsNullOrWhiteSpace(composedPlan.ParentTurnInputJson))
+                throw new InvalidOperationException("Composed transfer lacks a parent worktree or captured base.");
+            var input = JsonSerializer.Deserialize<AgentTurnInput>(
+                composedPlan.ParentTurnInputJson, JsonDefaults.Options)
+                ?? throw new InvalidOperationException("Composed transfer lost its parent worktree identity.");
+            var parent = await _runStore.GetAsync(parentId, ct).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Composed transfer lost its parent run.");
+            if (parent.Status == RunStatus.AwaitingReview
+                && (string.IsNullOrWhiteSpace(parent.WorktreePath)
+                    || !Directory.Exists(parent.WorktreePath)))
+            {
+                var recovered = _serviceProvider.GetRequiredService<IWorktreeOperations>()
+                    .TryReattachWorktree(parent.RepositoryPath, parent.OriginatingBranch,
+                        parentId.ToString());
+                if (recovered is null
+                    || recovered.Value.BranchName != WorktreeManager.BranchNameFor(parentId))
+                    throw new InvalidOperationException("Composed transfer cannot recover the isolated parent branch.");
+                await _runStore.UpdateWorktreeAsync(
+                    parentId, recovered.Value.WorktreePath, recovered.Value.BranchName, ct)
+                    .ConfigureAwait(false);
+                parent = parent with
+                {
+                    WorktreePath = recovered.Value.WorktreePath,
+                    WorktreeBranch = recovered.Value.BranchName,
+                };
+            }
+            if (parent.Status != RunStatus.AwaitingReview
+                || !string.Equals(input.RunId, parentId.ToString(), StringComparison.Ordinal)
+                || !string.Equals(input.WorktreeBranch, WorktreeManager.BranchNameFor(parentId),
+                    StringComparison.Ordinal)
+                || !string.Equals(input.RepositoryPath, parent.RepositoryPath, StringComparison.Ordinal)
+                || !string.Equals(parent.WorktreeBranch, input.WorktreeBranch, StringComparison.Ordinal)
+                || string.IsNullOrWhiteSpace(parent.WorktreePath))
+                throw new InvalidOperationException("Composed transfer parent is not parked on its isolated branch.");
+            _worktreeManager.TransferComposedTree(
+                parent.RepositoryPath, parent.WorktreePath, parentId,
+                composedPlan.ExecutionBaseTreeHash, assembled.IntegrationBranch, assembled.TreeHash);
+            await _runStore.UpdateAssemblyArtifactsAsync(
+                parentId, assembled.TreeHash, assembled.AggregateDiff, ct).ConfigureAwait(false);
         }
 
         var (workPlanId, planStatus, subtasks, edges) = plan.Value;

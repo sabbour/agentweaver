@@ -36,14 +36,14 @@ review, merge, and Scribe. Neither can safely be used as an embedded workflow st
 
 ## Acceptance criteria
 
-- [x] The grammar recognizes the node but does not advertise it as authorable or executable
-  before the durable runtime is implemented; structurally invalid definitions fail validation.
-- [ ] One correlated pre-dispatch child run and work plan survive retries and restart.
-- [ ] Runtime-derived dependent subtasks execute and assemble exactly once without nested policy gates.
-- [ ] The typed assembled result resumes the pinned parent exactly once; failure and cancellation
+- [x] The grammar advertises the node as authorable and executable only with the supported
+  single-stage topology; structurally invalid definitions fail validation.
+- [x] One correlated pre-dispatch child run and work plan survive retries and restart.
+- [x] Runtime-derived dependent subtasks execute and assemble exactly once without nested policy gates.
+- [x] The typed assembled result resumes the pinned parent exactly once; failure and cancellation
   propagate with durable diagnostics.
-- [ ] API, MCP, events, topology, and artifacts expose parent-to-child correlation.
-- [ ] An acceptance workflow demonstrates a runtime-dependent DAG.
+- [x] API, MCP, events, topology, and artifacts expose parent-to-child correlation.
+- [x] Acceptance coverage demonstrates a runtime-dependent DAG and typed parent continuation.
 
 ## Notable edge cases
 
@@ -51,21 +51,13 @@ review, merge, and Scribe. Neither can safely be used as an embedded workflow st
 - A crash after integration but before delivering the parent continuation must not reassemble.
 - An edited workflow or generated child workflow containing composition must not recurse.
 
-## Current implementation boundary
+## Current implementation
 
-The reserved node still fails binding. The internal child-work path reserves and reattaches one
-correlated run/plan, populates an empty composed plan through the normal decomposition path,
-uses the existing dependency dispatcher, and can persist an assembly-only result in the same
-work-plan row before using the established parent-delivery receipt. These contracts have
-focused in-process tests; they are not an executable workflow or a completed acceptance DAG.
-
-**Decision needed before enabling the node:** collective assembly builds a *separate* integration
-branch, while a pinned parent workflow continues in its own run worktree and its existing review
-and merge executors read that worktree branch. Returning only a branch name, diff, or task text
-does not make the assembled files visible to those executors. The ordinary coordinator merge
-would update the user's branch (prohibited for the nested coordinator). Choose a crash-recoverable,
-idempotent transfer of the verified assembled tree into the **parent's isolated worktree branch**
-before parent resume, guarded by the parent's captured pre-composition tree hash; alternatively
-define and test a new parent-worktree identity handoff across every downstream executor and
-cleanup path. Until one of these contracts is implemented, the binder must continue to reject
-`coordinator_composed`, and issue #1544 remains open.
+The node binds to the durable child-work request port. The child-work path reserves and reattaches one
+correlated run and plan, populates its dynamic DAG through normal decomposition and dependency dispatch,
+and checkpoints assembly in the existing work-plan row. The assembly path stages the verified
+integration tree before an idempotent fast-forward into the parent's **isolated** branch; it checks the
+captured pre-composition tree, refuses dirty or diverged worktrees, and never updates the user's branch.
+Recovery reattaches the parent's durable branch and reconciles a crash between the Git transfer and its
+run-row tree-hash update. The parent resumes only after the installed tree matches the staged result,
+and receives a typed completion carrying the correlated child and assembly identities.

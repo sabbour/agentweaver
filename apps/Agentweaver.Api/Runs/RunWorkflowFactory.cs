@@ -771,10 +771,15 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         var fullDefinition = effectiveDefinition ?? Workflows.BuiltInWorkflows.Default.Definition!;
         var fanOutNode = fullDefinition.Nodes.SingleOrDefault(node => node.Type == WorkflowNodeType.FanOut);
         var fanInNode = fullDefinition.Nodes.SingleOrDefault(node => node.Type == WorkflowNodeType.FanIn);
+        var composedNode = fullDefinition.Nodes.SingleOrDefault(
+            node => node.Type == WorkflowNodeType.CoordinatorComposed);
         ExecutorBinding? fanOutBinding = null;
         ExecutorBinding? fanPauseBinding = null;
         ExecutorBinding? fanInBinding = null;
         ExecutorBinding? fanFailureBinding = null;
+        ExecutorBinding? composedBinding = null;
+        ExecutorBinding? composedPauseBinding = null;
+        ExecutorBinding? composedFailureBinding = null;
         if (fanOutNode is not null && fanInNode is not null)
         {
             var branchNodes = fullDefinition.Edges
@@ -859,6 +864,67 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                         parentInput?.RunId ?? string.Empty,
                         result.FailureReason ?? "workflow_child_work_failed",
                         Evidence: JsonSerializer.Serialize(result.Branches));
+                });
+        }
+        if (composedNode is not null)
+        {
+            var composedPort = RequestPort.Create<WorkflowChildWorkPauseRequest, WorkflowChildWorkResult>(
+                $"workflow-child-work-{composedNode.Id}");
+            composedBinding = new VisualFunctionExecutor<AgentTurnInput, WorkflowChildWorkPauseRequest>(
+                $"coordinator-composed-{composedNode.Id}",
+                composedNode.Id,
+                composedNode.Label,
+                composedNode.Role ?? "assembly",
+                "coordinator-composed",
+                false,
+                async (input, ctx, ct) =>
+                {
+                    if (!RunId.TryParse(input.RunId, out var parsedRunId))
+                        throw new InvalidOperationException($"Invalid parent workflow run id '{input.RunId}'.");
+                    var parentRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException($"Parent workflow run '{input.RunId}' was not found.");
+                    var baseTree = _worktreeOps.GetTreeHash(input.WorktreePath);
+                    if (string.IsNullOrWhiteSpace(baseTree))
+                        throw new InvalidOperationException(
+                            $"Coordinator-composed node '{composedNode.Id}' could not capture the parent tree.");
+
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var attachment = await scope.ServiceProvider
+                        .GetRequiredService<WorkflowChildWorkService>()
+                        .PrepareComposedAsync(
+                            new WorkflowComposedWorkRequest(
+                                parentRun,
+                                fullDefinition.Id,
+                                composedNode.Id,
+                                composedNode.Prompt!,
+                                input,
+                                baseTree),
+                            ct)
+                        .ConfigureAwait(false);
+
+                    return new WorkflowChildWorkPauseRequest(
+                        attachment.WorkPlanId,
+                        input.RunId,
+                        composedNode.Id,
+                        composedNode.Id,
+                        attachment.ChildCoordinatorRunId);
+                });
+            composedPauseBinding = composedPort;
+            composedFailureBinding = new VisualFunctionExecutor<WorkflowChildWorkResult, AgentTurnFailedOutput>(
+                $"coordinator-composed-failed-{composedNode.Id}",
+                composedNode.Id,
+                composedNode.Label,
+                "plumbing",
+                "terminal",
+                true,
+                async (result, ctx, ct) =>
+                {
+                    var parentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    return new AgentTurnFailedOutput(
+                        parentInput?.RunId ?? string.Empty,
+                        result?.FailureReason ?? "workflow_composed_child_work_failed",
+                        Evidence: result is null ? null : JsonSerializer.Serialize(result));
                 });
         }
         var policyGateBindings = BuildPolicyGateBindings(fullDefinition);
@@ -1007,6 +1073,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 FanPauseBinding: fanPauseBinding,
                 FanInBinding: fanInBinding,
                 FanFailureBinding: fanFailureBinding,
+                ComposedBinding: composedBinding,
+                ComposedPauseBinding: composedPauseBinding,
+                ComposedFailureBinding: composedFailureBinding,
                 MaxIterations: MaxIterations,
                 Wiring: wiringSupport));
 
@@ -1388,6 +1457,53 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                         output.JoinedOutput,
                         output.WorkPlanId,
                         output.ChildCoordinatorRunId);
+                });
+        }
+
+        public ExecutorBinding ComposedToAgentAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("composed-to-agent", edge);
+            return new VisualFunctionExecutor<WorkflowChildWorkResult, AgentTurnInput>(
+                id, id, "Composed result", "plumbing", "action", true,
+                async (output, ctx, ct) =>
+                {
+                    var previous = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    var basis = previous ?? EmptyTurn(string.Empty);
+                    var assembly = output.Assembly
+                        ?? throw new InvalidOperationException("Composed child work completed without an assembly.");
+                    var next = basis with
+                    {
+                        Task =
+                            $"{basis.Task}\n\n[Composed coordinator result]\n" +
+                            $"Work plan: {output.WorkPlanId}\n" +
+                            $"Child coordinator: {output.ChildCoordinatorRunId}\n" +
+                            $"Tree: {assembly.TreeHash}\n" +
+                            $"Included child runs: {string.Join(", ", assembly.IncludedChildRunIds)}",
+                        IsRevision = false,
+                    };
+                    await ctx.QueueStateUpdateAsync(
+                        "agent-input", next, "run-context", ct).ConfigureAwait(false);
+                    return next;
+                });
+        }
+
+        public ExecutorBinding ComposedToTerminalAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("composed-to-terminal", edge);
+            return new VisualFunctionExecutor<WorkflowChildWorkResult, WorkflowComposedCompletedOutput>(
+                id, id, "Composed result", "plumbing", "terminal", true,
+                async (output, ctx, ct) =>
+                {
+                    var parentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    return new WorkflowComposedCompletedOutput(
+                        parentInput?.RunId ?? string.Empty,
+                        output.WorkPlanId,
+                        output.ChildCoordinatorRunId,
+                        output.Assembly
+                            ?? throw new InvalidOperationException(
+                                "Composed child work completed without an assembly."));
                 });
         }
 

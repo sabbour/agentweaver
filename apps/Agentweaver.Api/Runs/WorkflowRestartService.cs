@@ -491,6 +491,12 @@ public sealed class WorkflowRestartService
 
                 // Fail-closed: null means the worktree is unreadable/corrupt.
                 var currentNoCheckpointHash = _worktreeOps.GetTreeHash(run.WorktreePath!);
+                if (currentNoCheckpointHash is not null
+                    && !string.Equals(currentNoCheckpointHash, run.TreeHash, StringComparison.Ordinal)
+                    && childWork is not null
+                    && await childWork.TryRestoreTransferredParentTreeAsync(run, currentNoCheckpointHash, ct)
+                        .ConfigureAwait(false))
+                    run = run with { TreeHash = currentNoCheckpointHash };
                 if (currentNoCheckpointHash is null || !string.Equals(currentNoCheckpointHash, run.TreeHash, StringComparison.Ordinal))
                 {
                     _logger.LogError(
@@ -534,6 +540,12 @@ public sealed class WorkflowRestartService
             {
                 var currentTreeHash = _worktreeOps.GetTreeHash(run.WorktreePath!);
                 // Fail-closed: null means the worktree is unreadable/corrupt (FIX 2).
+                if (currentTreeHash is not null
+                    && !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal)
+                    && childWork is not null
+                    && await childWork.TryRestoreTransferredParentTreeAsync(run, currentTreeHash, ct)
+                        .ConfigureAwait(false))
+                    run = run with { TreeHash = currentTreeHash };
                 if (currentTreeHash is null || !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal))
                 {
                     _logger.LogError("Worktree tree hash mismatch for run {RunId}: expected={Expected} actual={Actual}; failing run",

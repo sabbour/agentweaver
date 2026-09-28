@@ -27,9 +27,9 @@ edges: []
 `;
 
 describe('workflowYaml', () => {
-  it('keeps composed nodes parseable but out of the authorable palette', () => {
+  it('keeps composed nodes parseable and authorable', () => {
     expect(WORKFLOW_NODE_TYPES).toContain('coordinator_composed');
-    expect(AUTHORABLE_WORKFLOW_NODE_TYPES).not.toContain('coordinator_composed');
+    expect(AUTHORABLE_WORKFLOW_NODE_TYPES).toContain('coordinator_composed');
 
     const parsed = parseWorkflowYaml(`
 id: reserved

@@ -62,44 +62,51 @@ public sealed class RunWorkflowGraphBinderTests
         AssertCanonicalDefaultGraph(descriptor);
     }
 
-    // ── Fail closed: a node type accepted by the loader but not yet wired throws a node-scoped error. ─
+    // ── Fail closed: a bindable node without its runtime executors throws a node-scoped error. ─
     [Fact]
-    public void UnwiredNodeType_FailsClosed_WithNodeScopedError()
+    public void ComposedNode_MissingRuntimeBindings_FailsClosed_WithNodeScopedError()
     {
-        var bindings = FakeBindings.Create();
+        var bindings = FakeBindings.Create() with { ComposedBinding = null };
         var builder = new GraphDescriptorBuilder(bindings.AgentInputStorer);
 
         var def = new WorkflowDefinition
         {
-            Id = "fan",
-            Name = "Fan",
+            Id = "dynamic",
+            Name = "Dynamic",
             Start = "agent",
             Nodes =
             [
                 Node("agent", WorkflowNodeType.Prompt),
-                Node("spread", WorkflowNodeType.CoordinatorComposed),
+                Node("compose", WorkflowNodeType.CoordinatorComposed) with
+                {
+                    Prompt = "Derive dependent tasks",
+                },
+                Node("done", WorkflowNodeType.Terminal),
             ],
-            Edges = [ new WorkflowEdge { From = "agent", To = "spread" } ],
+            Edges =
+            [
+                new WorkflowEdge { From = "agent", To = "compose" },
+                new WorkflowEdge { From = "compose", To = "done" },
+            ],
         };
 
         var act = () => RunWorkflowGraphBinder.WireFull(builder, def, bindings);
 
         act.Should().Throw<WorkflowBindException>()
-            .Which.NodeId.Should().Be("spread");
+            .Which.NodeId.Should().Be("compose");
     }
 
     [Fact]
-    public void ComposedNode_ValidShapeRemainsNonRunnableUntilDurableExecutionIsWired()
+    public void ComposedNode_ValidShapeIsRuntimeBindable()
     {
         var definition = ComposedDefinition();
 
         RunWorkflowGraphBinder.GetTopologyErrors(definition).Should().BeEmpty();
-        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().ContainSingle(error =>
-            error.Contains("not yet wired to a runtime executor", StringComparison.Ordinal));
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().BeEmpty();
         var grammar = WorkflowGrammarContract.NodeTypes.Single(node =>
             node.Type == WorkflowNodeType.CoordinatorComposed);
-        grammar.Authorable.Should().BeFalse();
-        grammar.RuntimeBindable.Should().BeFalse();
+        grammar.Authorable.Should().BeTrue();
+        grammar.RuntimeBindable.Should().BeTrue();
         grammar.RequiredFields.Should().Contain("prompt");
     }
 
@@ -139,6 +146,21 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Fact]
+    public void ComposedNode_RejectsWorkflowEntryOrMissingPromptPredecessor()
+    {
+        var original = ComposedDefinition();
+        RunWorkflowGraphBinder.GetBindabilityErrors(original with { Start = "compose" })
+            .Should().Contain(error => error.Contains("requires one unconditional incoming edge"));
+
+        var missingIncoming = original with
+        {
+            Edges = [.. original.Edges.Where(edge => edge.To != "compose")],
+        };
+        RunWorkflowGraphBinder.GetTopologyErrors(missingIncoming)
+            .Should().Contain(error => error.Contains("exactly one unconditional incoming edge from a prompt"));
+    }
+
+    [Fact]
     public void ComposedNode_RejectsRecursionAndNestedSteps()
     {
         var original = ComposedDefinition();
@@ -156,7 +178,7 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Fact]
-    public void ComposedNode_LoadedFromGeneratedYamlCannotBecomeExecutable()
+    public void ComposedNode_LoadedFromGeneratedYamlIsExecutable()
     {
         const string yaml = """
             id: generated-dynamic
@@ -181,9 +203,7 @@ public sealed class RunWorkflowGraphBinderTests
         var loaded = WorkflowDefinitionLoader.Load(
             yaml, "generated.yaml", validationMode: WorkflowDefinitionValidationMode.Authoring);
         loaded.IsValid.Should().BeTrue(loaded.Error);
-        var act = () => RunWorkflowGraphBinder.ValidateBindable(loaded.Definition!);
-        act.Should().Throw<WorkflowBindException>()
-            .WithMessage("*coordinator_composed*not yet wired*");
+        RunWorkflowGraphBinder.ValidateBindable(loaded.Definition!);
     }
 
     private static WorkflowDefinition ComposedDefinition() => new()
@@ -774,6 +794,7 @@ public sealed class RunWorkflowGraphBinderTests
             case NodeKind.PeerReview:
             case NodeKind.OpenPullRequest:
             case NodeKind.Scribe:
+            case NodeKind.CoordinatorComposed:
                 edges.Add(new WorkflowEdge { From = entry.Id, To = source.Id });
                 return;
             case NodeKind.Merge:
@@ -800,6 +821,9 @@ public sealed class RunWorkflowGraphBinderTests
         NodeKind.Scribe => Node($"{prefix}-scribe", WorkflowNodeType.Scribe),
         NodeKind.Terminal => Node($"{prefix}-terminal", WorkflowNodeType.Terminal),
         NodeKind.OpenPullRequest => Node($"{prefix}-open-pull-request", WorkflowNodeType.OpenPullRequest),
+        NodeKind.CoordinatorComposed => Node(
+            $"{prefix}-coordinator-composed",
+            WorkflowNodeType.CoordinatorComposed) with { Prompt = "Derive dependent tasks" },
         _ => throw new InvalidOperationException($"Published transition uses unsupported kind '{kind}'."),
     };
 }
@@ -877,6 +901,9 @@ internal static class FakeBindings
             FanPauseBinding: Exec("fan-pause", "fan-pause", "plumbing", "action", hidden: true),
             FanInBinding: Exec("fan-in", "fan-in", "assembly", "fan-in", hidden: false),
             FanFailureBinding: Exec("fan-failure", "fan-failure", "plumbing", "terminal", hidden: true),
+            ComposedBinding: Exec("composed", "compose", "assembly", "coordinator-composed", hidden: false),
+            ComposedPauseBinding: Exec("composed-pause", "composed-pause", "plumbing", "action", hidden: true),
+            ComposedFailureBinding: Exec("composed-failure", "composed-failure", "plumbing", "terminal", hidden: true),
             MaxIterations: 3,
             Wiring: new FakeWiring(agent, openPr, mergeToOutputAdapter, new ScribeSubPath(scribeInputMerge, scribeMerge, scribeOutputMerge)));
     }
@@ -917,6 +944,8 @@ internal sealed class FakeWiring(
     public ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ExecutorBinding FanInToAgentAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ExecutorBinding FanInToTerminalAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding ComposedToAgentAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding ComposedToTerminalAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ScribeSubPath AgentScribePath(WorkflowEdge edge) => openPrScribePath;
     public ScribeSubPath OpenPullRequestScribePath(WorkflowEdge edge) => openPrScribePath;
     public ScribeSubPath ReviewScribePath(WorkflowEdge edge) => openPrScribePath;

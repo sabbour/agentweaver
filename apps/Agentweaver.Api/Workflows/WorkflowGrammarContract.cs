@@ -23,7 +23,7 @@ internal sealed record WorkflowTransitionGrammar(
 /// </summary>
 internal static class WorkflowGrammarContract
 {
-    public const string Version = "1.2";
+    public const string Version = "1.3";
     public const int MaxDocumentCharacters = 262_144;
     public const int MaxNodes = 128;
     public const int MaxEdges = 512;
@@ -40,7 +40,7 @@ internal static class WorkflowGrammarContract
         Node(WorkflowNodeType.Check, "check", "check", "Check / gate", true, true, ["rai", "human-review", "rubberduck"], ["branches", "gate_kind"], ["rai", "human-review", "rubberduck"]),
         Node(WorkflowNodeType.FanOut, "fan_out", "fan-out", "Fan-out", true, true, ["fan-out"]),
         Node(WorkflowNodeType.FanIn, "fan_in", "fan-in", "Fan-in", true, true, ["fan-in"]),
-        Node(WorkflowNodeType.CoordinatorComposed, "coordinator_composed", "coordinator-composed", "Coordinator-composed", false, false, ["coordinator-composed"], ["prompt"]),
+        Node(WorkflowNodeType.CoordinatorComposed, "coordinator_composed", "coordinator-composed", "Coordinator-composed", true, true, ["coordinator-composed"], ["prompt"]),
         Node(WorkflowNodeType.Merge, "merge", "merge", "Merge", false, true, ["merge"]),
         Node(WorkflowNodeType.Scribe, "scribe", "scribe", "Scribe", false, true, ["scribe"]),
         Node(WorkflowNodeType.Terminal, "terminal", "terminal", "Terminal", true, true, ["terminal"]),
@@ -70,6 +70,9 @@ internal static class WorkflowGrammarContract
         Unconditional(NodeKind.Agent, NodeKind.HumanReview),
         Unconditional(NodeKind.Agent, NodeKind.Rubberduck),
         Unconditional(NodeKind.Agent, NodeKind.OpenPullRequest),
+        Unconditional(NodeKind.Agent, NodeKind.CoordinatorComposed),
+        Unconditional(NodeKind.CoordinatorComposed, NodeKind.Agent),
+        Unconditional(NodeKind.CoordinatorComposed, NodeKind.Terminal),
         Transition(NodeKind.PeerReview, NodeKind.OpenPullRequest, "approved", "pass"),
         Unconditional(NodeKind.OpenPullRequest, NodeKind.Scribe),
         Transition(NodeKind.Rai, NodeKind.Merge, "review"),
@@ -120,6 +123,7 @@ internal static class WorkflowGrammarContract
             NodeKind.PeerReview,
             NodeKind.HumanReview,
             NodeKind.Rubberduck,
+            NodeKind.CoordinatorComposed,
             NodeKind.Terminal,
         };
 

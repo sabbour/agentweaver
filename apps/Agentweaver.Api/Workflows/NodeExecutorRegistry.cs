@@ -67,9 +67,10 @@ internal sealed class NodeExecutorRegistry
                         $"Cannot bind fan_in node '{node.Id}': the static fan runtime was not built.", node.Id);
 
             case NodeKind.CoordinatorComposed:
-                throw new WorkflowBindException(
-                    $"Cannot bind node '{node.Id}' (type='coordinator_composed'): node type 'coordinator_composed' is accepted by " +
-                    "the loader but not yet wired to a runtime executor.", node.Id);
+                return bindings.ComposedBinding
+                    ?? throw new WorkflowBindException(
+                        $"Cannot bind coordinator_composed node '{node.Id}': the composed runtime was not built.",
+                        node.Id);
 
             case NodeKind.Terminal:
                 throw new WorkflowBindException(

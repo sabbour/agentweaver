@@ -3,6 +3,7 @@ using LibGit2Sharp;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Agentweaver.AgentRuntime;
@@ -10,6 +11,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Projects;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
@@ -299,6 +301,134 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
 
         terminal.Should().NotBeNull();
         terminal!.JoinedOutput.Should().Be("[1. branch-a]\nfirst\n\n[2. branch-b]\nsecond");
+    }
+
+    [Fact]
+    public async Task StartAsync_ComposedCoordinator_SuspendsAtChildWorkPort_AndReturnsTypedAssembly()
+    {
+        using var baseFactory = new WorkflowWebApplicationFactory();
+        using var testFactory = baseFactory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IGitHubCopilotCapabilityCredentialProvider>();
+                services.AddSingleton<IGitHubCopilotCapabilityCredentialProvider>(
+                    new FixedGitHubCopilotCapabilityCredentialProvider());
+            }));
+        var services = testFactory.Services;
+        var workflowFactory = services.GetRequiredService<RunWorkflowFactory>();
+        var workingDirectory = Path.Combine(
+            Path.GetTempPath(), $"agentweaver-composed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(workingDirectory, ".agentweaver", "workflows"));
+        await File.WriteAllTextAsync(
+            Path.Combine(workingDirectory, ".agentweaver", "workflows", "composed.yaml"),
+            ComposedWorkflowYaml());
+        Repository.Init(workingDirectory);
+        using (var repository = new Repository(workingDirectory))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial commit", signature, signature);
+            if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+                repository.Branches.Rename(repository.Head, "main");
+        }
+
+        var project = new Project
+        {
+            Id = ProjectId.New(),
+            Name = "Composed workflow project",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = workingDirectory,
+            DefaultBranch = "main",
+            Owner = CoordinatorWebApplicationFactory.OwnerUser,
+            ProviderSettings = new ProjectProviderSettings
+            {
+                DefaultProvider = ModelSource.GitHubCopilot,
+            },
+            State = ProjectState.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            DefaultWorkflowId = "composed",
+        };
+        await services.GetRequiredService<IProjectStore>().InsertAsync(project);
+
+        var runId = RunId.New();
+        var worktree = services.GetRequiredService<WorktreeManager>()
+            .AddWorktree(workingDirectory, "main", runId);
+        var run = new DomainRun
+        {
+            Id = runId,
+            RepositoryPath = workingDirectory,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "derive and execute a dependent plan",
+            SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = DomainRunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = project.Id,
+            WorktreePath = worktree.WorktreePath,
+            WorktreeBranch = worktree.BranchName,
+        };
+        await services.GetRequiredService<IRunStore>().InsertAsync(run);
+
+        var input = new AgentTurnInput(
+            run.Id.ToString(),
+            run.Task,
+            worktree.WorktreePath,
+            worktree.BranchName,
+            workingDirectory,
+            "main",
+            run.ModelSource.ToApiString(),
+            run.ModelId,
+            run.SubmittingUser,
+            ProjectId: project.Id.ToString());
+        var started = await workflowFactory.StartAsync(input, run.Id.ToString(), CancellationToken.None);
+        WorkflowComposedCompletedOutput? terminal = null;
+
+        await foreach (var evt in started.WatchStreamAsync(CancellationToken.None))
+        {
+            if (evt is RequestInfoEvent request
+                && request.Request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out var pause))
+            {
+                pause.ParentRunId.Should().Be(run.Id.ToString());
+                using var scope = services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var plan = await db.WorkPlans.AsNoTracking()
+                    .SingleAsync(candidate => candidate.Id == pause.WorkPlanId);
+                plan.ParentRunId.Should().Be(run.Id.ToString());
+                plan.ParentWorkflowNodeId.Should().Be("compose");
+                plan.ParentJoinNodeId.Should().BeNull();
+
+                var assembly = new WorkflowComposedAssembly(
+                    "agentweaver/integration-child",
+                    new string('a', 40),
+                    "diff --git a/generated.txt b/generated.txt",
+                    ["child-a", "child-b"]);
+                var result = new WorkflowChildWorkResult(
+                    pause.WorkPlanId,
+                    pause.ChildCoordinatorRunId,
+                    "composed",
+                    pause.ParentWorkflowNodeId,
+                    null,
+                    true,
+                    WorkPlanStatus.Complete,
+                    null,
+                    [],
+                    string.Empty,
+                    assembly);
+                await started.SendResponseAsync(request.Request.CreateResponse(result));
+            }
+            else if (evt is WorkflowOutputEvent output
+                     && output.Is<WorkflowComposedCompletedOutput>(out var completed))
+            {
+                terminal = completed;
+                break;
+            }
+        }
+
+        terminal.Should().NotBeNull();
+        terminal!.WorkPlanId.Should().BeGreaterThan(0);
+        terminal.Assembly.TreeHash.Should().Be(new string('a', 40));
+        terminal.Assembly.IncludedChildRunIds.Should().Equal("child-a", "child-b");
     }
 
     [Fact]
@@ -744,6 +874,31 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
           - from: branch-b
             to: join
           - from: join
+            to: done
+        """;
+
+    private static string ComposedWorkflowYaml() =>
+        """
+        id: composed
+        name: Dynamic composed plan
+        version: "1"
+        start: prepare
+        nodes:
+          - id: prepare
+            type: prompt
+            label: Prepare the runtime goal
+            prompt: Refine the goal before deriving dependent work.
+          - id: compose
+            type: coordinator_composed
+            label: Derive and execute dependent work
+            prompt: Derive a runtime-dependent implementation plan, execute it, and assemble the result.
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: prepare
+            to: compose
+          - from: compose
             to: done
         """;
 
