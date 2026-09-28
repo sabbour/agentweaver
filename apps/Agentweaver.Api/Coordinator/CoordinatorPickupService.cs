@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
@@ -236,6 +237,67 @@ public sealed class CoordinatorPickupService
                     "Pickup refused: project {ProjectId} has no dispatchable team; task {TaskId} claimed to failed run {RunId} with reason {Reason}",
                     project.Id, task.Id, runId, blockedReason);
             }
+            return;
+        }
+
+        // The claim, not the heartbeat's Ready snapshot, owns the pinned prerequisite identities.
+        // Materialize their retained bytes against one exact project commit, then bind that immutable
+        // input to the reserved run before any launch path can provision a worktree.
+        var claimedTask = await _backlogStore.GetAsync(project.Id, task.Id, CancellationToken.None)
+            .ConfigureAwait(false);
+        try
+        {
+            if (claimedTask?.RunId != runId)
+                throw new RunOutputRevisionUnavailableException("missing_claimed_prerequisites");
+            var inputs = await ClaimedPrerequisiteResolver.ResolveAsync(
+                claimedTask.ClaimedPrerequisitesJson,
+                (id, revisionId, token) => _runStore.ResolveOutputRevisionAsync(id, revisionId, token),
+                CancellationToken.None).ConfigureAwait(false);
+            if (inputs.Count > 0)
+            {
+                run = run with { ExecutionInputRequired = true };
+                var source = RunOutputTreeCapture.CaptureSource(
+                    project.WorkingDirectory,
+                    project.DefaultBranch);
+                var plan = ImmutableExecutionInputPlan.Compose(
+                    source.CommitHash,
+                    source.TreeHash,
+                    source.TreeContent,
+                    inputs.Select(input => (input.Claim, input.Revision)).ToArray());
+                var executionCommitHash = RunOutputTreeCapture.Materialize(
+                    project.WorkingDirectory,
+                    plan);
+                if (!await _runStore.TryBindExecutionInputAsync(
+                        runId,
+                        run.LifecycleGeneration,
+                        source.CommitHash,
+                        executionCommitHash,
+                        plan.CompositeId,
+                        CancellationToken.None).ConfigureAwait(false))
+                {
+                    throw new RunOutputRevisionUnavailableException("execution_input_binding_conflict");
+                }
+                run = run with
+                {
+                    ExecutionInputSourceCommitHash = source.CommitHash,
+                    ExecutionInputCommitHash = executionCommitHash,
+                    ExecutionInputCompositeId = plan.CompositeId,
+                };
+            }
+        }
+        catch (RunOutputRevisionUnavailableException ex)
+        {
+            _logger.LogWarning(ex,
+                "Pickup blocked for task {TaskId} and run {RunId}: prerequisite {Reason}",
+                task.Id, runId, ex.Reason);
+            var terminalized = await _runStore.TrySetTerminalOutcomeAsync(
+                runId,
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+                    new { reason = ex.Reason }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                ex.Reason,
+                CancellationToken.None).ConfigureAwait(false);
+            if (!terminalized)
+                _logger.LogError("Pickup could not terminalize prerequisite-blocked run {RunId}", runId);
             return;
         }
 

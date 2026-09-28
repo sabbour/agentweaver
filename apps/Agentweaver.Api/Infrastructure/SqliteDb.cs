@@ -77,6 +77,51 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN merged_commit_hash TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approved_output_revision_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN current_output_revision_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN output_kind TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN merged_commit_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN work_plan_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN merge_effect_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN accepted_no_change INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN tree_content BLOB;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN tree_content_sha256 TEXT;", ct);
+        // The old uniqueness is a table constraint, requiring a rebuild rather than DROP INDEX.
+        await using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='run_output_revisions';";
+            var definition = (string?)await check.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            if (definition?.Contains("UNIQUE (run_id, lifecycle_generation)", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+                await using var migrate = connection.CreateCommand();
+                migrate.Transaction = transaction;
+                migrate.CommandText = """
+                    DROP TRIGGER IF EXISTS trg_run_output_revisions_no_update;
+                    DROP TRIGGER IF EXISTS trg_run_output_revisions_no_delete;
+                    ALTER TABLE run_output_revisions RENAME TO run_output_revisions_old;
+                    CREATE TABLE run_output_revisions (
+                        revision_id TEXT NOT NULL PRIMARY KEY, schema_version INTEGER NOT NULL,
+                        run_id TEXT NOT NULL, lifecycle_generation INTEGER NOT NULL,
+                        workflow_digest TEXT, manifest_incomplete INTEGER NOT NULL,
+                        tree_hash TEXT NOT NULL, diff_sha256 TEXT NOT NULL,
+                        predecessor_revision_id TEXT, output_kind TEXT, merged_commit_hash TEXT,
+                        work_plan_id TEXT, merge_effect_id TEXT,
+                        accepted_no_change INTEGER NOT NULL DEFAULT 0,
+                        diff_bytes BLOB, tree_content BLOB, tree_content_sha256 TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    INSERT INTO run_output_revisions SELECT * FROM run_output_revisions_old;
+                    DROP TABLE run_output_revisions_old;
+                    CREATE INDEX idx_run_output_revisions_history
+                        ON run_output_revisions (run_id, lifecycle_generation DESC);
+                    CREATE TRIGGER trg_run_output_revisions_no_update BEFORE UPDATE ON run_output_revisions
+                        BEGIN SELECT RAISE(ABORT, 'run_output_revisions is immutable'); END;
+                    CREATE TRIGGER trg_run_output_revisions_no_delete BEFORE DELETE ON run_output_revisions
+                        BEGIN SELECT RAISE(ABORT, 'run_output_revisions is immutable'); END;
+                    """;
+                await migrate.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
+            }
+        }
         // Coordinator workflow-selection reasoning (#167): short human-readable explanation of why the
         // coordinator selected the workflow it planned this run against. NULL for runs with no captured reason.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN workflow_selection_reason TEXT;", ct);
@@ -133,6 +178,10 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_content_digest TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_definition_yaml TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_pinned_at TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN execution_input_required INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN execution_input_source_commit_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN execution_input_commit_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN execution_input_composite_id TEXT;", ct);
         await TryAlterAsync(connection,
             """
             CREATE TABLE IF NOT EXISTS execution_identities (
@@ -598,7 +647,11 @@ public sealed class SqliteDb
                 executable_workflow_source TEXT,
                 executable_workflow_content_digest TEXT,
                 executable_workflow_definition_yaml TEXT,
-                executable_workflow_pinned_at TEXT
+                executable_workflow_pinned_at TEXT,
+                execution_input_required INTEGER NOT NULL DEFAULT 0,
+                execution_input_source_commit_hash TEXT,
+                execution_input_commit_hash TEXT,
+                execution_input_composite_id TEXT
             );
 
             INSERT INTO runs__new (
@@ -617,7 +670,9 @@ public sealed class SqliteDb
                 executable_workflow_pin_required, executable_workflow_manifest_schema_version,
                 executable_workflow_definition_id, executable_workflow_definition_version,
                 executable_workflow_source, executable_workflow_content_digest,
-                executable_workflow_definition_yaml, executable_workflow_pinned_at
+                executable_workflow_definition_yaml, executable_workflow_pinned_at,
+                execution_input_required, execution_input_source_commit_hash,
+                execution_input_commit_hash, execution_input_composite_id
             )
             SELECT
                 run_id, repository_path, originating_branch, model_source, task,
@@ -636,7 +691,9 @@ public sealed class SqliteDb
                 executable_workflow_pin_required, executable_workflow_manifest_schema_version,
                 executable_workflow_definition_id, executable_workflow_definition_version,
                 executable_workflow_source, executable_workflow_content_digest,
-                executable_workflow_definition_yaml, executable_workflow_pinned_at
+                executable_workflow_definition_yaml, executable_workflow_pinned_at,
+                execution_input_required, execution_input_source_commit_hash,
+                execution_input_commit_hash, execution_input_composite_id
             FROM runs;
 
             DROP TABLE runs;
@@ -703,7 +760,11 @@ public sealed class SqliteDb
             executable_workflow_source TEXT,
             executable_workflow_content_digest TEXT,
             executable_workflow_definition_yaml TEXT,
-            executable_workflow_pinned_at TEXT
+            executable_workflow_pinned_at TEXT,
+            execution_input_required INTEGER NOT NULL DEFAULT 0,
+            execution_input_source_commit_hash TEXT,
+            execution_input_commit_hash TEXT,
+            execution_input_composite_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS run_execution_leases (
@@ -723,9 +784,16 @@ public sealed class SqliteDb
             tree_hash TEXT NOT NULL,
             diff_sha256 TEXT NOT NULL,
             predecessor_revision_id TEXT,
+            output_kind TEXT,
+            merged_commit_hash TEXT,
+            work_plan_id TEXT,
+            merge_effect_id TEXT,
+            accepted_no_change INTEGER NOT NULL DEFAULT 0,
             diff_bytes BLOB,
+            tree_content BLOB,
+            tree_content_sha256 TEXT,
             created_at TEXT NOT NULL,
-            UNIQUE (run_id, lifecycle_generation)
+            CHECK (length(revision_id) > 0)
         );
         CREATE INDEX IF NOT EXISTS idx_run_output_revisions_history
             ON run_output_revisions (run_id, lifecycle_generation DESC);

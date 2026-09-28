@@ -12,7 +12,8 @@ public sealed class ExecutionIdentityReader(
     SqliteDb sqliteDb,
     IConfiguration configuration,
     IRunEventStream eventStream,
-    IEffectivePermissionBindingProvider permissionBindings)
+    IEffectivePermissionBindingProvider permissionBindings,
+    IRunStore runStore)
 {
     public async Task<ExecutionIdentityProjection> GetAsync(
         Run run,
@@ -40,7 +41,25 @@ public sealed class ExecutionIdentityReader(
         {
             // The projection reports partial evidence rather than manufacturing authority.
         }
-        return ExecutionIdentityProjector.Project(run, descriptor, events, currentBinding);
+        RunOutputRevision? output = null;
+        string? outputError = null;
+        if (run.CurrentOutputRevisionId is { } revisionId)
+        {
+            try
+            {
+                output = await runStore.GetOutputRevisionAsync(run.Id, revisionId, ct).ConfigureAwait(false);
+            }
+            catch (RunOutputRevisionUnavailableException ex)
+            {
+                outputError = ex.Reason;
+            }
+        }
+        var projection = ExecutionIdentityProjector.Project(run, descriptor, events, currentBinding);
+        return projection with
+        {
+            ExecutionManifest = ExecutionManifestInventory.Create(
+                run, descriptor, output, outputError, projection.LaunchPermissionBinding),
+        };
     }
 
     private async Task<ExecutionIdentityRecord?> ReadPostgresAsync(Run run, CancellationToken ct) =>

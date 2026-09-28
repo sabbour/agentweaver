@@ -1002,6 +1002,10 @@ app.MapGet("/api/runs/{id}/output-revisions", async (
             lifecycle_generation = r.LifecycleGeneration, workflow_digest = r.WorkflowDigest,
             manifest_incomplete = r.ManifestIncomplete, tree_hash = r.TreeHash,
             diff_sha256 = r.DiffSha256, predecessor_revision_id = r.PredecessorRevisionId,
+            tree_content_sha256 = r.TreeContentSha256,
+            output_kind = r.OutputKind, merged_commit_hash = r.MergedCommitHash,
+            work_plan_id = r.WorkPlanId, merge_effect_id = r.MergeEffectId,
+            accepted_no_change = r.AcceptedNoChange,
             created_at = r.CreatedAt
         }));
     }
@@ -1027,15 +1031,90 @@ app.MapGet("/api/runs/{id}/output-revisions/{revisionId}", async (
             return run.CurrentOutputRevisionId == revisionId || run.ApprovedOutputRevisionId == revisionId
                 ? Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone)
                 : Results.NotFound(new { error = "output_revision_unavailable" });
+        if (revision.SchemaVersion == RunOutputRevision.CollectiveSchemaVersion)
+            revision.ResolveFiles();
         return Results.Ok(new
         {
             revision_id = revision.RevisionId, schema_version = revision.SchemaVersion,
             lifecycle_generation = revision.LifecycleGeneration, workflow_digest = revision.WorkflowDigest,
             manifest_incomplete = revision.ManifestIncomplete, tree_hash = revision.TreeHash,
             diff_sha256 = revision.DiffSha256, predecessor_revision_id = revision.PredecessorRevisionId,
+            output_kind = revision.OutputKind, merged_commit_hash = revision.MergedCommitHash,
+            work_plan_id = revision.WorkPlanId, merge_effect_id = revision.MergeEffectId,
+            accepted_no_change = revision.AcceptedNoChange,
+            tree_content_sha256 = revision.TreeContentSha256,
+            files = revision.TreeContent is null ? null : revision.ResolveFiles().Select(file => new
+            {
+                path = file.Path, mode = file.Mode, size = file.Bytes.Length,
+                sha256 = RunOutputRevision.Sha256(file.Bytes)
+            }),
             created_at = revision.CreatedAt,
             diff = new System.Text.UTF8Encoding(false, true).GetString(revision.DiffBytes)
         });
+
+    }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+    }
+});
+
+app.MapGet("/api/runs/{id}/output-revisions/{revisionId}/files/{**path}", async (
+    HttpContext httpContext, string id, string revisionId, string path,
+    IRunStore runStore, CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
+    try
+    {
+        var revision = await runStore.ResolveOutputRevisionAsync(runId, revisionId, ct);
+        var file = revision.ResolveFile(path);
+        return Results.Ok(new
+        {
+            revision_id = revision.RevisionId, path = file.Path, mode = file.Mode,
+            sha256 = RunOutputRevision.Sha256(file.Bytes), content_base64 = Convert.ToBase64String(file.Bytes)
+        });
+    }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason },
+            statusCode: ex.Reason == "file_not_found" ? StatusCodes.Status404NotFound : StatusCodes.Status410Gone);
+    }
+});
+
+app.MapGet("/api/runs/{id}/output-revisions/{revisionId}/compare/{otherId}", async (
+    HttpContext httpContext, string id, string revisionId, string otherId,
+    IRunStore runStore, CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
+    try
+    {
+        var before = await runStore.ResolveOutputRevisionAsync(runId, revisionId, ct);
+        var after = await runStore.ResolveOutputRevisionAsync(runId, otherId, ct);
+        var oldFiles = before.ResolveFiles().ToDictionary(file => file.Path, StringComparer.Ordinal);
+        var newFiles = after.ResolveFiles().ToDictionary(file => file.Path, StringComparer.Ordinal);
+        var changes = oldFiles.Keys.Union(newFiles.Keys, StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Where(path => !oldFiles.TryGetValue(path, out var oldFile)
+                || !newFiles.TryGetValue(path, out var newFile)
+                || oldFile.Mode != newFile.Mode || !oldFile.Bytes.AsSpan().SequenceEqual(newFile.Bytes))
+            .Select(path => new
+            {
+                path, before_sha256 = oldFiles.TryGetValue(path, out var oldFile)
+                    ? RunOutputRevision.Sha256(oldFile.Bytes) : null,
+                after_sha256 = newFiles.TryGetValue(path, out var newFile)
+                    ? RunOutputRevision.Sha256(newFile.Bytes) : null
+            });
+        return Results.Ok(new { before_revision_id = revisionId, after_revision_id = otherId, changes });
     }
     catch (RunOutputRevisionUnavailableException ex)
     {

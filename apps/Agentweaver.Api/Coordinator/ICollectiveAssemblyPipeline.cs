@@ -1,4 +1,5 @@
 using Agentweaver.Api.Git;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -14,6 +15,9 @@ namespace Agentweaver.Api.Coordinator;
 /// </summary>
 public interface ICollectiveAssemblyPipeline
 {
+    /// <summary>Captures the verified immutable tree before any mutable ref or worktree is removed.</summary>
+    byte[] CaptureOutputTree(string repositoryPath, string treeHash) =>
+        RunOutputTreeCapture.Capture(repositoryPath, treeHash);
     /// <summary>Builds the COMBINED integration branch (D1) — pure git, no agent.</summary>
     IntegrationBranchResult BuildIntegrationBranch(CollectiveIntegrationRequest request);
 

@@ -15,6 +15,7 @@ public sealed class CoordinatorAssemblyReviewRecord
     public string? OwnerUser { get; set; }
     public string? IntegrationBranch { get; set; }
     public string? AggregateTreeHash { get; set; }
+    public string? OutputRevisionId { get; set; }
     public string? DecisionJson { get; set; }
     public string? Reviewer { get; set; }
     public DateTimeOffset? DecisionSubmittedAt { get; set; }

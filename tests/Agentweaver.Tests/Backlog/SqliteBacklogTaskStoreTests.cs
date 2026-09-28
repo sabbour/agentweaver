@@ -406,7 +406,7 @@ public sealed class SqliteBacklogTaskStoreTests
     [Theory]
     [InlineData("completed", "assembly_complete", "integrated", true)]
     [InlineData("completed", "complete", "integrated", true)]
-    [InlineData("completed", "confirmed", "accepted_no_change", true)]
+    [InlineData("completed", "confirmed", "upstream_output_revision_unavailable", false)]
     [InlineData("completed", "delegated_to_backlog", "delegated", false)]
     [InlineData("completed", null, "pending", false)]
     [InlineData("failed", "cancelled", "cancelled", false)]
@@ -478,6 +478,71 @@ public sealed class SqliteBacklogTaskStoreTests
             MakeCoordinatorRun(project.Id, RunId.New()), DateTimeOffset.UtcNow))
             .Should().Be(ClaimReserveResult.Lost);
         (await store.GetAsync(project.Id, dependent.Id))!.State.Should().Be(BacklogTaskState.Ready);
+    }
+
+    [Fact]
+    public async Task LegacyCollectiveWithoutRevisionBlocksReadinessAndClaim()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var runs = new SqliteRunStore(testDb.Db);
+        var producer = MakeCoordinatorRun(project.Id, RunId.New());
+        await runs.InsertAsync(producer);
+        (await runs.TryMutateTerminalOutcomeAsync(producer.Id, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, "run.completed",
+                new { result = "assembly_complete" }, DateTimeOffset.UtcNow,
+                (await runs.GetAsync(producer.Id))!.LifecycleGeneration),
+            "assembly_complete", MergedCommitHash: "legacy-commit", TreeHash: "legacy-tree")))
+            .Should().BeTrue();
+        var first = MakeReadyTask(project.Id, "first") with
+        {
+            State = BacklogTaskState.Claimed, RunId = producer.Id, ClaimedAt = DateTimeOffset.UtcNow
+        };
+        var next = MakeReadyTask(project.Id, "next");
+        await store.InsertAsync(first);
+        await store.InsertAsync(next);
+        await InsertDependencyAsync(testDb.Db, project.Id, next.Id, first.Id);
+
+        (await store.ListDependencyStatusesAsync(project.Id, [next.Id])).Should()
+            .ContainSingle(status => status.Reason == "upstream_output_revision_unavailable"
+                && !status.IsSatisfied);
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
+        (await store.CountReadyForPickupAsync()).Should().Be(0);
+        (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, next.Id,
+            MakeCoordinatorRun(project.Id, RunId.New()), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Lost);
+    }
+
+    [Fact]
+    public async Task ConfirmedNoChangeWithRetainedReceiptCanBeClaimed()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var runs = new SqliteRunStore(testDb.Db);
+        var producer = MakeCoordinatorRun(project.Id, RunId.New());
+        await runs.InsertAsync(producer);
+        await runs.PinDefaultExecutableWorkflowForTestAsync(producer.Id);
+        (await runs.TryMutateTerminalOutcomeAsync(producer.Id, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, "run.completed",
+                new { result = "confirmed" }, DateTimeOffset.UtcNow, producer.LifecycleGeneration),
+            "confirmed", NoChangeOutput: new NoChangeOutputPublication(
+                "base-commit", "base-tree", RunOutputTree.Encode([]))))).Should().BeTrue();
+        var first = MakeReadyTask(project.Id, "first") with
+        {
+            State = BacklogTaskState.Claimed, RunId = producer.Id, ClaimedAt = DateTimeOffset.UtcNow,
+        };
+        var next = MakeReadyTask(project.Id, "next");
+        await store.InsertAsync(first);
+        await store.InsertAsync(next);
+        await InsertDependencyAsync(testDb.Db, project.Id, next.Id, first.Id);
+
+        (await store.ListDependencyStatusesAsync(project.Id, [next.Id]))
+            .Should().ContainSingle(status => status.Reason == "accepted_no_change" && status.IsSatisfied);
+        (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, next.Id,
+            MakeCoordinatorRun(project.Id, RunId.New()), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Won);
+        (await store.GetAsync(project.Id, next.Id))!.ClaimedPrerequisitesJson
+            .Should().Contain("accepted_no_change");
     }
 
     [Fact]
@@ -687,13 +752,29 @@ public sealed class SqliteBacklogTaskStoreTests
         SqliteRunStore runs, RunId id, RunStatus status, string result, string commit, string tree)
     {
         var run = await runs.GetAsync(id);
+        var collective = status == RunStatus.Completed;
+        if (collective)
+        {
+            await runs.PinDefaultExecutableWorkflowForTestAsync(id);
+            await runs.UpdateAssemblyArtifactsAsync(id, tree, "verified-diff");
+            var prepared = (await runs.GetAsync(id))!;
+            prepared.Diff.Should().Be("verified-diff");
+            prepared.TreeHash.Should().Be(tree);
+            prepared.CurrentOutputRevisionId.Should().BeNull();
+            prepared.ExecutableWorkflowContentDigest.Should().NotBeNull();
+        }
         (await runs.TryMutateTerminalOutcomeAsync(id,
             new TerminalRunMutation(
                 TerminalRunOutcome.Create(status, "run.completed", new { result },
                     DateTimeOffset.UtcNow, run!.LifecycleGeneration),
                 result,
                 MergedCommitHash: commit,
-                TreeHash: tree))).Should().BeTrue();
+                TreeHash: tree,
+                CollectiveOutput: collective
+                    ? new CollectiveOutputPublication("1", $"effect-{id}", commit, tree, false,
+                        RunOutputTree.Encode([new RunOutputTree.File("receipt.txt", 33188,
+                            System.Text.Encoding.UTF8.GetBytes(tree))]))
+                    : null))).Should().BeTrue();
     }
 
     [Fact]

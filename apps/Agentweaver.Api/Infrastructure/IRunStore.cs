@@ -11,21 +11,48 @@ public interface IRunStore
 {
     Task InsertAsync(Run run, CancellationToken ct = default);
     Task<Run?> GetAsync(RunId runId, CancellationToken ct = default);
+    Task<bool> TryBindExecutionInputAsync(
+        RunId runId,
+        int expectedLifecycleGeneration,
+        string sourceCommitHash,
+        string executionCommitHash,
+        string compositeId,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support immutable execution inputs.");
     Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default);
     Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default);
     Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default);
     Task UpdateAssemblyArtifactsAsync(RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Task.CompletedTask;
     Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        throw new NotSupportedException($"{GetType().Name} cannot retain review-ready tree content.");
     Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
         int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
         throw new NotSupportedException($"{GetType().Name} does not support generation-fenced output publication.");
+    Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
+        int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        throw new NotSupportedException($"{GetType().Name} cannot retain generation-fenced tree content.");
     Task<RunOutputRevision?> GetOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
+    async Task<RunOutputRevision> ResolveOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default)
+    {
+        var revision = await GetOutputRevisionAsync(runId, revisionId, ct).ConfigureAwait(false)
+            ?? throw new RunOutputRevisionUnavailableException("missing_content");
+        revision.ResolveFiles();
+        return revision;
+    }
     Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
     Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(RunId runId, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
+    Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot publish collective candidates.");
+    Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot approve collective candidates.");
     Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryParkForChildWorkAsync(
         RunId runId,
@@ -69,7 +96,7 @@ public interface IRunStore
         RunId runId,
         TerminalRunMutation mutation,
         CancellationToken ct = default) =>
-        mutation.RequiredLease is not null
+        mutation.RequiredLease is not null || mutation.CollectiveOutput is not null || mutation.NoChangeOutput is not null
             ? throw new NotSupportedException(
                 $"{GetType().Name} does not implement lease-fenced terminal mutations.")
             : TrySetTerminalOutcomeAsync(runId, mutation.Outcome, mutation.Result, ct);

@@ -46,7 +46,8 @@ Use **Links** on a Backlog or Ready card to set prerequisite task IDs. Preview f
 see which downstream cards may be affected; then save. The edit uses the board's project
 graph revision: if someone else changed links meanwhile, refresh and preview again.
 Only links *from* unclaimed, unarchived tasks can be edited. A claimed run keeps the
-prerequisite graph revision, producer run/lifecycle-generation identities, and available merged commit/tree hashes
+prerequisite graph revision, producer run/lifecycle-generation identities, the immutable
+collective output revision ID (when available), and merged commit/tree hashes
 it accepted at claim time; editing another task never rewrites those consumed inputs.
 Archived prerequisite tasks retain their links and run identity, but block new claims.
 
@@ -58,7 +59,8 @@ dependent remains Ready with the `upstream_output_identity_unavailable` blocker,
 rather than claiming an unidentified output. Successful collective assembly records
 both identities atomically with its terminal outcome before settling the work plan.
 Delegation is not execution. A completed coordinator run satisfies dependents only
-after integration or an explicitly accepted no-change completion; a failed run must
+after integration; an explicitly accepted no-change completion remains blocked until
+its immutable receipt is available. A failed run must
 recover successfully first. Ready cards without blockers can still wait for a capacity
 slot. Human Review and Problems are run gates, not prerequisite wait states.
 
@@ -68,14 +70,35 @@ share one review/assembly boundary as subtasks *inside* a single coordinator run
 do not model every implementation step as a separate story. The per-project editor
 does not create cross-project links.
 
-The claim records the accepted producer generation and commit/tree identity, not a new
-artifact revision store. Retrying or archiving a producer does not rewrite an active
-dependent's claimed snapshot. Until
-[immutable output revisions](https://github.com/sabbour/agentweaver/issues/1396)
-publish and retain **collective integration** output (including verified no-change
-receipts) by exact revision, commit/tree identities are not a guarantee that historic
-bytes remain retrievable after workspace cleanup. Do not treat a replacement producer
-run or a moving branch as the originally accepted input.
+The claim records the accepted producer generation, commit/tree and collective output
+revision ID in the existing run revision store. A completed collective assembly lacking
+an immutable revision stays blocked with `upstream_output_revision_unavailable`; a missing
+commit/tree stays blocked with `upstream_output_identity_unavailable`. Retrying or
+archiving a producer does not rewrite a dependent's claimed snapshot. The revision
+retains the assembly diff and exact committed tree/file bytes in the run database,
+independent of the Git branch and worktree. REST
+`/api/runs/{runId}/output-revisions` lists history; the exact revision route returns
+its file inventory; `/files/{path}` returns exact base64 bytes, and
+`/compare/{otherRevisionId}` compares retained file identities. MCP exposes the same
+history, revision, file and compare routes as `run_output_history`,
+`run_output_revision`, `run_output_file` and `run_output_compare`. Missing/corrupt
+content returns an explicit unavailable error; older diff-only revisions have no
+retained files and cannot be resolved as exact inputs.
+
+At pickup, Agentweaver resolves the claimed revisions, composes their retained files in
+the recorded prerequisite order, and materializes a deterministic execution commit
+against one pinned project commit. Non-overlapping outputs compose; divergent edits to
+the same path, missing lineage, unsupported manifests, and missing or corrupt content
+fail closed with a typed prerequisite error. The run persists the source commit,
+materialized commit, and composite digest before launch or recovery. Its worktree starts
+from that exact commit while `originating_branch` remains the separate publication
+target, so later branch movement cannot change the consumed input.
+
+Collective review is bound to an immutable candidate published before the review
+request; approval of a replaced candidate is stale.
+New accepted no-change completions retain a tree and receipt and can satisfy a
+prerequisite; historical completions without a receipt stay blocked with
+`upstream_output_revision_unavailable`.
 
 For REST callers, read `graph_revision` on a task or GET
 `/api/projects/{projectId}/backlog/dependencies/revision`, then POST

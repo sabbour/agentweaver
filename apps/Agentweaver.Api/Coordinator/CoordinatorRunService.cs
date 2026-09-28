@@ -17,12 +17,14 @@ using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
+using LibGit2Sharp;
 
 using Run = Agentweaver.Domain.Run;
 using RunStatus = Agentweaver.Domain.RunStatus;
@@ -2302,11 +2304,11 @@ public sealed class CoordinatorRunService
             var terminal = spec?.Status == "declined" ? RunStatus.Declined : RunStatus.Completed;
             var entry0 = _streamStore.Get(runId) ?? _streamStore.Create(runId, run.SubmittingUser);
             var eventType = terminal == RunStatus.Declined ? EventTypes.ReviewDeclined : EventTypes.RunCompleted;
-            var changed = await _runStore.TrySetTerminalOutcomeAsync(
-                run.Id,
+            var changed = await _runStore.TryMutateTerminalOutcomeAsync(run.Id, new TerminalRunMutation(
                 TerminalRunOutcome.Create(terminal, eventType, new { result }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
                 result,
-                ct).ConfigureAwait(false);
+                NoChangeOutput: terminal == RunStatus.Completed
+                    ? CaptureNoChangeReceipt(run) : null), ct).ConfigureAwait(false);
             await CompleteTerminalOutcomeAsync(changed, entry0, runId, eventType, new { result }, ct).ConfigureAwait(false);
             _factory.DeleteCheckpoints(runId);
             return;
@@ -3126,12 +3128,18 @@ public sealed class CoordinatorRunService
             result = "delegated_to_backlog";
 
         var occurredAt = DateTimeOffset.UtcNow;
+        var current = status == RunStatus.Completed
+            ? await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false)
+                ?? throw new RunOutputRevisionUnavailableException("run_missing")
+            : null;
+        var receipt = current is null ? null : CaptureNoChangeReceipt(current);
         var changed = expectedLifecycleGeneration is { } generation
             ? await _runStore.TryMutateTerminalOutcomeAsync(
                 parsedRunId,
                 new TerminalRunMutation(
                     TerminalRunOutcome.Create(status, eventType, new { result }, occurredAt, generation),
                     result,
+                    NoChangeOutput: receipt,
                     RequiredLease: requiredLease is null
                         ? null
                         : new RunLeaseFence(
@@ -3139,18 +3147,44 @@ public sealed class CoordinatorRunService
                             requiredLease.FencingToken,
                             generation)),
                 CancellationToken.None).ConfigureAwait(false)
-            : await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                parsedRunId,
-                status,
-                eventType,
-                new { result },
-                occurredAt,
-                result,
-                CancellationToken.None).ConfigureAwait(false);
+            : await _runStore.TryMutateTerminalOutcomeAsync(parsedRunId,
+                new TerminalRunMutation(
+                    TerminalRunOutcome.Create(status, eventType, new { result }, occurredAt,
+                        current?.LifecycleGeneration
+                        ?? (await _runStore.GetAsync(parsedRunId, CancellationToken.None).ConfigureAwait(false)
+                            ?? throw new RunOutputRevisionUnavailableException("run_missing")).LifecycleGeneration),
+                    result, NoChangeOutput: receipt), CancellationToken.None).ConfigureAwait(false);
 
         await CompleteTerminalOutcomeAsync(
             changed, entry, runId, eventType, new { result }, CancellationToken.None).ConfigureAwait(false);
         return changed;
+    }
+
+    internal static NoChangeOutputPublication CaptureNoChangeReceipt(Run run)
+    {
+        if (!Repository.IsValid(run.RepositoryPath))
+            throw new RunOutputRevisionUnavailableException("source_revision_unavailable");
+        using var repository = new Repository(run.RepositoryPath);
+        Commit? commit;
+        if (run.ExecutionInputRequired)
+        {
+            if (string.IsNullOrWhiteSpace(run.ExecutionInputCommitHash))
+                throw new RunOutputRevisionUnavailableException("execution_input_unbound");
+            commit = repository.Lookup<Commit>(run.ExecutionInputCommitHash);
+        }
+        else
+        {
+            var branchName = string.IsNullOrWhiteSpace(run.WorktreeBranch)
+                ? run.OriginatingBranch
+                : run.WorktreeBranch;
+            commit = repository.Branches[branchName]?.Tip
+                ?? repository.Branches[$"origin/{branchName}"]?.Tip;
+        }
+        if (commit is null)
+            throw new RunOutputRevisionUnavailableException("source_revision_unavailable");
+        return new NoChangeOutputPublication(
+            commit.Id.Sha, commit.Tree.Id.Sha,
+            RunOutputTreeCapture.Capture(run.RepositoryPath, commit.Tree.Id.Sha));
     }
 
     private async Task CompleteTerminalOutcomeAsync(

@@ -9,6 +9,17 @@ public sealed record Run
     public required RunId Id { get; init; }
     public required string RepositoryPath { get; init; }
     public required string OriginatingBranch { get; init; }
+    /// <summary>
+    /// True when execution must start from a durably bound immutable input rather than resolving
+    /// <see cref="OriginatingBranch"/> at launch time.
+    /// </summary>
+    public bool ExecutionInputRequired { get; init; }
+    /// <summary>The pinned project commit used as the base of the immutable execution input.</summary>
+    public string? ExecutionInputSourceCommitHash { get; init; }
+    /// <summary>The materialized commit whose tree contains the exact retained prerequisite bytes.</summary>
+    public string? ExecutionInputCommitHash { get; init; }
+    /// <summary>Deterministic identity of the ordered prerequisite composition.</summary>
+    public string? ExecutionInputCompositeId { get; init; }
     public required ModelSource ModelSource { get; init; }
     public required string Task { get; init; }
     public required string SubmittingUser { get; init; }

@@ -102,6 +102,75 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
         using var response = JsonDocument.Parse(await exact.Content.ReadAsStringAsync());
         response.RootElement.GetProperty("diff").GetString().Should().Be(run.Diff);
         response.RootElement.GetProperty("diff_sha256").GetString().Should().Be(revision.DiffSha256);
+        response.RootElement.GetProperty("output_kind").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task CollectiveRevisionHistoryAndExactDiffExposeIntegrationIdentity()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync(dir =>
+            File.WriteAllText(Path.Combine(dir, "collective.txt"), "assembled"));
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        await store.PinDefaultExecutableWorkflowForTestAsync(run.Id);
+        (await store.TryTransitionReviewToInProgressAsync(run.Id)).Should().BeTrue();
+        await store.UpdateAssemblyArtifactsAsync(run.Id, "collective-tree", "collective-diff");
+        var generation = (await store.GetAsync(run.Id))!.LifecycleGeneration;
+        (await store.TryMutateTerminalOutcomeAsync(run.Id, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted,
+                new { result = "assembly_complete" }, DateTimeOffset.UtcNow, generation),
+            "assembly_complete", MergedCommitHash: "collective-commit", TreeHash: "collective-tree",
+            CollectiveOutput: new CollectiveOutputPublication("42", "effect-42",
+                "collective-commit", "collective-tree", false,
+                RunOutputTree.Encode([new RunOutputTree.File("collective.txt", 33188,
+                    System.Text.Encoding.UTF8.GetBytes("assembled"))]))))).Should().BeTrue();
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+
+        var history = await _ownerClient.GetAsync($"/api/runs/{run.Id}/output-revisions");
+        history.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var list = JsonDocument.Parse(await history.Content.ReadAsStringAsync());
+        list.RootElement[0].GetProperty("revision_id").GetString().Should().Be(revision.RevisionId);
+        list.RootElement[0].GetProperty("work_plan_id").GetString().Should().Be("42");
+        var response = await _ownerClient.GetAsync(
+            $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var exact = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        exact.RootElement.GetProperty("output_kind").GetString().Should().Be("collective");
+        exact.RootElement.GetProperty("merged_commit_hash").GetString().Should().Be("collective-commit");
+        exact.RootElement.GetProperty("merge_effect_id").GetString().Should().Be("effect-42");
+        exact.RootElement.GetProperty("diff").GetString().Should().Be("collective-diff");
+        var retainedFile = await _ownerClient.GetAsync(
+            $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}/files/collective.txt");
+        retainedFile.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var retained = JsonDocument.Parse(await retainedFile.Content.ReadAsStringAsync());
+        Convert.FromBase64String(retained.RootElement.GetProperty("content_base64").GetString()!)
+            .Should().Equal(System.Text.Encoding.UTF8.GetBytes("assembled"));
+    }
+
+    [Fact]
+    public async Task CollectiveRevisionWithoutPinnedInputFailsExactRetrievalExplicitly()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync(dir =>
+            File.WriteAllText(Path.Combine(dir, "legacy.txt"), "legacy"));
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        (await store.TryTransitionReviewToInProgressAsync(run.Id)).Should().BeTrue();
+        await store.UpdateAssemblyArtifactsAsync(run.Id, "legacy-tree", "legacy-diff");
+        var generation = (await store.GetAsync(run.Id))!.LifecycleGeneration;
+        (await store.TryMutateTerminalOutcomeAsync(run.Id, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted,
+                new { result = "assembly_complete" }, DateTimeOffset.UtcNow, generation),
+            "assembly_complete", MergedCommitHash: "legacy-commit", TreeHash: "legacy-tree",
+            CollectiveOutput: new CollectiveOutputPublication("43", "effect-43",
+                "legacy-commit", "legacy-tree", false,
+                RunOutputTree.Encode([new RunOutputTree.File("legacy.txt", 33188,
+                    System.Text.Encoding.UTF8.GetBytes("legacy"))]))))).Should().BeTrue();
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+        revision.ManifestIncomplete.Should().BeTrue();
+
+        var response = await _ownerClient.GetAsync(
+            $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
+        response.StatusCode.Should().Be(HttpStatusCode.Gone);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("error").GetString().Should().Be("incomplete_manifest");
     }
 
     // =========================================================================

@@ -862,6 +862,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
         _owner.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
 
@@ -893,10 +894,13 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/assembly/review",
-            new { approved = true, feedback = "looks good" });
+            new { approved = true, feedback = "looks good",
+                output_revision_id = (await _factory.Services.GetRequiredService<SqliteRunStore>()
+                    .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Accepted,
             "a non-owner replica can durably defer a decision only for a validated in-review gate");
@@ -911,6 +915,31 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         record.DecisionJson.Should().Contain("\"Approved\":true");
         record.DecisionJson.Should().Contain("looks good");
         record.DecisionSubmittedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task AssemblyReview_StaleOrMissingCandidateCannotBeDeferred()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
+        var candidate = await SeedReviewCandidateAsync(runId);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(), runId,
+            CoordinatorWebApplicationFactory.OwnerUser, $"agentweaver/integration/{runId}",
+            "tree-hash", candidate, CancellationToken.None);
+
+        foreach (var submittedId in new string?[] { null, "stale-revision" })
+        {
+            var response = await _owner.PostAsJsonAsync($"/api/runs/{runId}/assembly/review",
+                new { approved = true, output_revision_id = submittedId });
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        }
+
+        using var scope = _factory.Services.CreateScope();
+        var row = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+            .AssemblyReviews.AsNoTracking().SingleAsync(r => r.CoordinatorRunId == runId);
+        row.DecisionJson.Should().BeNull();
+        row.DecisionSubmittedAt.Should().BeNull();
     }
 
     // =========================================================================
@@ -988,10 +1017,13 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
-            new { kind = "redirect", instruction = "Rework the signup validation." });
+            new { kind = "redirect", instruction = "Rework the signup validation.",
+                output_revision_id = (await _factory.Services.GetRequiredService<SqliteRunStore>()
+                    .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Accepted,
             "a human redirect at the review gate on a replica without the armed gate is durably deferred, mirroring /assembly/review");
@@ -1026,10 +1058,13 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
-            new { kind = "amend", instruction = "Also cover the empty-email edge case." });
+            new { kind = "amend", instruction = "Also cover the empty-email edge case.",
+                output_revision_id = (await _factory.Services.GetRequiredService<SqliteRunStore>()
+                    .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Accepted);
         var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
@@ -1060,9 +1095,12 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
 
-        var json = $$"""{"kind":"redirect","target_child_run_id":"{{childRunId}}","instruction":"fix the signup path"}""";
+        var candidateId = (await _factory.Services.GetRequiredService<SqliteRunStore>()
+            .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId;
+        var json = $$"""{"kind":"redirect","target_child_run_id":"{{childRunId}}","instruction":"fix the signup path","output_revision_id":"{{candidateId}}"}""";
         var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
         var resp = await _owner.PostAsync($"/api/runs/{runId}/steer", content);
 
@@ -1492,6 +1530,18 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         await _factory.PrepareAiExecutionAsync(
             _owner, "orchestration", projectId, runId.ToString());
         return runId.ToString();
+    }
+
+    private async Task<string> SeedReviewCandidateAsync(string coordinatorRunId)
+    {
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var runId = RunId.Parse(coordinatorRunId);
+        await store.UpdateAssemblyArtifactsAsync(runId, "tree-hash", "review diff");
+        var run = (await store.GetAsync(runId))!;
+        var candidate = await store.PublishCollectiveCandidateAsync(
+            runId, run.LifecycleGeneration, "1", "tree-hash", "review diff",
+            RunOutputTree.Encode([new RunOutputTree.File("artifact.txt", 33188, [1, 2, 3])]));
+        return candidate.RevisionId;
     }
 
     private async Task SeedConfirmedOutcomeSpecAsync(string coordinatorRunId)

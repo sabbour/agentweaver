@@ -37,11 +37,11 @@ public sealed class AssemblyReviewGate
     /// submits a decision, or is cancelled when the host stops (<paramref name="ct"/>). Replaces any
     /// prior armed gate for the same run. There is no timeout — the wait is indefinite by design.
     /// </summary>
-    public Task<AssemblyReviewDecision> ArmAsync(string coordinatorRunId, string ownerUser, CancellationToken ct)
+    public Task<AssemblyReviewDecision> ArmAsync(string coordinatorRunId, string ownerUser, CancellationToken ct, string? revisionId = null)
     {
         var entry = new GateEntry(
             new TaskCompletionSource<AssemblyReviewDecision>(TaskCreationOptions.RunContinuationsAsynchronously),
-            ownerUser);
+            ownerUser, revisionId);
 
         var cancellationRegistration = ct.CanBeCanceled
             ? ct.Register(static state =>
@@ -94,6 +94,9 @@ public sealed class AssemblyReviewGate
                        (callerGitHubLogin is not null && string.Equals(entry.OwnerUser, callerGitHubLogin, StringComparison.Ordinal));
             if (!owns)
                 return AssemblyReviewSubmitResult.Forbidden;
+            if (string.IsNullOrWhiteSpace(decision.OutputRevisionId)
+                || !string.Equals(entry.RevisionId, decision.OutputRevisionId, StringComparison.Ordinal))
+                return AssemblyReviewSubmitResult.StaleRevision;
 
             if (!_gates.Remove(coordinatorRunId, out var existing))
                 return AssemblyReviewSubmitResult.NotArmed;
@@ -134,14 +137,16 @@ public sealed class AssemblyReviewGate
         private CancellationTokenRegistration _cancellationRegistration;
         private int _disposed;
 
-        public GateEntry(TaskCompletionSource<AssemblyReviewDecision> tcs, string ownerUser)
+        public GateEntry(TaskCompletionSource<AssemblyReviewDecision> tcs, string ownerUser, string? revisionId)
         {
             Tcs = tcs;
             OwnerUser = ownerUser;
+            RevisionId = revisionId;
         }
 
         public TaskCompletionSource<AssemblyReviewDecision> Tcs { get; }
         public string OwnerUser { get; }
+        public string? RevisionId { get; }
 
         public void SetRegistration(CancellationTokenRegistration cancellationRegistration)
         {
@@ -167,7 +172,8 @@ public sealed record AssemblyReviewDecision(
     bool RequestChanges,
     string? Feedback,
     IReadOnlyList<string>? TargetFiles,
-    string Reviewer);
+    string Reviewer,
+    string? OutputRevisionId = null);
 
 /// <summary>Outcome of <see cref="AssemblyReviewGate.TrySubmit"/> so the HTTP layer can map status codes.</summary>
 public enum AssemblyReviewSubmitResult
@@ -180,4 +186,5 @@ public enum AssemblyReviewSubmitResult
 
     /// <summary>The caller does not own the pending review request.</summary>
     Forbidden,
+    StaleRevision,
 }

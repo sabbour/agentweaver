@@ -372,6 +372,8 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
         <Caption1 key={prerequisite.task_id} className={styles.meta}>
           Needs {prerequisite.title}: {prerequisite.reason === 'upstream_output_identity_unavailable'
             ? 'integrated output identity unavailable'
+            : prerequisite.reason === 'upstream_output_revision_unavailable'
+              ? 'immutable integrated output revision unavailable'
             : prerequisite.reason ?? 'pending'}
         </Caption1>
       ))}

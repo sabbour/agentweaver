@@ -525,6 +525,8 @@ public sealed record ReviewRequest
 /// </summary>
 public sealed record AssemblyReviewRequest
 {
+    [JsonPropertyName("output_revision_id")]
+    public string? OutputRevisionId { get; init; }
     [JsonPropertyName("approved")]
     public required bool Approved { get; init; }
 
@@ -1427,6 +1429,7 @@ public sealed record SteerRequest
     [JsonPropertyName("kind")] public string? Kind { get; init; }
     [JsonPropertyName("target_child_run_id")] public string? TargetChildRunId { get; init; }
     [JsonPropertyName("instruction")] public string? Instruction { get; init; }
+    [JsonPropertyName("output_revision_id")] public string? OutputRevisionId { get; init; }
 }
 
 /// <summary>

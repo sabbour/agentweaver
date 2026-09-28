@@ -179,7 +179,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         WorktreeInfo worktreeInfo;
         try
         {
-            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, ExecutionBase(run), run.Id);
         }
         catch (Exception ex)
         {
@@ -332,8 +332,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             await EnsureAuthorizedAsync().ConfigureAwait(false);
             worktreeInfo = existingLease is null
-                ? _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id)
-                : _worktreeManager.EnsureWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+                ? _worktreeManager.AddWorktree(run.RepositoryPath, ExecutionBase(run), run.Id)
+                : _worktreeManager.EnsureWorktree(run.RepositoryPath, ExecutionBase(run), run.Id);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -530,7 +530,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         WorktreeInfo worktreeInfo;
         try
         {
-            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, ExecutionBase(run), run.Id);
         }
         catch (Exception ex)
         {
@@ -1839,7 +1839,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 // (ephemeral storage wiped) even though the path is stored in the DB.
                 // EnsureWorktree is a no-op when the directory already exists; if missing it
                 // prunes the stale git admin entry and recreates the worktree from the persisted branch.
-                return _worktreeManager.EnsureWorktree(repositoryPath, originatingBranch, coordId);
+                return _worktreeManager.EnsureWorktree(repositoryPath, ExecutionBase(coordinator), coordId);
             }
         }
 
@@ -1854,14 +1854,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 if (!string.IsNullOrEmpty(coordinator?.WorktreePath) && !string.IsNullOrEmpty(coordinator.WorktreeBranch))
                 {
                     // Same idempotent ensure as the fast path above.
-                    return _worktreeManager.EnsureWorktree(repositoryPath, originatingBranch, coordId2);
+                    return _worktreeManager.EnsureWorktree(repositoryPath, ExecutionBase(coordinator), coordId2);
                 }
 
                 // Create the shared orchestration worktree keyed to the coordinator run id.
                 _logger.LogInformation(
                     "Provisioning shared orchestration worktree for coordinator run {CoordinatorRunId}",
                     coordinatorRunId);
-                var worktreeInfo = _worktreeManager.AddWorktree(repositoryPath, originatingBranch, coordId2);
+                var worktreeInfo = _worktreeManager.AddWorktree(
+                    repositoryPath,
+                    coordinator is null ? originatingBranch : ExecutionBase(coordinator),
+                    coordId2);
 
                 // Persist on the coordinator run so all subsequent children reuse the same path.
                 await _runStore.UpdateWorktreeAsync(
@@ -1894,5 +1897,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             _logger.LogWarning(ex, "Failed to clean up worktree for aborted run {RunId}", runId);
         }
+    }
+
+    private static string ExecutionBase(Run run)
+    {
+        if (!run.ExecutionInputRequired)
+            return run.OriginatingBranch;
+        if (string.IsNullOrWhiteSpace(run.ExecutionInputSourceCommitHash)
+            || string.IsNullOrWhiteSpace(run.ExecutionInputCommitHash)
+            || string.IsNullOrWhiteSpace(run.ExecutionInputCompositeId))
+        {
+            throw new RunOutputRevisionUnavailableException("execution_input_unbound");
+        }
+        return run.ExecutionInputCommitHash;
     }
 }

@@ -18,4 +18,5 @@ public sealed record BacklogClaimedPrerequisite(
     string TaskId, string RunId, string Outcome,
     int LifecycleGeneration,
     string? MergedCommitHash, string? TreeHash,
-    string? ExecutableWorkflowContentDigest);
+    string? ExecutableWorkflowContentDigest,
+    string? OutputRevisionId = null);

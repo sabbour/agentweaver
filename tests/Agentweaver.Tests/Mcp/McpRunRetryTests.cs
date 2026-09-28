@@ -84,6 +84,21 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
             .Where(ex => ex.StatusCode == 404);
     }
 
+    [Fact]
+    public async Task OutputRevisionTools_UnknownRun_PropagateTypedHttpUnavailable()
+    {
+        var tools = CreateTools();
+        var id = Guid.NewGuid().ToString("N");
+        await FluentActions.Invoking(() => tools.RunOutputHistoryAsync(id))
+            .Should().ThrowAsync<McpApiException>().Where(ex => ex.StatusCode == 404);
+        await FluentActions.Invoking(() => tools.RunOutputRevisionAsync(id, "revision"))
+            .Should().ThrowAsync<McpApiException>().Where(ex => ex.StatusCode == 404);
+        await FluentActions.Invoking(() => tools.RunOutputFileAsync(id, "revision", "file.txt"))
+            .Should().ThrowAsync<McpApiException>().Where(ex => ex.StatusCode == 404);
+        await FluentActions.Invoking(() => tools.RunOutputCompareAsync(id, "old", "new"))
+            .Should().ThrowAsync<McpApiException>().Where(ex => ex.StatusCode == 404);
+    }
+
     // =========================================================================
     // Failed run -> success summary: "Retried run {id} -> new run {newId}."
     // =========================================================================

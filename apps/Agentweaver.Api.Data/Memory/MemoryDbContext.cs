@@ -425,6 +425,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.RunId).HasColumnName("run_id");
             e.Property(r => r.RepositoryPath).HasColumnName("repository_path");
             e.Property(r => r.OriginatingBranch).HasColumnName("originating_branch");
+            e.Property(r => r.ExecutionInputRequired).HasColumnName("execution_input_required").HasDefaultValue(false);
+            e.Property(r => r.ExecutionInputSourceCommitHash).HasColumnName("execution_input_source_commit_hash");
+            e.Property(r => r.ExecutionInputCommitHash).HasColumnName("execution_input_commit_hash");
+            e.Property(r => r.ExecutionInputCompositeId).HasColumnName("execution_input_composite_id");
             e.Property(r => r.ModelSource).HasColumnName("model_source");
             e.Property(r => r.Task).HasColumnName("task");
             e.Property(r => r.SubmittingUser).HasColumnName("submitting_user");
@@ -543,9 +547,16 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.TreeHash).HasColumnName("tree_hash");
             e.Property(r => r.DiffSha256).HasColumnName("diff_sha256");
             e.Property(r => r.PredecessorRevisionId).HasColumnName("predecessor_revision_id");
+            e.Property(r => r.OutputKind).HasColumnName("output_kind");
+            e.Property(r => r.MergedCommitHash).HasColumnName("merged_commit_hash");
+            e.Property(r => r.WorkPlanId).HasColumnName("work_plan_id");
+            e.Property(r => r.MergeEffectId).HasColumnName("merge_effect_id");
+            e.Property(r => r.AcceptedNoChange).HasColumnName("accepted_no_change");
             e.Property(r => r.DiffBytes).HasColumnName("diff_bytes");
+            e.Property(r => r.TreeContent).HasColumnName("tree_content");
+            e.Property(r => r.TreeContentSha256).HasColumnName("tree_content_sha256");
             e.Property(r => r.CreatedAt).HasColumnName("created_at");
-            e.HasIndex(r => new { r.RunId, r.LifecycleGeneration }).IsUnique();
+            e.HasIndex(r => new { r.RunId, r.LifecycleGeneration });
         });
 
         model.Entity<RunRevisionRecord>(e =>

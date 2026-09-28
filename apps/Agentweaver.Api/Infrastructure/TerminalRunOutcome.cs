@@ -56,4 +56,20 @@ public sealed record TerminalRunMutation(
     string? WorktreeBranch = null,
     string? Diff = null,
     RunLeaseFence? RequiredLease = null,
-    int? ExpectedParentLifecycleGeneration = null);
+    int? ExpectedParentLifecycleGeneration = null,
+    CollectiveOutputPublication? CollectiveOutput = null,
+    NoChangeOutputPublication? NoChangeOutput = null,
+    string? ApprovedCollectiveRevisionId = null);
+
+public sealed record CollectiveOutputPublication(
+    string WorkPlanId,
+    string MergeEffectId,
+    string CommitHash,
+    string TreeHash,
+    bool AcceptedNoChange,
+    byte[]? TreeContent = null);
+
+public sealed record NoChangeOutputPublication(
+    string CommitHash,
+    string TreeHash,
+    byte[] TreeContent);

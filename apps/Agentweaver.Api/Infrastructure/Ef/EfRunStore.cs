@@ -170,6 +170,38 @@ public sealed class EfRunStore : IRunStore
         return rec is null ? null : FromRecord(rec);
     }
 
+    public async Task<bool> TryBindExecutionInputAsync(
+        RunId runId,
+        int expectedLifecycleGeneration,
+        string sourceCommitHash,
+        string executionCommitHash,
+        string compositeId,
+        CancellationToken ct = default)
+    {
+        var id = runId.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var record = await db.Runs.SingleOrDefaultAsync(
+            run => run.RunId == id && run.LifecycleGeneration == expectedLifecycleGeneration,
+            ct).ConfigureAwait(false);
+        if (record is null || !record.ExecutionInputRequired)
+            return false;
+
+        if (record.ExecutionInputSourceCommitHash is not null
+            || record.ExecutionInputCommitHash is not null
+            || record.ExecutionInputCompositeId is not null)
+        {
+            return record.ExecutionInputSourceCommitHash == sourceCommitHash
+                && record.ExecutionInputCommitHash == executionCommitHash
+                && record.ExecutionInputCompositeId == compositeId;
+        }
+
+        record.ExecutionInputSourceCommitHash = sourceCommitHash;
+        record.ExecutionInputCommitHash = executionCommitHash;
+        record.ExecutionInputCompositeId = compositeId;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
@@ -189,6 +221,14 @@ public sealed class EfRunStore : IRunStore
             .ExecuteUpdateAsync(s => s
                 .SetProperty(r => r.Status, statusStr)
                 .SetProperty(r => r.EndedAt, endedAt)
+                .SetProperty(r => r.CurrentOutputRevisionId,
+                    r => statusStr == "in_progress"
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? null : r.CurrentOutputRevisionId)
+                .SetProperty(r => r.ApprovedOutputRevisionId,
+                    r => statusStr == "in_progress"
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? null : r.ApprovedOutputRevisionId)
                 .SetProperty(r => r.ApprovalGeneration,
                     r => r.Status == RunStatus.InProgress.ToApiString() && statusStr != RunStatus.InProgress.ToApiString()
                         ? r.ApprovalGeneration + 1 : r.ApprovalGeneration)
@@ -211,6 +251,14 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.Status, statusStr)
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)endedAt)
                 .SetProperty(r => r.Result, result)
+                .SetProperty(r => r.CurrentOutputRevisionId,
+                    r => statusStr == "in_progress"
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? null : r.CurrentOutputRevisionId)
+                .SetProperty(r => r.ApprovedOutputRevisionId,
+                    r => statusStr == "in_progress"
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? null : r.ApprovedOutputRevisionId)
                 .SetProperty(r => r.ApprovalGeneration,
                     r => r.Status == RunStatus.InProgress.ToApiString() && statusStr != RunStatus.InProgress.ToApiString()
                         ? r.ApprovalGeneration + 1 : r.ApprovalGeneration)
@@ -233,20 +281,30 @@ public sealed class EfRunStore : IRunStore
         WarnIfNoRows(rows, runId, "persist assembly artifacts");
     }
 
+    public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount,
+        CancellationToken ct = default, DateTimeOffset? now = null) =>
+        UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now, null);
+
     public async Task UpdateReviewReadyAsync(
         RunId runId, string treeHash, string diff, int stepCount,
-        CancellationToken ct = default, DateTimeOffset? now = null) =>
-        await PublishReviewReadyCoreAsync(runId, null, treeHash, diff, stepCount, ct, now);
+        CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        await PublishReviewReadyCoreAsync(runId, null, treeHash, diff, stepCount, ct, now, treeContent);
+
+    public Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash,
+        string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now, null);
 
     public Task PublishReviewReadyAsync(
         RunId runId, int expectedLifecycleGeneration, string treeHash, string diff, int stepCount,
-        CancellationToken ct = default, DateTimeOffset? now = null) =>
-        PublishReviewReadyCoreAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now);
+        CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        PublishReviewReadyCoreAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now, treeContent);
 
     private async Task PublishReviewReadyCoreAsync(
         RunId runId, int? expectedLifecycleGeneration, string treeHash, string diff, int stepCount,
-        CancellationToken ct, DateTimeOffset? now)
+        CancellationToken ct, DateTimeOffset? now, byte[]? treeContent)
     {
+        if (treeContent is not null)
+           RunOutputTree.Decode(treeContent);
         var ts = (now ?? DateTimeOffset.UtcNow).ToUniversalTime();
         var id = runId.ToString();
         var bytes = RunOutputRevision.EncodeDiff(diff);
@@ -265,7 +323,8 @@ public sealed class EfRunStore : IRunStore
         if (expectedLifecycleGeneration is { } expected && run.LifecycleGeneration != expected)
             throw new InvalidOperationException("Run lifecycle generation changed before output publication.");
         var existing = await db.RunOutputRevisions.AsNoTracking()
-            .SingleOrDefaultAsync(r => r.RunId == id && r.LifecycleGeneration == run.LifecycleGeneration, ct);
+            .Where(r => r.RunId == id && r.LifecycleGeneration == run.LifecycleGeneration)
+            .OrderByDescending(r => r.CreatedAt).FirstOrDefaultAsync(ct);
         if (existing is not null)
         {
             var revision = ToOutputRevision(existing);
@@ -273,7 +332,8 @@ public sealed class EfRunStore : IRunStore
                 || revision.TreeHash != treeHash
                 || revision.DiffSha256 != digest
                 || revision.WorkflowDigest != run.ExecutableWorkflowContentDigest
-                || !revision.DiffBytes.AsSpan().SequenceEqual(bytes))
+                || !revision.DiffBytes.AsSpan().SequenceEqual(bytes)
+                || !(revision.TreeContent ?? []).AsSpan().SequenceEqual(treeContent ?? []))
                 throw new InvalidOperationException("Output revision already published with different content or generation is no longer review-ready.");
             await tx.CommitAsync(ct);
             return;
@@ -299,6 +359,8 @@ public sealed class EfRunStore : IRunStore
             DiffSha256 = digest,
             PredecessorRevisionId = predecessor,
             DiffBytes = bytes,
+            TreeContent = treeContent,
+            TreeContentSha256 = treeContent is null ? null : RunOutputRevision.Sha256(treeContent),
             CreatedAt = ts
         });
         var rows = await db.Runs
@@ -322,7 +384,91 @@ public sealed class EfRunStore : IRunStore
         new(record.RevisionId, record.SchemaVersion, new RunId(Guid.Parse(record.RunId)),
             record.LifecycleGeneration, record.WorkflowDigest, record.ManifestIncomplete,
             record.TreeHash, record.DiffSha256, record.PredecessorRevisionId, record.DiffBytes,
-            record.CreatedAt);
+            record.CreatedAt, record.OutputKind, record.MergedCommitHash, record.WorkPlanId,
+            record.MergeEffectId, record.AcceptedNoChange, record.TreeContent, record.TreeContentSha256);
+
+    public async Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(treeHash) || string.IsNullOrWhiteSpace(workPlanId))
+            throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
+        RunOutputTree.Decode(treeContent);
+        var id = runId.ToString();
+        var bytes = RunOutputRevision.EncodeDiff(diff);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({id}, 0));", ct);
+        var run = await db.Runs.SingleOrDefaultAsync(r => r.RunId == id, ct);
+        if (run is null || run.LifecycleGeneration != generation
+            || run.Status is not ("in_progress" or "awaiting_review")
+            || run.TreeHash != treeHash || run.Diff != diff)
+            throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
+        RunOutputRevisionRecord? previous = null;
+        if (run.CurrentOutputRevisionId is not null)
+            previous = await db.RunOutputRevisions.AsNoTracking()
+                .SingleOrDefaultAsync(r => r.RevisionId == run.CurrentOutputRevisionId && r.RunId == id, ct)
+                ?? throw new RunOutputRevisionUnavailableException("missing_content");
+        if (previous is not null)
+        {
+            var revision = ToOutputRevision(previous);
+            if (revision.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
+                && revision.LifecycleGeneration == generation && revision.WorkPlanId == workPlanId
+                && revision.TreeHash == treeHash
+                && revision.WorkflowDigest == run.ExecutableWorkflowContentDigest
+                && revision.DiffBytes.AsSpan().SequenceEqual(bytes)
+                && (revision.TreeContent ?? []).AsSpan().SequenceEqual(treeContent))
+            {
+                await tx.CommitAsync(ct);
+                return revision;
+            }
+        }
+        var revisionId = Guid.NewGuid().ToString("N");
+        var record = new RunOutputRevisionRecord
+        {
+            RevisionId = revisionId,
+            SchemaVersion = RunOutputRevision.CollectiveCandidateSchemaVersion,
+            RunId = id,
+            LifecycleGeneration = generation,
+            WorkflowDigest = run.ExecutableWorkflowContentDigest,
+            ManifestIncomplete = run.ExecutableWorkflowContentDigest is null,
+            TreeHash = treeHash,
+            DiffSha256 = RunOutputRevision.Sha256(bytes),
+            PredecessorRevisionId = previous?.RevisionId,
+            OutputKind = "collective",
+            WorkPlanId = workPlanId,
+            DiffBytes = bytes,
+            TreeContent = treeContent,
+            TreeContentSha256 = RunOutputRevision.Sha256(treeContent),
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        db.RunOutputRevisions.Add(record);
+        run.CurrentOutputRevisionId = revisionId;
+        run.ApprovedOutputRevisionId = null;
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return ToOutputRevision(record);
+    }
+
+    public async Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var revision = await db.RunOutputRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(r => r.RevisionId == revisionId && r.RunId == runId.ToString()
+                && r.LifecycleGeneration == generation && r.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion, ct);
+        if (revision is null) return false;
+        var rows = await db.Runs.Where(r => r.RunId == runId.ToString()
+                && r.LifecycleGeneration == generation
+                && (r.Status == "in_progress" || r.Status == "awaiting_review")
+                && r.CurrentOutputRevisionId == revisionId
+                && r.TreeHash == revision.TreeHash
+                && r.Diff == System.Text.Encoding.UTF8.GetString(revision.DiffBytes!)
+                && r.ExecutableWorkflowContentDigest == revision.WorkflowDigest)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.ApprovedOutputRevisionId, revisionId), ct);
+        return rows == 1;
+    }
 
     public async Task<RunOutputRevision?> GetOutputRevisionAsync(
         RunId runId, string revisionId, CancellationToken ct = default)
@@ -338,6 +484,7 @@ public sealed class EfRunStore : IRunStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         var record = await db.RunOutputRevisions.AsNoTracking()
             .Where(r => r.RunId == runId.ToString()).OrderByDescending(r => r.LifecycleGeneration)
+            .ThenByDescending(r => r.CreatedAt)
             .FirstOrDefaultAsync(ct);
         return record is null ? null : ToOutputRevision(record);
     }
@@ -348,6 +495,7 @@ public sealed class EfRunStore : IRunStore
         await using var db = await _factory.CreateDbContextAsync(ct);
         var records = await db.RunOutputRevisions.AsNoTracking()
             .Where(r => r.RunId == runId.ToString()).OrderByDescending(r => r.LifecycleGeneration)
+            .ThenByDescending(r => r.CreatedAt)
             .ToListAsync(ct);
         return records.Select(ToOutputRevision).ToArray();
     }
@@ -497,8 +645,7 @@ public sealed class EfRunStore : IRunStore
         MemoryDbContext db, RunRecord rec, string? revisionId, CancellationToken ct)
     {
         var stored = await db.RunOutputRevisions.AsNoTracking()
-            .SingleOrDefaultAsync(r => r.RunId == rec.RunId
-                && r.LifecycleGeneration == rec.LifecycleGeneration, ct);
+            .SingleOrDefaultAsync(r => r.RunId == rec.RunId && r.RevisionId == rec.CurrentOutputRevisionId, ct);
         return stored is null
             ? revisionId is null && rec.CurrentOutputRevisionId is null
             : string.Equals(rec.CurrentOutputRevisionId, stored.RevisionId, StringComparison.Ordinal)
@@ -648,6 +795,26 @@ public sealed class EfRunStore : IRunStore
         if (mutation.ExpectedStatuses is { Count: > 0 }
             && !mutation.ExpectedStatuses.Contains(RunStatusExtensions.ParseStatus(record.Status)))
             return false;
+        if (mutation.CollectiveOutput is { } collective
+            && record.TreeHash != collective.TreeHash)
+            return false;
+        RunOutputRevisionRecord? approvedCandidate = null;
+        if (mutation.ApprovedCollectiveRevisionId is { } approved)
+        {
+            if (mutation.CollectiveOutput is null || mutation.NoChangeOutput is not null
+                || mutation.Outcome.Status != RunStatus.Completed
+                || mutation.TreeHash != record.TreeHash || string.IsNullOrWhiteSpace(mutation.MergedCommitHash)
+                || record.CurrentOutputRevisionId != approved || record.ApprovedOutputRevisionId != approved)
+                return false;
+            approvedCandidate = await db.RunOutputRevisions.AsNoTracking()
+                .SingleOrDefaultAsync(r => r.RevisionId == approved && r.RunId == record.RunId
+                    && r.LifecycleGeneration == record.LifecycleGeneration && r.SchemaVersion == 4, ct);
+            if (approvedCandidate is null || approvedCandidate.TreeHash != record.TreeHash
+                || approvedCandidate.DiffSha256 != RunOutputRevision.Sha256(RunOutputRevision.EncodeDiff(record.Diff ?? ""))
+                || approvedCandidate.WorkflowDigest != record.ExecutableWorkflowContentDigest)
+                return false;
+            ToOutputRevision(approvedCandidate).ResolveFiles();
+        }
 
         var wasInProgress = record.Status == RunStatus.InProgress.ToApiString();
         if (mutation.RequiredLease is { } requiredLease)
@@ -693,6 +860,98 @@ public sealed class EfRunStore : IRunStore
             if (mutation.Diff is not null) record.Diff = mutation.Diff;
             if (wasInProgress)
                 record.ApprovalGeneration++;
+        }
+        if (mutation.CollectiveOutput is { } output)
+        {
+            if (output.TreeContent is null)
+                throw new RunOutputRevisionUnavailableException("missing_content");
+            RunOutputTree.Decode(output.TreeContent);
+            if (approvedCandidate is not null
+                && (approvedCandidate.WorkPlanId != output.WorkPlanId
+                    || approvedCandidate.TreeContent is null
+                    || !approvedCandidate.TreeContent.AsSpan().SequenceEqual(output.TreeContent)))
+                throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
+            if (mutation.Outcome.Status != RunStatus.Completed
+                || string.IsNullOrWhiteSpace(output.CommitHash)
+                || string.IsNullOrWhiteSpace(output.TreeHash)
+                || string.IsNullOrWhiteSpace(output.WorkPlanId)
+                || string.IsNullOrWhiteSpace(output.MergeEffectId)
+                || (approvedCandidate is null
+                    ? record.CurrentOutputRevisionId is not null
+                    : record.CurrentOutputRevisionId != approvedCandidate.RevisionId)
+                || record.Diff is null
+                || (mutation.TreeHash is not null && mutation.TreeHash != output.TreeHash)
+                || (record.ExecutableWorkflowPinRequired
+                    && string.IsNullOrWhiteSpace(record.ExecutableWorkflowContentDigest)))
+                throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
+            var predecessor = approvedCandidate?.RevisionId
+                ?? await db.RunOutputRevisions.AsNoTracking()
+                    .Where(r => r.RunId == record.RunId && r.LifecycleGeneration < record.LifecycleGeneration)
+                    .OrderByDescending(r => r.LifecycleGeneration)
+                    .Select(r => r.RevisionId).FirstOrDefaultAsync(ct);
+            var bytes = RunOutputRevision.EncodeDiff(record.Diff);
+            var revisionId = Guid.NewGuid().ToString("N");
+            db.RunOutputRevisions.Add(new RunOutputRevisionRecord
+            {
+                RevisionId = revisionId,
+                SchemaVersion = RunOutputRevision.CollectiveSchemaVersion,
+                RunId = record.RunId,
+                LifecycleGeneration = record.LifecycleGeneration,
+                WorkflowDigest = record.ExecutableWorkflowContentDigest,
+                ManifestIncomplete = record.ExecutableWorkflowContentDigest is null,
+                TreeHash = output.TreeHash,
+                DiffSha256 = RunOutputRevision.Sha256(bytes),
+                PredecessorRevisionId = predecessor,
+                OutputKind = "collective",
+                MergedCommitHash = output.CommitHash,
+                WorkPlanId = output.WorkPlanId,
+                MergeEffectId = output.MergeEffectId,
+                AcceptedNoChange = output.AcceptedNoChange,
+                DiffBytes = bytes,
+                TreeContent = output.TreeContent,
+                TreeContentSha256 = RunOutputRevision.Sha256(output.TreeContent),
+                CreatedAt = mutation.Outcome.OccurredAt
+            });
+            record.CurrentOutputRevisionId = revisionId;
+        }
+        if (mutation.NoChangeOutput is { } receipt)
+        {
+            if (mutation.CollectiveOutput is not null || mutation.Outcome.Status != RunStatus.Completed
+                || string.IsNullOrWhiteSpace(receipt.CommitHash) || string.IsNullOrWhiteSpace(receipt.TreeHash)
+                || record.CurrentOutputRevisionId is not null
+                || !string.IsNullOrEmpty(record.Diff)
+                || (record.ExecutableWorkflowPinRequired
+                    && string.IsNullOrWhiteSpace(record.ExecutableWorkflowContentDigest)))
+                throw new RunOutputRevisionUnavailableException("invalid_no_change_manifest");
+            RunOutputTree.Decode(receipt.TreeContent);
+            var predecessor = await db.RunOutputRevisions.AsNoTracking()
+                .Where(r => r.RunId == record.RunId)
+                .OrderByDescending(r => r.CreatedAt)
+                .Select(r => r.RevisionId).FirstOrDefaultAsync(ct);
+            var revisionId = Guid.NewGuid().ToString("N");
+            db.RunOutputRevisions.Add(new RunOutputRevisionRecord
+            {
+                RevisionId = revisionId,
+                SchemaVersion = RunOutputRevision.NoChangeSchemaVersion,
+                RunId = record.RunId,
+                LifecycleGeneration = record.LifecycleGeneration,
+                WorkflowDigest = record.ExecutableWorkflowContentDigest,
+                ManifestIncomplete = record.ExecutableWorkflowContentDigest is null,
+                TreeHash = receipt.TreeHash,
+                DiffSha256 = RunOutputRevision.Sha256([]),
+                PredecessorRevisionId = predecessor,
+                OutputKind = "no_change",
+                MergedCommitHash = receipt.CommitHash,
+                AcceptedNoChange = true,
+                DiffBytes = [],
+                TreeContent = receipt.TreeContent,
+                TreeContentSha256 = RunOutputRevision.Sha256(receipt.TreeContent),
+                CreatedAt = mutation.Outcome.OccurredAt,
+            });
+            record.CurrentOutputRevisionId = revisionId;
+            record.TreeHash = receipt.TreeHash;
+            record.MergedCommitHash = receipt.CommitHash;
+            record.Diff = "";
         }
         db.TerminalRunOutcomes.Add(new TerminalRunOutcomeRecord
         {
@@ -1194,6 +1453,10 @@ public sealed class EfRunStore : IRunStore
         RunId = r.Id.ToString(),
         RepositoryPath = r.RepositoryPath,
         OriginatingBranch = r.OriginatingBranch,
+        ExecutionInputRequired = r.ExecutionInputRequired,
+        ExecutionInputSourceCommitHash = r.ExecutionInputSourceCommitHash,
+        ExecutionInputCommitHash = r.ExecutionInputCommitHash,
+        ExecutionInputCompositeId = r.ExecutionInputCompositeId,
         ModelSource = r.ModelSource.ToApiString(),
         Task = r.Task,
         SubmittingUser = r.SubmittingUser,
@@ -1250,6 +1513,10 @@ public sealed class EfRunStore : IRunStore
         Id = RunId.Parse(r.RunId),
         RepositoryPath = r.RepositoryPath,
         OriginatingBranch = r.OriginatingBranch,
+        ExecutionInputRequired = r.ExecutionInputRequired,
+        ExecutionInputSourceCommitHash = r.ExecutionInputSourceCommitHash,
+        ExecutionInputCommitHash = r.ExecutionInputCommitHash,
+        ExecutionInputCompositeId = r.ExecutionInputCompositeId,
         ModelSource = ModelSourceExtensions.FromApiString(r.ModelSource),
         Task = r.Task,
         SubmittingUser = r.SubmittingUser,
