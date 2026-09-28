@@ -678,6 +678,37 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RecoverInterruptedRunsAsync_NonRetryableScribeFailure_DoesNotReenqueue()
+    {
+        var coordinatorRun = await SeedTerminalCoordinatorRunAsync(
+            RunStatus.MergeFailed, "needs_resolution: integration_conflict");
+        var config = BuildConfiguration();
+        var streamStore = new RunStreamStore();
+        var pipeline = new CountingScribePipeline(nonRetryableFailure: true);
+        var assembly = BuildAssembly(_runStore, streamStore, pipeline, config);
+
+        assembly.EnsureFinalScribe(coordinatorRun);
+        await WaitUntilAsync(async () =>
+        {
+            var children = await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString());
+            return children.Any(r => IsScribe(r) && r.Status == RunStatus.Failed);
+        });
+
+        var svc = BuildCoordinatorRunService(_runStore, streamStore, assembly, config);
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        assembly.EnsureFinalScribe(coordinatorRun);
+        await Task.Delay(100);
+
+        pipeline.InvocationCount.Should().Be(1);
+        (await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString()))
+            .Where(IsScribe).Should().ContainSingle()
+            .Which.Result.Should().Be("scribe_infrastructure_failure (non-retryable)");
+        var parent = (await _runStore.GetAsync(coordinatorRun.Id))!;
+        parent.Status.Should().Be(RunStatus.MergeFailed);
+        parent.Result.Should().Be("needs_resolution: integration_conflict");
+    }
+
+    [Fact]
     public async Task EnsureFinalScribe_ConcurrentCallsForSameRun_ExecutesPipelineOnce()
     {
         var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
@@ -1053,14 +1084,15 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             configuration,
             providerBoundaryResolver: new FixedRunModelProviderBoundaryResolver());
 
-    private async Task<Run> SeedTerminalCoordinatorRunAsync()
+    private async Task<Run> SeedTerminalCoordinatorRunAsync(
+        RunStatus status = RunStatus.Completed, string result = "complete")
     {
         var run = new Run
         {
             Id = RunId.New(),
             AgentName = "Coordinator",
             ParentRunId = null,
-            Status = RunStatus.Completed,
+            Status = status,
             RepositoryPath = _checkpointsPath,
             OriginatingBranch = "main",
             ModelSource = ModelSource.GitHubCopilot,
@@ -1068,7 +1100,7 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             SubmittingUser = "test-user",
             StartedAt = DateTimeOffset.UtcNow,
             EndedAt = DateTimeOffset.UtcNow,
-            Result = "complete",
+            Result = result,
             Origin = RunOrigin.Interactive,
         };
         await _runStore.InsertAsync(run);
@@ -1183,7 +1215,8 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
 
     private sealed class CountingScribePipeline(
         bool block = false,
-        bool failScribes = false) : ICollectiveAssemblyPipeline
+        bool failScribes = false,
+        bool nonRetryableFailure = false) : ICollectiveAssemblyPipeline
     {
         private readonly TaskCompletionSource<bool> _release = CreateRelease(block);
         private int _invocationCount;
@@ -1204,7 +1237,9 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             {
                 await _release.Task.WaitAsync(ct);
                 if (failScribes)
-                    throw new InvalidOperationException("simulated Scribe failure");
+                    throw new ScribeTurnException("scribe_transport_failure", retryable: true);
+                if (nonRetryableFailure)
+                    throw new ScribeTurnException("scribe_infrastructure_failure", retryable: false);
             }
             finally
             {

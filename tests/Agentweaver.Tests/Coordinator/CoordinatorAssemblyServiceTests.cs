@@ -3158,6 +3158,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             [Attempt(RunStatus.Completed)], maxAttempts: 2).Should().BeFalse();
         CoordinatorAssemblyService.ShouldAttemptFinalScribe(
             [Attempt(RunStatus.InProgress)], maxAttempts: 2).Should().BeFalse();
+        CoordinatorAssemblyService.ShouldAttemptFinalScribe(
+            [Attempt(RunStatus.Failed) with { Result = "scribe_infrastructure_failure (non-retryable)" }],
+            maxAttempts: 3).Should().BeFalse();
     }
 
     [Fact]
