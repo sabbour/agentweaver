@@ -147,6 +147,7 @@ async function driveReviewFixture({
   missingInitialId = false, staleCorrectedId = false, missingExecutionKey = false,
   unchangedContent = false, advanceBrowserMs = 0, correctedBudget = 5,
   rejectReviewHeader = false, staleDecision = false, advancePreviewRequestMs = 0,
+  transientRunReads = 0,
 } = {}) {
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
@@ -157,6 +158,7 @@ async function driveReviewFixture({
     const deleted = [];
     const decisions = [];
     const active = new Set();
+    let remainingTransientRunReads = transientRunReads;
     const browser = async (url, expected) => {
       opened.push([url, expected]);
       if (revised) now += advanceBrowserMs;
@@ -208,6 +210,10 @@ async function driveReviewFixture({
       if (url.endsWith('/output-revisions')) return { status: 200, body: [
         { revision_id: 'revision-1' }, ...(revised ? [{ revision_id: 'revision-2' }] : []),
       ] };
+      if (url === '/api/runs/parent' && remainingTransientRunReads > 0) {
+        remainingTransientRunReads--;
+        return { status: 0, body: { error: 'transport_error', message: 'fetch failed' } };
+      }
       return { status: 200, body: { status: approved ? 'completed' : 'in_progress', project_id: 'project' } };
     };
     const result = await runOracleAcceptance({
@@ -283,4 +289,14 @@ test('late preview publication is failed and its returned session is still clean
   assert.equal(decisions.length, 1);
   assert.equal(deleted.length, 2);
   assert.ok(result.cleanup.every((entry) => entry.deleted));
+});
+
+test('idempotent polling retries bounded transient transport failures', async () => {
+  const recovered = await driveReviewFixture({ transientRunReads: 2 });
+  assert.equal(recovered.result.verdict, 'pass');
+
+  const exhausted = await driveReviewFixture({ transientRunReads: 3 });
+  assert.equal(exhausted.result.verdict, 'fail');
+  assert.equal(exhausted.result.error.code, 'transport_error');
+  assert.match(exhausted.result.error.message, /GET \/api\/runs\/parent: fetch failed/);
 });

@@ -135,12 +135,22 @@ export async function runOracleAcceptance({
   };
   const checkedRequest = async (method, url, body, options = {}) => {
     const { allowLateResponse = false, ...requestOptions } = options;
-    const response = await request(method, url, body, {
-      ...requestOptions,
-      signal: AbortSignal.timeout(Math.max(1, Math.min(remaining(), method === 'POST' ? 180_000 : 30_000))),
-    });
-    if (!allowLateResponse) remaining();
-    return response;
+    const maxAttempts = method === 'GET' ? 3 : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const response = await request(method, url, body, {
+        ...requestOptions,
+        signal: AbortSignal.timeout(Math.max(1, Math.min(remaining(), method === 'POST' ? 180_000 : 30_000))),
+      });
+      if (!allowLateResponse) remaining();
+      const transientRead = method === 'GET' && [0, 502, 503, 504].includes(response.status);
+      if (!transientRead) return response;
+      if (attempt === maxAttempts) {
+        const message = response.body?.message ?? `HTTP ${response.status}`;
+        throw new AcceptanceFailure(`${method} ${url}: ${message}`, 'transport_error');
+      }
+      await pause(Math.min(250 * attempt, remaining()));
+    }
+    throw new AcceptanceFailure(`${method} ${url}: retry budget exhausted`, 'transport_error');
   };
   deltas.request = checkedRequest;
   const path = (suffix) => `/api/runs/${encodeURIComponent(result.parentRunId)}${suffix}`;
