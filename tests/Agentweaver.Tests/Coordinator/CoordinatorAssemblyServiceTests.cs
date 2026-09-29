@@ -3044,13 +3044,13 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                 ModelSource = ModelSource.GitHubCopilot, Task = "goal", SubmittingUser = "alice",
                 Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow, AgentName = "Coordinator",
             });
-            await _runStore.PinDefaultExecutableWorkflowForTestAsync(RunId.Parse(coordinatorRunId));
             var (planId, ids) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.AssembleReady]);
             await _runStore.UpdateAssemblyArtifactsAsync(RunId.Parse(coordinatorRunId), treeHash, "reviewed");
             var run = (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!;
             var candidate = await _runStore.PublishCollectiveCandidateAsync(
                 run.Id, run.LifecycleGeneration, planId.ToString(), treeHash, "reviewed",
                 RunOutputTreeCapture.Capture(path, treeHash));
+            candidate.ManifestIncomplete.Should().BeTrue("coordinators need not have an executable workflow digest");
             _streamStore.Create(coordinatorRunId, "alice");
             var sut = new CoordinatorAssemblyService(
                 _runStore, _streamStore, _assemblyStore, _reviewGate, _pipeline,
@@ -3105,6 +3105,119 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                 Directory.Delete(path, recursive: true);
             }
         }
+    }
+
+    [Theory]
+    [InlineData(SteeringSource.Rubberduck)]
+    [InlineData(SteeringSource.BuildTest)]
+    [InlineData(SteeringSource.HumanReview)]
+    public async Task AssemblyReviewRedirect_PinsDigestlessIntegratedTree_BeforeFreshRevision(string source)
+    {
+                var path = Path.Combine(Environment.CurrentDirectory, "r" + Guid.NewGuid().ToString("N")[..8]);
+                try
+                {
+                    Repository.Init(path);
+                    var coordinatorRunId = RunId.New().ToString();
+                    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(coordinatorRunId);
+                    string commitHash;
+                    string treeHash;
+                    using (var repo = new Repository(path))
+                    {
+                        var sig = new Signature("Test", "test@localhost", DateTimeOffset.UnixEpoch);
+                        var root = repo.ObjectDatabase.CreateCommit(sig, sig, "base",
+                            repo.ObjectDatabase.CreateTree(new TreeDefinition()), [], false);
+                        repo.Refs.Add("refs/heads/main", root.Id);
+                        var definition = TreeDefinition.From(root.Tree);
+                        foreach (var name in new[] { "README.md", "app.js", "index.html", "styles.css" })
+                            definition.Add(name, repo.ObjectDatabase.CreateBlob(
+                                new MemoryStream(System.Text.Encoding.UTF8.GetBytes("integrated " + name))), Mode.NonExecutableFile);
+                        var integrated = repo.ObjectDatabase.CreateCommit(sig, sig, "integrated",
+                            repo.ObjectDatabase.CreateTree(definition), [root], false);
+                        repo.Refs.Add("refs/heads/" + integrationBranch, integrated.Id);
+                        commitHash = integrated.Sha;
+                        treeHash = integrated.Tree.Sha;
+                    }
+
+                    await _runStore.InsertAsync(new Run
+                    {
+                        Id = RunId.Parse(coordinatorRunId), RepositoryPath = path, OriginatingBranch = "main",
+                        ModelSource = ModelSource.GitHubCopilot, Task = "goal", SubmittingUser = "alice",
+                        Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow, AgentName = "Coordinator",
+                    });
+                    var priorId = RunId.New().ToString();
+                    var (planId, ids) = await SeedPlanAsync(
+                        coordinatorRunId, [SubtaskStatus.AssembleReady], [priorId]);
+                    await SeedChildRunAsync(RunId.Parse(priorId), "agentweaver/prior", DiffTouching("index.html"));
+                    await LapseSteeringRetentionAsync(ids[0]);
+                    _rotation.Impl = (_, _, _) => null;
+                    await _runStore.UpdateAssemblyArtifactsAsync(RunId.Parse(coordinatorRunId), treeHash, "reviewed");
+                    var run = (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!;
+                    var candidate = await _runStore.PublishCollectiveCandidateAsync(
+                        run.Id, run.LifecycleGeneration, planId.ToString(), treeHash, "reviewed",
+                        RunOutputTreeCapture.Capture(path, treeHash));
+                    candidate.ManifestIncomplete.Should().BeTrue();
+                    _streamStore.Create(coordinatorRunId, "alice");
+
+                    var sut = new CoordinatorAssemblyService(
+                        _runStore, _streamStore, _assemblyStore, _reviewGate, _pipeline,
+                        _scopeFactory, _provider, new TestHostApplicationLifetime(),
+                        NullLogger<CoordinatorAssemblyService>.Instance,
+                        worktreeManager: new WorktreeManager(new ConfigurationBuilder().Build(),
+                            NullLogger<WorktreeManager>.Instance),
+                        providerBoundaryResolver: _providerBoundary);
+                    var method = typeof(CoordinatorAssemblyService).GetMethod(
+                        "RouteAssemblyGateThroughSteeringAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                    var touched = new Dictionary<int, IReadOnlySet<string>>
+                    {
+                        [ids[0]] = new HashSet<string> { "index.html" },
+                    };
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    var redirected = await (Task<bool>)method.Invoke(sut, [
+                        new CoordinatorDispatchContext(coordinatorRunId, path, "main", "alice", null),
+                        planId, Array.Empty<(int, int)>(), source,
+                        "Re-apply the app files in the workspace.", new[] { "index.html" },
+                        touched, treeHash, cts.Token,
+                    ])!;
+                    redirected.Should().BeTrue();
+                    using var scope = _provider.CreateScope();
+                    var row = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+                        .Subtasks.AsNoTracking().SingleAsync(s => s.Id == ids[0]);
+                    row.Status.Should().Be(SubtaskStatus.Pending);
+                    row.PriorChildRunId.Should().Be(priorId);
+                    row.RevisionInputRevisionId.Should().Be(candidate.RevisionId);
+                    row.RevisionInputCommitHash.Should().Be(commitHash);
+                    _dispatch.StartDispatchCalls.Should().ContainSingle();
+                    var manager = new WorktreeManager(new ConfigurationBuilder().Build(),
+                        NullLogger<WorktreeManager>.Instance);
+                    var workspace = manager.AddWorktree(path, row.RevisionInputCommitHash!, RunId.New());
+                    try
+                    {
+                        foreach (var name in new[] { "README.md", "app.js", "index.html", "styles.css" })
+                            File.ReadAllText(Path.Combine(workspace.WorktreePath, name))
+                                .Should().Be("integrated " + name);
+                        File.WriteAllText(Path.Combine(workspace.WorktreePath, "review-delta.txt"), "corrected");
+                        using var revisionRepo = new Repository(workspace.WorktreePath);
+                        Commands.Stage(revisionRepo, "*");
+                        var sig = new Signature("Test", "test@localhost", DateTimeOffset.UnixEpoch);
+                        var revised = revisionRepo.Commit("review delta", sig, sig);
+                        RunOutputTree.Decode(RunOutputTreeCapture.Capture(path, revised.Tree.Sha))
+                            .Select(f => f.Path).Should().BeEquivalentTo(
+                                "README.md", "app.js", "index.html", "styles.css", "review-delta.txt");
+                    }
+                    finally
+                    {
+                        manager.RemoveWorktree(path, workspace.WorktreePath, workspace.BranchName);
+                    }
+                }
+                finally
+                {
+                    if (Directory.Exists(path))
+                    {
+                        foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+                            File.SetAttributes(file, FileAttributes.Normal);
+                        Directory.Delete(path, recursive: true);
+                    }
+                }
     }
 
     // ── Terminal coordinator-run status + reason (so the UI never shows a bare "Failed") ──────────

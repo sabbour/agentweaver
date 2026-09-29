@@ -4642,13 +4642,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     }
 
     private async Task<RunOutputRevision> RequireCurrentCandidateAsync(
-        string runId, int workPlanId, string treeHash, CancellationToken ct)
+        string runId, int workPlanId, string treeHash, CancellationToken ct,
+        bool allowIncompleteManifest = false)
     {
         var run = await TryGetCoordinatorRunAsync(runId, ct).ConfigureAwait(false);
         if (run is null || run.CurrentOutputRevisionId is null || run.TreeHash != treeHash)
             throw new RunOutputRevisionUnavailableException("collective_output_revision_unavailable");
-        var revision = await _runStore.ResolveOutputRevisionAsync(
-            run.Id, run.CurrentOutputRevisionId, ct).ConfigureAwait(false);
+        var revision = allowIncompleteManifest
+            ? await _runStore.GetOutputRevisionAsync(run.Id, run.CurrentOutputRevisionId, ct).ConfigureAwait(false)
+                ?? throw new RunOutputRevisionUnavailableException("missing_content")
+            : await _runStore.ResolveOutputRevisionAsync(
+                run.Id, run.CurrentOutputRevisionId, ct).ConfigureAwait(false);
         if (revision.SchemaVersion != RunOutputRevision.CollectiveCandidateSchemaVersion
             || revision.LifecycleGeneration != run.LifecycleGeneration
             || revision.WorkPlanId != workPlanId.ToString(System.Globalization.CultureInfo.InvariantCulture)
@@ -5158,11 +5162,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         if (string.IsNullOrWhiteSpace(run.CurrentOutputRevisionId)
             || string.IsNullOrWhiteSpace(run.TreeHash))
             throw new RunOutputRevisionUnavailableException("assembly_revision_input_unavailable");
+        // The collective candidate can have no executable workflow digest (a coordinator
+        // assembled child outputs rather than executing a workflow). ResolveOutputRevisionAsync
+        // rejects such a candidate as incomplete even when its captured tree is complete.
+        // Pinning only needs the candidate's identity and bytes, checked against the Git tip below.
         var revision = await RequireCurrentCandidateAsync(
-            coordinatorRunId, workPlanId, run.TreeHash, ct).ConfigureAwait(false);
+            coordinatorRunId, workPlanId, run.TreeHash, ct, allowIncompleteManifest: true)
+            .ConfigureAwait(false);
         var branch = IntegrationBranchName(coordinatorRunId);
         var commit = _worktreeManager.GetBranchTipCommitSha(run.RepositoryPath, branch);
         if (commit is null || _worktreeManager.GetBranchTipTreeSha(run.RepositoryPath, branch) != revision.TreeHash
+            || revision.TreeContent is null
             || !RunOutputTreeCapture.Capture(run.RepositoryPath, revision.TreeHash)
                 .AsSpan().SequenceEqual(revision.TreeContent))
             throw new RunOutputRevisionUnavailableException("assembly_revision_input_mismatch");
