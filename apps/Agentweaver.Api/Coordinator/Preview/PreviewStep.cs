@@ -92,6 +92,9 @@ public sealed class PreviewStep
         var keepProcess = false;
         var skipProcessCleanup = false;
         var leased = false;
+        // Capture before command discovery/model fallback or process startup can outlive recovery.
+        var publicationGeneration = (await _runStore.GetAsync(RunId.Parse(runId), ct)
+            .ConfigureAwait(false))?.LifecycleGeneration;
         var stopReason = "registration_failed";
 
         try
@@ -169,7 +172,10 @@ public sealed class PreviewStep
             //    supervised so a fresh approval attempt can reuse it without duplicate execution.
             //    The publication lease starts here so process startup, observation, and the configured
             //    Gateway-convergence window cannot be cancelled by the run finishing its agent work.
-            leased = await TryLeaseAsync(runId, publicationLeaseOwner, ct).ConfigureAwait(false);
+            if (publicationGeneration is null)
+                return;
+            leased = await TryLeaseAsync(runId, publicationLeaseOwner, publicationGeneration.Value, ct)
+                .ConfigureAwait(false);
             if (!leased)
             {
                 stopReason = "run_terminal";
@@ -288,10 +294,9 @@ public sealed class PreviewStep
                 return;
             }
 
-            var publicationGeneration = (await _runStore.GetAsync(RunId.Parse(runId), ct)
-                .ConfigureAwait(false))?.LifecycleGeneration;
             // Hold the run open again for registration and the preview_ready commit (#1315).
-            leased = await TryLeaseAsync(runId, publicationLeaseOwner, ct).ConfigureAwait(false);
+            leased = await TryLeaseAsync(runId, publicationLeaseOwner, publicationGeneration.Value, ct)
+                .ConfigureAwait(false);
             if (!leased)
             {
                 if (await SandboxEndpoints.IsPreviewRunActiveAsync(runId, _runStore, ct).ConfigureAwait(false))
@@ -313,7 +318,8 @@ public sealed class PreviewStep
                 runId, port.Port, request.SubmittingUser, _previewService, ct,
                 previewRunnerSessionId: started.SessionId,
                 maintainPublicationLease: true,
-                publicationLeaseOwner: publicationLeaseOwner).ConfigureAwait(false);
+                publicationLeaseOwner: publicationLeaseOwner,
+                expectedLifecycleGeneration: publicationGeneration.Value).ConfigureAwait(false);
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
@@ -386,7 +392,9 @@ public sealed class PreviewStep
                 try
                 {
                     shouldStopProcess = await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
-                        _runStore, parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
+                        _runStore, parsedRunId, publicationLeaseOwner,
+                        publicationGeneration ?? throw new InvalidOperationException("Preview generation not captured."),
+                        ownershipCheck.Token).ConfigureAwait(false);
                     cleanupReserved = shouldStopProcess;
                 }
                 catch (Exception ex)
@@ -413,7 +421,8 @@ public sealed class PreviewStep
     /// Claims the preview-publication lease so a run that finishes its agent work cannot terminalize
     /// while this step publishes (#1315). Returns <c>false</c> when the run is already terminal.
     /// </summary>
-    private async Task<bool> TryLeaseAsync(string runId, string ownerId, CancellationToken ct)
+    private async Task<bool> TryLeaseAsync(
+        string runId, string ownerId, int expectedLifecycleGeneration, CancellationToken ct)
     {
         if (!RunId.TryParse(runId, out var parsed))
             return false;
@@ -421,6 +430,7 @@ public sealed class PreviewStep
             parsed,
             ownerId,
             DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
+            expectedLifecycleGeneration,
             ct).ConfigureAwait(false);
     }
 

@@ -118,6 +118,13 @@ committed, or takes ownership without restarting the preview process otherwise. 
 attempt cannot publish its ready events or release the retry's lease. A terminal run or
 unhealthy preview session remains an explicit error.
 
+If startup recovery advances a run to a new lifecycle generation during Gateway
+publication, the earlier API attempt loses its lease at the next renewal (normally
+within a minute), aborts, and releases it without stopping the replacement process.
+Retry from the recovered run with its new healthy preview session and port; a conflict
+while the old attempt is winding down is temporary, not a reason to wait for the full
+Gateway-convergence timeout. Ready events are emitted only by the current generation.
+
 The supervised preview process accepts either a worktree-relative working directory or the canonical absolute path of the worktree (or one of its subdirectories). Paths outside the run worktree, traversal escapes, and symlink or junction escapes remain blocked by the sandbox policy.
 
 ## The OutcomeSpec confirmation

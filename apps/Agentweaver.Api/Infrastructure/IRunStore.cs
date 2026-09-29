@@ -144,28 +144,33 @@ public interface IRunStore
 
     /// <summary>
     /// Atomically acquires a preview-publication lease for one publication attempt. A current lease
-    /// owned by another attempt must be refused until it expires.
+    /// owned by another attempt must be refused until it expires. The run must still have
+    /// <paramref name="expectedLifecycleGeneration"/> at the atomic update boundary.
     /// </summary>
     Task<bool> TryAcquirePreviewPublicationAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
         Task.FromResult(false);
 
     /// <summary>Renews only a live lease owned by <paramref name="ownerId"/>.
-    /// An expired owner cannot revive cleanup authority after a replacement becomes eligible.</summary>
+    /// An expired owner or an owner from an earlier lifecycle cannot revive authority.</summary>
     Task<bool> TryRenewPreviewPublicationAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
         Task.FromResult(false);
 
     /// <summary>Reserves a terminal run's process cleanup when no live publication exists.
     /// The reservation blocks reopening until the bounded stop finishes or its lease expires.</summary>
     Task<bool> TryReserveTerminalPreviewCleanupAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
         Task.FromResult(false);
 
     /// <summary>Reserves cleanup of an unpublished process before publication has been claimed.
     /// Only an active run with no recorded owner or lease can grant it.</summary>
     Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
         Task.FromResult(false);
 
     /// <summary>

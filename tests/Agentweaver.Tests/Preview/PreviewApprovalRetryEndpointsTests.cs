@@ -271,7 +271,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         {
             Enabled = true,
             ZoneSuffix = "preview.example.test",
-        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication,
+            runStore: _factory.Services.GetRequiredService<IRunStore>());
         var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
         var secrets = new InMemorySecretStore();
         using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
@@ -333,7 +334,11 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             (await factory.Services.GetRequiredService<IToolApprovalGate>()
                 .GrantAsync(runId, approvalId, ApprovalScope.Once)).Should().BeTrue();
             if (initialRequest is not null)
-                (await initialRequest.WaitAsync(TimeSpan.FromSeconds(5))).StatusCode.Should().Be(HttpStatusCode.OK);
+            {
+                var published = await initialRequest.WaitAsync(TimeSpan.FromSeconds(5));
+                published.StatusCode.Should().Be(HttpStatusCode.OK,
+                    await published.Content.ReadAsStringAsync());
+            }
         }
 
         var report = await logger.Reported.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -399,7 +404,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         {
             Enabled = true,
             ZoneSuffix = "preview.example.test",
-        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication,
+            runStore: _factory.Services.GetRequiredService<IRunStore>());
         var runner = new RetainedRunnerClient(healthy: true, unreachable: false);
         var secrets = new InMemorySecretStore();
         using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
@@ -708,7 +714,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         (await runStore.TryAcquirePreviewPublicationAsync(
             RunId.Parse(runId),
             existingOwner,
-            DateTimeOffset.UtcNow + TimeSpan.FromMinutes(3))).Should().BeTrue();
+            DateTimeOffset.UtcNow + TimeSpan.FromMinutes(3),
+            (await runStore.GetAsync(RunId.Parse(runId)))!.LifecycleGeneration)).Should().BeTrue();
         try
         {
             var request = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
@@ -752,7 +759,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         var streams = factory.Services.GetRequiredService<RunStreamStore>();
         const string previousOwner = "retained-process";
         (await runStore.TryAcquirePreviewPublicationAsync(
-            RunId.Parse(runId), previousOwner, DateTimeOffset.UtcNow.AddMinutes(-1))).Should().BeTrue();
+            RunId.Parse(runId), previousOwner, DateTimeOffset.UtcNow.AddMinutes(-1),
+            (await runStore.GetAsync(RunId.Parse(runId)))!.LifecycleGeneration)).Should().BeTrue();
 
         var request = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
         {
@@ -767,7 +775,8 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         try
         {
             (await runStore.TryRenewPreviewPublicationAsync(
-                RunId.Parse(runId), previousOwner, DateTimeOffset.UtcNow.AddMinutes(3)))
+                RunId.Parse(runId), previousOwner, DateTimeOffset.UtcNow.AddMinutes(3),
+                (await runStore.GetAsync(RunId.Parse(runId)))!.LifecycleGeneration))
                 .Should().BeFalse("the restarted request must use a fresh owner, not the shared process session");
         }
         finally
@@ -807,7 +816,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             "gateway-token", runId, "pod", 5173, "https://preview.example.test", DateTimeOffset.UtcNow);
         preview.SeedPublishedSession(route);
         (await runStore.TryAcquirePreviewPublicationAsync(
-            parsedRunId, oldOwner, DateTimeOffset.UtcNow.AddMinutes(3))).Should().BeTrue();
+            parsedRunId, oldOwner, DateTimeOffset.UtcNow.AddMinutes(3), generation)).Should().BeTrue();
         (await SandboxEndpoints.PublishPreviewReadyAsync(
             route,
             new
@@ -819,7 +828,7 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
             preview, streams, runStore, CancellationToken.None, oldOwner, generation))
             .Should().BeTrue("the prior API committed ready before losing its response");
         (await runStore.TryRenewPreviewPublicationAsync(
-            parsedRunId, oldOwner, DateTimeOffset.UtcNow.AddMinutes(-1)))
+            parsedRunId, oldOwner, DateTimeOffset.UtcNow.AddMinutes(-1), generation))
             .Should().BeTrue("the API died before it could release its lease");
 
         var request = client.PostAsJsonAsync($"/api/runs/{runId}/sandbox/preview", new
@@ -1093,6 +1102,12 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
 
     private sealed class RetainedPreviewService : ISandboxPreviewService
     {
+        public Task<PreviewSession> StartRunBoundPreviewAsync(
+            string runId, int targetPort, string ownerUserId, int expectedLifecycleGeneration,
+            CancellationToken ct = default, string? previewRunnerSessionId = null,
+            string? publicationLeaseOwner = null) =>
+            StartPreviewAsync(runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
+
         private readonly RetainedRunnerClient _runner;
         private readonly bool _requireHealthCheck;
 

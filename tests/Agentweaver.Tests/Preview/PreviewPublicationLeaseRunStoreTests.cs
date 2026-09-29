@@ -101,14 +101,14 @@ public class PreviewPublicationLeaseRunStoreTests
         var firstExpiry = DateTimeOffset.UtcNow.AddMinutes(3);
         var renewedExpiry = firstExpiry.AddMinutes(1);
 
-        (await store.TryAcquirePreviewPublicationAsync(Run, "owner-a", firstExpiry)).Should().BeTrue();
-        (await store.TryAcquirePreviewPublicationAsync(Run, "owner-b", firstExpiry)).Should().BeFalse();
-        (await store.TryRenewPreviewPublicationAsync(Run, "owner-b", renewedExpiry)).Should().BeFalse();
+        (await store.TryAcquirePreviewPublicationAsync(Run, "owner-a", firstExpiry, 1)).Should().BeTrue();
+        (await store.TryAcquirePreviewPublicationAsync(Run, "owner-b", firstExpiry, 1)).Should().BeFalse();
+        (await store.TryRenewPreviewPublicationAsync(Run, "owner-b", renewedExpiry, 1)).Should().BeFalse();
 
         await store.EndPreviewPublicationAsync(Run, "owner-b");
         (await store.GetPreviewPublicationLeaseAsync(Run)).Should().Be(firstExpiry);
 
-        (await store.TryRenewPreviewPublicationAsync(Run, "owner-a", renewedExpiry)).Should().BeTrue();
+        (await store.TryRenewPreviewPublicationAsync(Run, "owner-a", renewedExpiry, 1)).Should().BeTrue();
         (await store.GetPreviewPublicationLeaseAsync(Run)).Should().Be(renewedExpiry);
         await store.EndPreviewPublicationAsync(Run, "owner-a");
         (await store.GetPreviewPublicationLeaseAsync(Run)).Should().BeNull();
@@ -119,11 +119,11 @@ public class PreviewPublicationLeaseRunStoreTests
     {
         var runId = RunId.New();
         var store = new LeaseRunStore { StoredRun = MakeRun(runId, RunStatus.AssembleReady) };
-        (await store.TryAcquirePreviewPublicationAsync(runId, "winning-owner", DateTimeOffset.UtcNow.AddMinutes(3)))
+        (await store.TryAcquirePreviewPublicationAsync(runId, "winning-owner", DateTimeOffset.UtcNow.AddMinutes(3), 1))
             .Should().BeTrue();
 
         (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
-            store, runId, "losing-owner", CancellationToken.None)).Should().BeFalse();
+            store, runId, "losing-owner", 1, CancellationToken.None)).Should().BeFalse();
     }
 
     [Fact]
@@ -131,11 +131,11 @@ public class PreviewPublicationLeaseRunStoreTests
     {
         var runId = RunId.New();
         var store = new LeaseRunStore { StoredRun = MakeRun(runId, RunStatus.InProgress) };
-        (await store.TryAcquirePreviewPublicationAsync(runId, "winning-owner", DateTimeOffset.UtcNow.AddMinutes(3)))
+        (await store.TryAcquirePreviewPublicationAsync(runId, "winning-owner", DateTimeOffset.UtcNow.AddMinutes(3), 1))
             .Should().BeTrue();
 
         (await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
-            store, runId, "losing-owner", CancellationToken.None)).Should().BeFalse();
+            store, runId, "losing-owner", 1, CancellationToken.None)).Should().BeFalse();
     }
 
     [Fact]
@@ -169,6 +169,7 @@ public class PreviewPublicationLeaseRunStoreTests
         private string? _leaseOwner;
 
         public volatile bool Terminal;
+        public int LifecycleGeneration = 1;
         public Run? StoredRun;
         public int TerminalCalls;
         public int StatusCalls;
@@ -184,9 +185,11 @@ public class PreviewPublicationLeaseRunStoreTests
         }
 
         public Task<bool> TryAcquirePreviewPublicationAsync(
-            RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+            RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+            CancellationToken ct = default)
         {
-            if (Terminal || (_leaseOwner is not null && _leaseUntil > DateTimeOffset.UtcNow))
+            if (Terminal || expectedLifecycleGeneration != LifecycleGeneration
+                || (_leaseOwner is not null && _leaseUntil > DateTimeOffset.UtcNow))
                 return Task.FromResult(false);
             _leaseOwner = ownerId;
             _leaseUntil = leaseUntil;
@@ -195,9 +198,11 @@ public class PreviewPublicationLeaseRunStoreTests
         }
 
         public Task<bool> TryRenewPreviewPublicationAsync(
-            RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+            RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+            CancellationToken ct = default)
         {
-            if (Terminal || _leaseOwner != ownerId || _leaseUntil <= DateTimeOffset.UtcNow)
+            if (Terminal || expectedLifecycleGeneration != LifecycleGeneration
+                || _leaseOwner != ownerId || _leaseUntil <= DateTimeOffset.UtcNow)
                 return Task.FromResult(false);
             _leaseUntil = leaseUntil;
             LeaseExpirations.Add(leaseUntil);
@@ -205,9 +210,11 @@ public class PreviewPublicationLeaseRunStoreTests
         }
 
         public Task<bool> TryReserveTerminalPreviewCleanupAsync(
-            RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+            RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+            CancellationToken ct = default)
         {
-            if (StoredRun is not { } run || !TerminalRunOutcome.IsTerminal(run.Status)
+            if (StoredRun is not { } run || expectedLifecycleGeneration != LifecycleGeneration
+                || !TerminalRunOutcome.IsTerminal(run.Status)
                 || (_leaseOwner is not null && _leaseOwner != ownerId)
                 || _leaseUntil > DateTimeOffset.UtcNow)
                 return Task.FromResult(false);
@@ -217,9 +224,11 @@ public class PreviewPublicationLeaseRunStoreTests
         }
 
         public Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
-            RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default)
+            RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+            CancellationToken ct = default)
         {
-            if (StoredRun is not { } run || TerminalRunOutcome.IsTerminal(run.Status)
+            if (StoredRun is not { } run || expectedLifecycleGeneration != LifecycleGeneration
+                || TerminalRunOutcome.IsTerminal(run.Status)
                 || _leaseOwner is not null || _leaseUntil is not null)
                 return Task.FromResult(false);
             _leaseOwner = ownerId;

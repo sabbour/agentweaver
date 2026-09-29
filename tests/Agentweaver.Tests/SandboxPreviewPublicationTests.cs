@@ -237,6 +237,31 @@ public sealed class SandboxPreviewPublicationTests
         h.AssertCleanedUp();
     }
 
+    [Fact]
+    public async Task RecoveryGeneration_RefusesServiceRenewalWithinIntervalAndRollsBack()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runStore = new Agentweaver.Tests.Preview.PreviewPublicationLeaseRunStoreTests.LeaseRunStore();
+        var publication = new PreviewPublicationHandler(async (_, ct) =>
+        {
+            entered.SetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+        using var h = new Harness(
+            publication, runStore: runStore,
+            publicationLeaseRenewalInterval: TimeSpan.FromMilliseconds(20));
+        runStore.StoredRun = h.Run;
+
+        var start = h.StartServiceAsync(maintainPublicationLease: true);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        runStore.LifecycleGeneration++;
+
+        var act = async () => await start.WaitAsync(TimeSpan.FromSeconds(5));
+        await act.Should().ThrowAsync<PreviewPublicationLeaseLostException>();
+        h.AssertCleanedUp();
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.NotFound)]
     [InlineData(HttpStatusCode.InternalServerError)]
@@ -474,6 +499,7 @@ public sealed class SandboxPreviewPublicationTests
         private readonly HttpClient _http;
         private readonly IKubernetes _client;
         private readonly SandboxPreviewService _service;
+        private readonly IRunStore? _runStore;
 
         public Harness(
             PreviewPublicationHandler handler,
@@ -484,6 +510,7 @@ public sealed class SandboxPreviewPublicationTests
             IRunStore? runStore = null,
             TimeSpan? publicationLeaseRenewalInterval = null)
         {
+            _runStore = runStore;
             var claim = SandboxClaimConventions.DeriveAgentHostClaimName(Run.Id.ToString());
             Kube.OnGet(
                 $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claim}",
@@ -511,13 +538,26 @@ public sealed class SandboxPreviewPublicationTests
             SandboxEndpoints.StartPreviewForRunAsync(
                 Run.Id.ToString(), 4632, Run, _service, null!, Streams, NullLogger.Instance, ct, "retained-session");
 
-        public Task<PreviewSession> StartServiceAsync(
-            bool maintainPublicationLease = false, CancellationToken ct = default) =>
-            maintainPublicationLease
-                ? _service.StartRunBoundPreviewAsync(
-                    Run.Id.ToString(), 4632, Run.SubmittingUser, ct, "retained-session")
-                : _service.StartPreviewAsync(
+        public async Task<PreviewSession> StartServiceAsync(
+            bool maintainPublicationLease = false, CancellationToken ct = default)
+        {
+            if (!maintainPublicationLease)
+                return await _service.StartPreviewAsync(
                     Run.Id.ToString(), 4632, Run.SubmittingUser, ct, "retained-session");
+            (await _runStore!.TryAcquirePreviewPublicationAsync(
+                Run.Id, "test-owner", DateTimeOffset.UtcNow.AddMinutes(3), Run.LifecycleGeneration, ct))
+                .Should().BeTrue();
+            try
+            {
+                return await _service.StartRunBoundPreviewAsync(
+                    Run.Id.ToString(), 4632, Run.SubmittingUser, Run.LifecycleGeneration,
+                    ct, "retained-session", "test-owner");
+            }
+            finally
+            {
+                await _runStore.EndPreviewPublicationAsync(Run.Id, "test-owner");
+            }
+        }
 
         public IEnumerable<string> ReadyEvents() =>
             Streams.Get(Run.Id.ToString())!.GetSnapshotSince(0).Events
