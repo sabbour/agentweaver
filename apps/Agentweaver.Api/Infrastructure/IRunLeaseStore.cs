@@ -52,4 +52,11 @@ public interface IRunLeaseStore
     /// Returns <c>true</c> if this worker currently owns a valid, unexpired lease for the run.
     /// </summary>
     Task<bool> IsLeaseOwnerAsync(string runId, string ownerId, long fencingToken, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the current unexpired lease claim, or <see langword="null"/> when the run is unleased.
+    /// Consumers use this to bind external execution resources to the same fencing generation.
+    /// </summary>
+    Task<RunLeaseClaim?> GetActiveClaimAsync(string runId, CancellationToken ct = default) =>
+        Task.FromResult<RunLeaseClaim?>(null);
 }

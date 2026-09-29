@@ -1599,7 +1599,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
                     DispatchProjectId: "project-123",
                     DispatchUserId: "user-123",
                     DispatchAgentName: "link",
-                    ProviderSnapshotKey: "copilot:binding:v7"),
+                    ProviderSnapshotKey: "copilot:binding:v7",
+                    DispatchFencingToken: 42),
                 new CancellationTokenSource(TimeSpan.FromMilliseconds(50)).Token);
         }
         catch (Exception)
@@ -1615,10 +1616,35 @@ public sealed class KubernetesSandboxExecutorClaimTests
             .And.Contain(KubernetesSandboxExecutor.DispatchIdAnnotation)
             .And.Contain("dispatch-123")
             .And.Contain(KubernetesSandboxExecutor.LifecycleGenerationAnnotation)
+            .And.Contain(KubernetesSandboxExecutor.DispatchFencingTokenAnnotation)
+            .And.Contain("42")
             .And.Contain("project-123")
             .And.Contain("user-123")
             .And.Contain("link")
             .And.Contain("copilot:binding:v7");
+    }
+
+    [Fact]
+    public async Task Forced_takeover_release_deletes_matching_claim_even_with_active_preview()
+    {
+        const string runId = "run-force-takeover-preview";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, "stale-dispatch"));
+        var executor = NewExecutor(
+            fake,
+            new StubSubmittingUserResolver("sabbour"),
+            previewService: new StubPreviewService(hasActivePreview: true));
+
+        var released = await executor.TryForceReleaseHeldAgentHostPodAsync(
+            runId, "stale-dispatch");
+
+        released.Should().BeTrue();
+        fake.Requests.Should().Contain(
+            request => request.Method == "DELETE"
+                && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
     }
 
     // Minimal ISandboxPreviewService test double: only lifecycle reconciliation is exercised by the

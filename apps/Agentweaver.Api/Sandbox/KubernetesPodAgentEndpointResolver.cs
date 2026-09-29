@@ -372,23 +372,71 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
 
     private async Task<bool> EnsureAdoptedDispatchAsync(string runId, CancellationToken ct)
     {
-        if (_dispatchBoundaryValidator is null || _launches.ContainsKey(runId))
+        if (_dispatchBoundaryValidator is null)
             return true;
 
         var boundary = await _dispatchBoundaryValidator.CaptureAsync(runId, ct).ConfigureAwait(false);
+        if (_launches.TryGetValue(runId, out var localLaunch))
+        {
+            if (_launchMetadata.TryGetValue(localLaunch, out var localMetadata)
+                && localMetadata.Boundary == boundary)
+            {
+                return true;
+            }
+
+            if (_launchMetadata.TryGetValue(localLaunch, out var fencedLocal)
+                && fencedLocal.Boundary?.LeaseFencingToken is not null
+                && boundary.LeaseFencingToken is null)
+            {
+                throw new WorkflowAgentInfrastructureException(
+                    "agenthost_dispatch_stale",
+                    $"AgentHost dispatch '{runId}' lost its active run lease before delivery.");
+            }
+
+            if (_launches.TryRemove(new KeyValuePair<string, Lazy<Task<string>>>(runId, localLaunch))
+                && _launchMetadata.TryRemove(localLaunch, out var staleMetadata)
+                && _podLifecycle is not null)
+            {
+                var released = await _podLifecycle.TryForceReleaseHeldAgentHostPodAsync(
+                    runId, staleMetadata.DispatchId, CancellationToken.None).ConfigureAwait(false);
+                if (!released)
+                    return await EnsureAdoptedDispatchAsync(runId, ct).ConfigureAwait(false);
+            }
+            _podRegistry.Unregister(runId);
+            return false;
+        }
+
         var persisted = _podLifecycle is null
             ? null
             : await _podLifecycle.GetAgentHostDispatchContextAsync(runId, ct).ConfigureAwait(false);
-        if (persisted is null
-            || persisted.LifecycleGeneration != boundary.LifecycleGeneration
+        if (persisted is null)
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "agenthost_dispatch_stale",
+                $"AgentHost dispatch '{runId}' has no complete persisted fencing metadata.");
+        }
+        if (persisted.DispatchFencingToken is not null
+            && boundary.LeaseFencingToken is null)
+        {
+            throw new WorkflowAgentInfrastructureException(
+                "agenthost_dispatch_stale",
+                $"AgentHost dispatch '{runId}' lost its active run lease before delivery.");
+        }
+        if (persisted.LifecycleGeneration != boundary.LifecycleGeneration
             || !string.Equals(persisted.DispatchProjectId, boundary.ProjectId, StringComparison.Ordinal)
             || !string.Equals(persisted.DispatchUserId, boundary.UserId, StringComparison.Ordinal)
             || !string.Equals(persisted.DispatchAgentName, boundary.AgentName, StringComparison.Ordinal)
             || !string.Equals(persisted.ProviderSnapshotKey, boundary.ProviderKey, StringComparison.Ordinal)
+            || persisted.DispatchFencingToken != boundary.LeaseFencingToken
             || string.IsNullOrWhiteSpace(persisted.DispatchId))
         {
-            if (_podLifecycle is not null)
-                await _podLifecycle.ReleaseAgentHostPodAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            if (_podLifecycle is not null && !string.IsNullOrWhiteSpace(persisted.DispatchId))
+            {
+                var released = await _podLifecycle.TryForceReleaseHeldAgentHostPodAsync(
+                    runId, persisted.DispatchId, CancellationToken.None).ConfigureAwait(false);
+                if (!released)
+                    return await EnsureAdoptedDispatchAsync(runId, ct).ConfigureAwait(false);
+            }
             _podRegistry.Unregister(runId);
             return false;
         }
@@ -432,6 +480,7 @@ internal sealed class KubernetesPodAgentEndpointResolver : ISandboxAgentEndpoint
                     DispatchUserId = boundary?.UserId,
                     DispatchAgentName = boundary?.AgentName,
                     ProviderSnapshotKey = boundary?.ProviderKey,
+                    DispatchFencingToken = boundary?.LeaseFencingToken,
                 };
 
                 var endpoint = await _podLifecycle!

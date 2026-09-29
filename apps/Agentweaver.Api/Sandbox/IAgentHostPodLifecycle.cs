@@ -110,6 +110,17 @@ public interface IAgentHostPodLifecycle
         await ReleaseAgentHostPodAsync(runId, ct).ConfigureAwait(false);
         return true;
     }
+
+    /// <summary>
+    /// Fenced takeover release. Unlike ordinary terminal/suspension cleanup, a matching stale
+    /// execution claim must be removed even when it currently hosts a preview, because allowing it
+    /// to survive would let two owners execute the same run identity.
+    /// </summary>
+    Task<bool> TryForceReleaseHeldAgentHostPodAsync(
+        string runId,
+        string holderToken,
+        CancellationToken ct = default) =>
+        TryReleaseHeldAgentHostPodAsync(runId, holderToken, ct);
 }
 
 /// <summary>Run-scoped inputs delivered to the warm AgentHost through <c>POST /configure</c>.</summary>
@@ -137,7 +148,8 @@ public sealed record AgentHostLaunchContext(
     string? DispatchProjectId = null,
     string? DispatchUserId = null,
     string? DispatchAgentName = null,
-    string? ProviderSnapshotKey = null)
+    string? ProviderSnapshotKey = null,
+    long? DispatchFencingToken = null)
 {
     /// <summary>
     /// Whether this launch must resolve its effective model provider at PLATFORM scope

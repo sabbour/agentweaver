@@ -62,6 +62,26 @@ public sealed class SqliteRunLeaseStore(SqliteDb db) : IRunLeaseStore
         return Convert.ToInt32(await command.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture) != 0;
     }
 
+    public async Task<RunLeaseClaim?> GetActiveClaimAsync(
+        string runId, CancellationToken ct = default)
+    {
+        await using var connection = await db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT l.owner_id, l.fencing_token, r.lifecycle_generation
+              FROM run_execution_leases l
+              JOIN runs r ON r.run_id = l.run_id
+             WHERE l.run_id=$runId AND l.lease_expires_at>$now;
+            """;
+        command.Parameters.AddWithValue("$runId", runId);
+        command.Parameters.AddWithValue("$now", Timestamp(DateTimeOffset.UtcNow));
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        return await reader.ReadAsync(ct).ConfigureAwait(false)
+            ? new RunLeaseClaim(reader.GetString(0), reader.GetInt64(1), reader.GetInt32(2))
+            : null;
+    }
+
     private async Task<bool> UpdateAsync(
         string sql, string runId, string ownerId, long fencingToken, string now, string? deadline, CancellationToken ct)
     {

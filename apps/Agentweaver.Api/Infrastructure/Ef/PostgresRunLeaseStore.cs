@@ -94,4 +94,20 @@ public sealed class PostgresRunLeaseStore : IRunLeaseStore
                            r.LeaseExpiresAt > now,
                       ct);
     }
+
+    public async Task<RunLeaseClaim?> GetActiveClaimAsync(
+        string runId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var now = DateTimeOffset.UtcNow;
+        return await db.Runs
+            .Where(r => r.RunId == runId
+                && r.OwnerId != null
+                && r.LeaseExpiresAt > now)
+            .Select(r => new RunLeaseClaim(
+                r.OwnerId!,
+                r.FencingToken,
+                r.LifecycleGeneration))
+            .FirstOrDefaultAsync(ct);
+    }
 }
