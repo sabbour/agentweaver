@@ -74,7 +74,8 @@ public sealed class KubernetesPodAgentEndpointResolverTests
             && context.DispatchProjectId == boundary.ProjectId
             && context.DispatchUserId == boundary.UserId
             && context.DispatchAgentName == boundary.AgentName
-            && context.ProviderSnapshotKey == boundary.ProviderKey);
+            && context.ProviderSnapshotKey == boundary.ProviderKey
+            && context.DispatchFencingToken == boundary.LeaseFencingToken);
     }
 
     [Fact]
@@ -114,6 +115,126 @@ public sealed class KubernetesPodAgentEndpointResolverTests
         var failure = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
         failure.Which.Reason.Should().Be("agenthost_dispatch_stale");
         lifecycle.LaunchCalls.Should().Be(1, "delivery validation must never replay a possibly accepted turn");
+    }
+
+    [Fact]
+    public async Task Adopted_dispatch_with_stale_run_lease_is_replaced_before_delivery()
+    {
+        var runId = RunId.New().ToString();
+        var registry = new PodNameRegistry();
+        registry.Register(runId, "agenthost-dispatch");
+        var boundary = Boundary(runId) with { LeaseFencingToken = 8 };
+        var lifecycle = new RecoveringDispatchLifecycle(registry)
+        {
+            PersistedContext = new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                DispatchId: "old-dispatch",
+                LifecycleGeneration: boundary.LifecycleGeneration,
+                DispatchProjectId: boundary.ProjectId,
+                DispatchUserId: boundary.UserId,
+                DispatchAgentName: boundary.AgentName,
+                ProviderSnapshotKey: boundary.ProviderKey,
+                DispatchFencingToken: 7),
+        };
+        var resolver = NewDispatchResolver(
+            runId, registry, lifecycle, new MutableDispatchValidator(boundary));
+
+        var endpoint = await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        endpoint.Should().Be("http://10.0.0.50:8088/a2a/agent");
+        lifecycle.ReleaseCalls.Should().Be(1,
+            "a replacement lease must fence and stop the pod still executing the prior owner");
+        lifecycle.LaunchCalls.Should().Be(1);
+        lifecycle.Contexts.Should().ContainSingle()
+            .Which.DispatchFencingToken.Should().Be(8);
+    }
+
+    [Fact]
+    public async Task Locally_cached_dispatch_with_stale_run_lease_is_replaced_before_delivery()
+    {
+        var runId = RunId.New().ToString();
+        var registry = new PodNameRegistry();
+        var validator = new MutableDispatchValidator(
+            Boundary(runId) with { LeaseFencingToken = 7 });
+        var lifecycle = new RecoveringDispatchLifecycle(registry);
+        var resolver = NewDispatchResolver(runId, registry, lifecycle, validator);
+        await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        validator.Current = validator.Current with { LeaseFencingToken = 8 };
+        var endpoint = await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        endpoint.Should().Be("http://10.0.0.50:8088/a2a/agent");
+        lifecycle.ReleaseCalls.Should().Be(1);
+        lifecycle.LaunchCalls.Should().Be(2);
+        lifecycle.Contexts.Select(context => context.DispatchFencingToken)
+            .Should().Equal(7, 8);
+    }
+
+    [Fact]
+    public async Task Fenced_dispatch_without_active_successor_lease_is_rejected()
+    {
+        var runId = RunId.New().ToString();
+        var registry = new PodNameRegistry();
+        registry.Register(runId, "agenthost-dispatch");
+        var boundary = Boundary(runId) with { LeaseFencingToken = null };
+        var lifecycle = new RecoveringDispatchLifecycle(registry)
+        {
+            PersistedContext = new AgentHostLaunchContext(
+                SharedWorkingDirectory: null,
+                DispatchId: "old-dispatch",
+                LifecycleGeneration: boundary.LifecycleGeneration,
+                DispatchProjectId: boundary.ProjectId,
+                DispatchUserId: boundary.UserId,
+                DispatchAgentName: boundary.AgentName,
+                ProviderSnapshotKey: boundary.ProviderKey,
+                DispatchFencingToken: 7),
+        };
+        var resolver = NewDispatchResolver(
+            runId, registry, lifecycle, new MutableDispatchValidator(boundary));
+
+        var act = () => resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        var failure = await act.Should().ThrowAsync<WorkflowAgentInfrastructureException>();
+        failure.Which.Reason.Should().Be("agenthost_dispatch_stale");
+        lifecycle.ReleaseCalls.Should().Be(0);
+        lifecycle.LaunchCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Takeover_release_that_loses_holder_race_adopts_newer_matching_claim()
+    {
+        var runId = RunId.New().ToString();
+        var registry = new PodNameRegistry();
+        registry.Register(runId, "agenthost-dispatch");
+        var boundary = Boundary(runId) with { LeaseFencingToken = 8 };
+        var replacement = new AgentHostLaunchContext(
+            SharedWorkingDirectory: null,
+            DispatchId: "new-dispatch",
+            LifecycleGeneration: boundary.LifecycleGeneration,
+            DispatchProjectId: boundary.ProjectId,
+            DispatchUserId: boundary.UserId,
+            DispatchAgentName: boundary.AgentName,
+            ProviderSnapshotKey: boundary.ProviderKey,
+            DispatchFencingToken: 8);
+        var lifecycle = new RecoveringDispatchLifecycle(registry)
+        {
+            PersistedContext = replacement with
+            {
+                DispatchId = "old-dispatch",
+                DispatchFencingToken = 7,
+            },
+            ForcedReleaseSucceeds = false,
+            ReplacementContextAfterFailedRelease = replacement,
+        };
+        var resolver = NewDispatchResolver(
+            runId, registry, lifecycle, new MutableDispatchValidator(boundary));
+
+        var endpoint = await resolver.TryResolveEndpointAsync(runId, CancellationToken.None);
+
+        endpoint.Should().Be("http://10.0.0.50:8088/a2a/agent");
+        lifecycle.ForcedReleaseCalls.Should().Be(1);
+        lifecycle.LaunchCalls.Should().Be(0,
+            "the claim that won the holder race already carries the current lease fence");
     }
 
     [Fact]
@@ -451,7 +572,7 @@ public sealed class KubernetesPodAgentEndpointResolverTests
     }
 
     private static AgentHostDispatchBoundary Boundary(string runId, int generation = 3) =>
-        new(runId, runId, generation, "project-1", "user-1", "link", "copilot:binding:v7", false);
+        new(runId, runId, generation, "project-1", "user-1", "link", "copilot:binding:v7", false, 4);
 
     private static Run MakeRun() => new()
     {
@@ -533,7 +654,12 @@ public sealed class KubernetesPodAgentEndpointResolverTests
         private int _launchCalls;
 
         public int LaunchCalls => Volatile.Read(ref _launchCalls);
+        public int ReleaseCalls { get; private set; }
+        public int ForcedReleaseCalls { get; private set; }
         public List<AgentHostLaunchContext> Contexts { get; } = [];
+        public AgentHostLaunchContext? PersistedContext { get; set; }
+        public bool ForcedReleaseSucceeds { get; init; } = true;
+        public AgentHostLaunchContext? ReplacementContextAfterFailedRelease { get; init; }
         public TaskCompletionSource Started { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -567,8 +693,30 @@ public sealed class KubernetesPodAgentEndpointResolverTests
 
         public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
         {
+            ReleaseCalls++;
             registry.Unregister(runId);
             return Task.CompletedTask;
+        }
+
+        public Task<AgentHostLaunchContext?> GetAgentHostDispatchContextAsync(
+            string runId,
+            CancellationToken ct = default) =>
+            Task.FromResult(PersistedContext);
+
+        public Task<bool> TryForceReleaseHeldAgentHostPodAsync(
+            string runId,
+            string holderToken,
+            CancellationToken ct = default)
+        {
+            ForcedReleaseCalls++;
+            if (!ForcedReleaseSucceeds)
+            {
+                PersistedContext = ReplacementContextAfterFailedRelease;
+                return Task.FromResult(false);
+            }
+            ReleaseCalls++;
+            registry.Unregister(runId);
+            return Task.FromResult(true);
         }
 
         public void CompleteLaunch() => _continue.TrySetResult();

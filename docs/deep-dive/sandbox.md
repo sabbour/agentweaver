@@ -268,6 +268,8 @@ Per-run values are delivered by `POST /configure` after the claim binds:
 
 The executor does not create per-run `SecretProviderClass` objects, cloned `SandboxTemplate`s, or per-run warm pools for AgentHost. It sends the required run-scoped provider and repository capability data through `/configure`. The sandbox identity has no Key Vault access and cannot retrieve ambient user credentials.
 
+AgentHost claims carry the active run-lease fencing token. A recovery or dispatch takeover that acquires a newer token must replace the older claim before sending a turn, so a stale pod cannot continue editing or publish a competing write-back under the same run ID.
+
 Where this lives:
 
 | Source | Role |

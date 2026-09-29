@@ -175,6 +175,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     internal const string DispatchUserAnnotation = "agentweaver.io/dispatch-user-id";
     internal const string DispatchAgentAnnotation = "agentweaver.io/dispatch-agent-name";
     internal const string ProviderSnapshotAnnotation = "agentweaver.io/provider-snapshot-key";
+    internal const string DispatchFencingTokenAnnotation = "agentweaver.io/run-lease-fencing-token";
     private const string ContainerName = "agentweaver-sandbox";
 
     /// <summary>
@@ -1031,6 +1032,26 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         return true;
     }
 
+    public async Task<bool> TryForceReleaseHeldAgentHostPodAsync(
+        string runId, string holderToken, CancellationToken ct = default)
+    {
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var currentHolder = await TryGetAgentHostClaimAnnotationAsync(claimName, HolderTokenAnnotation, ct)
+            .ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(currentHolder)
+            && !string.Equals(currentHolder, holderToken, StringComparison.Ordinal))
+        {
+            _logger.LogInformation(
+                "KubernetesSandboxExecutor: refusing forced takeover release of AgentHost claim {Claim} " +
+                "for run {RunId} because holder {CurrentHolder} replaced expected holder {ExpectedHolder}.",
+                claimName, runId, currentHolder, holderToken);
+            return false;
+        }
+
+        await DeleteAgentHostClaimAsync(runId, claimName, ct).ConfigureAwait(false);
+        return true;
+    }
+
     public async Task<AgentHostLaunchContext?> GetAgentHostDispatchContextAsync(
         string runId,
         CancellationToken ct = default)
@@ -1044,10 +1065,19 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             .ConfigureAwait(false);
         var providerKey = await TryGetAgentHostClaimAnnotationAsync(claimName, ProviderSnapshotAnnotation, ct)
             .ConfigureAwait(false);
+        var fencingToken = await TryGetAgentHostClaimAnnotationAsync(
+                claimName, DispatchFencingTokenAnnotation, ct)
+            .ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(dispatchId)
             || !int.TryParse(generation, out var lifecycleGeneration)
             || string.IsNullOrWhiteSpace(userId)
-            || string.IsNullOrWhiteSpace(providerKey))
+            || string.IsNullOrWhiteSpace(providerKey)
+            || (!string.IsNullOrWhiteSpace(fencingToken)
+                && !long.TryParse(
+                    fencingToken,
+                    System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out _)))
         {
             return null;
         }
@@ -1061,7 +1091,10 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             DispatchUserId: userId,
             DispatchAgentName: await TryGetAgentHostClaimAnnotationAsync(
                 claimName, DispatchAgentAnnotation, ct).ConfigureAwait(false),
-            ProviderSnapshotKey: providerKey);
+            ProviderSnapshotKey: providerKey,
+            DispatchFencingToken: string.IsNullOrWhiteSpace(fencingToken)
+                ? null
+                : long.Parse(fencingToken, System.Globalization.CultureInfo.InvariantCulture));
     }
 
     /// <inheritdoc/>
@@ -1084,6 +1117,14 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             return;
         }
 
+        await DeleteAgentHostClaimAsync(runId, claimName, ct).ConfigureAwait(false);
+    }
+
+    private async Task DeleteAgentHostClaimAsync(
+        string runId,
+        string claimName,
+        CancellationToken ct)
+    {
         _logger.LogInformation(
             "KubernetesSandboxExecutor: releasing AgentHost pod for run {RunId} (claim {Claim})",
             runId, claimName);
@@ -1189,6 +1230,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             annotations[DispatchAgentAnnotation] = launchContext.DispatchAgentName;
         if (!string.IsNullOrWhiteSpace(launchContext.ProviderSnapshotKey))
             annotations[ProviderSnapshotAnnotation] = launchContext.ProviderSnapshotKey;
+        if (launchContext.DispatchFencingToken is { } fencingToken)
+            annotations[DispatchFencingTokenAnnotation] =
+                fencingToken.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         var manifest = new
         {

@@ -190,6 +190,9 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         var (claimed2, token2) = await store.TryClaimAsync(runId, "worker-B", TimeSpan.FromSeconds(30));
         claimed2.Should().BeTrue("worker-B should reclaim the expired lease");
         token2.Should().BeGreaterThan(token1, "fencing token must be strictly increasing");
+        (await store.GetActiveClaimAsync(runId)).Should().Be(
+            new RunLeaseClaim("worker-B", token2, 1),
+            "AgentHost adoption must bind to the same durable lease generation");
     }
 
     [PostgresFact]

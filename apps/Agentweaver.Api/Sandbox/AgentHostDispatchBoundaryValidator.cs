@@ -16,7 +16,8 @@ internal sealed record AgentHostDispatchBoundary(
     string UserId,
     string? AgentName,
     string ProviderKey,
-    bool IsResumableAssistant);
+    bool IsResumableAssistant,
+    long? LeaseFencingToken);
 
 internal interface IAgentHostDispatchBoundaryValidator
 {
@@ -71,6 +72,10 @@ internal sealed class AgentHostDispatchBoundaryValidator(IServiceScopeFactory sc
         var providerKey = provider.Provider.ProviderKey();
         if (string.IsNullOrWhiteSpace(providerKey))
             throw new InvalidOperationException($"AgentHost dispatch run '{owningRunId}' has no provider snapshot key.");
+        var leaseStore = scope.ServiceProvider.GetService<IRunLeaseStore>();
+        var activeLease = leaseStore is null
+            ? null
+            : await leaseStore.GetActiveClaimAsync(owningRunId, ct).ConfigureAwait(false);
 
         return new AgentHostDispatchBoundary(
             runId,
@@ -80,6 +85,7 @@ internal sealed class AgentHostDispatchBoundaryValidator(IServiceScopeFactory sc
             run.SubmittingUser,
             run.AgentName,
             providerKey,
-            isResumableAssistant);
+            isResumableAssistant,
+            activeLease?.FencingToken);
     }
 }
