@@ -2901,6 +2901,71 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunBuildTestAsync_SupersededAttemptCannotLaunchOrReleaseSharedPod()
+    {
+        var repoPath = CreateGitRepository();
+        var worktreesBase = Path.Combine(Path.GetTempPath(), $"agentweaver-buildtest-fence-{Guid.NewGuid():N}");
+        var lifecycle = new ConfigureRecoveryPodLifecycle();
+        var leases = new MutableRunLeaseStore(ActiveFencingToken: 2);
+
+        try
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Worktrees:BasePath"] = worktreesBase,
+                })
+                .Build();
+            var pipeline = new CollectiveAssemblyPipeline(
+                new WorktreeManager(configuration, NullLogger<WorktreeManager>.Instance),
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                null!,
+                NullLoggerFactory.Instance,
+                lifecycle,
+                Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }),
+                configuration,
+                leases);
+            var runId = RunId.New().ToString();
+
+            var act = () => pipeline.RunBuildTestAsync(
+                new CollectiveBuildTestRequest(
+                    runId,
+                    ProjectId: null,
+                    repoPath,
+                    "main",
+                    "tree",
+                    "diff",
+                    "alice",
+                    AssemblyAttemptToken: "1"),
+                CancellationToken.None);
+
+            var exception = await act.Should().ThrowAsync<CollectiveBuildTestInfrastructureException>();
+            exception.Which.Reason.Should().Be("assembly_attempt_superseded");
+            lifecycle.LaunchCalls.Should().Be(0);
+            lifecycle.ReleaseCalls.Should().Be(0);
+
+            await pipeline.CleanupBuildTestResourcesAsync(
+                runId, repoPath, CancellationToken.None, assemblyAttemptToken: "1");
+            lifecycle.ReleaseCalls.Should().Be(0);
+
+            await pipeline.CleanupBuildTestResourcesAsync(
+                runId, repoPath, CancellationToken.None, assemblyAttemptToken: "2");
+            lifecycle.ReleaseCalls.Should().Be(1);
+        }
+        finally
+        {
+            TryDeleteDirectory(repoPath);
+            TryDeleteDirectory(worktreesBase);
+        }
+    }
+
+    [Fact]
     public async Task BuildTestRetryableInfrastructureFailure_ParksAssemblyBlocked_NotPermanentFailed()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -4926,6 +4991,46 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             ReleaseCalls++;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class MutableRunLeaseStore(long? ActiveFencingToken) : IRunLeaseStore
+    {
+        public Task<(bool Claimed, long FencingToken)> TryClaimAsync(
+            string runId,
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default) =>
+            Task.FromResult((true, ActiveFencingToken ?? 1));
+
+        public Task<bool> TryRenewAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default) =>
+            Task.FromResult(ActiveFencingToken == fencingToken);
+
+        public Task ReleaseAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<bool> IsLeaseOwnerAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            CancellationToken ct = default) =>
+            Task.FromResult(ActiveFencingToken == fencingToken);
+
+        public Task<RunLeaseClaim?> GetActiveClaimAsync(
+            string runId,
+            CancellationToken ct = default) =>
+            Task.FromResult(
+                ActiveFencingToken is { } token
+                    ? new RunLeaseClaim("current-owner", token)
+                    : null);
     }
 
     private sealed class FakeDispatch : ICoordinatorDispatch

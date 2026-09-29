@@ -4,6 +4,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Infrastructure;
 using LibGit2Sharp;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
@@ -44,6 +45,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly IRunLeaseStore? _runLeaseStore;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly TimeSpan _buildTestTotalTimeout;
     private readonly TimeSpan _buildTestStallTimeout;
@@ -63,7 +65,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         ILoggerFactory loggerFactory,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IRunLeaseStore? runLeaseStore = null)
     {
         _worktreeManager = worktreeManager;
         _mergeLock = mergeLock;
@@ -75,6 +78,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         _approvalStore = approvalStore;
         _toolApprovalGate = toolApprovalGate;
         _podLifecycle = podLifecycle;
+        _runLeaseStore = runLeaseStore;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _buildTestTotalTimeout = TimeSpan.FromMinutes(Math.Max(
             0.01,
@@ -198,6 +202,17 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         WorktreeInfo? detachedWorktree = null;
         try
         {
+            if (!await IsCurrentAssemblyAttemptAsync(
+                    request.CoordinatorRunId,
+                    request.AssemblyAttemptToken,
+                    gateCt).ConfigureAwait(false))
+            {
+                throw new CollectiveBuildTestInfrastructureException(
+                    "assembly_attempt_superseded",
+                    "Collective Build/Test no longer owns the durable assembly lease.",
+                    retryable: true);
+            }
+
             detachedWorktree = _worktreeManager.AddDetachedWorktree(
                 request.RepositoryPath,
                 request.IntegrationBranch,
@@ -254,6 +269,17 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                             ex.RecoveryAction,
                             launchAttempt,
                             MaxAgentHostConfigureAttempts);
+                        if (!await IsCurrentAssemblyAttemptAsync(
+                                request.CoordinatorRunId,
+                                request.AssemblyAttemptToken,
+                                CancellationToken.None).ConfigureAwait(false))
+                        {
+                            throw new CollectiveBuildTestInfrastructureException(
+                                "assembly_attempt_superseded",
+                                "Collective Build/Test lost its durable assembly lease before AgentHost recovery.",
+                                retryable: true,
+                                ex);
+                        }
                         try
                         {
                             await _podLifecycle.ReleaseAgentHostPodAsync(
@@ -404,7 +430,10 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         CancellationToken ct,
         string? assemblyAttemptToken)
     {
-        if (_sandboxRuntime.IsPodPerRun && _podLifecycle is not null)
+        if (_sandboxRuntime.IsPodPerRun
+            && _podLifecycle is not null
+            && await IsCurrentAssemblyAttemptAsync(
+                coordinatorRunId, assemblyAttemptToken, ct).ConfigureAwait(false))
         {
             try
             {
@@ -429,6 +458,53 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             _logger.LogWarning(ex,
                 "Collective Build/Test: failed to remove detached worktree {Path}",
                 path);
+        }
+    }
+
+    private async Task<bool> IsCurrentAssemblyAttemptAsync(
+        string coordinatorRunId,
+        string? assemblyAttemptToken,
+        CancellationToken ct)
+    {
+        if (_runLeaseStore is null || string.IsNullOrWhiteSpace(assemblyAttemptToken))
+            return true;
+
+        if (!long.TryParse(
+                assemblyAttemptToken,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var fencingToken))
+        {
+            _logger.LogWarning(
+                "Collective Build/Test: refusing shared resource cleanup for run {RunId}; " +
+                "assembly attempt token {AttemptToken} is invalid",
+                coordinatorRunId,
+                assemblyAttemptToken);
+            return false;
+        }
+
+        try
+        {
+            var claim = await _runLeaseStore.GetActiveClaimAsync(coordinatorRunId, ct)
+                .ConfigureAwait(false);
+            if (claim?.FencingToken == fencingToken)
+                return true;
+
+            _logger.LogInformation(
+                "Collective Build/Test: skipping shared resource cleanup for superseded assembly " +
+                "attempt {AttemptToken} on run {RunId}",
+                assemblyAttemptToken,
+                coordinatorRunId);
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Collective Build/Test: refusing shared resource cleanup for run {RunId}; " +
+                "durable assembly ownership could not be verified",
+                coordinatorRunId);
+            return false;
         }
     }
 
