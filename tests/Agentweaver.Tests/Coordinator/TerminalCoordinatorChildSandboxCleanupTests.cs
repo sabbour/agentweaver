@@ -13,12 +13,14 @@ public sealed class TerminalCoordinatorChildSandboxCleanupTests : IAsyncDisposab
 {
     private readonly TestSqliteDb _database;
     private readonly SqliteRunStore _runs;
+    private readonly SqliteRunLeaseStore _leases;
     private readonly RecordingPods _pods = new();
 
     public TerminalCoordinatorChildSandboxCleanupTests()
     {
         _database = TestSqliteDb.CreateAsync().GetAwaiter().GetResult();
         _runs = new SqliteRunStore(_database.Db);
+        _leases = new SqliteRunLeaseStore(_database.Db);
     }
 
     [Theory]
@@ -77,15 +79,58 @@ public sealed class TerminalCoordinatorChildSandboxCleanupTests : IAsyncDisposab
         var activeParent = await AddRunAsync(RunStatus.InProgress);
         await AddRunAsync(RunStatus.AssembleReady, activeParent);
         var terminalParent = await AddRunAsync(RunStatus.Failed);
-        await AddRunAsync(RunStatus.InProgress, terminalParent);
+        var executing = await AddRunAsync(RunStatus.InProgress, terminalParent);
+        var executingLease = await _leases.TryClaimAsync(executing, "worker", TimeSpan.FromMinutes(5));
+        executingLease.Claimed.Should().BeTrue();
+        _pods.Claims[executing] = _pods.Claims[executing] with
+        {
+            DispatchFencingToken = executingLease.FencingToken,
+        };
         await AddRunAsync(RunStatus.AwaitingReview, terminalParent);
-        await AddRunAsync(RunStatus.Pending, terminalParent);
+        var pending = await AddRunAsync(RunStatus.Pending, terminalParent);
+        var pendingLease = await _leases.TryClaimAsync(pending, "queued-worker", TimeSpan.FromMinutes(5));
+        pendingLease.Claimed.Should().BeTrue();
+        _pods.Claims[pending] = _pods.Claims[pending] with { DispatchFencingToken = pendingLease.FencingToken };
 
         await CreateCleanup().ReleaseForParentAsync(activeParent);
         await CreateCleanup().ReleaseForParentAsync(terminalParent);
         await CreateCleanup().SweepAsync();
 
         _pods.Releases.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RestartSweep_ReclaimsAbandonedPendingAndInProgressChildren()
+    {
+        var parent = await AddRunAsync(RunStatus.Failed);
+        var pending = await AddRunAsync(RunStatus.Pending, parent);
+        var abandoned = await AddRunAsync(RunStatus.InProgress, parent);
+        var expired = await AddRunAsync(RunStatus.InProgress, parent);
+        var (claimed, token) = await _leases.TryClaimAsync(expired, "crashed-worker", TimeSpan.FromMinutes(5));
+        claimed.Should().BeTrue();
+        await _leases.ReleaseAsync(expired, "crashed-worker", token);
+
+        await CreateCleanup().SweepAsync();
+
+        _pods.Releases.Select(r => r.RunId).Should().BeEquivalentTo([pending, abandoned, expired]);
+        await CreateCleanup().SweepAsync();
+        _pods.Releases.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task LeaseFromNewOwner_DoesNotProtectPriorExecutionClaim()
+    {
+        var parent = await AddRunAsync(RunStatus.Failed);
+        var child = await AddRunAsync(RunStatus.InProgress, parent);
+        var (claimed, token) = await _leases.TryClaimAsync(child, "new-worker", TimeSpan.FromMinutes(5));
+        claimed.Should().BeTrue();
+        _pods.Claims[child] = new AgentHostLaunchContext(
+            null, HolderToken: "old-holder", LifecycleGeneration: 1,
+            DispatchFencingToken: token + 1);
+
+        await CreateCleanup().SweepAsync();
+
+        _pods.Releases.Select(r => r.RunId).Should().ContainSingle().Which.Should().Be(child);
     }
 
     [Fact]
@@ -157,7 +202,7 @@ public sealed class TerminalCoordinatorChildSandboxCleanupTests : IAsyncDisposab
     private TerminalCoordinatorChildSandboxCleanup CreateCleanup() =>
         new(_runs,
             NullLogger<TerminalCoordinatorChildSandboxCleanup>.Instance,
-            Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }), _pods);
+            Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }), _pods, _leases);
 
     private async Task<string> AddRunAsync(RunStatus status, string? parentId = null)
     {
@@ -209,6 +254,15 @@ public sealed class TerminalCoordinatorChildSandboxCleanupTests : IAsyncDisposab
                 await OnReadClaim(runId);
             return Claims.GetValueOrDefault(runId);
         }
+        public async Task<AgentHostClaimSnapshot?> GetAgentHostClaimSnapshotAsync(
+            string runId, CancellationToken ct = default)
+        {
+            var context = await GetAgentHostDispatchContextAsync(runId, ct);
+            return context is null ? null : new AgentHostClaimSnapshot(context, "uid-" + runId, "1");
+        }
+        public Task<bool> TryReleaseHeldAgentHostPodAsync(
+            string runId, AgentHostClaimSnapshot claim, CancellationToken ct = default) =>
+            TryReleaseHeldAgentHostPodAsync(runId, claim.Context.HolderToken!, ct);
         public Task<bool> TryReleaseHeldAgentHostPodAsync(
             string runId, string holderToken, CancellationToken ct = default)
         {

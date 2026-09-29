@@ -13,6 +13,7 @@ public sealed class TerminalCoordinatorChildSandboxCleanup
 {
     private const int SweepBatchSize = 16;
     private readonly IRunStore _runs;
+    private readonly IRunLeaseStore? _leases;
     private readonly IAgentHostPodLifecycle? _pods;
     private readonly bool _podPerRun;
     private readonly ILogger<TerminalCoordinatorChildSandboxCleanup> _logger;
@@ -22,10 +23,12 @@ public sealed class TerminalCoordinatorChildSandboxCleanup
         IRunStore runs,
         ILogger<TerminalCoordinatorChildSandboxCleanup> logger,
         IOptions<SandboxRuntimeOptions> runtime,
-        IAgentHostPodLifecycle? pods = null)
+        IAgentHostPodLifecycle? pods = null,
+        IRunLeaseStore? leases = null)
     {
         _runs = runs;
         _pods = pods;
+        _leases = leases;
         _podPerRun = runtime.Value.IsPodPerRun;
         _logger = logger;
     }
@@ -54,30 +57,32 @@ public sealed class TerminalCoordinatorChildSandboxCleanup
                     if (!RunId.TryParse(childId, out var id))
                         continue;
                     var child = await _runs.GetAsync(id, cleanupCt).ConfigureAwait(false);
-                    // Active execution and pending review own their claims even if a parent has stopped.
-                    if (child is null || !TerminalRunOutcome.IsTerminal(child.Status))
+                    if (child is null || child.Status is RunStatus.AwaitingReview
+                        or RunStatus.Committing or RunStatus.Merging or RunStatus.Idle)
                         continue;
 
-                    var claim = await _pods.GetAgentHostDispatchContextAsync(childId, cleanupCt)
+                    var claim = await _pods.GetAgentHostClaimSnapshotAsync(childId, cleanupCt)
                         .ConfigureAwait(false);
-                    if (claim?.LifecycleGeneration != child.LifecycleGeneration
-                        || string.IsNullOrWhiteSpace(claim.HolderToken))
+                    if (claim?.Context.LifecycleGeneration != child.LifecycleGeneration
+                        || string.IsNullOrWhiteSpace(claim.Context.HolderToken))
                     {
                         _logger.LogDebug(
                             "Terminal child cleanup: no current fenced claim for child {ChildRunId}", childId);
                         continue;
                     }
+                    if (await MustRetainAsync(child, claim, cleanupCt).ConfigureAwait(false))
+                        continue;
 
                     // Recheck both sides after the claim read: a restarted generation or a reopened
                     // coordinator may now own the same identity. The holder CAS fences later takeovers.
                     parent = await _runs.GetAsync(parentId, cleanupCt).ConfigureAwait(false);
                     child = await _runs.GetAsync(id, cleanupCt).ConfigureAwait(false);
                     if (parent is null || !IsTerminalParent(parent.Status)
-                        || child is null || !TerminalRunOutcome.IsTerminal(child.Status)
-                        || child.LifecycleGeneration != claim.LifecycleGeneration)
+                        || child is null || child.LifecycleGeneration != claim.Context.LifecycleGeneration
+                        || await MustRetainAsync(child, claim, cleanupCt).ConfigureAwait(false))
                         continue;
 
-                    if (await _pods.TryReleaseHeldAgentHostPodAsync(childId, claim.HolderToken, cleanupCt)
+                    if (await _pods.TryReleaseHeldAgentHostPodAsync(childId, claim, cleanupCt)
                         .ConfigureAwait(false))
                         _logger.LogInformation(
                             "Terminal child cleanup: requested release for child {ChildRunId} of coordinator {ParentRunId} (live previews remain retained)",
@@ -142,4 +147,23 @@ public sealed class TerminalCoordinatorChildSandboxCleanup
     private static bool IsTerminalParent(RunStatus status) =>
         status is RunStatus.Failed or RunStatus.Completed or RunStatus.Merged
             or RunStatus.Declined or RunStatus.MergeFailed;
+
+    private async Task<bool> MustRetainAsync(
+        Run child, AgentHostClaimSnapshot claim, CancellationToken ct)
+    {
+        if (child.Status is RunStatus.AwaitingReview or RunStatus.Committing
+            or RunStatus.Merging or RunStatus.Idle)
+            return true;
+        if (TerminalRunOutcome.IsTerminal(child.Status))
+            return false;
+        // Status alone cannot prove an active worker: a crashed Pending/InProgress child retains
+        // that row forever. A current durable run lease is the execution authority on both stores.
+        // Fail closed when the lease service is unavailable or its read fails.
+        if (_leases is null)
+            return true;
+        var lease = await _leases.GetActiveClaimAsync(child.Id.ToString(), ct).ConfigureAwait(false);
+        return lease is not null && lease.LifecycleGeneration == child.LifecycleGeneration
+            && (claim.Context.DispatchFencingToken is null
+                || claim.Context.DispatchFencingToken == lease.FencingToken);
+    }
 }

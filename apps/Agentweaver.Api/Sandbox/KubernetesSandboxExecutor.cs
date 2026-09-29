@@ -1010,93 +1010,143 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     public async Task<bool> TryReleaseHeldAgentHostPodAsync(
         string runId, string holderToken, CancellationToken ct = default)
     {
-        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
-        var currentHolder = await TryGetAgentHostClaimAnnotationAsync(claimName, HolderTokenAnnotation, ct)
+        var claim = await ReadAgentHostClaimSnapshotAsync(runId, requireDispatch: false, ct)
             .ConfigureAwait(false);
-
-        // Only refuse when the claim carries a DIFFERENT holder. A claim with no stamp at all (older
-        // claim, or one created by a path that does not hold across turns) is still ours to reclaim,
-        // which keeps this a safety net against a newer owner rather than a new failure mode.
-        if (!string.IsNullOrWhiteSpace(currentHolder) &&
-            !string.Equals(currentHolder, holderToken, StringComparison.Ordinal))
-        {
-            _logger.LogInformation(
-                "KubernetesSandboxExecutor: refusing to release AgentHost claim {Claim} for run {RunId} — " +
-                "it is held by another owner, so a newer launch (likely on another API replica) now " +
-                "serves this conversation.",
-                claimName, runId);
+        if (claim is null || (claim.Context.HolderToken is { Length: > 0 } holder
+                && !string.Equals(holder, holderToken, StringComparison.Ordinal)))
             return false;
-        }
 
-        await ReleaseAgentHostPodAsync(runId, ct).ConfigureAwait(false);
-        return true;
+        return await ReleaseCapturedAgentHostClaimAsync(runId, claim, holderToken, force: false, ct)
+            .ConfigureAwait(false);
     }
+
+    public Task<AgentHostClaimSnapshot?> GetAgentHostClaimSnapshotAsync(
+        string runId, CancellationToken ct = default) =>
+        ReadAgentHostClaimSnapshotAsync(runId, requireDispatch: true, ct);
+
+    public Task<bool> TryReleaseHeldAgentHostPodAsync(
+        string runId, AgentHostClaimSnapshot claim, CancellationToken ct = default) =>
+        ReleaseCapturedAgentHostClaimAsync(runId, claim, claim.Context.HolderToken
+            ?? throw new ArgumentException("Claim has no holder token.", nameof(claim)), force: false, ct);
 
     public async Task<bool> TryForceReleaseHeldAgentHostPodAsync(
         string runId, string holderToken, CancellationToken ct = default)
     {
-        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
-        var currentHolder = await TryGetAgentHostClaimAnnotationAsync(claimName, HolderTokenAnnotation, ct)
+        var claim = await ReadAgentHostClaimSnapshotAsync(runId, requireDispatch: false, ct)
             .ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(currentHolder)
-            && !string.Equals(currentHolder, holderToken, StringComparison.Ordinal))
-        {
-            _logger.LogInformation(
-                "KubernetesSandboxExecutor: refusing forced takeover release of AgentHost claim {Claim} " +
-                "for run {RunId} because holder {CurrentHolder} replaced expected holder {ExpectedHolder}.",
-                claimName, runId, currentHolder, holderToken);
+        if (claim is null || (claim.Context.HolderToken is { Length: > 0 } holder
+                && !string.Equals(holder, holderToken, StringComparison.Ordinal)))
             return false;
-        }
 
-        await DeleteAgentHostClaimAsync(runId, claimName, ct).ConfigureAwait(false);
-        return true;
+        return await ReleaseCapturedAgentHostClaimAsync(runId, claim, holderToken, force: true, ct)
+            .ConfigureAwait(false);
     }
 
     public async Task<AgentHostLaunchContext?> GetAgentHostDispatchContextAsync(
         string runId,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        (await GetAgentHostClaimSnapshotAsync(runId, ct).ConfigureAwait(false))?.Context;
+
+    private async Task<AgentHostClaimSnapshot?> ReadAgentHostClaimSnapshotAsync(
+        string runId, bool requireDispatch, CancellationToken ct)
     {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
-        var dispatchId = await TryGetAgentHostClaimAnnotationAsync(claimName, DispatchIdAnnotation, ct)
-            .ConfigureAwait(false);
-        var generation = await TryGetAgentHostClaimAnnotationAsync(claimName, LifecycleGenerationAnnotation, ct)
-            .ConfigureAwait(false);
-        var userId = await TryGetAgentHostClaimAnnotationAsync(claimName, DispatchUserAnnotation, ct)
-            .ConfigureAwait(false);
-        var providerKey = await TryGetAgentHostClaimAnnotationAsync(claimName, ProviderSnapshotAnnotation, ct)
-            .ConfigureAwait(false);
-        var fencingToken = await TryGetAgentHostClaimAnnotationAsync(
-                claimName, DispatchFencingTokenAnnotation, ct)
-            .ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(dispatchId)
-            || !int.TryParse(generation, out var lifecycleGeneration)
-            || string.IsNullOrWhiteSpace(userId)
-            || string.IsNullOrWhiteSpace(providerKey)
-            || (!string.IsNullOrWhiteSpace(fencingToken)
-                && !long.TryParse(
-                    fencingToken,
-                    System.Globalization.NumberStyles.Integer,
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    out _)))
+        object raw;
+        try
+        {
+            raw = await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == HttpStatusCode.NotFound)
         {
             return null;
         }
 
-        return new AgentHostLaunchContext(
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(raw));
+        if (!doc.RootElement.TryGetProperty("metadata", out var meta))
+            return null;
+        static string? Read(JsonElement element, string key) =>
+            element.ValueKind == JsonValueKind.Object && element.TryGetProperty(key, out var value)
+                && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        var uid = Read(meta, "uid");
+        var version = Read(meta, "resourceVersion");
+        if (string.IsNullOrWhiteSpace(uid) || string.IsNullOrWhiteSpace(version))
+            return null;
+        meta.TryGetProperty("annotations", out var annotations);
+        var generation = Read(annotations, LifecycleGenerationAnnotation);
+        var dispatchId = Read(annotations, DispatchIdAnnotation);
+        var userId = Read(annotations, DispatchUserAnnotation);
+        var providerKey = Read(annotations, ProviderSnapshotAnnotation);
+        var fencingToken = Read(annotations, DispatchFencingTokenAnnotation);
+        if (requireDispatch && (string.IsNullOrWhiteSpace(dispatchId)
+            || !int.TryParse(generation, out _)
+            || string.IsNullOrWhiteSpace(userId)
+            || string.IsNullOrWhiteSpace(providerKey)
+            || (!string.IsNullOrWhiteSpace(fencingToken) && !long.TryParse(fencingToken, out _))))
+            return null;
+
+        return new AgentHostClaimSnapshot(new AgentHostLaunchContext(
             SharedWorkingDirectory: null,
-            HolderToken: await TryGetAgentHostClaimAnnotationAsync(
-                claimName, HolderTokenAnnotation, ct).ConfigureAwait(false),
+            HolderToken: Read(annotations, HolderTokenAnnotation),
             DispatchId: dispatchId,
-            LifecycleGeneration: lifecycleGeneration,
-            DispatchProjectId: await TryGetAgentHostClaimAnnotationAsync(
-                claimName, DispatchProjectAnnotation, ct).ConfigureAwait(false),
+            LifecycleGeneration: int.TryParse(generation, out var lifecycleGeneration) ? lifecycleGeneration : null,
+            DispatchProjectId: Read(annotations, DispatchProjectAnnotation),
             DispatchUserId: userId,
-            DispatchAgentName: await TryGetAgentHostClaimAnnotationAsync(
-                claimName, DispatchAgentAnnotation, ct).ConfigureAwait(false),
+            DispatchAgentName: Read(annotations, DispatchAgentAnnotation),
             ProviderSnapshotKey: providerKey,
             DispatchFencingToken: string.IsNullOrWhiteSpace(fencingToken)
                 ? null
-                : long.Parse(fencingToken, System.Globalization.CultureInfo.InvariantCulture));
+                : long.Parse(fencingToken, System.Globalization.CultureInfo.InvariantCulture)),
+            uid, version);
+    }
+
+    private async Task<bool> ReleaseCapturedAgentHostClaimAsync(
+        string runId, AgentHostClaimSnapshot captured, string expectedHolder, bool force, CancellationToken ct)
+    {
+        var current = await ReadAgentHostClaimSnapshotAsync(runId, requireDispatch: false, ct)
+            .ConfigureAwait(false);
+        if (current is null)
+            return false;
+        if (current.Uid != captured.Uid || current.ResourceVersion != captured.ResourceVersion
+            || current.Context.LifecycleGeneration != captured.Context.LifecycleGeneration
+            || (current.Context.HolderToken is { Length: > 0 } holder && holder != expectedHolder))
+            return false;
+
+        if (!force && _previewService is not null &&
+            await _previewService.ReconcilePreviewLifecycleAsync(runId, ct).ConfigureAwait(false)
+                == Preview.PreviewLifecycleState.PreviewActive)
+            return true;
+
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        try
+        {
+            await _client.CustomObjects.DeleteNamespacedCustomObjectAsync(
+                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                body: new k8s.Models.V1DeleteOptions
+                {
+                    Preconditions = new k8s.Models.V1Preconditions
+                    {
+                        Uid = captured.Uid,
+                        ResourceVersion = captured.ResourceVersion,
+                    },
+                }, cancellationToken: ct).ConfigureAwait(false);
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode is HttpStatusCode.Conflict
+            or HttpStatusCode.UnprocessableEntity or HttpStatusCode.NotFound)
+        {
+            _logger.LogInformation("KubernetesSandboxExecutor: claim {Claim} changed before fenced delete",
+                claimName);
+            return false;
+        }
+
+        _podRegistry?.Unregister(runId);
+        _turnTokenRegistry?.UnregisterTurnToken(runId);
+        if (_authorshipCapabilityStore is not null)
+            await _authorshipCapabilityStore.RemoveAsync(runId, ct).ConfigureAwait(false);
+        await DeletePreviewRunnerCredentialAsync(runId, ct).ConfigureAwait(false);
+        await RevokeRepositoryCredentialAsync(runId, ct).ConfigureAwait(false);
+        return true;
     }
 
     /// <inheritdoc/>

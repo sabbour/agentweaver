@@ -74,6 +74,11 @@ public interface IAgentHostPodLifecycle
         CancellationToken ct = default) =>
         Task.FromResult<AgentHostLaunchContext?>(null);
 
+    /// <summary>Reads dispatch annotations and Kubernetes object identity in one claim GET.</summary>
+    Task<AgentHostClaimSnapshot?> GetAgentHostClaimSnapshotAsync(
+        string runId, CancellationToken ct = default) =>
+        Task.FromResult<AgentHostClaimSnapshot?>(null);
+
     /// <summary>
     /// Releases the AgentHost pod for the given run by deleting its
     /// <c>SandboxClaim</c>. Called on workflow suspension (HITL / coordinator-idle)
@@ -84,15 +89,16 @@ public interface IAgentHostPodLifecycle
     /// <summary>
     /// FENCED release: deletes the run's <c>SandboxClaim</c> only while it is still the one stamped
     /// with <paramref name="holderToken"/> (<see cref="AgentHostLaunchContext.HolderToken"/>).
-    /// Returns <see langword="true"/> when the claim was released (or was already gone), and
-    /// <see langword="false"/> when a DIFFERENT holder now owns it, in which case nothing is deleted.
+    /// Returns <see langword="true"/> when the claim was released or retained for a live preview,
+    /// and <see langword="false"/> when it was replaced, disappeared, or cannot be safely fenced.
     ///
     /// <para>
     /// A claim is addressed by a deterministic name derived from the run id, so an owner that has
     /// since lost the conversation — e.g. an API replica whose process-local pod-hold state went
     /// stale after the next turn landed on the other replica — would otherwise delete a claim that
-    /// another replica is actively serving a turn from. This is the compare-and-swap that prevents
-    /// it. The unfenced <see cref="ReleaseAgentHostPodAsync"/> remains correct for callers that are
+    /// another replica is actively serving a turn from. Kubernetes implementations additionally
+    /// use object UID/resourceVersion preconditions at deletion. The unfenced
+    /// <see cref="ReleaseAgentHostPodAsync"/> remains correct for callers that are
     /// deliberately reclaiming whatever is there (the cross-replica reaper, turn-scoped failure
     /// paths that just bound the claim themselves).
     /// </para>
@@ -111,6 +117,13 @@ public interface IAgentHostPodLifecycle
         return true;
     }
 
+    /// <summary>Releases only the exact claim object captured in <paramref name="claim"/>.
+    /// Kubernetes implementations use UID/resourceVersion delete preconditions.</summary>
+    Task<bool> TryReleaseHeldAgentHostPodAsync(
+        string runId, AgentHostClaimSnapshot claim, CancellationToken ct = default) =>
+        TryReleaseHeldAgentHostPodAsync(runId, claim.Context.HolderToken
+            ?? throw new ArgumentException("Claim has no holder token.", nameof(claim)), ct);
+
     /// <summary>
     /// Fenced takeover release. Unlike ordinary terminal/suspension cleanup, a matching stale
     /// execution claim must be removed even when it currently hosts a preview, because allowing it
@@ -122,6 +135,11 @@ public interface IAgentHostPodLifecycle
         CancellationToken ct = default) =>
         TryReleaseHeldAgentHostPodAsync(runId, holderToken, ct);
 }
+
+public sealed record AgentHostClaimSnapshot(
+    AgentHostLaunchContext Context,
+    string Uid,
+    string ResourceVersion);
 
 /// <summary>Run-scoped inputs delivered to the warm AgentHost through <c>POST /configure</c>.</summary>
 /// <param name="HolderToken">
