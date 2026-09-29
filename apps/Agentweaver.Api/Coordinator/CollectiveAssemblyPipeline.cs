@@ -201,7 +201,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             detachedWorktree = _worktreeManager.AddDetachedWorktree(
                 request.RepositoryPath,
                 request.IntegrationBranch,
-                BuildTestWorktreeName(request.CoordinatorRunId));
+                BuildTestWorktreeName(request.CoordinatorRunId, request.AssemblyAttemptToken));
 
             if (_sandboxRuntime.IsPodPerRun)
             {
@@ -357,7 +357,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 await CleanupBuildTestResourcesAsync(
                     request.CoordinatorRunId,
                     request.RepositoryPath,
-                    CancellationToken.None).ConfigureAwait(false);
+                    CancellationToken.None,
+                    request.AssemblyAttemptToken).ConfigureAwait(false);
             }
 
             _logger.LogWarning(ex,
@@ -374,7 +375,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             await CleanupBuildTestResourcesAsync(
                 request.CoordinatorRunId,
                 request.RepositoryPath,
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None,
+                request.AssemblyAttemptToken).ConfigureAwait(false);
             throw new CollectiveBuildTestInfrastructureException(
                 BuildTestTurnExecutor.WallClockTimeoutReason,
                 $"Collective Build/Test exceeded its total wall-clock timeout of {_buildTestTotalTimeout}.",
@@ -392,7 +394,15 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
     public async Task CleanupBuildTestResourcesAsync(
         string coordinatorRunId,
         string repositoryPath,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        await CleanupBuildTestResourcesAsync(
+            coordinatorRunId, repositoryPath, ct, assemblyAttemptToken: null).ConfigureAwait(false);
+
+    public async Task CleanupBuildTestResourcesAsync(
+        string coordinatorRunId,
+        string repositoryPath,
+        CancellationToken ct,
+        string? assemblyAttemptToken)
     {
         if (_sandboxRuntime.IsPodPerRun && _podLifecycle is not null)
         {
@@ -408,7 +418,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             }
         }
 
-        var path = _worktreeManager.DetachedWorktreePath(BuildTestWorktreeName(coordinatorRunId));
+        var path = _worktreeManager.DetachedWorktreePath(
+            BuildTestWorktreeName(coordinatorRunId, assemblyAttemptToken));
         try
         {
             _worktreeManager.RemoveDetachedWorktree(repositoryPath, path);
@@ -421,13 +432,32 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         }
     }
 
-    private static string BuildTestWorktreeName(string coordinatorRunId) =>
-        "assembly-build-test-" + coordinatorRunId;
+    private static string BuildTestWorktreeName(
+        string coordinatorRunId,
+        string? assemblyAttemptToken = null) =>
+        string.IsNullOrWhiteSpace(assemblyAttemptToken)
+            ? "assembly-build-test-" + coordinatorRunId
+            : $"assembly-build-test-{coordinatorRunId}-attempt-{assemblyAttemptToken}";
 
     public string GetBuildTestWorktreePath(string coordinatorRunId) =>
-        _worktreeManager.DetachedWorktreePath(BuildTestWorktreeName(coordinatorRunId));
+        GetBuildTestWorktreePath(coordinatorRunId, assemblyAttemptToken: null);
 
-    public string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch)
+    public string GetBuildTestWorktreePath(string coordinatorRunId, string? assemblyAttemptToken) =>
+        _worktreeManager.DetachedWorktreePath(
+            BuildTestWorktreeName(coordinatorRunId, assemblyAttemptToken));
+
+    public string PrepareReviewerWorktree(
+        string coordinatorRunId,
+        string repositoryPath,
+        string integrationBranch) =>
+        PrepareReviewerWorktree(
+            coordinatorRunId, repositoryPath, integrationBranch, assemblyAttemptToken: null);
+
+    public string PrepareReviewerWorktree(
+        string coordinatorRunId,
+        string repositoryPath,
+        string integrationBranch,
+        string? assemblyAttemptToken)
     {
         // #236: provision a detached worktree at the assembled integration branch so the collective RAI
         // + rubber-duck reviewers can read the integration files host-side. Reuse the SAME pattern (and
@@ -438,7 +468,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         var info = _worktreeManager.AddDetachedWorktree(
             repositoryPath,
             integrationBranch,
-            BuildTestWorktreeName(coordinatorRunId));
+            BuildTestWorktreeName(coordinatorRunId, assemblyAttemptToken));
         return info.WorktreePath;
     }
 

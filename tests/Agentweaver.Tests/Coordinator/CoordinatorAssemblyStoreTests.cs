@@ -84,7 +84,9 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
         // A fresh claim = another replica is actively building the integration branch right now.
         // Reclaiming would let a second pod race the git merge, so it must be refused.
         var workPlanId = await SeedPlanAsync(
-            WorkPlanStatus.Assembling, assemblyStartedAt: DateTimeOffset.UtcNow);
+            WorkPlanStatus.Assembling,
+            assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5),
+            updatedAt: DateTimeOffset.UtcNow);
 
         var reclaimed = await _sut.TryReclaimStaleAssemblyAsync(
             workPlanId, staleBefore: DateTimeOffset.UtcNow.AddSeconds(-120), default);
@@ -97,7 +99,9 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
     public async Task TryReclaimStaleAssembly_StaleClaim_ReturnsTrue_ResetsToAwaiting()
     {
         var workPlanId = await SeedPlanAsync(
-            WorkPlanStatus.Assembling, assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5));
+            WorkPlanStatus.Assembling,
+            assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5),
+            updatedAt: DateTimeOffset.UtcNow.AddMinutes(-5));
 
         var reclaimed = await _sut.TryReclaimStaleAssemblyAsync(
             workPlanId, staleBefore: DateTimeOffset.UtcNow.AddSeconds(-120), default);
@@ -107,14 +111,17 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task TryReclaimStaleAssembly_NullStartedAt_ReturnsTrue()
+    public async Task TryReclaimStaleAssembly_NullStartedAtWithStaleHeartbeat_ReturnsTrue()
     {
-        var workPlanId = await SeedPlanAsync(WorkPlanStatus.Assembling, assemblyStartedAt: null);
+        var workPlanId = await SeedPlanAsync(
+            WorkPlanStatus.Assembling,
+            assemblyStartedAt: null,
+            updatedAt: DateTimeOffset.UtcNow.AddMinutes(-5));
 
         var reclaimed = await _sut.TryReclaimStaleAssemblyAsync(
             workPlanId, staleBefore: DateTimeOffset.UtcNow.AddSeconds(-120), default);
 
-        reclaimed.Should().BeTrue("a missing AssemblyStartedAt is treated as stale/reclaimable");
+        reclaimed.Should().BeTrue("the renewable UpdatedAt heartbeat, not the one-time start timestamp, determines staleness");
     }
 
     [Fact]
@@ -133,7 +140,9 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
     public async Task TryReclaimStaleAssembly_ConcurrentCallers_ExactlyOneReclaims()
     {
         var workPlanId = await SeedPlanAsync(
-            WorkPlanStatus.Assembling, assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5));
+            WorkPlanStatus.Assembling,
+            assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5),
+            updatedAt: DateTimeOffset.UtcNow.AddMinutes(-5));
 
         var tasks = Enumerable.Range(0, 16)
             .Select(_ => Task.Run(() => _sut.TryReclaimStaleAssemblyAsync(
@@ -144,7 +153,10 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
         results.Count(won => won).Should().Be(1, "exactly one caller may reclaim the stale assembly");
     }
 
-    private async Task<int> SeedPlanAsync(string status, DateTimeOffset? assemblyStartedAt = null)
+    private async Task<int> SeedPlanAsync(
+        string status,
+        DateTimeOffset? assemblyStartedAt = null,
+        DateTimeOffset? updatedAt = null)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -172,7 +184,7 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
             Status = status,
             AssemblyStartedAt = assemblyStartedAt,
             CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = updatedAt ?? DateTimeOffset.UtcNow,
         };
         db.WorkPlans.Add(plan);
         await db.SaveChangesAsync();

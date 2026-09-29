@@ -243,6 +243,49 @@ public sealed class SqliteRunStore : IRunStore
         WarnIfNoRows(rows, runId, $"update status to {status.ToApiString()}");
     }
 
+    public async Task<bool> TryUpdateStatusAsync(
+        RunId runId, RunStatus status, DateTimeOffset? endedAt, RunLeaseClaim requiredLease,
+        CancellationToken ct = default)
+    {
+        RejectTerminalStatus(status);
+        var now = DateTimeOffset.UtcNow;
+        return await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET status = $status, ended_at = $endedAt,
+                   current_output_revision_id = CASE WHEN $status = 'in_progress'
+                       AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                       THEN NULL ELSE current_output_revision_id END,
+                   approved_output_revision_id = CASE WHEN $status = 'in_progress'
+                       AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                       THEN NULL ELSE approved_output_revision_id END,
+                   approval_generation = approval_generation +
+                       CASE WHEN status = 'in_progress' AND $status <> 'in_progress' THEN 1 ELSE 0 END,
+                   lifecycle_generation = lifecycle_generation +
+                       CASE WHEN $status = 'in_progress'
+                                 AND status IN ('merged', 'declined', 'failed', 'completed', 'merge_failed', 'assemble_ready')
+                            THEN 1 ELSE 0 END
+             WHERE run_id = $runId
+               AND lifecycle_generation = $generation
+               AND EXISTS (
+                   SELECT 1 FROM run_execution_leases lease
+                    WHERE lease.run_id = runs.run_id
+                      AND lease.owner_id = $leaseOwner
+                      AND lease.fencing_token = $fencingToken
+                      AND lease.lease_expires_at > $now);
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$status", status.ToApiString());
+                cmd.Parameters.AddWithValue("$endedAt", NullableTs(endedAt));
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+                cmd.Parameters.AddWithValue("$generation", requiredLease.LifecycleGeneration);
+                cmd.Parameters.AddWithValue("$leaseOwner", requiredLease.OwnerId);
+                cmd.Parameters.AddWithValue("$fencingToken", requiredLease.FencingToken);
+                cmd.Parameters.AddWithValue("$now", Ts(now));
+            }, ct).ConfigureAwait(false) == 1;
+    }
+
     public async Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default)
     {
         RejectTerminalStatus(status);
@@ -290,6 +333,36 @@ public sealed class SqliteRunStore : IRunStore
                 cmd.Parameters.AddWithValue("$runId", runId.ToString());
             }, ct).ConfigureAwait(false);
         WarnIfNoRows(rows, runId, "persist assembly artifacts");
+    }
+
+    public async Task<bool> TryUpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,
+        CancellationToken ct = default)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return await ExecuteNonQueryAsync(
+            """
+            UPDATE runs
+               SET tree_hash = $treeHash, diff = $diff
+             WHERE run_id = $runId
+               AND lifecycle_generation = $generation
+               AND EXISTS (
+                   SELECT 1 FROM run_execution_leases lease
+                    WHERE lease.run_id = runs.run_id
+                      AND lease.owner_id = $leaseOwner
+                      AND lease.fencing_token = $fencingToken
+                      AND lease.lease_expires_at > $now);
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$treeHash", treeHash);
+                cmd.Parameters.AddWithValue("$diff", diff);
+                cmd.Parameters.AddWithValue("$runId", runId.ToString());
+                cmd.Parameters.AddWithValue("$generation", requiredLease.LifecycleGeneration);
+                cmd.Parameters.AddWithValue("$leaseOwner", requiredLease.OwnerId);
+                cmd.Parameters.AddWithValue("$fencingToken", requiredLease.FencingToken);
+                cmd.Parameters.AddWithValue("$now", Ts(now));
+            }, ct).ConfigureAwait(false) == 1;
     }
 
     public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount,
@@ -488,7 +561,21 @@ public sealed class SqliteRunStore : IRunStore
 
     public async Task<RunOutputRevision> PublishCollectiveCandidateAsync(
         RunId runId, int generation, string workPlanId, string treeHash, string diff,
-        byte[] treeContent, CancellationToken ct = default)
+        byte[] treeContent, CancellationToken ct = default) =>
+        await PublishCollectiveCandidateCoreAsync(
+            runId, generation, workPlanId, treeHash, diff, treeContent, ct, requiredLease: null)
+            .ConfigureAwait(false);
+
+    public async Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct, RunLeaseClaim requiredLease) =>
+        await PublishCollectiveCandidateCoreAsync(
+            runId, generation, workPlanId, treeHash, diff, treeContent, ct, (RunLeaseClaim?)requiredLease)
+            .ConfigureAwait(false);
+
+    private async Task<RunOutputRevision> PublishCollectiveCandidateCoreAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct, RunLeaseClaim? requiredLease)
     {
         if (string.IsNullOrWhiteSpace(treeHash) || string.IsNullOrWhiteSpace(workPlanId))
             throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
@@ -501,10 +588,19 @@ public sealed class SqliteRunStore : IRunStore
         command.CommandText = """
             UPDATE runs SET status=status
              WHERE run_id=$runId AND lifecycle_generation=$generation
-               AND status IN ('in_progress','awaiting_review');
+               AND status IN ('in_progress','awaiting_review')
+               AND ($leaseOwner IS NULL OR EXISTS (
+                   SELECT 1 FROM run_execution_leases lease
+                    WHERE lease.run_id=runs.run_id AND lease.owner_id=$leaseOwner
+                      AND lease.fencing_token=$fencingToken AND lease.lease_expires_at>$now));
             """;
         command.Parameters.AddWithValue("$runId", runId.ToString());
         command.Parameters.AddWithValue("$generation", generation);
+        command.Parameters.AddWithValue("$leaseOwner", (object?)requiredLease?.OwnerId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$fencingToken", (object?)requiredLease?.FencingToken ?? DBNull.Value);
+        command.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
+        if (requiredLease is { } candidateLease && candidateLease.LifecycleGeneration != generation)
+            throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
         if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
             throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
         command.CommandText = """
@@ -564,7 +660,19 @@ public sealed class SqliteRunStore : IRunStore
     }
 
     public async Task<bool> ApproveCollectiveCandidateAsync(
-        RunId runId, int generation, string revisionId, CancellationToken ct = default)
+        RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
+        await ApproveCollectiveCandidateCoreAsync(
+            runId, generation, revisionId, ct, requiredLease: null).ConfigureAwait(false);
+
+    public async Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct,
+        RunLeaseClaim requiredLease) =>
+        await ApproveCollectiveCandidateCoreAsync(
+            runId, generation, revisionId, ct, (RunLeaseClaim?)requiredLease).ConfigureAwait(false);
+
+    private async Task<bool> ApproveCollectiveCandidateCoreAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct,
+        RunLeaseClaim? requiredLease)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
@@ -573,6 +681,10 @@ public sealed class SqliteRunStore : IRunStore
              WHERE run_id=$runId AND lifecycle_generation=$generation
                AND status IN ('in_progress','awaiting_review')
                AND current_output_revision_id=$revision
+               AND ($leaseOwner IS NULL OR EXISTS (
+                   SELECT 1 FROM run_execution_leases lease
+                    WHERE lease.run_id=runs.run_id AND lease.owner_id=$leaseOwner
+                      AND lease.fencing_token=$fencingToken AND lease.lease_expires_at>$now))
                AND EXISTS (
                    SELECT 1 FROM run_output_revisions v
                     WHERE v.revision_id=$revision AND v.run_id=$runId
@@ -586,6 +698,11 @@ public sealed class SqliteRunStore : IRunStore
         command.Parameters.AddWithValue("$generation", generation);
         command.Parameters.AddWithValue("$revision", revisionId);
         command.Parameters.AddWithValue("$diffSha", RunOutputRevision.Sha256(RunOutputRevision.EncodeDiff(run.Diff)));
+        command.Parameters.AddWithValue("$leaseOwner", (object?)requiredLease?.OwnerId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$fencingToken", (object?)requiredLease?.FencingToken ?? DBNull.Value);
+        command.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
+        if (requiredLease is { } approvalLease && approvalLease.LifecycleGeneration != generation)
+            return false;
         return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 1;
     }
 

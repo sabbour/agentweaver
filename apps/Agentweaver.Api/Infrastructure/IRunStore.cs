@@ -28,9 +28,23 @@ public interface IRunStore
     Task<IReadOnlyList<string>> GetTerminalCoordinatorRunIdsAsync(int offset, int limit, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support terminal sandbox reconciliation.");
     Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default);
+    async Task<bool> TryUpdateStatusAsync(
+        RunId runId, RunStatus status, DateTimeOffset? endedAt, RunLeaseClaim requiredLease,
+        CancellationToken ct = default)
+    {
+        await UpdateStatusAsync(runId, status, endedAt, ct).ConfigureAwait(false);
+        return true;
+    }
     Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default);
     Task UpdateAssemblyArtifactsAsync(RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Task.CompletedTask;
+    async Task<bool> TryUpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,
+        CancellationToken ct = default)
+    {
+        await UpdateAssemblyArtifactsAsync(runId, treeHash, diff, ct).ConfigureAwait(false);
+        return true;
+    }
     Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null);
     Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
         throw new NotSupportedException($"{GetType().Name} cannot retain review-ready tree content.");
@@ -57,9 +71,17 @@ public interface IRunStore
         RunId runId, int generation, string workPlanId, string treeHash, string diff,
         byte[] treeContent, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} cannot publish collective candidates.");
+    Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct, RunLeaseClaim requiredLease) =>
+        PublishCollectiveCandidateAsync(runId, generation, workPlanId, treeHash, diff, treeContent, ct);
     Task<bool> ApproveCollectiveCandidateAsync(
         RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} cannot approve collective candidates.");
+    Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct,
+        RunLeaseClaim requiredLease) =>
+        ApproveCollectiveCandidateAsync(runId, generation, revisionId, ct);
     Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryParkForChildWorkAsync(
         RunId runId,

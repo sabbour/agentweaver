@@ -44,7 +44,16 @@ public interface ICollectiveAssemblyPipeline
     /// Returns the absolute worktree path. Callers should only invoke this when the integration has
     /// changes; empty-diff assemblies never need a worktree.
     /// </summary>
-    string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch);
+    string PrepareReviewerWorktree(
+        string coordinatorRunId,
+        string repositoryPath,
+        string integrationBranch);
+    string PrepareReviewerWorktree(
+        string coordinatorRunId,
+        string repositoryPath,
+        string integrationBranch,
+        string? assemblyAttemptToken) =>
+        PrepareReviewerWorktree(coordinatorRunId, repositoryPath, integrationBranch);
 
     /// <summary>Verifies that the reviewer worktree still represents the reviewed aggregate.</summary>
     bool ReviewerWorktreeMatchesAggregate(
@@ -56,6 +65,12 @@ public interface ICollectiveAssemblyPipeline
         string coordinatorRunId,
         string repositoryPath,
         CancellationToken ct = default);
+    Task CleanupBuildTestResourcesAsync(
+        string coordinatorRunId,
+        string repositoryPath,
+        CancellationToken ct,
+        string? assemblyAttemptToken) =>
+        CleanupBuildTestResourcesAsync(coordinatorRunId, repositoryPath, ct);
 
     /// <summary>
     /// Absolute path of the coordinator's detached Build/Test worktree (spec-006 decouple-preview).
@@ -64,6 +79,8 @@ public interface ICollectiveAssemblyPipeline
     /// <see cref="RunBuildTestAsync"/> creates the worktree until <see cref="CleanupBuildTestResourcesAsync"/>.
     /// </summary>
     string GetBuildTestWorktreePath(string coordinatorRunId);
+    string GetBuildTestWorktreePath(string coordinatorRunId, string? assemblyAttemptToken) =>
+        GetBuildTestWorktreePath(coordinatorRunId);
 
     /// <summary>Creates an immutable merge commit/intention without moving any ref.</summary>
     PrepareGitMergeResult PrepareMerge(CollectiveMergeRequest request);
@@ -156,7 +173,8 @@ public sealed record CollectiveBuildTestRequest(
     string? DisplayLabel = null,
     string? AgentId = null,
     string? ModelSource = null,
-    string? ByokProviderFingerprint = null);
+    string? ByokProviderFingerprint = null,
+    string? AssemblyAttemptToken = null);
 
 /// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
 /// <param name="TargetFiles">

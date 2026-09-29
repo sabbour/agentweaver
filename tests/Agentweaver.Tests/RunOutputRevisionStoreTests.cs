@@ -239,6 +239,55 @@ public sealed class RunOutputRevisionStoreTests
             .Bytes.Should().Equal(1, 0, 255);
         (await store.TryMutateTerminalOutcomeAsync(id, approved)).Should().BeFalse();
     }
+
+    [Fact]
+    public async Task CollectiveAssemblyWritesRejectSupersededLeaseToken()
+    {
+        await using var db = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(db.Db);
+        var leases = new SqliteRunLeaseStore(db.Db);
+        var id = await InsertAsync(store);
+        await store.PinDefaultExecutableWorkflowForTestAsync(id);
+        var generation = (await store.GetAsync(id))!.LifecycleGeneration;
+        var tree = RunOutputTree.Encode([new RunOutputTree.File("artifact.txt", 33188, [1, 2, 3])]);
+
+        var firstClaim = await leases.TryClaimAsync(id.ToString(), "pod-a:assembly:first", TimeSpan.FromMinutes(1));
+        firstClaim.Claimed.Should().BeTrue();
+        var first = new RunLeaseClaim("pod-a:assembly:first", firstClaim.FencingToken, generation);
+        (await store.TryUpdateAssemblyArtifactsAsync(id, "tree-one", "first", first)).Should().BeTrue();
+        var firstCandidate = await store.PublishCollectiveCandidateAsync(
+            id, generation, "7", "tree-one", "first", tree, default, first);
+
+        await leases.ReleaseAsync(id.ToString(), first.OwnerId, first.FencingToken);
+        var secondClaim = await leases.TryClaimAsync(id.ToString(), "pod-b:assembly:second", TimeSpan.FromMinutes(1));
+        secondClaim.Claimed.Should().BeTrue();
+        secondClaim.FencingToken.Should().BeGreaterThan(first.FencingToken);
+        var second = new RunLeaseClaim("pod-b:assembly:second", secondClaim.FencingToken, generation);
+
+        (await store.TryUpdateAssemblyArtifactsAsync(id, "stale-tree", "stale", first)).Should().BeFalse();
+        var stalePublish = () => store.PublishCollectiveCandidateAsync(
+            id, generation, "7", "tree-one", "first", tree, default, first);
+        await stalePublish.Should().ThrowAsync<RunOutputRevisionUnavailableException>()
+            .WithMessage("*stale_collective_candidate*");
+        (await store.ApproveCollectiveCandidateAsync(
+            id, generation, firstCandidate.RevisionId, default, first)).Should().BeFalse();
+        (await store.TryMutateTerminalOutcomeAsync(
+            id,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(
+                    RunStatus.Failed, EventTypes.RunFailed, new { reason = "stale" },
+                    DateTimeOffset.UtcNow, generation),
+                "stale",
+                RequiredLease: new RunLeaseFence(
+                    first.OwnerId, first.FencingToken, first.LifecycleGeneration)))).Should().BeFalse();
+
+        (await store.TryUpdateAssemblyArtifactsAsync(id, "tree-two", "second", second)).Should().BeTrue();
+        var secondCandidate = await store.PublishCollectiveCandidateAsync(
+            id, generation, "7", "tree-two", "second", tree, default, second);
+        (await store.ApproveCollectiveCandidateAsync(
+            id, generation, secondCandidate.RevisionId, default, second)).Should().BeTrue();
+    }
+
     [Fact]
     public async Task NoChangeReceiptIsAtomicGenerationFencedAndRetainsExactFiles()
     {
