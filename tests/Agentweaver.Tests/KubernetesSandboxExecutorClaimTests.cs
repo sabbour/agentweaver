@@ -1502,12 +1502,124 @@ public sealed class KubernetesSandboxExecutorClaimTests
             Entries.Add((logLevel, formatter(state, exception)));
     }
 
-    private static string ClaimJsonWithHolder(string claimName, string? holderToken)
+    private static string ClaimJsonWithHolder(
+        string claimName, string? holderToken, string uid = "uid-1", string resourceVersion = "1")
     {
         var annotations = holderToken is null
             ? string.Empty
             : ",\"annotations\":{\"" + KubernetesSandboxExecutor.HolderTokenAnnotation + "\":\"" + holderToken + "\"}";
-        return "{\"metadata\":{\"name\":\"" + claimName + "\"" + annotations + "}}";
+        return "{\"metadata\":{\"name\":\"" + claimName
+            + "\",\"uid\":\"" + uid + "\",\"resourceVersion\":\"" + resourceVersion + "\"" + annotations + "}}";
+    }
+
+    private static string ClaimJsonWithDispatch(string claimName, string holder, string uid, string version) =>
+        JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                name = claimName, uid, resourceVersion = version,
+                annotations = new Dictionary<string, string>
+                {
+                    [KubernetesSandboxExecutor.HolderTokenAnnotation] = holder,
+                    [KubernetesSandboxExecutor.LifecycleGenerationAnnotation] = "2",
+                    [KubernetesSandboxExecutor.DispatchIdAnnotation] = "dispatch",
+                    [KubernetesSandboxExecutor.DispatchUserAnnotation] = "user",
+                    [KubernetesSandboxExecutor.ProviderSnapshotAnnotation] = "provider",
+                },
+            },
+        });
+
+    [Fact]
+    public async Task ClaimSnapshot_reads_annotations_and_identity_from_one_incarnation()
+    {
+        const string runId = "run-capture-replaced";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path = $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var first = JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                name = claimName, uid = "old-uid", resourceVersion = "11",
+                annotations = new Dictionary<string, string>
+                {
+                    [KubernetesSandboxExecutor.HolderTokenAnnotation] = "old-holder",
+                    [KubernetesSandboxExecutor.LifecycleGenerationAnnotation] = "2",
+                    [KubernetesSandboxExecutor.DispatchIdAnnotation] = "old-dispatch",
+                    [KubernetesSandboxExecutor.DispatchUserAnnotation] = "user",
+                    [KubernetesSandboxExecutor.ProviderSnapshotAnnotation] = "provider",
+                },
+            },
+        });
+        var fake = new FakeKubeHandler();
+        fake.OnSequence("GET", path, (HttpStatusCode.OK, first),
+            (HttpStatusCode.OK, ClaimJsonWithHolder(claimName, "new-holder", "new-uid", "12")));
+
+        var snapshot = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"))
+            .GetAgentHostClaimSnapshotAsync(runId);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Context.HolderToken.Should().Be("old-holder");
+        snapshot.Context.LifecycleGeneration.Should().Be(2);
+        snapshot.Uid.Should().Be("old-uid");
+        snapshot.ResourceVersion.Should().Be("11");
+        fake.Requests.Should().ContainSingle(r => r.Method == "GET");
+    }
+
+    [Fact]
+    public async Task CapturedClaim_replaced_before_validation_is_not_deleted()
+    {
+        const string runId = "run-claim-replaced-before-check";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path = $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var fake = new FakeKubeHandler();
+        fake.OnSequence("GET", path,
+            (HttpStatusCode.OK, ClaimJsonWithDispatch(claimName, "holder", "old", "3")),
+            (HttpStatusCode.OK, ClaimJsonWithDispatch(claimName, "holder", "replacement", "4")));
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+        var captured = await executor.GetAgentHostClaimSnapshotAsync(runId);
+        captured.Should().NotBeNull();
+        var released = await executor.TryReleaseHeldAgentHostPodAsync(runId, captured!);
+        released.Should().BeFalse();
+        fake.Requests.Should().NotContain(r => r.Method == "DELETE");
+    }
+
+    [Fact]
+    public async Task Claim_replaced_between_validation_and_delete_returns_false_with_preconditions()
+    {
+        const string runId = "run-claim-replaced-at-delete";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path = $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var fake = new FakeKubeHandler();
+        fake.OnGet(path, ClaimJsonWithHolder(claimName, "holder", "old-uid", "21"));
+        fake.OnStatus("DELETE", path, HttpStatusCode.Conflict,
+            """{"kind":"Status","status":"Failure","reason":"Conflict","code":409}""");
+        var released = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"))
+            .TryReleaseHeldAgentHostPodAsync(runId, "holder");
+
+        released.Should().BeFalse();
+        var delete = fake.Requests.Should().ContainSingle(r => r.Method == "DELETE").Which;
+        using var body = JsonDocument.Parse(delete.Body!);
+        body.RootElement.GetProperty("preconditions").GetProperty("uid").GetString().Should().Be("old-uid");
+        body.RootElement.GetProperty("preconditions").GetProperty("resourceVersion").GetString().Should().Be("21");
+    }
+
+    [Fact]
+    public async Task Fenced_release_retains_claim_while_preview_is_active()
+    {
+        const string runId = "run-fenced-preview-active";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, "holder"));
+        var preview = new StubPreviewService(hasActivePreview: true);
+
+        var released = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"), previewService: preview)
+            .TryReleaseHeldAgentHostPodAsync(runId, "holder");
+
+        released.Should().BeTrue("live preview retains the current pod until expiry");
+        preview.ReconciledRunIds.Should().ContainSingle().Which.Should().Be(runId);
+        fake.Requests.Should().NotContain(r => r.Method == "DELETE");
     }
 
     [Fact]
@@ -1526,7 +1638,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         var fake = new FakeKubeHandler();
         fake.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
-            JsonSerializer.Serialize(new { metadata = new { name = claimName, annotations } }));
+            JsonSerializer.Serialize(new { metadata = new { name = claimName, uid = "uid-1", resourceVersion = "1", annotations } }));
 
         var context = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"))
             .GetAgentHostDispatchContextAsync(runId);

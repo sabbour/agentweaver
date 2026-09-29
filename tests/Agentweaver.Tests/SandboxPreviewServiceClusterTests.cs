@@ -655,8 +655,12 @@ internal sealed class FakeKubeHandler : DelegatingHandler
 
     private const string EchoMarker = "\u0000ECHO";
     private readonly List<(string Method, string PathOrRegex, bool IsRegex, HttpStatusCode Status, string Body)> _routes = new();
+    private readonly Dictionary<(string Method, string Path),
+        Queue<(HttpStatusCode Status, string Body)>> _sequences = new();
 
     public void OnGet(string path, string body) => _routes.Add(("GET", path, false, HttpStatusCode.OK, body));
+    public void OnSequence(string method, string path, params (HttpStatusCode Status, string Body)[] responses) =>
+        _sequences[(method, path)] = new Queue<(HttpStatusCode, string)>(responses);
 
     public void OnAny(string pathRegex, string body) => _routes.Add(("*", pathRegex, true, HttpStatusCode.OK, body));
 
@@ -683,6 +687,12 @@ internal sealed class FakeKubeHandler : DelegatingHandler
             ? await request.Content.ReadAsStringAsync(cancellationToken)
             : null;
         Requests.Add(new Req(method, path, reqBody));
+
+        if (_sequences.TryGetValue((method, path), out var sequence) && sequence.Count > 0)
+        {
+            var (status, body) = sequence.Dequeue();
+            return Json(status, body);
+        }
 
         foreach (var (rMethod, pathOrRegex, isRegex, status, body) in _routes)
         {
