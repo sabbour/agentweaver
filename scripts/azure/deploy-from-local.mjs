@@ -80,7 +80,6 @@ Flags:
 `;
 
 export const WARM_POOL_NAME = "agentweaver-agent-host";
-export const WARM_POOL_POD_SELECTOR = "app=agentweaver-sandbox,app.kubernetes.io/component=agent-host";
 export const WARM_POOL_WAIT_TIMEOUT_MS = 180_000;
 export const WARM_POOL_POLL_INTERVAL_MS = 3_000;
 
@@ -109,7 +108,7 @@ export async function mintLocalDeployTag({ cwd, git = gitDefault } = {}) {
 /**
  * Fetches the SandboxWarmPool's current status via
  * `kubectl get sandboxwarmpool <name> -o json`. Returns
- * `{ found, readyReplicas, replicas, raw }`; `found: false` if the resource
+ * `{ found, readyReplicas, replicas, selector, raw }`; `found: false` if the resource
  * or CRD does not exist (never throws for that case -- callers decide how to
  * treat an absent pool).
  */
@@ -120,7 +119,7 @@ export async function getWarmPoolStatus(namespace, { exec = execDefault } = {}) 
     { allowFailure: true, json: true },
   );
   if (result.code !== 0 || !result.json) {
-    return { found: false, readyReplicas: 0, replicas: 0, raw: null };
+    return { found: false, readyReplicas: 0, replicas: 0, selector: null, raw: null };
   }
   const spec = result.json.spec || {};
   const status = result.json.status || {};
@@ -128,6 +127,7 @@ export async function getWarmPoolStatus(namespace, { exec = execDefault } = {}) 
     found: true,
     readyReplicas: Number(status.readyReplicas || 0),
     replicas: Number(spec.replicas ?? 0),
+    selector: status.selector,
     raw: result.json,
   };
 }
@@ -204,8 +204,8 @@ export async function resolveAcrDigestForTag(acrName, image, tag, { exec = execD
 }
 
 /**
- * Verifies every warm pod (selector WARM_POOL_POD_SELECTOR) runs the
- * expected AgentHost image, using lib/kubectl.mjs's podStatusForSelector().
+ * Verifies exactly the configured ready membership selected by the live
+ * SandboxWarmPool status, using lib/kubectl.mjs's podStatusForSelector().
  * Returns `{ ok, pods, mismatched }`.
  *
  * IMPORTANT (found in Phase 7 staging re-verification): compares by DIGEST,
@@ -222,13 +222,44 @@ export async function resolveAcrDigestForTag(acrName, image, tag, { exec = execD
  * @param {string} namespace
  * @param {string} expectedTag The AgentHost tag just built/deployed.
  * @param {object} [opts]
+ * @param {object} [opts.poolStatus] Result of waitForWarmPoolReady().
  * @param {string} [opts.acrName] Required for digest-aware comparison; if
  *   omitted, falls back to tag-string comparison (with a warning).
  * @param {string} [opts.imageName] Defaults to AGENTHOST_IMAGE_NAME.
  */
 export async function verifyWarmPoolImage(namespace, expectedTag, opts = {}) {
-  const { kubectl = kubectlDefault, log = logDefault, exec = execDefault, acrName, imageName = AGENTHOST_IMAGE_NAME } = opts;
-  const pods = await kubectl.podStatusForSelector(WARM_POOL_POD_SELECTOR, namespace);
+  const { kubectl = kubectlDefault, log = logDefault, exec = execDefault, acrName, imageName = AGENTHOST_IMAGE_NAME, poolStatus } = opts;
+  const selector = poolStatus?.selector;
+  // status.selector is the controller's authoritative membership query, not
+  // an app label inferred from a pod template.
+  const dnsSegment = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
+  const label = `(?:${dnsSegment}(?:\\.${dnsSegment})*/)?[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?`;
+  const value = "[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?";
+  const requirement = new RegExp(`^(${label})(?:=|==)(${value})$`);
+  const validRequirement = (part) => {
+    const match = requirement.exec(part);
+    if (!match) return false;
+    const [prefix, name] = match[1].includes("/") ? match[1].split("/") : ["", match[1]];
+    return prefix.length <= 253 && prefix.split(".").every((segment) => segment.length <= 63) &&
+      name.length <= 63 && match[2].length <= 63;
+  };
+  if (typeof selector !== "string" || !selector.trim() || selector !== selector.trim() ||
+      !selector.split(",").every(validRequirement)) {
+    throw new Error(`SandboxWarmPool '${WARM_POOL_NAME}' has no valid status.selector; refusing warm-pool image verification.`);
+  }
+  const replicas = poolStatus?.replicas;
+  if (!poolStatus.found || !Number.isSafeInteger(replicas) || replicas <= 0 ||
+      poolStatus.readyReplicas !== replicas) {
+    throw new Error(`SandboxWarmPool '${WARM_POOL_NAME}' must have a positive, fully ready configured membership before image verification.`);
+  }
+  const pods = await kubectl.podStatusForSelector(selector, namespace);
+  if (!Array.isArray(pods) || pods.length !== replicas) {
+    throw new Error(`SandboxWarmPool '${WARM_POOL_NAME}' selector '${selector}' returned ${pods?.length ?? 0} pods; expected ${replicas} ready pods.`);
+  }
+  const notReady = pods.filter((pod) => pod.phase !== "Running" || (pod.ready !== true && pod.ready !== "true") || pod.deletionTimestamp);
+  if (notReady.length) {
+    throw new Error(`SandboxWarmPool '${WARM_POOL_NAME}' selected ${notReady.length} not-ready or terminating pod(s): ${notReady.map((pod) => pod.name).join(", ")}.`);
+  }
 
   const expectedDigest = acrName ? await resolveAcrDigestForTag(acrName, imageName, expectedTag, { exec }) : null;
   if (acrName && !expectedDigest) {
@@ -255,10 +286,8 @@ export async function verifyWarmPoolImage(namespace, expectedTag, opts = {}) {
       const actualDisplay = expectedDigest ? m.digest || "<unresolved digest>" : m.tag || "<unknown>";
       log.warn(`  warm pod ${m.name} runs ${actualDisplay} (${m.imageRef || "<no image>"}), expected ${expectedDisplay}`);
     }
-  } else if (pods.length > 0) {
-    log.ok(`All ${pods.length} warm pod(s) run the expected AgentHost image (${expectedDigest ? "digest-verified" : `tag '${expectedTag}'`}).`);
   } else {
-    log.skip(`No warm pods found for selector '${WARM_POOL_POD_SELECTOR}' yet (pool may still be scheduling).`);
+    log.ok(`All ${pods.length} warm pod(s) run the expected AgentHost image (${expectedDigest ? "digest-verified" : `tag '${expectedTag}'`}).`);
   }
   return { ok: mismatched.length === 0, pods, mismatched };
 }
@@ -331,6 +360,7 @@ export async function deployCommittedSha(cfg, opts = {}) {
   const warmPoolImageCheck = warmPoolStatus.skipped
     ? { ok: true, pods: [], mismatched: [] }
     : await verifyWarmPoolImage(deploymentCfg.NAMESPACE, imageTag, {
+        poolStatus: warmPoolStatus,
         kubectl,
         log,
         exec,

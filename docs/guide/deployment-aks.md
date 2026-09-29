@@ -211,6 +211,11 @@ Mints a new immutable image tag from `HEAD` (refuses a dirty working tree by def
 builds and pushes images, redeploys, verifies provenance, and cycles the
 AgentHost warm-pool sandboxes (reapply-and-wait on the SandboxWarmPool —
 never manual pod deletion).
+The post-deploy image check queries the controller's live
+`SandboxWarmPool.status.selector` and requires exactly the configured number of
+ready pods before comparing every pod's AgentHost digest (or tag if the digest
+cannot be resolved). A missing selector, missing pods, or a count/readiness
+mismatch fails verification rather than reporting a successful deploy.
 
 For an intentional personal development test, `--allow-dirty` is the explicit escape
 hatch. It is not release-candidate evidence; use an exact committed candidate for release validation.
@@ -366,4 +371,5 @@ described above.
 | ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
 | API/MCP auth failures | confirm Entra client/tenant IDs, canonical OAuth public origin, both configured Key Vault certificate families/versions, and readable `ghtok-repo-app-private-key` |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
+| Warm-pool image verification fails despite ready replicas | Inspect `status.selector` with `kubectl get sandboxwarmpool agentweaver-agent-host -n agentweaver -o json`, then query its selected pods; check membership, readiness, and image digests. Let the controller replace pods; do not delete them manually. |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

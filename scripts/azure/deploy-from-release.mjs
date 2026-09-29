@@ -433,6 +433,7 @@ export async function run(opts = {}) {
     const warmPoolImageCheck = warmPoolStatus.skipped
       ? { ok: true, pods: [], mismatched: [] }
       : await verifyWarmPoolImage(cfg.NAMESPACE, tag, {
+          poolStatus: warmPoolStatus,
           kubectl,
           log,
           exec,
