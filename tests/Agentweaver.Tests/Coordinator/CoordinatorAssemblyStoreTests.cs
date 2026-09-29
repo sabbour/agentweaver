@@ -79,6 +79,38 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task SupersededAttemptOnSameReplicaCannotChangePlanState()
+    {
+        var workPlanId = await SeedPlanAsync(WorkPlanStatus.AwaitingAssembly);
+        const string firstAttempt = "api-0:assembly:first";
+        const string successorAttempt = "api-0:assembly:successor";
+
+        (await _sut.TryStartAssemblyAsync(
+            workPlanId,
+            "agentweaver/integration/x/attempt-1",
+            successorAttempt,
+            default)).Should().BeTrue();
+
+        await _sut.SetStageAsync(
+            workPlanId, AssemblyStage.Scribe, default, firstAttempt);
+        await _sut.SetStatusAndStageAsync(
+            workPlanId, WorkPlanStatus.InReview, AssemblyStage.Review, default, firstAttempt);
+        await _sut.SetTerminalStatusAsync(
+            workPlanId, WorkPlanStatus.AssemblyFailed, "stale", default, firstAttempt);
+
+        var current = await _sut.GetAsync(workPlanId, default);
+        current!.Status.Should().Be(WorkPlanStatus.Assembling);
+        current.AssemblyStage.Should().BeNull();
+        current.AssemblyStatusReason.Should().BeNull();
+
+        await _sut.SetTerminalStatusAsync(
+            workPlanId, WorkPlanStatus.AssemblyFailed, "current", default, successorAttempt);
+        current = await _sut.GetAsync(workPlanId, default);
+        current!.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        current.AssemblyStatusReason.Should().Be("current");
+    }
+
+    [Fact]
     public async Task TryReclaimStaleAssembly_FreshClaim_ReturnsFalse_LeavesAssembling()
     {
         // A fresh claim = another replica is actively building the integration branch right now.

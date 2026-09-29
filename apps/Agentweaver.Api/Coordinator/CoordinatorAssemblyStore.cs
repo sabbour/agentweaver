@@ -169,13 +169,18 @@ public sealed class CoordinatorAssemblyStore
             .ConfigureAwait(false);
         return updated > 0;
     }
-    public async Task SetStatusAsync(int workPlanId, string status, CancellationToken ct)
+    public async Task SetStatusAsync(
+        int workPlanId,
+        string status,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, status)
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
@@ -188,13 +193,19 @@ public sealed class CoordinatorAssemblyStore
     /// Sets a parked/terminal assembly status and snapshots the current <see cref="WorkPlan.AssemblyStage"/>
     /// into <see cref="WorkPlan.AssemblyTerminalStage"/> before any cleanup/scribe stage advances it.
     /// </summary>
-    public async Task SetTerminalStatusAsync(int workPlanId, string status, string reason, CancellationToken ct)
+    public async Task SetTerminalStatusAsync(
+        int workPlanId,
+        string status,
+        string reason,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, status)
                 .SetProperty(w => w.AssemblyTerminalStage, w => w.AssemblyStage)
@@ -205,6 +216,7 @@ public sealed class CoordinatorAssemblyStore
 
     public async Task<bool> TrySetCancelledAfterAppliedMergeAsync(
         int workPlanId,
+        string ownerId,
         string effectId,
         long lifecycleGeneration,
         string reason,
@@ -216,6 +228,7 @@ public sealed class CoordinatorAssemblyStore
         var rows = await db.WorkPlans
             .Where(w => w.Id == workPlanId
                      && w.Status == WorkPlanStatus.Assembling
+                     && w.CoordinatorPodId == ownerId
                      && w.MergeEffectId == effectId
                      && w.MergeLifecycleGeneration == lifecycleGeneration
                      && w.MergeEffectState == MergeEffectState.Applied)
@@ -256,13 +269,18 @@ public sealed class CoordinatorAssemblyStore
     }
 
     /// <summary>Advances the collective-assembly stage (drives the coordinator graph node-flip).</summary>
-    public async Task SetStageAsync(int workPlanId, string? stage, CancellationToken ct)
+    public async Task SetStageAsync(
+        int workPlanId,
+        string? stage,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.AssemblyStage, stage)
                 .SetProperty(w => w.UpdatedAt, now), ct)
@@ -270,13 +288,19 @@ public sealed class CoordinatorAssemblyStore
     }
 
     /// <summary>Sets status and stage together (e.g. in_review/review, assembling/merge).</summary>
-    public async Task SetStatusAndStageAsync(int workPlanId, string status, string? stage, CancellationToken ct)
+    public async Task SetStatusAndStageAsync(
+        int workPlanId,
+        string status,
+        string? stage,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, status)
                 .SetProperty(w => w.AssemblyStage, stage)
@@ -295,13 +319,17 @@ public sealed class CoordinatorAssemblyStore
     /// a crash mid-steering would otherwise look permanently stale (or, if left from a prior phase,
     /// permanently fresh). Using a dedicated stamp here makes the heartbeat the reclaim relies on real.
     /// </summary>
-    public async Task SetAssemblySteeringAsync(int workPlanId, CancellationToken ct)
+    public async Task SetAssemblySteeringAsync(
+        int workPlanId,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, WorkPlanStatus.AssemblySteering)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
@@ -482,13 +510,17 @@ public sealed class CoordinatorAssemblyStore
     /// finds the plan already <c>InReview</c> gets <c>false</c> and NO-OPs (prevents double-escalation
     /// from clobbering an already-open review record).
     /// </summary>
-    public async Task<bool> TryEscalateToInReviewAsync(int workPlanId, CancellationToken ct)
+    public async Task<bool> TryEscalateToInReviewAsync(
+        int workPlanId,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         var rows = await db.WorkPlans
             .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId)
                      && (w.Status == WorkPlanStatus.AssemblySteering
                          || w.Status == WorkPlanStatus.Assembling))
             .ExecuteUpdateAsync(s => s

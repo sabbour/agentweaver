@@ -3947,4 +3947,5 @@ public sealed record CoordinatorDispatchContext(
     bool StaticWorkflowChild = false,
     string? StaticParentTask = null,
     bool ComposedWorkflowChild = false,
-    string? AssemblyAttemptToken = null);
+    string? AssemblyAttemptToken = null,
+    string? AssemblyAttemptOwnerId = null);
