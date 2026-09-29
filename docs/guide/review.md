@@ -13,6 +13,10 @@ the selected workflow's collective gates. Built-in software workflows run **RAI 
 Build & Test → Human Review** before merge and Scribe. These gates do not run per child.
 Feedback returns to coordinator steering and any required reassembly, not straight
 from an agent revision to another human-review screen.
+When an assembly gate (including rubber-duck or Build & Test) or a human reviewer
+requests a fresh revision, its workspace starts from the exact integrated tree
+reviewed at that gate. The revised output retains those files alongside the new edits;
+retrying that revision keeps the same pinned input.
 
 The coordinator verifies each file-producing child's recorded tree against its Git
 branch and assembles from that exact verified commit, even if the branch moves later.
