@@ -77,6 +77,9 @@ public sealed class StartupRecoveryService : BackgroundService
                     _logger.LogInformation("Startup recovery sweep started");
                     await _recover(timeout.Token).ConfigureAwait(false);
                     _logger.LogInformation("Startup recovery sweep completed");
+                    // Keep the session advisory lock until this process stops. Releasing it
+                    // after success would let a waiting replica sweep newly created runs.
+                    await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

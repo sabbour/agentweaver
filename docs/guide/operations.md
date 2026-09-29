@@ -147,9 +147,11 @@ runtime.
 
 API and worker restart recovery run after their listeners start. Separate Postgres
 advisory locks serialize sweeps within each role; a healthy worker cannot prevent
-new API replicas from sweeping after an API-only restart. Each leader releases its
-lock after the sweep and all replicas retry periodically, including after success,
-so expired per-run leases and orphaned plans are reconsidered. The advisory lock
+new API replicas from sweeping after an API-only restart. A successful leader
+holds its lock until that process stops, so followers cannot repeat a completed
+startup sweep over newly created runs. Followers retry acquiring leadership;
+if the leader exits or dies, another replica can take over recovery. A failed
+or timed-out sweep releases the lock and retries. The advisory lock
 does not authorize mutations: durable run leases, coordinator plan claims, and
 child-dispatch reservations fence work across API and worker roles. Healthy child
 work on a surviving replica remains associated with its existing run identity.
@@ -178,9 +180,10 @@ between the grace and ten minutes). An absent/expired lease or exhausted cap
 restores normal stall recovery; neither setting changes lease fencing. Inspect
 the child's execution lease and terminal run events before increasing the cap.
 Both API replicas can answer `/api/ping` without waiting for a sweep.
-A sweep has a five-minute deadline and retries after 30 seconds on timeout
-or failure. Look for `Startup recovery sweep started`, `completed`, `exceeded`, or
-`failed` in API logs when diagnosing a restart. Readiness reflects workspace availability and successful initial static OAuth client
+A sweep has a five-minute deadline; followers and failed sweeps retry after
+30 seconds, but a successful leader does not resweep. Look for
+`Startup recovery sweep started`, `completed`, `exceeded`, or `failed` in API logs
+when diagnosing a restart. Readiness reflects workspace availability and successful initial static OAuth client
 reconciliation, not completion of the recovery backlog: operators should
 check the sweep log before assuming every interrupted run has been re-armed. `/api/health`,
 `/healthz/workspace`, and `/oauth/*` return 503 until the initial static OAuth client

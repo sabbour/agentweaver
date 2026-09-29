@@ -8,6 +8,8 @@ namespace Agentweaver.Api.Infrastructure;
 /// <summary>
 /// Serializes recovery sweeps among replicas of the same role. Per-run leases and
 /// coordinator plan claims, not this lock, protect mutations across API and worker roles.
+/// A successful leader holds the session lock until host shutdown; an interrupted or
+/// failed sweep releases it so a replica can retry.
 ///
 /// <para>On SQLite and other non-Postgres providers (local dev / test) the lock is always granted
 /// so single-process recovery still runs.</para>
