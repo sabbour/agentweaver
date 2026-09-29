@@ -83,6 +83,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly IRunOptionsStore? _runOptions;
     private readonly ICoordinatorAutopilot? _autopilot;
     private readonly IRunEventStream? _eventStream;
+    private readonly IRunLeaseStore? _runLeaseStore;
     private readonly IToolApprovalGate? _approvalGate;
     private readonly IPodNameRegistry? _podRegistry;
     private readonly IKubernetesEnvironment? _k8sEnv;
@@ -98,10 +99,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     private readonly TimeSpan _stallTimeout;
 
     /// <summary>
-    /// One bounded reconciliation window after a durable agent turn-end marker.
+    /// Initial reconciliation window after a durable agent turn-end marker.
     /// Configurable via <c>Coordinator:PostTurnFinalizationGraceSeconds</c> (default 10 seconds).
     /// </summary>
     private readonly TimeSpan _postTurnFinalizationGrace;
+
+    /// <summary>Hard cap on post-turn observation while the child still holds a live execution lease.</summary>
+    private readonly TimeSpan _postTurnFinalizationMaxWait;
 
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
@@ -161,7 +165,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
         IKubernetesEnvironment? k8sEnv = null,
-        IntegrationBuildLock? integrationBuildLock = null)
+        IntegrationBuildLock? integrationBuildLock = null,
+        IRunLeaseStore? runLeaseStore = null)
     {
         _runStore = runStore;
         _streamStore = streamStore;
@@ -173,6 +178,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _runOptions = runOptions;
         _autopilot = autopilot;
         _eventStream = eventStream;
+        _runLeaseStore = runLeaseStore;
         _approvalGate = approvalGate;
         _podRegistry = podRegistry;
         _k8sEnv = k8sEnv;
@@ -187,6 +193,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         _stallTimeout = TimeSpan.FromMinutes(Math.Max(0, stallMinutes));
         var graceSeconds = configuration?.GetValue("Coordinator:PostTurnFinalizationGraceSeconds", 10.0) ?? 10.0;
         _postTurnFinalizationGrace = TimeSpan.FromSeconds(Math.Clamp(graceSeconds, 0.1, 30.0));
+        var maxWaitSeconds = configuration?.GetValue("Coordinator:PostTurnFinalizationMaxWaitSeconds", 300.0) ?? 300.0;
+        _postTurnFinalizationMaxWait = TimeSpan.FromSeconds(Math.Clamp(
+            maxWaitSeconds, _postTurnFinalizationGrace.TotalSeconds, 600.0));
 
         // Renew the coordinator lease every 30 s by default — comfortably below the 120 s stale TTL so
         // a long child turn (implement/debug runs of 5-15+ min) can never let the lease go stale.
@@ -527,6 +536,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             var finished = await Task.WhenAny(inFlight.Values).ConfigureAwait(false);
             var result = await finished.ConfigureAwait(false);
             inFlight.Remove(result.SubtaskId);
+
+            // Observation and dispatch are separate tasks. A terminal write may land after the
+            // observer's last read but before dispatch consumes its stale stall result.
+            if (result.Outcome == ChildOutcome.Stalled)
+            {
+                var terminal = await TryResolveTerminalFromEventLogAsync(
+                    result.SubtaskId, result.ChildRunId, result.LastObservedSequence, ct).ConfigureAwait(false);
+                if (terminal is not null)
+                    result = terminal;
+                else if (await TryResolveFromStoreAsync(result.ChildRunId, ct).ConfigureAwait(false) is { } outcome)
+                    result = new ChildResult(result.SubtaskId, result.ChildRunId, outcome);
+            }
 
             // A re-observed orphaned child that has made no progress past the stall threshold (no live
             // watch loop, non-terminal in the store) is failed deterministically so the loop never
@@ -2343,7 +2364,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// <para>Stall detection: if no event arrives within <see cref="_stallTimeout"/> from the last
     /// received event (or from subscription start), the loop returns <see cref="ChildOutcome.Stalled"/>
     /// so the coordinator can reconcile without an unbounded wait. An observed agent turn-end
-    /// grants one short post-turn finalization window before declaring a stall.</para>
+    /// grants one short post-turn finalization window; a live child execution lease permits
+    /// further reconciliation up to a fixed cap before declaring a stall.</para>
     ///
     /// <para>Crash / restart safety: <see cref="IRunEventStream.SubscribeAsync"/> replays all
     /// persisted events from <paramref name="lastSeq"/> before tailing the live channel, so
@@ -2413,12 +2435,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         bool provisioningPending = false;
         bool postTurnGracePending = false;
         long? postTurnGraceDeadline = null;
+        long? postTurnMaxDeadline = null;
 
         while (!ct.IsCancellationRequested)
         {
             // Per-iteration linked CTS: ordinary observation resets after each event. Once post-turn
-            // grace begins, all subscriptions share one fixed deadline so activity cannot restore the
-            // full stall TTL and turn a bounded finalization reconciliation into another long wait.
+            // grace begins, subscriptions share a bounded deadline so activity cannot restore the
+            // full stall TTL. A live execution lease may extend it, but never past the hard cap.
             using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var observationTimeout = _stallTimeout;
             if (postTurnGraceDeadline is { } graceDeadline)
@@ -2571,14 +2594,43 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 if (postTurnGracePending)
                 {
                     postTurnGracePending = false;
-                    postTurnGraceDeadline = Stopwatch.GetTimestamp()
+                    var now = Stopwatch.GetTimestamp();
+                    postTurnGraceDeadline = now
                         + (long)(_postTurnFinalizationGrace.TotalSeconds * Stopwatch.Frequency);
+                    postTurnMaxDeadline = now
+                        + (long)(_postTurnFinalizationMaxWait.TotalSeconds * Stopwatch.Frequency);
                     _logger.LogInformation(
                         "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) ended its agent turn; " +
-                        "reconciling post-turn finalization for at most {Grace} before declaring a stall",
-                        childRunId, subtaskId, _postTurnFinalizationGrace);
+                        "reconciling post-turn finalization for {Grace}, extending only while its execution lease " +
+                        "remains active (at most {MaxWait})",
+                        childRunId, subtaskId, _postTurnFinalizationGrace, _postTurnFinalizationMaxWait);
                     continue;
                 }
+
+                // The recovered worker may still be assembling a finished turn after the initial
+                // grace. Its durable, unexpired execution lease proves it owns live finalization.
+                // Recheck the terminal log each tick; if renewal stops, or the hard cap is reached,
+                // normal stall recovery proceeds. Do not change the worker's lease or its fence.
+                if (postTurnGraceDeadline is not null
+                    && postTurnMaxDeadline is { } maxDeadline
+                    && Stopwatch.GetTimestamp() < maxDeadline
+                    && await HasActiveChildExecutionLeaseAsync(childRunId, ct).ConfigureAwait(false))
+                {
+                    postTurnGraceDeadline = Math.Min(
+                        maxDeadline, Stopwatch.GetTimestamp() + Stopwatch.Frequency);
+                    _logger.LogDebug(
+                        "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) still owns " +
+                        "an execution lease; continuing bounded post-turn reconciliation",
+                        childRunId, subtaskId);
+                    continue;
+                }
+
+                // The durable completion may have landed while checking lease state.
+                if (await TryResolveTerminalFromEventLogAsync(subtaskId, childRunId, lastSeq, ct)
+                    .ConfigureAwait(false) is { } lateTerminal)
+                    return lateTerminal;
+                if (await TryResolveFromStoreAsync(childRunId, ct).ConfigureAwait(false) is { } lateOutcome)
+                    return new ChildResult(subtaskId, childRunId, lateOutcome);
 
                 // The ordinary TTL (or the single post-turn reconciliation window) expired.
                 _logger.LogWarning(
@@ -2600,7 +2652,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 await PersistPartialOutputCheckpointAsync(
                     childRunId, subtaskId, lastSeq, lastPartialOutput, "event_stream_stalled", ct)
                     .ConfigureAwait(false);
-                return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled, DateTimeOffset.UtcNow);
+                return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled,
+                    DateTimeOffset.UtcNow, LastObservedSequence: lastSeq);
             }
 
             if (terminal is not null)
@@ -2623,6 +2676,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         return new ChildResult(subtaskId, childRunId, ChildOutcome.Failed);
     }
 
+    private async Task<bool> HasActiveChildExecutionLeaseAsync(string childRunId, CancellationToken ct) =>
+        _runLeaseStore is not null
+        && await _runLeaseStore.GetActiveClaimAsync(childRunId, ct).ConfigureAwait(false) is not null;
+
     /// <summary>
     /// Legacy observation path via <see cref="RunStreamStore"/> snapshot + <see cref="RunStreamEntry.WaitForChangeAsync"/>.
     /// Used as a fallback when <see cref="_eventStream"/> is not injected (existing test harnesses).
@@ -2643,7 +2700,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 // Non-terminal in the store with no live stream entry: check the stall threshold.
                 var staleSince = await StaleSinceAsync(childRunId, ct).ConfigureAwait(false);
                 if (staleSince is { } since)
-                    return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled, since);
+                    return new ChildResult(subtaskId, childRunId, ChildOutcome.Stalled,
+                        since, LastObservedSequence: lastSeq);
 
                 await Task.Delay(200, ct).ConfigureAwait(false);
                 continue;
@@ -3728,7 +3786,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         bool Retryable = false,
         string? FailureReason = null,
         string? FailureMessage = null,
-        int? TerminalSequence = null);
+        int? TerminalSequence = null,
+        int LastObservedSequence = 0);
 
     /// <summary>Monotonic topology sequence: snapshot is <c>Current</c> (0), each delta is <c>Next()</c>.</summary>
     internal sealed class SeqCounter
