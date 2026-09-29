@@ -108,13 +108,13 @@ public sealed class CoordinatorChildReservationPostgresTests(PostgresFixture pg)
     }
 
     [PostgresFact]
-    public async Task WorkerAndApiPlanTakeover_WaitsForLeaseThenReclaimsSameChild()
+    public async Task WorkerAndApiPlanTakeover_FencesPendingLaunchAndReclaimsSameChild()
     {
         var (planId, subtaskId, parentId, proposed) = await SeedAsync();
         var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
         var store = new EfRunStore(pg.Factory, clock: clock);
         var worker = await store.TryReserveCoordinatorChildAsync(
-            planId, subtaskId, "pod-a", 1, proposed, "worker-owner", TimeSpan.FromMinutes(1));
+            planId, subtaskId, "pod-a", 1, proposed, "pod-a/child-dispatch/worker", TimeSpan.FromMinutes(1));
         worker.State.Should().Be(ChildDispatchReservationState.Claimed);
 
         await using (var db = await pg.CreateDbContextAsync())
@@ -124,17 +124,15 @@ public sealed class CoordinatorChildReservationPostgresTests(PostgresFixture pg)
         (await store.TryReserveCoordinatorChildAsync(
             planId, subtaskId, "pod-a", 1, proposed with { Id = RunId.New() },
             "stale-worker", TimeSpan.FromMinutes(1))).State.Should().Be(ChildDispatchReservationState.NotOwner);
-        (await store.TryReserveCoordinatorChildAsync(
-            planId, subtaskId, "api-pod", 1, proposed with { Id = RunId.New() },
-            "api-owner", TimeSpan.FromMinutes(1))).State.Should().Be(ChildDispatchReservationState.LeaseHeld);
-
-        clock.Advance(TimeSpan.FromMinutes(2));
         var api = await store.TryReserveCoordinatorChildAsync(
             planId, subtaskId, "api-pod", 1, proposed with { Id = RunId.New() },
-            "api-owner", TimeSpan.FromMinutes(1));
+            "api-pod/child-dispatch/worker", TimeSpan.FromMinutes(1));
         api.State.Should().Be(ChildDispatchReservationState.Claimed);
         api.ChildRunId.Should().Be(worker.ChildRunId);
         api.FencingToken.Should().Be(worker.FencingToken + 1);
+        (await store.IsCoordinatorChildLaunchAuthorizedAsync(
+            planId, subtaskId, "pod-a", 1, worker.ChildRunId!,
+            "pod-a/child-dispatch/worker", worker.FencingToken, CancellationToken.None)).Should().BeFalse();
         await using var verify = await pg.CreateDbContextAsync();
         (await verify.Runs.CountAsync(r => r.ParentRunId == parentId
             && r.SubtaskId == subtaskId.ToString())).Should().Be(1);

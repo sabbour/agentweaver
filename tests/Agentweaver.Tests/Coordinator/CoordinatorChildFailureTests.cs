@@ -327,6 +327,36 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task StartChildRunAsync_ExistingReservedChildWithoutLease_ReusesExistingWorktree()
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = new RunOrchestrator(
+            _runStore, _streamStore, manager,
+            workflowFactory: null!, registry: null!, watchLoop: null!,
+            _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
+        var child = NewChildRun() with
+        {
+            RepositoryPath = repoPath, OriginatingBranch = "main", Status = RunStatus.Pending,
+        };
+        await _runStore.InsertAsync(child);
+        var existing = manager.AddWorktree(repoPath, "main", child.Id);
+        var checks = 0;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            orchestrator.StartChildRunAsync(
+                child,
+                CancellationToken.None,
+                isAuthorizedAsync: _ => Task.FromResult(++checks < 5),
+                existingReservedChild: true));
+
+        checks.Should().Be(5, "recovery must pass existing-worktree provisioning without duplicate creation");
+        Directory.Exists(existing.WorktreePath).Should().BeTrue(
+            "a cancelled recovery launch must preserve the canonical child's existing worktree");
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(RunStatus.Pending);
+    }
+
+    [Fact]
     public async Task RestartInterruptedChildRunAsync_PlanCancelledAfterWorktreeCheck_DoesNotLaunch()
     {
         var (repoPath, worktreesBase) = CreateRepository();
