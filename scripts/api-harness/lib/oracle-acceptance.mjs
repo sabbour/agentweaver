@@ -56,6 +56,7 @@ export class EventDeltas {
     this.cursors = new Map();
     this.recent = [];
     this.boundClaims = new Set();
+    this.reviewRequests = new Map();
   }
 
   async poll(runId) {
@@ -74,6 +75,9 @@ export class EventDeltas {
         cursor = event.sequence;
         added.push(event);
         if (event.type === 'sandbox.execution_pod.bound') this.boundClaims.add(runId);
+        if (event.type === 'coordinator.assembly_review_requested' && event.payload?.outputRevisionId) {
+          this.reviewRequests.set(runId, { id: event.payload.outputRevisionId, sequence: cursor });
+        }
         if (/^(run\.|assembly\.|coordinator\.|sandbox\.|shell\.|preview\.|workflow\.)/.test(event.type ?? '')) {
           this.recent.push({ runId, sequence: cursor, type: event.type, payload: event.payload });
         }
@@ -116,16 +120,33 @@ export async function runOracleAcceptance({
   const owned = [];
   const deltas = new EventDeltas(request);
   let phaseStarted = clock();
+  let phaseDeadline = Infinity;
   let latest = {};
   const phase = (name) => {
     result.phaseTimingsMs[result.phase] = clock() - phaseStarted;
     result.phase = name;
     phaseStarted = clock();
+    phaseDeadline = phaseStarted + (budgets[name] ?? 2) * 60_000;
   };
+  const remaining = () => {
+    const ms = phaseDeadline - clock();
+    if (ms <= 0) throw new AcceptanceFailure(`Phase ${result.phase} exceeded its budget.`, 'phase_timeout');
+    return ms;
+  };
+  const checkedRequest = async (method, url, body, options = {}) => {
+    const { allowLateResponse = false, ...requestOptions } = options;
+    const response = await request(method, url, body, {
+      ...requestOptions,
+      signal: AbortSignal.timeout(Math.max(1, Math.min(remaining(), method === 'POST' ? 180_000 : 30_000))),
+    });
+    if (!allowLateResponse) remaining();
+    return response;
+  };
+  deltas.request = checkedRequest;
   const path = (suffix) => `/api/runs/${encodeURIComponent(result.parentRunId)}${suffix}`;
   const collectRevisions = async () => {
     for (const id of [result.parentRunId, ...result.childRunIds]) {
-      const response = await request('GET', `/api/runs/${encodeURIComponent(id)}/output-revisions`);
+      const response = await checkedRequest('GET', `/api/runs/${encodeURIComponent(id)}/output-revisions`);
       if (response.status === 410) throw new AcceptanceFailure(`Output revision content unavailable for run ${id}.`);
       const revisions = requireResponse(response, 'output revisions');
       if (!Array.isArray(revisions)) throw new AcceptanceFailure('Output revisions response must be an array.');
@@ -135,9 +156,39 @@ export async function runOracleAcceptance({
       }
     }
   };
+  const currentReviewRevision = async () => {
+    const requested = deltas.reviewRequests.get(result.parentRunId);
+    if (!requested?.id) throw new AcceptanceFailure('Current assembly review has no output revision event.');
+    const revisions = requireResponse(await checkedRequest('GET', path('/output-revisions')), 'parent output revisions');
+    if (!Array.isArray(revisions) || !revisions.some((entry) => entry.revision_id === requested.id)) {
+      throw new AcceptanceFailure('Review revision missing from parent output revisions.');
+    }
+    const detail = requireResponse(
+      await checkedRequest('GET', path(`/output-revisions/${encodeURIComponent(requested.id)}`)),
+      'review revision detail',
+    );
+    if (detail?.revision_id !== requested.id || detail.manifest_incomplete === true) {
+      throw new AcceptanceFailure('Current review revision is missing or incomplete.');
+    }
+    const contentIdentity = detail.tree_content_sha256 ?? detail.tree_hash;
+    if (typeof contentIdentity !== 'string' || !contentIdentity) {
+      throw new AcceptanceFailure('Review revision has no artifact content identity.');
+    }
+    return { ...requested, contentIdentity };
+  };
+  const submitReview = async (decision, revisionId) => {
+    if (!revisionId) throw new AcceptanceFailure('A current output revision is required for review.');
+    const context = requireResponse(await checkedRequest('POST', '/api/ai/execution-context', {
+      operation: 'orchestration', project_id: result.projectId,
+    }), 'review execution context');
+    if (!context?.execution_key) throw new AcceptanceFailure('Review execution key unavailable.');
+    return requireResponse(await checkedRequest('POST', path('/assembly/review'), {
+      ...decision, output_revision_id: revisionId,
+    }, { headers: { 'If-Model-Provider-Key': context.execution_key } }), 'assembly review', [200, 202]);
+  };
   const snapshot = async () => {
     const [run, plan, children] = await Promise.all([
-      request('GET', path('')), request('GET', path('/work-plan')), request('GET', path('/children')),
+      checkedRequest('GET', path('')), checkedRequest('GET', path('/work-plan')), checkedRequest('GET', path('/children')),
     ]);
     requireResponse(run, 'run status');
     if (plan.status !== 200 && plan.status !== 404) requireResponse(plan, 'work plan');
@@ -151,7 +202,7 @@ export async function runOracleAcceptance({
         if (event.type !== 'shell.approval_required') continue;
         const hash = event.payload?.commandHash ?? event.payload?.command_hash;
         if (!approveShell || !hash) throw new AcceptanceFailure(`Shell approval required for ${id}; rerun with --approve-shell only for a disposable project.`);
-        requireResponse(await request('POST', `/api/runs/${encodeURIComponent(id)}/shell-approvals`, { command_hash: hash }), 'shell approval', [200, 201, 202]);
+        requireResponse(await checkedRequest('POST', `/api/runs/${encodeURIComponent(id)}/shell-approvals`, { command_hash: hash }), 'shell approval', [200, 201, 202]);
       }
     }
     result.lastEvents = deltas.recent;
@@ -163,47 +214,47 @@ export async function runOracleAcceptance({
   };
   const wait = async (name, predicate) => {
     phase(name);
-    const deadline = clock() + budgets[name] * 60_000;
     for (;;) {
       const state = await snapshot();
-      if (await predicate(state)) return state;
-      if (clock() >= deadline) throw new AcceptanceFailure(`Phase ${name} exceeded ${budgets[name]} minute budget.`, 'phase_timeout');
-      await pause(Math.min(pollMs, Math.max(1, deadline - clock())));
+      if (await predicate(state)) { remaining(); return state; }
+      await pause(Math.min(pollMs, remaining()));
     }
   };
-  const preview = async (label, text) => {
-    phase(label);
-    const deadline = clock() + budgets[label] * 60_000;
+  const preview = async (label, text, { keepPhase = false } = {}) => {
+    if (!keepPhase) phase(label);
     let last;
-    while (clock() < deadline) {
-      const prior = requireResponse(await request('GET', path('/sandbox/port-forward')), 'existing preview sessions');
+    while (remaining() > 0) {
+      const prior = requireResponse(await checkedRequest('GET', path('/sandbox/port-forward')), 'existing preview sessions');
       if (!Array.isArray(prior) || prior.length > 0) {
         throw new AcceptanceFailure(`${label}: pre-existing preview session; refusing to adopt or delete it.`);
       }
-      const response = await request('POST', path('/sandbox/port-forward'), { target_port: port });
+      const response = await checkedRequest('POST', path('/sandbox/port-forward'), { target_port: port }, { allowLateResponse: true });
       const value = response.body;
       if (response.status === 200 && value?.session_id && value?.preview_url) {
         owned.push({ runId: result.parentRunId, sessionId: value.session_id });
-        const listed = requireResponse(await request('GET', path('/sandbox/port-forward')), 'preview readiness');
+        remaining();
+        const listed = requireResponse(await checkedRequest('GET', path('/sandbox/port-forward')), 'preview readiness');
         if (!Array.isArray(listed) || !listed.some((s) => s.session_id === value.session_id)) {
           throw new AcceptanceFailure(`${label}: created preview not listed as ready.`);
         }
-        const checked = await browser(value.preview_url, text, { timeoutMs: Math.max(1, deadline - clock()) });
+        remaining();
+        const checked = await browser(value.preview_url, text, { timeoutMs: remaining() });
+        remaining();
         result.previews.push({ phase: label, sessionId: value.session_id, ...checked });
         if (!checked.ready) throw new AcceptanceFailure(`${label}: rendered preview failed acceptance.`);
         return checked;
       }
       last = `HTTP ${response.status}`;
       if (response.status >= 400 && ![404, 409, 503].includes(response.status)) break;
-      await pause(Math.min(pollMs, Math.max(1, deadline - clock())));
+      await pause(Math.min(pollMs, remaining()));
     }
     throw new AcceptanceFailure(`${label}: preview not ready (${last ?? 'deadline'}).`, 'phase_timeout');
   };
   try {
     const [version, spec, auth] = await Promise.all([
-      request('GET', '/api/version', undefined, { authenticated: false }),
-      request('GET', '/openapi/v1.json', undefined, { authenticated: false }),
-      request('GET', '/api/auth/session'),
+      checkedRequest('GET', '/api/version', undefined, { authenticated: false }),
+      checkedRequest('GET', '/openapi/v1.json', undefined, { authenticated: false }),
+      checkedRequest('GET', '/api/auth/session'),
     ]);
     result.version = requireResponse(version, 'version');
     const openapi = requireResponse(spec, 'OpenAPI');
@@ -212,12 +263,21 @@ export async function runOracleAcceptance({
     }
     const essential = ['/api/runs/{id}/events', '/api/runs/{coordinatorRunId}/assembly/review'];
     result.openapiPathsChecked = essential.map((p) => ({ path: p, present: Boolean(openapi.paths[p]) }));
-    if (projectId) requireResponse(await request('GET', `/api/projects/${encodeURIComponent(projectId)}`), 'project');
+    if (result.parentRunId) {
+      const attached = requireResponse(await checkedRequest('GET', path('')), 'attached run');
+      if (!attached?.project_id || (projectId && attached.project_id !== projectId)) {
+        throw new AcceptanceFailure('Attached run must have a matching project_id.');
+      }
+      result.projectId = attached.project_id;
+    }
+    if (result.projectId) {
+      requireResponse(await checkedRequest('GET', `/api/projects/${encodeURIComponent(result.projectId)}`), 'project');
+    }
     if (!result.parentRunId) {
       if (!projectId || !goal) throw new AcceptanceFailure('Provide --run-id or --project-id and --goal.');
-      const execution = requireResponse(await request('POST', '/api/ai/execution-context', { operation: 'orchestration', project_id: projectId }), 'execution context');
+      const execution = requireResponse(await checkedRequest('POST', '/api/ai/execution-context', { operation: 'orchestration', project_id: projectId }), 'execution context');
       if (!execution?.execution_key) throw new AcceptanceFailure('Execution key unavailable.');
-      const started = requireResponse(await request('POST', `/api/projects/${encodeURIComponent(projectId)}/orchestrations`, {
+      const started = requireResponse(await checkedRequest('POST', `/api/projects/${encodeURIComponent(projectId)}/orchestrations`, {
         goal, workflow_override_id: workflowId, start_mode: 'direct', auto_approve_tools: true, autopilot: true,
       }, { headers: { 'If-Model-Provider-Key': execution.execution_key } }), 'orchestration start', [201]);
       result.parentRunId = started.runId ?? started.run_id;
@@ -227,39 +287,47 @@ export async function runOracleAcceptance({
     await wait('claimProvisioning', (s) => s.children.some((c) => deltas.boundClaims.has(c.childRunId)));
     await wait('implementation', (s) => /assembl|review|complet/.test(normalize(s.plan?.status)));
     await wait('buildTestReview', (s) => normalize(s.plan?.status) === 'in_review' || normalize(s.plan?.assemblyStage).includes('review'));
-    const firstFiles = requireResponse(await request('GET', path('/assembly/files')), 'initial assembly files');
+    const firstFiles = requireResponse(await checkedRequest('GET', path('/assembly/files')), 'initial assembly files');
     if (!Array.isArray(firstFiles) || !firstFiles.length) throw new AcceptanceFailure('No assembled files at initial review.');
     await preview('initialPreview', expectedText);
     await collectRevisions();
+    const firstRevision = await currentReviewRevision();
+    result.initialRevision = firstRevision;
     if (!feedback?.trim() || !correctedText?.trim() || !targetFiles?.length) {
       throw new AcceptanceFailure('Grounded request_changes requires feedback, target files, and corrected application evidence.');
     }
     result.childRunIdsAtReview = [...result.childRunIds];
     phase('reviewDecision');
-    requireResponse(await request('POST', path('/assembly/review'), {
+    await submitReview({
       approved: false, request_changes: true, feedback, target_files: targetFiles,
-    }), 'request_changes', [200, 202]);
-    result.decisions.push({ decision: 'request_changes', feedback, targetFiles });
+    }, firstRevision.id);
+    result.decisions.push({ decision: 'request_changes', outputRevisionId: firstRevision.id, feedback, targetFiles });
     const stopped = await cleanupOwnedPreviews(request, owned);
     result.cleanup.push(...stopped);
     if (stopped.some((entry) => !entry.deleted)) throw new AcceptanceFailure('Initial preview cleanup could not be confirmed.');
     owned.length = 0;
     await wait('revisionProvisioning', (s) => s.children.some((c) => c.childRunId
       && !result.childRunIdsAtReview.includes(c.childRunId) && deltas.boundClaims.has(c.childRunId)));
+    let correctedRevision;
     await wait('correctedPreview', async (s) => {
       if (normalize(s.plan?.status) !== 'in_review' && !normalize(s.plan?.assemblyStage).includes('review')) return false;
-      const files = await request('GET', path('/assembly/files'));
-      return files.status === 200 && Array.isArray(files.body) && files.body.length > 0
-        && JSON.stringify(files.body) !== JSON.stringify(firstFiles);
+      const requested = deltas.reviewRequests.get(result.parentRunId);
+      if (!requested?.id || requested.id === firstRevision.id || requested.sequence <= firstRevision.sequence) return false;
+      correctedRevision = await currentReviewRevision();
+      if (correctedRevision.contentIdentity === firstRevision.contentIdentity) {
+        throw new AcceptanceFailure('Corrected output revision has unchanged artifact content.');
+      }
+      return true;
     });
-    const revisedFiles = requireResponse(await request('GET', path('/assembly/files')), 'revised assembly files');
+    const revisedFiles = requireResponse(await checkedRequest('GET', path('/assembly/files')), 'revised assembly files');
     if (!Array.isArray(revisedFiles) || !revisedFiles.length) throw new AcceptanceFailure('No revised assembly artifacts.');
-    if (JSON.stringify(firstFiles) === JSON.stringify(revisedFiles)) throw new AcceptanceFailure('Revised assembly diff is unchanged.');
-    const corrected = await preview('correctedPreview', correctedText);
+    const corrected = await preview('correctedPreview', correctedText, { keepPhase: true });
     if (result.previews[0].bodySha256 === corrected.bodySha256) throw new AcceptanceFailure('Corrected preview is identical to initial render.');
+    result.correctedRevision = correctedRevision;
     await collectRevisions();
-    requireResponse(await request('POST', path('/assembly/review'), { approved: true }), 'final approval', [200, 202]);
-    result.decisions.push({ decision: 'approve' });
+    phase('reviewDecision');
+    await submitReview({ approved: true }, correctedRevision.id);
+    result.decisions.push({ decision: 'approve', outputRevisionId: correctedRevision.id });
     await wait('terminalCompletion', (s) => normalize(s.run?.status) === 'completed' || normalize(s.plan?.status) === 'complete');
     result.verdict = 'pass';
   } catch (error) {

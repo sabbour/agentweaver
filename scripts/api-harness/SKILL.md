@@ -118,10 +118,20 @@ preview session, HTTP 200 in installed Chrome, visible expected application text
 and absence of fatal page/console/network errors. **Only then** does it submit the
 one `request_changes` with your observed feedback and target files. It removes
 its first preview before revision to prevent a stale session from masquerading
-as the corrected version. The second gate requires a changed assembly diff and
+as the corrected version. The second gate requires changed assembly content and
 different rendered body before approving. The product's Build & Test gate precedes
 its human review/preview gate, so the first preview cannot be inspected earlier
 without changing the product workflow.
+
+Each assembly decision includes `output_revision_id` from the current parent
+`coordinator.assembly_review_requested` event (verified against parent output
+revision detail) and its own fresh orchestration execution context in
+`If-Model-Provider-Key`. Attached runs derive their `project_id` from the
+run detail, rejecting a mismatched explicit project. The second review must
+publish a new parent revision with a different `tree_content_sha256` (falling
+back to `tree_hash`); `/assembly/files` lists paths/statuses, **not** file
+content. Artifact readiness and browser verification share the single
+`correctedPreview` deadline.
 
 Shell approvals fail fast by default; `--approve-shell` is an explicit opt-in
 **only for a disposable project**, using command hashes observed in new event
