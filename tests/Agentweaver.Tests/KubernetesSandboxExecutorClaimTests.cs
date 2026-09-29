@@ -1511,6 +1511,32 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task GetAgentHostDispatchContext_returns_claim_holder_for_terminal_child_cleanup()
+    {
+        const string runId = "run-terminal-child-fence";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var annotations = new Dictionary<string, string>
+        {
+            [KubernetesSandboxExecutor.HolderTokenAnnotation] = "child-holder",
+            [KubernetesSandboxExecutor.DispatchIdAnnotation] = "dispatch-1",
+            [KubernetesSandboxExecutor.LifecycleGenerationAnnotation] = "3",
+            [KubernetesSandboxExecutor.DispatchUserAnnotation] = "user-1",
+            [KubernetesSandboxExecutor.ProviderSnapshotAnnotation] = "provider-1",
+        };
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            JsonSerializer.Serialize(new { metadata = new { name = claimName, annotations } }));
+
+        var context = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"))
+            .GetAgentHostDispatchContextAsync(runId);
+
+        context.Should().NotBeNull();
+        context!.HolderToken.Should().Be("child-holder");
+        context.LifecycleGeneration.Should().Be(3);
+    }
+
+    [Fact]
     public async Task TryReleaseHeldAgentHostPod_refuses_to_delete_a_claim_held_by_another_owner()
     {
         // Claims are addressed by a name deterministically derived from the run id, while everything

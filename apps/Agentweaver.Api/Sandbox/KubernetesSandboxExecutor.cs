@@ -1084,6 +1084,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
         return new AgentHostLaunchContext(
             SharedWorkingDirectory: null,
+            HolderToken: await TryGetAgentHostClaimAnnotationAsync(
+                claimName, HolderTokenAnnotation, ct).ConfigureAwait(false),
             DispatchId: dispatchId,
             LifecycleGeneration: lifecycleGeneration,
             DispatchProjectId: await TryGetAgentHostClaimAnnotationAsync(

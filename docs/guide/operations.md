@@ -155,6 +155,16 @@ child-dispatch reservations fence work across API and worker roles. Healthy chil
 work on a surviving replica remains associated with its existing run identity.
 An expired coordinator child is restarted under that same child run ID after
 claiming its execution lease; a fresh lease held by another replica is skipped.
+When a coordinator terminates, its assemble-ready child and revision sandboxes
+are released after the final Scribe turn. A stopped coordinator releases them
+after the stop settles. On API startup and each coordinator heartbeat, a bounded
+page of terminal coordinators is revisited to recover claims left by interrupted
+cleanup. Active child execution or review is not reclaimed; a live preview
+retains its pod until preview expiry. Release checks the claim holder and run
+generation before deleting, and failures are logged as `Terminal child cleanup`
+warnings for retry rather than changing the coordinator's outcome. If a new
+revision stays pending on Kata, inspect these warnings and the child claim
+inventory before considering cluster capacity changes.
 After a durable `agent.turn.end`, coordinator observation first waits
 `Coordinator:PostTurnFinalizationGraceSeconds` (default 10 seconds, clamped to
 0.1–30 seconds) for assemble-ready or another terminal event. If the recovered

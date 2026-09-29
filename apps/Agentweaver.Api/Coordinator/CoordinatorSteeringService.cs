@@ -398,6 +398,7 @@ public sealed class CoordinatorSteeringService
     private readonly IOutcomeSpecReplyClassifier? _replyClassifier;
     private readonly ILogger<CoordinatorSteeringService> _logger;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly TerminalCoordinatorChildSandboxCleanup? _childSandboxCleanup;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
 
     /// <summary>
@@ -434,7 +435,8 @@ public sealed class CoordinatorSteeringService
         AssemblyReviewGate? reviewGate = null,
         IOutcomeSpecReplyClassifier? replyClassifier = null,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
+        TerminalCoordinatorChildSandboxCleanup? childSandboxCleanup = null)
     {
         _streamStore = streamStore;
         _registry = registry;
@@ -449,6 +451,7 @@ public sealed class CoordinatorSteeringService
         _logger = logger;
         _runWorkflowFactory = runWorkflowFactory;
         _podLifecycle = podLifecycle;
+        _childSandboxCleanup = childSandboxCleanup;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
     }
 
@@ -1349,6 +1352,8 @@ public sealed class CoordinatorSteeringService
         // #350: the coordinator's own AgentHost pod (when pod-per-run) also needs reliable teardown —
         // mirrors the child-release call in ApplyStopAsync above.
         await ReleaseAgentHostPodSafeAsync(coordinatorRunId, ct).ConfigureAwait(false);
+        if (_childSandboxCleanup is not null)
+            await _childSandboxCleanup.ReleaseForParentAsync(coordinatorRunId, ct).ConfigureAwait(false);
         _logger.LogInformation("Steering stop: coordinator run {RunId} terminated as stopped", coordinatorRunId);
     }
 

@@ -51,6 +51,11 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
 
     public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default) =>
         inner.GetByStatusAsync(status, ct);
+    public Task<IReadOnlyList<string>> GetChildRunIdsAsync(string parentRunId, CancellationToken ct = default) =>
+        inner.GetChildRunIdsAsync(parentRunId, ct);
+    public Task<IReadOnlyList<string>> GetTerminalCoordinatorRunIdsAsync(
+        int offset, int limit, CancellationToken ct = default) =>
+        inner.GetTerminalCoordinatorRunIdsAsync(offset, limit, ct);
 
     public async Task UpdateStatusAsync(
         RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default)

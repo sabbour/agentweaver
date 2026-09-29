@@ -27,6 +27,25 @@ public sealed class EfRunStore : IRunStore
         _clock = clock ?? TimeProvider.System;
     }
 
+    public async Task<IReadOnlyList<string>> GetChildRunIdsAsync(string parentRunId, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        return await db.Runs.AsNoTracking().Where(r => r.ParentRunId == parentRunId)
+            .OrderBy(r => r.RunId).Select(r => r.RunId).ToListAsync(ct).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<string>> GetTerminalCoordinatorRunIdsAsync(
+        int offset, int limit, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        return await db.Runs.AsNoTracking()
+            .Where(r => r.ParentRunId == null && r.AgentName == "Coordinator"
+                && (r.Status == "failed" || r.Status == "completed" || r.Status == "merged"
+                    || r.Status == "declined" || r.Status == "merge_failed"))
+            .OrderByDescending(r => r.EndedAt).ThenBy(r => r.RunId).Select(r => r.RunId)
+            .Skip(offset).Take(limit).ToListAsync(ct).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Reserves the canonical child and its execution identity while holding the plan and subtask
     /// row locks. A launch is authorized only after the child lease is committed.

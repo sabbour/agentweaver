@@ -4586,11 +4586,12 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         if (!RunId.TryParse(coordinatorRunId, out var id))
             return false;
+        bool changed;
         if (mergedCommitHash is not null || treeHash is not null)
         {
             var run = await _runStore.GetAsync(id, ct).ConfigureAwait(false);
             if (run is null) return false;
-            return await _runStore.TryMutateTerminalOutcomeAsync(
+            changed = await _runStore.TryMutateTerminalOutcomeAsync(
                 id,
                 new TerminalRunMutation(
                     TerminalRunOutcome.Create(status, EventTypes.RunCompleted,
@@ -4602,15 +4603,33 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     ApprovedCollectiveRevisionId: approvedCollectiveRevisionId),
                 ct).ConfigureAwait(false);
         }
-
-        return await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-            id,
-            status,
-            status == RunStatus.Failed ? EventTypes.RunFailed : EventTypes.RunCompleted,
-            status == RunStatus.Failed ? new { reason = result } : new { result },
-            DateTimeOffset.UtcNow,
-            result,
-            ct).ConfigureAwait(false);
+        else
+        {
+            changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                id,
+                status,
+                status == RunStatus.Failed ? EventTypes.RunFailed : EventTypes.RunCompleted,
+                status == RunStatus.Failed ? new { reason = result } : new { result },
+                DateTimeOffset.UtcNow,
+                result,
+                ct).ConfigureAwait(false);
+        }
+        if (changed)
+        {
+            try
+            {
+                if (_serviceProvider.GetService<TerminalCoordinatorChildSandboxCleanup>() is { } childCleanup)
+                    await childCleanup.ReleaseForParentAsync(coordinatorRunId, CancellationToken.None)
+                        .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Collective assembly: terminal child sandbox cleanup failed for {RunId}; recovery will retry",
+                    coordinatorRunId);
+            }
+        }
+        return changed;
     }
 
     private async Task RequireCollectiveOutputAsync(
