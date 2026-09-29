@@ -170,3 +170,25 @@ API and MCP runners use the common lifecycle helpers in
 verdict persistence, judge invocation, result-line formatting, and deterministic
 exit handling. Their surface adapters retain their own transport validation,
 retries, evidence collection, output paths, and CLI option aliases.
+
+# Oracle release acceptance
+
+The API harness has a dedicated deterministic Oracle assembly/revision gate:
+`node scripts/api-harness/run-oracle-acceptance.mjs --help`. It accepts a
+disposable project and a running coordinator ID (or a goal to start one),
+original and corrected visible application evidence, grounded feedback and
+target files. It obtains recorder-session authentication in memory, preflights
+version/OpenAPI/session once, polls incremental parent/child events, and enforces
+configurable per-phase deadlines. The product currently performs Build & Test
+before the human assembly review, so the first browser preview runs when that
+gate is reached. It checks preview registration, HTTP 200, browser render,
+visible content, and fatal errors; after one request_changes it verifies changed
+assembly artifacts and a distinct corrected browser render before approval.
+Only previews created by the driver are deleted and their absence confirmed.
+Use a dedicated run: the current preview start API lacks an atomic
+`created`/ownership indicator for sessions concurrently started by another caller.
+The redacted JSONL transcript and result JSON contain timeout diagnostics and
+phase IDs. Shell approvals require explicit `--approve-shell` on a disposable
+project. This structured release gate complements, rather than replaces,
+free-form PersonaActor scenario exploration (see
+[`scripts/api-harness/SKILL.md`](../../scripts/api-harness/SKILL.md)).

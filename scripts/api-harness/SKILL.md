@@ -80,6 +80,66 @@ Two traps make this easy to misdiagnose:
 
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
 
+### Deterministic Oracle assembly/revision release acceptance
+
+Oracle **release acceptance** is the exception to free-form PersonaActor exploration:
+the lifecycle and preview safety checks are deterministic; Oracle's grounded review
+decision is supplied as bounded input, not inferred from a hard-coded transcript.
+Use `run-oracle-acceptance.mjs`, **not** an `agent-driver` command or
+`run-persona.mjs --scenario oracle`. Use a disposable repository-backed project
+with an executable app and server already configured to listen on the chosen port.
+Either attach to an already-started coordinator with `--run-id`, or provide
+`--goal` to launch a `direct` orchestration in that project.
+
+```powershell
+node scripts/api-harness/run-oracle-acceptance.mjs `
+  --target https://<staging-origin> `
+  --project-id <disposable-project-uuid> `
+  --goal "Build a working app and serve it on port 3000" `
+  --expected-text "Visible original app text" `
+  --corrected-text "Visible revised app text" `
+  --feedback "Observed missing behavior in the original preview; make the revised app show the corrected behavior" `
+  --target-files "src/App.tsx" `
+  --port 3000 `
+  --budget revisionProvisioning=15
+```
+
+The first authenticated request uses the cached recorder session provider.
+The driver checks version, OpenAPI and session **once**; never passes auth material
+on the command line. `--auth-provider local-test` is for local test targets.
+Polling uses exclusive `/events?after=<sequence>&limit=250` cursors per parent
+and child. Default budgets in minutes are: planning 6, claimProvisioning 6,
+implementation 18, initialPreview 5, buildTestReview 10, revisionProvisioning 12,
+correctedPreview 5, terminalCompletion 8. Override with repeatable
+`--budget phase=minutes`; `--poll-ms` defaults to 5000.
+
+At the first assembly review the driver verifies changed files, a listed ready
+preview session, HTTP 200 in installed Chrome, visible expected application text,
+and absence of fatal page/console/network errors. **Only then** does it submit the
+one `request_changes` with your observed feedback and target files. It removes
+its first preview before revision to prevent a stale session from masquerading
+as the corrected version. The second gate requires a changed assembly diff and
+different rendered body before approving. The product's Build & Test gate precedes
+its human review/preview gate, so the first preview cannot be inspected earlier
+without changing the product workflow.
+
+Shell approvals fail fast by default; `--approve-shell` is an explicit opt-in
+**only for a disposable project**, using command hashes observed in new event
+deltas. No speculative approvals are issued. Timeouts and terminal errors fail
+closed. The append-only redacted transcript (`--transcript`) and result JSON
+(`--result`) default to `transcripts/` and `verdicts/`; failure retains current
+phase, parent/child/revision IDs, recent events and diagnostic. Exit 0 means
+both objective preview gates and terminal completion passed; it is not an
+independent subjective Judge verdict. Cleanup deletes and confirms **only**
+preview session IDs created by this invocation, including on failure; an
+unconfirmed cleanup changes the verdict to fail. Do not interpret a successful
+port-forward response alone as proof of a rendered app.
+The current port-forward response does not atomically distinguish a newly created
+session from a concurrently reused session. The driver refuses any session
+already listed before publication, but another caller racing between list and
+start requires a product `created`/ownership indicator for a strict
+multi-writer ownership guarantee. Use a dedicated run for this gate.
+
 Before choosing a persona for a dynamic API run, check
 `scripts/persona-briefs/catalog.json` through
 `node scripts/persona-briefs/find-similar.mjs --description "<intent>"`. If the API
