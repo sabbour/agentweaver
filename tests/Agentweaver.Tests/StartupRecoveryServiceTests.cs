@@ -99,7 +99,50 @@ public sealed class StartupRecoveryServiceTests
     }
 
     [Fact]
-    public async Task LeaderDeath_TransfersSweep_AndCompletedLeaderReleasesLockForNextPass()
+    public async Task ProductionHost_FreshCoordinatorAfterCompletedRecovery_IsNotTerminalizedBeforeActivation()
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sweeps = 0;
+        await using var factory = new RecoveryFactory(
+            async (services, ct) =>
+            {
+                await services.GetRequiredService<CoordinatorRunService>()
+                    .RecoverInterruptedRunsAsync(ct);
+                Interlocked.Increment(ref sweeps);
+                completed.TrySetResult();
+            },
+            _ => Task.CompletedTask,
+            retryInterval: TimeSpan.FromMilliseconds(10));
+        using var client = factory.CreateClient();
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(20));
+
+        var runId = RunId.New();
+        var store = factory.Services.GetRequiredService<IRunStore>();
+        await store.InsertAsync(new Run
+        {
+            Id = runId,
+            AgentName = "Coordinator",
+            Status = RunStatus.InProgress,
+            Task = "new orchestration awaiting its first checkpoint",
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow,
+        }, CancellationToken.None);
+
+        await Task.Delay(200); // Twenty former retry intervals during the persistence/activation gap.
+        (await store.GetAsync(runId))!.Status.Should().Be(RunStatus.InProgress);
+        Volatile.Read(ref sweeps).Should().Be(1);
+
+        // Verify the persisted run really is vulnerable to a second startup sweep.
+        await factory.Services.GetRequiredService<CoordinatorRunService>()
+            .RecoverInterruptedRunsAsync(CancellationToken.None);
+        (await store.GetAsync(runId))!.Status.Should().Be(RunStatus.Failed);
+    }
+
+    [Fact]
+    public async Task LeaderDeath_TransfersSweep_ButCompletedLeaderHoldsLockUntilShutdown()
     {
         var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -149,11 +192,12 @@ public sealed class StartupRecoveryServiceTests
         await secondCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await using var third = CreateApp(Create());
         await third.StartAsync();
-        await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref sweeps) >= 3));
-        Volatile.Read(ref sweeps).Should().BeGreaterThanOrEqualTo(3);
+        await Task.Delay(100);
+        Volatile.Read(ref sweeps).Should().Be(2);
         Volatile.Read(ref maxConcurrent).Should().Be(1);
-        await third.StopAsync();
         await second.StopAsync();
+        await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref sweeps) >= 3));
+        await third.StopAsync();
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> predicate)
@@ -168,6 +212,7 @@ public sealed class StartupRecoveryServiceTests
         private readonly Func<IServiceProvider, CancellationToken, Task> _sweep;
         private readonly Func<CancellationToken, Task> _oauth;
         private readonly bool _bypassInitializationGate;
+        private readonly TimeSpan? _retryInterval;
         private readonly string _directory = Path.Combine(Environment.CurrentDirectory,
             ".startup-recovery-tests", Guid.NewGuid().ToString("N"));
 
@@ -182,11 +227,13 @@ public sealed class StartupRecoveryServiceTests
         public RecoveryFactory(
             Func<IServiceProvider, CancellationToken, Task> sweep,
             Func<CancellationToken, Task> oauth,
-            bool bypassInitializationGate = false)
+            bool bypassInitializationGate = false,
+            TimeSpan? retryInterval = null)
         {
             _sweep = sweep;
             _oauth = oauth;
             _bypassInitializationGate = bypassInitializationGate;
+            _retryInterval = retryInterval;
             Directory.CreateDirectory(_directory);
         }
 
@@ -211,6 +258,18 @@ public sealed class StartupRecoveryServiceTests
                 }));
             builder.ConfigureServices(services =>
             {
+                if (_retryInterval is { } retry)
+                {
+                    var recovery = services.Single(d => d.ServiceType == typeof(IHostedService)
+                        && d.ImplementationType == typeof(StartupRecoveryService));
+                    services.Remove(recovery);
+                    services.AddSingleton<IHostedService>(sp => new StartupRecoveryService(
+                        ct => AcquireRecoveryLeaseAsync(sp, ct),
+                        sp.GetRequiredService<StartupRecoveryStages>().RunAsync,
+                        sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<StartupRecoveryService>>(),
+                        retryInterval: retry,
+                        applicationStarted: sp.GetRequiredService<IHostApplicationLifetime>().ApplicationStarted));
+                }
                 services.RemoveAll<StartupRecoveryStages>();
                 services.AddSingleton(sp => new StartupRecoveryStages(sp)
                 { Override = ct => _sweep(sp, ct) });
@@ -222,6 +281,16 @@ public sealed class StartupRecoveryServiceTests
                     NullLogger<OAuthStaticClientReconciler>.Instance)
                 { ReconcileOverride = _oauth, RetryInterval = TimeSpan.FromMilliseconds(50) });
             });
+        }
+
+        private static async Task<(bool IsLeader, IAsyncDisposable Lease)> AcquireRecoveryLeaseAsync(
+            IServiceProvider services, CancellationToken ct)
+        {
+            var leader = await StartupRecoveryLeader.AcquireAsync(
+                services.GetRequiredService<IConfiguration>(),
+                services.GetRequiredService<Microsoft.Extensions.Logging.ILogger<StartupRecoveryService>>(),
+                ct);
+            return (leader.IsLeader, leader);
         }
 
         public override async ValueTask DisposeAsync()
@@ -296,10 +365,12 @@ public sealed class StartupRecoveryServiceTests
             return release.Task.WaitAsync(ct);
         }
 
-        await using var first = CreateApp(CreateService(Acquire, Sweep));
+        StartupRecoveryService Create() => new(Acquire, Sweep, NullLogger<StartupRecoveryService>.Instance,
+            retryInterval: TimeSpan.FromMilliseconds(10));
+        await using var first = CreateApp(Create());
         await first.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await using var second = CreateApp(CreateService(Acquire, Sweep));
+        await using var second = CreateApp(Create());
         await second.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
         await attempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -309,6 +380,9 @@ public sealed class StartupRecoveryServiceTests
         Volatile.Read(ref held).Should().Be(1);
 
         release.SetResult();
+        await WaitUntilAsync(() => Task.FromResult(Volatile.Read(ref held) == 1));
+        await Task.Delay(100);
+        Volatile.Read(ref sweeps).Should().Be(1);
         await first.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
         await second.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
         Volatile.Read(ref held).Should().Be(0);
@@ -351,34 +425,37 @@ public sealed class StartupRecoveryServiceTests
     }
 
     [Fact]
-    public async Task CompletedSweep_ReleasesLockAndRunsAgainOnNextInterval()
+    public async Task CompletedSweep_HoldsLeaseAndDoesNotReacquireUntilShutdown()
     {
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var held = 0;
-        var maxConcurrent = 0;
+        var acquisitions = 0;
         var sweeps = 0;
         var service = new StartupRecoveryService(
             _ =>
             {
+                Interlocked.Increment(ref acquisitions);
                 Interlocked.CompareExchange(ref held, 1, 0).Should().Be(0);
                 return Task.FromResult<(bool, IAsyncDisposable)>((true,
                     new Lease(() => Interlocked.Exchange(ref held, 0))));
             },
-            async ct =>
+            _ =>
             {
-                var count = Interlocked.Increment(ref sweeps);
-                Interlocked.Exchange(ref maxConcurrent, Math.Max(Volatile.Read(ref maxConcurrent), Volatile.Read(ref held)));
-                if (count == 2) completed.TrySetResult();
-                await Task.CompletedTask;
+                Interlocked.Increment(ref sweeps);
+                completed.TrySetResult();
+                return Task.CompletedTask;
             },
             NullLogger<StartupRecoveryService>.Instance,
             retryInterval: TimeSpan.FromMilliseconds(10));
         await using var app = CreateApp(service);
         await app.StartAsync();
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(100);
+        Volatile.Read(ref acquisitions).Should().Be(1);
+        Volatile.Read(ref sweeps).Should().Be(1);
+        Volatile.Read(ref held).Should().Be(1);
         await app.StopAsync();
         Volatile.Read(ref held).Should().Be(0);
-        Volatile.Read(ref maxConcurrent).Should().Be(1);
     }
 
     private static StartupRecoveryService CreateService(
