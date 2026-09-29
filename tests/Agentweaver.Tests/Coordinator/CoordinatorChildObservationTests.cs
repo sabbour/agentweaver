@@ -426,6 +426,96 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ObserveChild_TurnEnded_TerminalArrivesAfterFirstDeadline_AssembleReadyWins()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        const string coord = "obs-post-turn-race-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        // The second subscription times out with no terminal. Only after the observer has
+        // completed its first durable recheck and entered the grace subscription do we write it.
+        var stream = new TurnEndThenBlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001, postTurnGraceSeconds: 0.5);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+        await stream.GraceSubscriptionStarted.WaitAsync(cts.Token);
+
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.RunEvents.Add(new RunEventRecord
+            {
+                RunId = childRunId,
+                Sequence = 2,
+                EventType = EventTypes.RunAssembleReady,
+                PayloadJson = JsonSerializer.Serialize(new { raiSafetyFlagged = false }),
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync(cts.Token);
+        }
+
+        await loop;
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
+    [Fact]
+    public async Task ObserveChild_TurnEnded_ButFinalizationHangs_FailsAfterOneBoundedGrace()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        const string coord = "obs-post-turn-hang-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var subtask = await db.Subtasks.SingleAsync(row => row.Id == ids[0]);
+            subtask.RecoveryAttempts = CoordinatorSteeringService.MaxRecoveryAttempts;
+            await db.SaveChangesAsync();
+        }
+
+        var stream = new TurnEndThenBlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001, postTurnGraceSeconds: 0.15);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Failed);
+        stream.SubscriptionCount.Should().Be(3,
+            "the turn-end marker grants exactly one bounded reconciliation subscription");
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().Contain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
+    [Fact]
+    public async Task ObserveChild_TurnEnded_NonTerminalDuringGrace_DoesNotRestoreOrdinaryStallTtl()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        const string coord = "obs-post-turn-progress-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var subtask = await db.Subtasks.SingleAsync(row => row.Id == ids[0]);
+            subtask.RecoveryAttempts = CoordinatorSteeringService.MaxRecoveryAttempts;
+            await db.SaveChangesAsync();
+        }
+
+        var stream = new TurnEndThenBlockingEventStream(emitNonTerminalDuringGrace: true);
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.02, postTurnGraceSeconds: 0.2);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2.2));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Failed);
+        stream.SubscriptionCount.Should().Be(4);
+    }
+
+    [Fact]
     public async Task ObserveChild_ToolExecutionPendingHeartbeats_ResetStallWindow()
     {
         var stream = new SqliteRunEventStream(_streamConfig);
@@ -1108,13 +1198,16 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
     private CoordinatorDispatchService BuildDispatch(
         IRunEventStream eventStream,
-        double stallTimeoutMinutes = 5)
+        double stallTimeoutMinutes = 5,
+        double postTurnGraceSeconds = 10)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Coordinator:SubtaskStallTimeoutMinutes"] =
                     stallTimeoutMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Coordinator:PostTurnFinalizationGraceSeconds"] =
+                    postTurnGraceSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
             })
             .Build();
 
@@ -1320,6 +1413,60 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
         public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
             ValueTask.CompletedTask;
+    }
+
+    private sealed class TurnEndThenBlockingEventStream : IRunEventStream
+    {
+        private readonly TaskCompletionSource _graceSubscriptionStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly bool _emitNonTerminalDuringGrace;
+
+        public TurnEndThenBlockingEventStream(bool emitNonTerminalDuringGrace = false)
+        {
+            _emitNonTerminalDuringGrace = emitNonTerminalDuringGrace;
+        }
+
+        public Task GraceSubscriptionStarted => _graceSubscriptionStarted.Task;
+        public int SubscriptionCount { get; private set; }
+
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default) =>
+            ValueTask.FromResult(evt.Sequence);
+
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            SubscriptionCount++;
+            if (SubscriptionCount == 1)
+                yield return new RunEvent(1, EventTypes.AgentTurnEnd, new { turnId = "turn-1" });
+
+            if (SubscriptionCount == 3)
+            {
+                _graceSubscriptionStarted.TrySetResult();
+                if (_emitNonTerminalDuringGrace)
+                    yield return new RunEvent(2, EventTypes.AgentMessage, new { content = "finalizing" });
+            }
+
+            await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+        }
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
+    }
+
+    private async Task RecordTurnEndAsync(string childRunId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = childRunId,
+            Sequence = 1,
+            EventType = EventTypes.AgentTurnEnd,
+            PayloadJson = JsonSerializer.Serialize(new { turnId = "turn-1" }),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
     }
 
     private static void UpdateMax(ref int target, int value)
