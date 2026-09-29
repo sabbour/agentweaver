@@ -266,7 +266,12 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: scripts/ui-harness/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            scripts/ui-harness/package-lock.json
+
+      - name: Install root npm dependencies
+        run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
 
       - name: Install harness npm dependencies
         run: node scripts/ci/shared-deps.mjs ensure --project scripts/ui-harness --isolated

@@ -24,6 +24,9 @@ test("UI harness changes select the required Node toolchain job", () => {
 
   const job = workflowSection("  node-toolchain-tests:\n", "\n  web-tests:\n");
   assert.match(job, /if: needs\.changes\.outputs\.node-toolchain == 'true'/);
+  assert.match(job, /cache-dependency-path: \|\n\s+package-lock\.json\n\s+scripts\/ui-harness\/package-lock\.json/);
+  assert.match(job, /run: node scripts\/ci\/shared-deps\.mjs ensure --project \. --isolated/);
+  assert.match(job, /run: node scripts\/ci\/shared-deps\.mjs ensure --project scripts\/ui-harness --isolated/);
   assert.match(
     job,
     /run: node scripts\/ci\/validate\.mjs --profile ci --area node,harness/,
