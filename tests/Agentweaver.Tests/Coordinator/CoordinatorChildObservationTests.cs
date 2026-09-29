@@ -528,6 +528,63 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ObserveChild_TurnEnded_ActiveLease_TerminalAfterGrace_AssembleReadyWins()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        await RecordExecutionLeaseAsync(childRunId);
+        const string coord = "obs-post-turn-lease-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        var stream = new TurnEndThenBlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001,
+            postTurnGraceSeconds: 10, postTurnMaxWaitSeconds: 15);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        var loop = sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        // Subscription four cannot start until the old 10-second grace has expired and the durable
+        // lease has been checked. The terminal event arrives strictly AFTER that former boundary.
+        await stream.PostGraceSubscriptionStarted.WaitAsync(cts.Token);
+        await RecordTerminalAsync(childRunId, cts.Token);
+        await loop;
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
+    [Fact]
+    public async Task ObserveChild_TurnEnded_ActiveLeaseWithoutFinalization_StallsAtHardCap()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        await RecordExecutionLeaseAsync(childRunId);
+        const string coord = "obs-post-turn-lease-cap-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var subtask = await db.Subtasks.SingleAsync(row => row.Id == ids[0]);
+            subtask.RecoveryAttempts = CoordinatorSteeringService.MaxRecoveryAttempts;
+            await db.SaveChangesAsync();
+        }
+
+        var stream = new TurnEndThenBlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001,
+            postTurnGraceSeconds: 0.1, postTurnMaxWaitSeconds: 0.35);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        stream.SubscriptionCount.Should().BeGreaterThan(3,
+            "the live lease postponed the old grace boundary, but not the hard cap");
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Failed);
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().Contain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
+    [Fact]
     public async Task ObserveChild_TurnEnded_ButFinalizationHangs_FailsAfterOneBoundedGrace()
     {
         var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
@@ -1264,7 +1321,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     private CoordinatorDispatchService BuildDispatch(
         IRunEventStream eventStream,
         double stallTimeoutMinutes = 5,
-        double postTurnGraceSeconds = 10)
+        double postTurnGraceSeconds = 10,
+        double postTurnMaxWaitSeconds = 300)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -1273,6 +1331,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
                     stallTimeoutMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["Coordinator:PostTurnFinalizationGraceSeconds"] =
                     postTurnGraceSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Coordinator:PostTurnFinalizationMaxWaitSeconds"] =
+                    postTurnMaxWaitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
             })
             .Build();
 
@@ -1285,7 +1345,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
             _runStore, _streamStore, orchestrator, null!, new CoordinatorSteeringQueue(_scopeFactory), _assembly,
             _scopeFactory, new TestHostApplicationLifetime(),
             NullLogger<CoordinatorDispatchService>.Instance,
-            runOptions: null, autopilot: null, configuration: config, eventStream: eventStream);
+            runOptions: null, autopilot: null, configuration: config, eventStream: eventStream,
+            runLeaseStore: new SqliteRunLeaseStore(_runDb.Db));
     }
 
     private static CoordinatorDispatchContext Context(
@@ -1484,6 +1545,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
     {
         private readonly TaskCompletionSource _graceSubscriptionStarted =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _postGraceSubscriptionStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly bool _emitNonTerminalDuringGrace;
 
         public TurnEndThenBlockingEventStream(bool emitNonTerminalDuringGrace = false)
@@ -1492,6 +1555,7 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         }
 
         public Task GraceSubscriptionStarted => _graceSubscriptionStarted.Task;
+        public Task PostGraceSubscriptionStarted => _postGraceSubscriptionStarted.Task;
         public int SubscriptionCount { get; private set; }
 
         public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default) =>
@@ -1511,6 +1575,8 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
                 if (_emitNonTerminalDuringGrace)
                     yield return new RunEvent(2, EventTypes.AgentMessage, new { content = "finalizing" });
             }
+            if (SubscriptionCount == 4)
+                _postGraceSubscriptionStarted.TrySetResult();
 
             await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
         }
@@ -1532,6 +1598,28 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
+    }
+
+    private async Task RecordExecutionLeaseAsync(string childRunId)
+    {
+        var (claimed, _) = await new SqliteRunLeaseStore(_runDb.Db).TryClaimAsync(
+            childRunId, "recovered-worker", TimeSpan.FromMinutes(2));
+        claimed.Should().BeTrue();
+    }
+
+    private async Task RecordTerminalAsync(string childRunId, CancellationToken ct)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = childRunId,
+            Sequence = 2,
+            EventType = EventTypes.RunAssembleReady,
+            PayloadJson = JsonSerializer.Serialize(new { raiSafetyFlagged = false }),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct);
     }
 
     private static void UpdateMax(ref int target, int value)

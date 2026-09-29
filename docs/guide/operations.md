@@ -155,6 +155,15 @@ child-dispatch reservations fence work across API and worker roles. Healthy chil
 work on a surviving replica remains associated with its existing run identity.
 An expired coordinator child is restarted under that same child run ID after
 claiming its execution lease; a fresh lease held by another replica is skipped.
+After a durable `agent.turn.end`, coordinator observation first waits
+`Coordinator:PostTurnFinalizationGraceSeconds` (default 10 seconds, clamped to
+0.1–30 seconds) for assemble-ready or another terminal event. If the recovered
+child still owns an unexpired execution lease, it rechecks durable completion
+while that lease remains active, up to
+`Coordinator:PostTurnFinalizationMaxWaitSeconds` (default five minutes, clamped
+between the grace and ten minutes). An absent/expired lease or exhausted cap
+restores normal stall recovery; neither setting changes lease fencing. Inspect
+the child's execution lease and terminal run events before increasing the cap.
 Both API replicas can answer `/api/ping` without waiting for a sweep.
 A sweep has a five-minute deadline and retries after 30 seconds on timeout
 or failure. Look for `Startup recovery sweep started`, `completed`, `exceeded`, or
