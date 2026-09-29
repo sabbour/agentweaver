@@ -45,10 +45,9 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
     public PostgresAppBootTests(AppFixture fixture) => _fixture = fixture;
 
     [PostgresFact]
-    public async Task PostgresLeader_ExcludesSameRole_ButNotOtherRole_UntilSweepReleasesLock()
+    public async Task PostgresLeader_ExcludesOtherRole_UntilLeaderExits()
     {
         const long isolatedTestLockKey = 0x4157_5243_5652_5903L;
-        const long isolatedWorkerLockKey = 0x4157_5243_5652_5904L;
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?>
             {
@@ -64,23 +63,20 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
                 ["App:Role"] = AppRole.Worker,
             }).Build();
         StartupRecoveryLeader.LockKeyForRole(configuration)
-            .Should().NotBe(StartupRecoveryLeader.LockKeyForRole(worker));
+            .Should().Be(StartupRecoveryLeader.LockKeyForRole(worker));
         await using (var leader = await StartupRecoveryLeader.AcquireAsync(
             configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
         {
             leader.IsLeader.Should().BeTrue();
             await using var waiter = await StartupRecoveryLeader.AcquireAsync(
-                configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey);
-            waiter.IsLeader.Should().BeFalse("same-role sweeps cannot overlap");
-            await using var workerLeader = await StartupRecoveryLeader.AcquireAsync(
-                worker, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedWorkerLockKey);
-            workerLeader.IsLeader.Should().BeTrue("worker and API scans do not exclude one another");
+                worker, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey);
+            waiter.IsLeader.Should().BeFalse("other-role sweeps cannot follow a successful leader");
         }
 
         await using (var waiter = await StartupRecoveryLeader.AcquireAsync(
-            configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
+            worker, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
         {
-            waiter.IsLeader.Should().BeTrue("the lock is released on sweep completion or leader loss");
+            waiter.IsLeader.Should().BeTrue("a different role can take over after the leader exits");
         }
     }
 

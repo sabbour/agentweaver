@@ -2,6 +2,7 @@
 "agentweaver": patch
 ---
 
-Stop repeating successful startup recovery sweeps while an API or worker replica
-is running. New coordinator runs are no longer mistaken for interrupted runs
-before they have created their first checkpoint.
+Share one startup recovery leader across API and worker replicas and keep its
+lease until shutdown, so neither role repeats a successful sweep over new
+coordinator runs. Stop retrying failed or timed-out leader sweeps after three
+attempts per process; followers can still take over if the leader exits.

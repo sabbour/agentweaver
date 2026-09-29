@@ -6,8 +6,8 @@ using Npgsql;
 namespace Agentweaver.Api.Infrastructure;
 
 /// <summary>
-/// Serializes recovery sweeps among replicas of the same role. Per-run leases and
-/// coordinator plan claims, not this lock, protect mutations across API and worker roles.
+/// Serializes recovery sweeps across API and worker replicas. Per-run leases and
+/// coordinator plan claims, not this lock, protect run mutations.
 /// A successful leader holds the session lock until host shutdown; an interrupted or
 /// failed sweep releases it so a replica can retry.
 ///
@@ -20,15 +20,12 @@ namespace Agentweaver.Api.Infrastructure;
 /// </summary>
 public sealed class StartupRecoveryLeader : IAsyncDisposable
 {
-    // Stable key for pg_try_advisory_lock(bigint) — chosen once and never changed.
-    // Encodes "AWRCVRY\0" (AgentWeaver ReCOVeRY) as a big-endian int64.
-    // The former fleet-wide lifetime key ends in 00. Do not reuse it while
-    // older worker pods may still hold that connection during a rolling upgrade.
-    private const long ApiAdvisoryLockKey = 0x4157_5243_5652_5901L;
-    private const long WorkerAdvisoryLockKey = 0x4157_5243_5652_5902L;
+    // 00 was the old fleet-wide key; 01/02 were role-specific. Use a new shared
+    // key so older pods cannot block this leader during a rolling upgrade.
+    internal const long FleetAdvisoryLockKey = 0x4157_5243_5652_5905L;
 
-    internal static long LockKeyForRole(IConfiguration configuration) =>
-        AppRole.IsWorker(configuration) ? WorkerAdvisoryLockKey : ApiAdvisoryLockKey;
+    internal static long LockKeyForRole(IConfiguration _) =>
+        FleetAdvisoryLockKey;
 
     private DbConnection? _conn;
     /// <summary>True when this process won the advisory-lock race and must run recovery.</summary>
