@@ -183,7 +183,10 @@ configurable per-phase deadlines. The product currently performs Build & Test
 before the human assembly review, so the first browser preview runs when that
 gate is reached. It checks preview registration, HTTP 200, browser render,
 visible content, and fatal errors; after one request_changes it verifies changed
-assembly artifacts and a distinct corrected browser render before approval.
+assembly revision content identity and a distinct corrected browser render
+before approval. Both decisions pin the current parent `output_revision_id`
+and prepare a fresh orchestration execution key; artifact readiness and
+browser verification share one corrected-preview deadline.
 Only previews created by the driver are deleted and their absence confirmed.
 Use a dedicated run: the current preview start API lacks an atomic
 `created`/ownership indicator for sessions concurrently started by another caller.

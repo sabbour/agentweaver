@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { EventDeltas, cleanupOwnedPreviews, runOracleAcceptance } from '../lib/oracle-acceptance.mjs';
+import { DEFAULT_BUDGETS, EventDeltas, cleanupOwnedPreviews, runOracleAcceptance } from '../lib/oracle-acceptance.mjs';
 import { parseOracleArgs } from '../run-oracle-acceptance.mjs';
 import { verifyRenderedPreview } from '../../harness-shared/preview-browser.mjs';
 
@@ -97,7 +97,7 @@ test('pre-existing preview is never adopted or deleted', async () => {
           ? [{ sequence: 1, type: 'sandbox.execution_pod.bound', payload: {} }] : [] };
         if (url.endsWith('/assembly/files')) return { status: 200, body: [{ path: 'index.html' }] };
         if (url.endsWith('/sandbox/port-forward')) return { status: 200, body: [{ session_id: 'someone-else' }] };
-        return { status: 200, body: { status: 'in_progress' } };
+        return { status: 200, body: { status: 'in_progress', project_id: 'project' } };
       },
     });
     assert.equal(result.verdict, 'fail');
@@ -126,7 +126,7 @@ test('timeout fails closed with phase, identifiers, last events, diagnostic and 
         if (url.endsWith('/work-plan')) return { status: 404, body: {} };
         if (url.endsWith('/children')) return { status: 200, body: [] };
         if (url.includes('/events?')) return { status: 200, body: [{ sequence: 1, type: 'run.started', payload: {} }].filter((e) => url.includes('after=0')) };
-        return { status: 200, body: { status: 'in_progress', failureReason: 'waiting for planning' } };
+        return { status: 200, body: { status: 'in_progress', project_id: 'project', failureReason: 'waiting for planning' } };
       },
     });
     assert.equal(result.verdict, 'fail');
@@ -143,29 +143,56 @@ test('timeout fails closed with phase, identifiers, last events, diagnostic and 
   }
 });
 
-test('both preview gates require distinct revised artifacts before approval', async () => {
+async function driveReviewFixture({
+  missingInitialId = false, staleCorrectedId = false, missingExecutionKey = false,
+  unchangedContent = false, advanceBrowserMs = 0, correctedBudget = 5,
+  rejectReviewHeader = false, staleDecision = false, advancePreviewRequestMs = 0,
+} = {}) {
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
     let revised = false;
     let approved = false;
+    let now = 0;
     const opened = [];
     const deleted = [];
+    const decisions = [];
     const active = new Set();
     const browser = async (url, expected) => {
       opened.push([url, expected]);
+      if (revised) now += advanceBrowserMs;
       return { ready: true, status: 200, bodySha256: revised ? 'revised' : 'original', expectedTextMatched: true, errors: [] };
     };
-    const request = async (method, url, body) => {
+    const request = async (method, url, body, options) => {
       if (url === '/api/version') return { status: 200, body: { version: 'test' } };
       if (url === '/openapi/v1.json') return { status: 200, body: { paths: {} } };
       if (url === '/api/auth/session') return { status: 200, body: { authenticated: true } };
+      if (url === '/api/ai/execution-context') return { status: 200, body: missingExecutionKey ? {} : { execution_key: `key-${decisions.length + 1}` } };
       if (url === '/api/projects/project') return { status: 200, body: {} };
-      if (url.endsWith('/work-plan')) return { status: 200, body: { status: approved ? 'completed' : revised ? 'in_review' : 'in_review' } };
+      if (url.endsWith('/work-plan')) return { status: 200, body: { status: approved ? 'complete' : 'in_review' } };
       if (url.endsWith('/children')) return { status: 200, body: [{ childRunId: 'first' }, ...(revised ? [{ childRunId: 'second' }] : [])] };
-      if (url.includes('/events?')) return { status: 200, body: (url.includes('/first/') || url.includes('/second/')) && url.includes('after=0')
-        ? [{ sequence: 1, type: 'sandbox.execution_pod.bound', payload: {} }] : [] };
-      if (url.endsWith('/assembly/files')) return { status: 200, body: [{ path: 'index.html', diff: revised ? 'new' : 'old' }] };
+      if (url.includes('/events?')) {
+        const after = Number(new URL(url, 'https://example.test').searchParams.get('after'));
+        if (url.includes('/parent/')) return { status: 200, body: [
+          { sequence: 1, type: 'coordinator.assembly_review_requested', payload: missingInitialId ? {} : { outputRevisionId: 'revision-1' } },
+          ...(revised ? [{ sequence: 2, type: 'coordinator.assembly_review_requested', payload: { outputRevisionId: staleCorrectedId ? 'revision-1' : 'revision-2' } }] : []),
+        ].filter((event) => event.sequence > after) };
+        return { status: 200, body: (url.includes('/first/') || url.includes('/second/')) && after === 0
+          ? [{ sequence: 1, type: 'sandbox.execution_pod.bound', payload: {} }] : [] };
+      }
+      if (url.endsWith('/assembly/files')) return { status: 200, body: [{ path: 'index.html', status: 'modified' }] };
+      if (url.includes('/output-revisions/revision-')) {
+        const id = url.split('/').at(-1);
+        return { status: 200, body: { revision_id: id, manifest_incomplete: false, tree_content_sha256: id === 'revision-1' || unchangedContent ? 'content-original' : 'content-revised' } };
+      }
       if (url.endsWith('/assembly/review')) {
+        decisions.push({ body, headers: options?.headers });
+        if (rejectReviewHeader || !options?.headers?.['If-Model-Provider-Key']) {
+          return { status: 400, body: { error: 'ai_execution_context_required' } };
+        }
+        if (staleDecision || body.output_revision_id !== (revised ? 'revision-2' : 'revision-1')
+          || options.headers['If-Model-Provider-Key'] !== `key-${decisions.length}`) {
+          return { status: 409, body: { error: 'stale_output_revision' } };
+        }
         if (body.request_changes) revised = true;
         else approved = true;
         return { status: 200, body: {} };
@@ -173,24 +200,87 @@ test('both preview gates require distinct revised artifacts before approval', as
       if (url.endsWith('/sandbox/port-forward') && method === 'POST') {
         const session_id = revised ? 'second-preview' : 'first-preview';
         active.add(session_id);
+        if (revised) now += advancePreviewRequestMs;
         return { status: 200, body: { session_id, preview_url: `https://${revised ? 'revised' : 'initial'}.example.test` } };
       }
       if (method === 'DELETE') { deleted.push(url); active.delete(url.split('/').at(-1)); return { status: 200 }; }
       if (url.endsWith('/sandbox/port-forward')) return { status: 200, body: [...active].map((session_id) => ({ session_id })) };
-      if (url.endsWith('/output-revisions')) return { status: 200, body: [{ revision_id: 'revision-2' }] };
-      return { status: 200, body: { status: approved ? 'completed' : 'in_progress' } };
+      if (url.endsWith('/output-revisions')) return { status: 200, body: [
+        { revision_id: 'revision-1' }, ...(revised ? [{ revision_id: 'revision-2' }] : []),
+      ] };
+      return { status: 200, body: { status: approved ? 'completed' : 'in_progress', project_id: 'project' } };
     };
     const result = await runOracleAcceptance({
-      request, projectId: 'project', runId: 'parent', expectedText: 'original', correctedText: 'fixed',
+      request, runId: 'parent', expectedText: 'original', correctedText: 'fixed',
       feedback: 'The initial app is missing a visible feature.', targetFiles: ['index.html'],
       browser, transcriptPath: path.join(directory, 'trace.jsonl'), resultPath: path.join(directory, 'result.json'),
+      budgets: { ...DEFAULT_BUDGETS, correctedPreview: correctedBudget },
+      clock: () => now, pause: async (ms) => { now += ms; },
     });
-    assert.equal(result.verdict, 'pass');
-    assert.deepEqual(opened.map((o) => o[1]), ['original', 'fixed']);
-    assert.deepEqual(result.decisions.map((o) => o.decision), ['request_changes', 'approve']);
-    assert.equal(result.cleanup.length, 2);
-    assert.equal(deleted.length, 2);
+    return { result, opened, decisions, deleted };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+test('both preview gates pin fresh parent revisions and execution headers; metadata list can be identical', async () => {
+  const { result, opened, decisions, deleted } = await driveReviewFixture();
+  assert.equal(result.verdict, 'pass');
+  assert.equal(result.projectId, 'project');
+  assert.deepEqual(opened.map((o) => o[1]), ['original', 'fixed']);
+  assert.deepEqual(result.decisions.map((o) => o.decision), ['request_changes', 'approve']);
+  assert.deepEqual(decisions.map((o) => o.body.output_revision_id), ['revision-1', 'revision-2']);
+  assert.deepEqual(decisions.map((o) => o.headers['If-Model-Provider-Key']), ['key-1', 'key-2']);
+  assert.deepEqual([result.initialRevision.contentIdentity, result.correctedRevision.contentIdentity], ['content-original', 'content-revised']);
+  assert.equal(result.cleanup.length, 2);
+  assert.equal(deleted.length, 2);
+});
+
+test('server rejection of missing review header or stale output revision fails closed', async () => {
+  for (const options of [{ rejectReviewHeader: true }, { staleDecision: true }]) {
+    const { result, decisions } = await driveReviewFixture(options);
+    assert.equal(result.verdict, 'fail');
+    assert.equal(decisions.length, 1);
+    assert.equal(result.decisions.length, 0);
+    assert.match(result.error.message, /assembly review: HTTP (400|409)/);
+  }
+});
+
+test('missing initial review revision or execution key fails before submitting an unpinned decision', async () => {
+  for (const options of [{ missingInitialId: true }, { missingExecutionKey: true }]) {
+    const { result, decisions } = await driveReviewFixture(options);
+    assert.equal(result.verdict, 'fail');
+    assert.equal(decisions.length, 0);
+    assert.match(result.error.message, /output revision event|execution key unavailable/);
+  }
+});
+
+test('stale corrected revision and unchanged revision content fail before approval', async () => {
+  for (const options of [{ staleCorrectedId: true }, { unchangedContent: true }]) {
+    const { result, decisions } = await driveReviewFixture({ ...options, correctedBudget: 0.001 });
+    assert.equal(result.verdict, 'fail');
+    assert.deepEqual(decisions.map((entry) => entry.body.request_changes), [true]);
+    assert.match(result.error.message, /Phase correctedPreview|unchanged artifact content/);
+  }
+});
+
+test('corrected browser success after the shared deadline is rejected and preserves one timing entry', async () => {
+  const { result, decisions } = await driveReviewFixture({ advanceBrowserMs: 61, correctedBudget: 0.001 });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.error.code, 'phase_timeout');
+  assert.equal(result.phase, 'correctedPreview');
+  assert.equal(result.phaseTimingsMs.correctedPreview, 61);
+  assert.equal(decisions.length, 1);
+});
+
+test('late preview publication is failed and its returned session is still cleaned up', async () => {
+  const { result, decisions, deleted } = await driveReviewFixture({
+    advancePreviewRequestMs: 61, correctedBudget: 0.001,
+  });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.error.code, 'phase_timeout');
+  assert.equal(result.phase, 'correctedPreview');
+  assert.equal(decisions.length, 1);
+  assert.equal(deleted.length, 2);
+  assert.ok(result.cleanup.every((entry) => entry.deleted));
 });
