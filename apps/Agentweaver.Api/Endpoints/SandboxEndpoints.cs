@@ -159,6 +159,7 @@ public static class SandboxEndpoints
                     parsedRunId,
                     publicationLeaseOwner,
                     DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
+                    run.LifecycleGeneration,
                     publicationLifetime.Token).ConfigureAwait(false);
                 if (!leased)
                 {
@@ -244,7 +245,8 @@ public static class SandboxEndpoints
                     try
                     {
                         shouldCleanupProcess = await CanCleanUpPreviewProcessAsync(
-                            runStore, parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
+                            runStore, parsedRunId, publicationLeaseOwner, run.LifecycleGeneration,
+                            ownershipCheck.Token).ConfigureAwait(false);
                         cleanupReserved = shouldCleanupProcess;
                     }
                     catch (Exception ex)
@@ -608,7 +610,8 @@ public static class SandboxEndpoints
             var registration = await TryRegisterPreviewAsync(
                 runId, targetPort, run.SubmittingUser, previewService, ct, previewRunnerSessionId,
                 maintainPublicationLease: runStore is not null,
-                publicationLeaseOwner: publicationLeaseOwner);
+                publicationLeaseOwner: publicationLeaseOwner,
+                expectedLifecycleGeneration: publicationGeneration);
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
@@ -813,7 +816,8 @@ public static class SandboxEndpoints
         CancellationToken ct,
         string? previewRunnerSessionId = null,
         bool maintainPublicationLease = false,
-        string? publicationLeaseOwner = null)
+        string? publicationLeaseOwner = null,
+        int? expectedLifecycleGeneration = null)
     {
         if (!Agentweaver.Api.Sandbox.Preview.SandboxPreviewOptions.IsPortInRange(
                 targetPort, previewService.AllowedPortMin, previewService.AllowedPortMax))
@@ -828,7 +832,10 @@ public static class SandboxEndpoints
         {
             var preview = maintainPublicationLease
                 ? await previewService.StartRunBoundPreviewAsync(
-                    runId, targetPort, ownerUserId, ct, previewRunnerSessionId, publicationLeaseOwner)
+                    runId, targetPort, ownerUserId,
+                    expectedLifecycleGeneration ?? throw new ArgumentException(
+                        "Run-bound registration requires a lifecycle generation.", nameof(expectedLifecycleGeneration)),
+                    ct, previewRunnerSessionId, publicationLeaseOwner)
                 : await previewService.StartPreviewAsync(
                     runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
             return PreviewRegistrationResult.Ok(preview, previewRunnerSessionId);
@@ -952,7 +959,7 @@ public static class SandboxEndpoints
                     previewRunnerClient,
                     turnTokens,
                     secretStore,
-                    logger, runStore, publicationLeaseOwner).ConfigureAwait(false);
+                    logger, runStore, publicationLeaseOwner, run.LifecycleGeneration).ConfigureAwait(false);
                 EmitPreviewFailure(
                     streamStore,
                     logger,
@@ -972,6 +979,7 @@ public static class SandboxEndpoints
                     run.Id,
                     publicationLeaseOwner,
                     DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
+                    run.LifecycleGeneration,
                     ct).ConfigureAwait(false);
                 if (!leased)
                 {
@@ -981,7 +989,7 @@ public static class SandboxEndpoints
                         await TryStopRetainedProcessAsync(
                             runId, retry.PreviewRunnerSessionId, "run_terminal",
                             previewRunnerClient, turnTokens, secretStore, logger,
-                            runStore, publicationLeaseOwner).ConfigureAwait(false);
+                            runStore, publicationLeaseOwner, run.LifecycleGeneration).ConfigureAwait(false);
                         EmitPreviewFailure(
                             streamStore, logger, runId, retry.TargetPort, "registration_failed",
                             "The run became terminal before preview approval completed.",
@@ -1007,7 +1015,7 @@ public static class SandboxEndpoints
                         await TryStopRetainedProcessAsync(
                             runId, retry.PreviewRunnerSessionId, "preview_session_exited",
                             previewRunnerClient, turnTokens, secretStore, logger,
-                            runStore, publicationLeaseOwner).ConfigureAwait(false);
+                            runStore, publicationLeaseOwner, run.LifecycleGeneration).ConfigureAwait(false);
                         EmitPreviewFailure(
                             streamStore, logger, runId, retry.TargetPort, "preview_session_exited",
                             "Preview session has exited or is unreachable; a preview URL cannot be published.",
@@ -1030,14 +1038,14 @@ public static class SandboxEndpoints
                     previewRunnerClient,
                     await ResolveRetainedProcessBearerAsync(runId, turnTokens, secretStore, ct)
                         .ConfigureAwait(false),
-                    publicationLeaseOwner, currentRun.LifecycleGeneration).ConfigureAwait(false);
+                    publicationLeaseOwner, run.LifecycleGeneration).ConfigureAwait(false);
                 var published = registrationResult is IStatusCodeHttpResult { StatusCode: StatusCodes.Status200OK };
                 if (!published)
                 {
                     await TryStopRetainedProcessAsync(
                         runId, retry.PreviewRunnerSessionId, "registration_failed",
                         previewRunnerClient, turnTokens, secretStore, logger,
-                        runStore, publicationLeaseOwner).ConfigureAwait(false);
+                        runStore, publicationLeaseOwner, run.LifecycleGeneration).ConfigureAwait(false);
                 }
                 else if (previewService.Enabled)
                 {
@@ -1056,7 +1064,7 @@ public static class SandboxEndpoints
                     previewRunnerClient,
                     turnTokens,
                     secretStore,
-                    logger, runStore, publicationLeaseOwner).ConfigureAwait(false);
+                    logger, runStore, publicationLeaseOwner, run.LifecycleGeneration).ConfigureAwait(false);
             }
 
             EmitPreviewFailure(
@@ -1078,7 +1086,7 @@ public static class SandboxEndpoints
             await TryStopRetainedProcessAsync(
                 runId, retry.PreviewRunnerSessionId, "run_terminal",
                 previewRunnerClient, turnTokens, secretStore, logger,
-                runStore, publicationLeaseOwner).ConfigureAwait(false);
+                runStore, publicationLeaseOwner, run.LifecycleGeneration).ConfigureAwait(false);
             EmitPreviewFailure(
                 streamStore, logger, runId, retry.TargetPort, "registration_failed",
                 "The run ended before preview publication completed.", retry.PreviewRunnerSessionId);
@@ -1089,7 +1097,7 @@ public static class SandboxEndpoints
             await TryStopRetainedProcessAsync(
                 runId, retry.PreviewRunnerSessionId, "registration_failed",
                 previewRunnerClient, turnTokens, secretStore, logger,
-                runStore, publicationLeaseOwner).ConfigureAwait(false);
+                runStore, publicationLeaseOwner, run.LifecycleGeneration).ConfigureAwait(false);
             EmitPreviewFailure(
                 streamStore,
                 logger,
@@ -1120,6 +1128,7 @@ public static class SandboxEndpoints
         IRunStore runStore,
         RunId runId,
         string publicationLeaseOwner,
+        int expectedLifecycleGeneration,
         CancellationToken ct)
     {
         // Reserve the lease through the bounded process stop, not just a point-in-time
@@ -1127,16 +1136,17 @@ public static class SandboxEndpoints
         // owner cannot revive its authority after another attempt becomes eligible.
         var until = DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow;
         if (await runStore.TryRenewPreviewPublicationAsync(
-            runId, publicationLeaseOwner, until, ct).ConfigureAwait(false))
+            runId, publicationLeaseOwner, until, expectedLifecycleGeneration, ct).ConfigureAwait(false))
             return true;
 
         if (await runStore.TryReserveUnclaimedPreviewCleanupAsync(
-            runId, publicationLeaseOwner, until, ct).ConfigureAwait(false))
+            runId, publicationLeaseOwner, until, expectedLifecycleGeneration, ct).ConfigureAwait(false))
             return true;
 
         return await runStore.TryReserveTerminalPreviewCleanupAsync(
             runId, publicationLeaseOwner,
             until,
+            expectedLifecycleGeneration,
             ct).ConfigureAwait(false);
     }
 
@@ -1149,7 +1159,8 @@ public static class SandboxEndpoints
         Agentweaver.Api.Auth.ISecretStore secretStore,
         ILogger logger,
         IRunStore runStore,
-        string publicationLeaseOwner)
+        string publicationLeaseOwner,
+        int expectedLifecycleGeneration)
     {
         if (string.IsNullOrWhiteSpace(previewRunnerSessionId)) return;
 
@@ -1157,7 +1168,8 @@ public static class SandboxEndpoints
         try
         {
             if (!await CanCleanUpPreviewProcessAsync(
-                runStore, RunId.Parse(runId), publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false))
+                runStore, RunId.Parse(runId), publicationLeaseOwner, expectedLifecycleGeneration,
+                ownershipCheck.Token).ConfigureAwait(false))
                 return;
         }
         catch (Exception ex)

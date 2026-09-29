@@ -87,7 +87,10 @@ public sealed class PreviewStepTests : IDisposable
         {
             Enabled = true,
             ZoneSuffix = "preview.example.test",
-        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication,
+            runStore: new SqliteRunStore(new SqliteDb(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                { ["Database:Path"] = Path.Combine(_worktree, "runs.db") }).Build())));
         var h = new Harness(
             _worktree, autoApprove: approved, approvalTimeout: TimeSpan.FromMilliseconds(25),
             previewService: preview, pauseAtPersistence: true, logger: logger);
@@ -655,7 +658,10 @@ public sealed class PreviewStepTests : IDisposable
         {
             Enabled = true,
             ZoneSuffix = "preview.example.test",
-        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication,
+            runStore: new SqliteRunStore(new SqliteDb(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                { ["Database:Path"] = Path.Combine(_worktree, "runs.db") }).Build())));
         var h = new Harness(_worktree, previewService: preview, pauseAtPersistence: pauseAtPersistence);
         using var appLifetime = new CancellationTokenSource();
         var step = Task.Run(() => h.Step.RunAsync(Request(), appLifetime.Token));
@@ -959,6 +965,12 @@ public sealed class PreviewStepTests : IDisposable
 
     private sealed class FakePreviewService : ISandboxPreviewService
     {
+        public Task<PreviewSession> StartRunBoundPreviewAsync(
+            string runId, int targetPort, string ownerUserId, int expectedLifecycleGeneration,
+            CancellationToken ct = default, string? previewRunnerSessionId = null,
+            string? publicationLeaseOwner = null) =>
+            StartPreviewAsync(runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
+
         public bool EnabledValue = true;
         public int StartCalls;
         public Func<PreviewSession>? StartBehavior;

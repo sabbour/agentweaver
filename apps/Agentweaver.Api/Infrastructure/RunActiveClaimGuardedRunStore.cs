@@ -311,20 +311,24 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         inner.TryBeginPreviewPublicationAsync(runId, leaseUntil, ct);
 
     public Task<bool> TryAcquirePreviewPublicationAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
-        inner.TryAcquirePreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        inner.TryAcquirePreviewPublicationAsync(runId, ownerId, leaseUntil, expectedLifecycleGeneration, ct);
 
     public Task<bool> TryRenewPreviewPublicationAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
-        inner.TryRenewPreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        inner.TryRenewPreviewPublicationAsync(runId, ownerId, leaseUntil, expectedLifecycleGeneration, ct);
 
     public Task<bool> TryReserveTerminalPreviewCleanupAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
-        inner.TryReserveTerminalPreviewCleanupAsync(runId, ownerId, leaseUntil, ct);
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        inner.TryReserveTerminalPreviewCleanupAsync(runId, ownerId, leaseUntil, expectedLifecycleGeneration, ct);
 
     public Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
-        inner.TryReserveUnclaimedPreviewCleanupAsync(runId, ownerId, leaseUntil, ct);
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        inner.TryReserveUnclaimedPreviewCleanupAsync(runId, ownerId, leaseUntil, expectedLifecycleGeneration, ct);
 
     public Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default) =>
         inner.EndPreviewPublicationAsync(runId, ct);
