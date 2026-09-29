@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
@@ -96,6 +97,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     /// </summary>
     private readonly TimeSpan _stallTimeout;
 
+    /// <summary>
+    /// One bounded reconciliation window after a durable agent turn-end marker.
+    /// Configurable via <c>Coordinator:PostTurnFinalizationGraceSeconds</c> (default 10 seconds).
+    /// </summary>
+    private readonly TimeSpan _postTurnFinalizationGrace;
+
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
     private readonly ConcurrentDictionary<string, byte> _provisioningPendingChildren = new();
@@ -178,6 +185,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         var stallMinutes = configuration?.GetValue("Coordinator:SubtaskStallTimeoutMinutes", 5.0) ?? 5.0;
         _stallTimeout = TimeSpan.FromMinutes(Math.Max(0, stallMinutes));
+        var graceSeconds = configuration?.GetValue("Coordinator:PostTurnFinalizationGraceSeconds", 10.0) ?? 10.0;
+        _postTurnFinalizationGrace = TimeSpan.FromSeconds(Math.Clamp(graceSeconds, 0.1, 30.0));
 
         // Renew the coordinator lease every 30 s by default — comfortably below the 120 s stale TTL so
         // a long child turn (implement/debug runs of 5-15+ min) can never let the lease go stale.
@@ -2314,7 +2323,8 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
     ///
     /// <para>Stall detection: if no event arrives within <see cref="_stallTimeout"/> from the last
     /// received event (or from subscription start), the loop returns <see cref="ChildOutcome.Stalled"/>
-    /// so the coordinator can reconcile without an unbounded wait.</para>
+    /// so the coordinator can reconcile without an unbounded wait. An observed agent turn-end
+    /// grants one short post-turn finalization window before declaring a stall.</para>
     ///
     /// <para>Crash / restart safety: <see cref="IRunEventStream.SubscribeAsync"/> replays all
     /// persisted events from <paramref name="lastSeq"/> before tailing the live channel, so
@@ -2382,15 +2392,28 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         // i.e. its AgentHost pod is still being scheduled by Kubernetes (claim unbound). A Pending pod
         // is a legitimate wait (a node may be freeing up / the pool autoscaling), NOT a stall (#217).
         bool provisioningPending = false;
+        bool postTurnGracePending = false;
+        long? postTurnGraceDeadline = null;
 
         while (!ct.IsCancellationRequested)
         {
-            // Per-iteration linked CTS: fires after _stallTimeout from the moment we start waiting
-            // for the NEXT event. Broken and recreated on every non-terminal event so the stall
-            // timer resets to a fresh window each time activity is observed.
+            // Per-iteration linked CTS: ordinary observation resets after each event. Once post-turn
+            // grace begins, all subscriptions share one fixed deadline so activity cannot restore the
+            // full stall TTL and turn a bounded finalization reconciliation into another long wait.
             using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            if (_stallTimeout > TimeSpan.Zero)
-                stallCts.CancelAfter(_stallTimeout);
+            var observationTimeout = _stallTimeout;
+            if (postTurnGraceDeadline is { } graceDeadline)
+            {
+                var remainingTicks = graceDeadline - Stopwatch.GetTimestamp();
+                observationTimeout = remainingTicks > 0
+                    ? TimeSpan.FromSeconds(remainingTicks / (double)Stopwatch.Frequency)
+                    : TimeSpan.Zero;
+            }
+
+            if (observationTimeout > TimeSpan.Zero)
+                stallCts.CancelAfter(observationTimeout);
+            else
+                stallCts.Cancel();
 
             bool receivedEvent = false;
             ChildTerminal? terminal = null;
@@ -2425,6 +2448,11 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     // (the pod binding, agent output, terminal, …) clears it so the guard self-heals
                     // and can never latch — mirrors the #212 approval-gate guard above.
                     provisioningPending = evt.Type == EventTypes.SandboxProvisioningPending;
+
+                    // The durable turn-end marker proves the child has entered post-turn write-back.
+                    // Give this phase one short reconciliation window, not another full stall TTL.
+                    if (postTurnGraceDeadline is null)
+                        postTurnGracePending = evt.Type == EventTypes.AgentTurnEnd;
 
                     if (TryMapTerminalEvent(evt, out var mapped))
                     {
@@ -2474,6 +2502,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 // do not emit heartbeats (e.g. the preview gate, which emits tool.approval_required).
                 if (pendingApprovalRequestId is not null)
                 {
+                    postTurnGraceDeadline = null;
                     _logger.LogInformation(
                         "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
                         "({Timeout}) elapsed while tool approval {RequestId} is pending — treating as a " +
@@ -2492,6 +2521,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 // pod is still caught — the guard self-heals and cannot latch.
                 if (provisioningPending)
                 {
+                    postTurnGraceDeadline = null;
                     _logger.LogInformation(
                         "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
                         "({Timeout}) elapsed while its AgentHost pod is still being provisioned " +
@@ -2510,6 +2540,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     : null;
                 if (publicationLease > DateTimeOffset.UtcNow)
                 {
+                    postTurnGraceDeadline = null;
                     _logger.LogInformation(
                         "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) stall TTL " +
                         "({Timeout}) elapsed during active preview publication (lease until {LeaseUntil}) — " +
@@ -2518,11 +2549,23 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                     continue;
                 }
 
-                // Stall TTL expired: child emitted no event within the configured window.
+                if (postTurnGracePending)
+                {
+                    postTurnGracePending = false;
+                    postTurnGraceDeadline = Stopwatch.GetTimestamp()
+                        + (long)(_postTurnFinalizationGrace.TotalSeconds * Stopwatch.Frequency);
+                    _logger.LogInformation(
+                        "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) ended its agent turn; " +
+                        "reconciling post-turn finalization for at most {Grace} before declaring a stall",
+                        childRunId, subtaskId, _postTurnFinalizationGrace);
+                    continue;
+                }
+
+                // The ordinary TTL (or the single post-turn reconciliation window) expired.
                 _logger.LogWarning(
                     "Coordinator observation: child {ChildRunId} (subtask {SubtaskId}) emitted no event " +
-                    "within the stall TTL ({Timeout}); last event sequence {LastSeq}; treating as stalled",
-                    childRunId, subtaskId, _stallTimeout, lastSeq);
+                    "within the observation window ({Timeout}); last event sequence {LastSeq}; treating as stalled",
+                    childRunId, subtaskId, observationTimeout, lastSeq);
 
                 // Emit a structured stall event on the coordinator stream for actionable diagnostics.
                 var coordEntry = _streamStore.Get(coordinatorRunId);
