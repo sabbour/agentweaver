@@ -57,6 +57,12 @@ public sealed class WorkPlan
     /// exactly-once CAS claim). Null until assembly is claimed.</summary>
     public DateTimeOffset? AssemblyStartedAt { get; set; }
 
+    /// <summary>
+    /// Monotonic durable run-lease fencing token for the assembly attempt that owns this plan.
+    /// A takeover may mutate assembly state only with a strictly newer token.
+    /// </summary>
+    public long AssemblyFencingToken { get; set; }
+
     /// <summary>Stable identity for the coordinator's one authorized Git merge effect.</summary>
     public string? MergeEffectId { get; set; }
 

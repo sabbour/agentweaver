@@ -2608,6 +2608,9 @@ namespace Agentweaver.Api.Migrations
                     b.Property<DateTimeOffset?>("AssemblyStartedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("AssemblyFencingToken")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("AssemblyStatusReason")
                         .HasColumnType("TEXT");
 

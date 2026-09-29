@@ -600,7 +600,47 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                     "KubernetesSandboxExecutor: recreating existing AgentHost claim {Claim} for immutable pod-local workspace configuration (mode={Mode}).",
                     claimName,
                     launchContext.WorkspaceMode);
-                await DeleteClaimAsync(claimName).ConfigureAwait(false);
+                var captured = await ReadAgentHostClaimSnapshotAsync(
+                    runId, requireDispatch: false, ct).ConfigureAwait(false);
+                if (captured is not null
+                    && long.TryParse(
+                        launchContext.HolderToken,
+                        System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var requestedAssemblyToken)
+                    && long.TryParse(
+                        captured.Context.HolderToken,
+                        System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var existingAssemblyToken))
+                {
+                    if (existingAssemblyToken > requestedAssemblyToken)
+                    {
+                        throw new AgentHostConfigureException(
+                            "assembly_attempt_superseded",
+                            $"Assembly attempt {requestedAssemblyToken} cannot replace newer AgentHost claim " +
+                            $"{existingAssemblyToken} for run '{runId}'.",
+                            StatusCodes.Status409Conflict);
+                    }
+
+                    if (!await ReleaseCapturedAgentHostClaimAsync(
+                            runId,
+                            captured,
+                            captured.Context.HolderToken!,
+                            force: true,
+                            ct).ConfigureAwait(false))
+                    {
+                        throw new AgentHostConfigureException(
+                            "agenthost_claim_changed",
+                            $"AgentHost claim '{claimName}' changed during fenced assembly takeover.",
+                            StatusCodes.Status409Conflict,
+                            retryable: true);
+                    }
+                }
+                else
+                {
+                    await DeleteClaimAsync(claimName).ConfigureAwait(false);
+                }
                 _podRegistry?.Unregister(runId);
                 _turnTokenRegistry?.UnregisterTurnToken(runId);
                 await Task.Delay(1000, ct).ConfigureAwait(false);
@@ -657,6 +697,27 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             var podName = await WaitForBoundWithProvisioningHeartbeatAsync(runId, claimName, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
+
+            if (long.TryParse(
+                    launchContext.HolderToken,
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out _))
+            {
+                var currentClaim = await ReadAgentHostClaimSnapshotAsync(
+                    runId, requireDispatch: false, ct).ConfigureAwait(false);
+                if (!string.Equals(
+                        currentClaim?.Context.HolderToken,
+                        launchContext.HolderToken,
+                        StringComparison.Ordinal))
+                {
+                    throw new AgentHostConfigureException(
+                        "assembly_attempt_superseded",
+                        $"Assembly attempt {launchContext.HolderToken} lost AgentHost claim ownership " +
+                        $"before configuration for run '{runId}'.",
+                        StatusCodes.Status409Conflict);
+                }
+            }
 
             // Register also persists sandbox.execution_pod.bound into the shared RunEvents store so
             // graph snapshots/deltas on any API replica can resolve the execution pod.

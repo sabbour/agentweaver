@@ -2768,7 +2768,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                     "main",
                     "tree",
                     "diff",
-                    "alice"),
+                    "alice",
+                    AssemblyAttemptToken: "1"),
                 CancellationToken.None);
 
             var ex = await act.Should().ThrowAsync<CollectiveBuildTestInfrastructureException>();
@@ -2821,7 +2822,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                     "main",
                     "tree",
                     "diff",
-                    "alice"),
+                    "alice",
+                    AssemblyAttemptToken: "1"),
                 CancellationToken.None);
 
             var ex = await act.Should().ThrowAsync<CollectiveBuildTestInfrastructureException>();
@@ -2832,6 +2834,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                 "Build & Test retries only after a credential was actually rotated");
             lifecycle.ReleaseCalls.Should().Be(1,
                 "the one-time-configured failed pod must be released before the retry");
+            lifecycle.LastLaunchHolderToken.Should().Be("1");
+            lifecycle.ReleasedHolderTokens.Should().Equal("1");
         }
         finally
         {
@@ -4963,6 +4967,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     {
         public int LaunchCalls { get; private set; }
         public int ReleaseCalls { get; private set; }
+        public string? LastLaunchHolderToken { get; private set; }
+        public List<string> ReleasedHolderTokens { get; } = [];
 
         public Task<string> LaunchAgentHostPodAsync(string runId, CancellationToken ct = default)
         {
@@ -4986,10 +4992,29 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             CancellationToken ct = default) =>
             LaunchAgentHostPodAsync(runId, ct);
 
+        public Task<string> LaunchAgentHostPodAsync(
+            string runId,
+            AgentHostLaunchContext context,
+            CancellationToken ct = default)
+        {
+            LastLaunchHolderToken = context.HolderToken;
+            return LaunchAgentHostPodAsync(runId, ct);
+        }
+
         public Task ReleaseAgentHostPodAsync(string runId, CancellationToken ct = default)
         {
             ReleaseCalls++;
             return Task.CompletedTask;
+        }
+
+        public Task<bool> TryReleaseHeldAgentHostPodAsync(
+            string runId,
+            string holderToken,
+            CancellationToken ct = default)
+        {
+            ReleasedHolderTokens.Add(holderToken);
+            ReleaseCalls++;
+            return Task.FromResult(true);
         }
     }
 

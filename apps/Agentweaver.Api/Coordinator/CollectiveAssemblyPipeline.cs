@@ -253,7 +253,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                                 ExpectedTreeHash: request.AggregateTreeHash,
                                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
                                 Purpose: AgentHostPurpose.AssemblyBuildTest,
-                                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot),
+                                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot,
+                                HolderToken: request.AssemblyAttemptToken),
                             gateCt).ConfigureAwait(false);
                         break;
                     }
@@ -282,8 +283,10 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                         }
                         try
                         {
-                            await _podLifecycle.ReleaseAgentHostPodAsync(
-                                request.CoordinatorRunId, CancellationToken.None).ConfigureAwait(false);
+                            await ReleaseAgentHostPodForAttemptAsync(
+                                request.CoordinatorRunId,
+                                request.AssemblyAttemptToken,
+                                CancellationToken.None).ConfigureAwait(false);
                         }
                         catch (Exception cleanupEx)
                         {
@@ -437,7 +440,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         {
             try
             {
-                await _podLifecycle.ReleaseAgentHostPodAsync(coordinatorRunId, ct).ConfigureAwait(false);
+                await ReleaseAgentHostPodForAttemptAsync(
+                    coordinatorRunId, assemblyAttemptToken, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -458,6 +462,32 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             _logger.LogWarning(ex,
                 "Collective Build/Test: failed to remove detached worktree {Path}",
                 path);
+        }
+    }
+
+    private async Task ReleaseAgentHostPodForAttemptAsync(
+        string coordinatorRunId,
+        string? assemblyAttemptToken,
+        CancellationToken ct)
+    {
+        if (_podLifecycle is null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(assemblyAttemptToken))
+        {
+            await _podLifecycle.ReleaseAgentHostPodAsync(coordinatorRunId, ct).ConfigureAwait(false);
+            return;
+        }
+
+        var released = await _podLifecycle.TryReleaseHeldAgentHostPodAsync(
+            coordinatorRunId, assemblyAttemptToken, ct).ConfigureAwait(false);
+        if (!released)
+        {
+            _logger.LogInformation(
+                "Collective Build/Test: retained AgentHost pod for run {RunId}; " +
+                "assembly attempt {AttemptToken} no longer owns the claim",
+                coordinatorRunId,
+                assemblyAttemptToken);
         }
     }
 

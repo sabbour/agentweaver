@@ -234,6 +234,15 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     private string AssemblyOwner(CoordinatorDispatchContext context) =>
         context.AssemblyAttemptOwnerId ?? _myPodId;
 
+    private static long? AssemblyFencingToken(CoordinatorDispatchContext context) =>
+        long.TryParse(
+            context.AssemblyAttemptToken,
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var token)
+            ? token
+            : null;
+
     /// <summary>
     /// spec-006 §3.2 / focus item 3: decides whether the deterministic preview step runs after
     /// build-test. The step is ALWAYS the behavior (no feature flag) — it runs whenever it is wired
@@ -890,7 +899,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (status == WorkPlanStatus.Assembling)
             {
                 var staleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
-                if (!await _assemblyStore.TryReclaimStaleAssemblyAsync(workPlanId, staleBefore, ct)
+                if (!await _assemblyStore.TryReclaimStaleAssemblyAsync(
+                        workPlanId,
+                        staleBefore,
+                        AssemblyOwner(context),
+                        AssemblyFencingToken(context),
+                        IntegrationBranchName(
+                            context.CoordinatorRunId, context.AssemblyAttemptToken),
+                        ct)
                         .ConfigureAwait(false))
                     return;
             }
@@ -898,6 +914,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     workPlanId,
                     IntegrationBranchName(context.CoordinatorRunId, context.AssemblyAttemptToken),
                     AssemblyOwner(context),
+                    AssemblyFencingToken(context),
                     ct).ConfigureAwait(false))
                 return;
 
@@ -1063,7 +1080,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 {
                     var mergeStaleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
                     if (!await _assemblyStore.TryClaimMergeRecoveryAsync(
-                            workPlanId, AssemblyOwner(context), mergeStaleBefore, ct).ConfigureAwait(false))
+                            workPlanId,
+                            AssemblyOwner(context),
+                            AssemblyFencingToken(context),
+                            mergeStaleBefore,
+                            ct).ConfigureAwait(false))
                     {
                         _logger.LogInformation(
                             "Collective assembly: prepared merge for run {RunId} is owned by a live replica; skipping",
@@ -1087,7 +1108,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 // (owner likely dead). If it is fresh, another replica is actively building the
                 // integration branch right now — bail so two pods never race the ref-lock files.
                 var staleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
-                if (!await _assemblyStore.TryReclaimStaleAssemblyAsync(workPlanId, staleBefore, ct).ConfigureAwait(false))
+                if (!await _assemblyStore.TryReclaimStaleAssemblyAsync(
+                        workPlanId,
+                        staleBefore,
+                        AssemblyOwner(context),
+                        AssemblyFencingToken(context),
+                        IntegrationBranchName(
+                            context.CoordinatorRunId, context.AssemblyAttemptToken),
+                        ct).ConfigureAwait(false))
                 {
                     _logger.LogInformation(
                         "Collective assembly: run {RunId} is already being assembled by a live owner (fresh claim); skipping to avoid a concurrent git merge",
@@ -1108,7 +1136,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 // RunAssemblyCoreAsync whose TryStartAssemblyAsync re-establishes the claim and
                 // DriveOutstandingSteeringExecutionAsync re-drives the outstanding directive.
                 var staleBefore = DateTimeOffset.UtcNow - _assemblyLeaseStaleTtl;
-                if (!await _assemblyStore.TryReclaimStaleAssemblySteeringAsync(workPlanId, staleBefore, ct)
+                if (!await _assemblyStore.TryReclaimStaleAssemblySteeringAsync(
+                        workPlanId,
+                        staleBefore,
+                        AssemblyOwner(context),
+                        AssemblyFencingToken(context),
+                        IntegrationBranchName(
+                            context.CoordinatorRunId, context.AssemblyAttemptToken),
+                        ct)
                         .ConfigureAwait(false))
                 {
                     _logger.LogInformation(
@@ -1155,7 +1190,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         // D4 exactly-once claim: awaiting_assembly -> assembling.
         if (!await _assemblyStore.TryStartAssemblyAsync(
-                workPlanId, integrationBranch, AssemblyOwner(context), ct)
+                workPlanId,
+                integrationBranch,
+                AssemblyOwner(context),
+                AssemblyFencingToken(context),
+                ct)
                 .ConfigureAwait(false))
         {
             _logger.LogInformation(

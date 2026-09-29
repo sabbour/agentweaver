@@ -111,6 +111,55 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task StaleLeaseTokenCannotReclaimOrRestartPlanAfterTakeover()
+    {
+        const string staleOwner = "api-0:assembly:stale";
+        const string currentOwner = "api-0:assembly:current";
+        var workPlanId = await SeedPlanAsync(
+            WorkPlanStatus.Assembling,
+            assemblyStartedAt: DateTimeOffset.UtcNow.AddMinutes(-5),
+            updatedAt: DateTimeOffset.UtcNow.AddMinutes(-5),
+            coordinatorPodId: staleOwner,
+            assemblyFencingToken: 4);
+        var staleBefore = DateTimeOffset.UtcNow.AddSeconds(-120);
+
+        (await _sut.TryReclaimStaleAssemblyAsync(
+            workPlanId,
+            staleBefore,
+            staleOwner,
+            fencingToken: 4,
+            "agentweaver/integration/x/attempt-4",
+            default)).Should().BeFalse();
+
+        (await _sut.TryReclaimStaleAssemblyAsync(
+            workPlanId,
+            staleBefore,
+            currentOwner,
+            fencingToken: 5,
+            "agentweaver/integration/x/attempt-5",
+            default)).Should().BeTrue();
+
+        var claimed = await _sut.GetAsync(workPlanId, default);
+        claimed!.Status.Should().Be(WorkPlanStatus.AwaitingAssembly);
+        claimed.AssemblyFencingToken.Should().Be(5);
+        claimed.CoordinatorPodId.Should().Be(currentOwner);
+        claimed.IntegrationBranch.Should().Be("agentweaver/integration/x/attempt-5");
+
+        (await _sut.TryStartAssemblyAsync(
+            workPlanId,
+            "agentweaver/integration/x/attempt-4",
+            staleOwner,
+            fencingToken: 4,
+            default)).Should().BeFalse();
+        (await _sut.TryStartAssemblyAsync(
+            workPlanId,
+            "agentweaver/integration/x/attempt-5",
+            currentOwner,
+            fencingToken: 5,
+            default)).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task TryReclaimStaleAssembly_FreshClaim_ReturnsFalse_LeavesAssembling()
     {
         // A fresh claim = another replica is actively building the integration branch right now.
@@ -188,7 +237,9 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
     private async Task<int> SeedPlanAsync(
         string status,
         DateTimeOffset? assemblyStartedAt = null,
-        DateTimeOffset? updatedAt = null)
+        DateTimeOffset? updatedAt = null,
+        string? coordinatorPodId = null,
+        long assemblyFencingToken = 0)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -215,6 +266,8 @@ public sealed class CoordinatorAssemblyStoreTests : IDisposable
             CoordinatorRunId = spec.CoordinatorRunId,
             Status = status,
             AssemblyStartedAt = assemblyStartedAt,
+            CoordinatorPodId = coordinatorPodId,
+            AssemblyFencingToken = assemblyFencingToken,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = updatedAt ?? DateTimeOffset.UtcNow,
         };
