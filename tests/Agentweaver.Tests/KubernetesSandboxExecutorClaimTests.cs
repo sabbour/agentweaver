@@ -1148,6 +1148,62 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task LaunchAgentHostPod_olderAssemblyTokenCannotReplaceNewerClaim()
+    {
+        const string runId = "run-claim-stale-assembly";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path =
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}" +
+            $"/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var fake = new FakeKubeHandler();
+        fake.OnGet(path,
+            $$"""
+            {
+              "metadata": {
+                "name": "{{claimName}}",
+                "uid": "successor-uid",
+                "resourceVersion": "7",
+                "annotations": {
+                  "{{KubernetesSandboxExecutor.HolderTokenAnnotation}}": "6"
+                }
+              },
+              "status": {
+                "conditions": [{"type":"Ready","status":"True"}],
+                "sandbox":{"name":"successor-pod"}
+              }
+            }
+            """);
+        var conflict = new AlwaysConflictClaimHandler();
+        var configure = new RecordingConfigureHandler();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflict, fake),
+            Options(),
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configure),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        var act = () => executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: "/workspace/reviewer",
+                SourceRepositoryPath: "/workspace/repository",
+                SourceRef: "agentweaver/integration/run-claim-stale-assembly/attempt-5",
+                BaseCommitSha: new string('1', 40),
+                ExpectedTreeHash: new string('2', 40),
+                WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
+                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot,
+                HolderToken: "5"));
+
+        var exception = await act.Should().ThrowAsync<AgentHostConfigureException>();
+        exception.Which.Reason.Should().Be("assembly_attempt_superseded");
+        fake.Requests.Should().NotContain(request => request.Method == "DELETE");
+        configure.Body.Should().BeNull();
+    }
+
+    [Fact]
     public async Task LaunchAgentHostPod_persists_effective_working_directory_from_configure_success()
     {
         const string runId = "run-claim-effective-workspace";

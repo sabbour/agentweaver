@@ -30,16 +30,44 @@ public sealed class CoordinatorAssemblyStore
     /// </summary>
     public Task<bool> TryStartAssemblyAsync(
         int workPlanId, string integrationBranch, CancellationToken ct) =>
-        TryStartAssemblyAsync(workPlanId, integrationBranch, coordinatorPodId: null, ct);
+        TryStartAssemblyAsync(
+            workPlanId, integrationBranch, coordinatorPodId: null, fencingToken: null, ct);
+
+    public Task<bool> TryStartAssemblyAsync(
+        int workPlanId,
+        string integrationBranch,
+        string? coordinatorPodId,
+        CancellationToken ct) =>
+        TryStartAssemblyAsync(
+            workPlanId, integrationBranch, coordinatorPodId, fencingToken: null, ct);
 
     public async Task<bool> TryStartAssemblyAsync(
-        int workPlanId, string integrationBranch, string? coordinatorPodId, CancellationToken ct)
+        int workPlanId,
+        string integrationBranch,
+        string? coordinatorPodId,
+        long? fencingToken,
+        CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
-        var rows = await db.WorkPlans
-            .Where(w => w.Id == workPlanId && w.Status == WorkPlanStatus.AwaitingAssembly)
+        var query = db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.AwaitingAssembly
+                     && (fencingToken == null || w.AssemblyFencingToken <= fencingToken));
+        var rows = fencingToken is { } token
+            ? await query
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(w => w.Status, WorkPlanStatus.Assembling)
+                .SetProperty(w => w.IntegrationBranch, integrationBranch)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.AssemblyStartedAt, now)
+                .SetProperty(w => w.CoordinatorPodId, coordinatorPodId)
+                .SetProperty(w => w.AssemblyFencingToken, token)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false)
+            : await query
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.Assembling)
                 .SetProperty(w => w.IntegrationBranch, integrationBranch)
@@ -84,6 +112,21 @@ public sealed class CoordinatorAssemblyStore
     /// <see cref="TryStartAssemblyAsync"/> CAS re-establishes the exactly-once claim).
     /// </summary>
     public async Task<bool> TryReclaimStaleAssemblyAsync(int workPlanId, DateTimeOffset staleBefore, CancellationToken ct)
+        => await TryReclaimStaleAssemblyAsync(
+            workPlanId,
+            staleBefore,
+            coordinatorPodId: null,
+            fencingToken: null,
+            integrationBranch: null,
+            ct).ConfigureAwait(false);
+
+    public async Task<bool> TryReclaimStaleAssemblyAsync(
+        int workPlanId,
+        DateTimeOffset staleBefore,
+        string? coordinatorPodId,
+        long? fencingToken,
+        string? integrationBranch,
+        CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -100,10 +143,14 @@ public sealed class CoordinatorAssemblyStore
                        "AssemblyStage" = NULL,
                        "AssemblyTerminalStage" = NULL,
                        "AssemblyStatusReason" = NULL,
+                       "CoordinatorPodId" = COALESCE({coordinatorPodId}, "CoordinatorPodId"),
+                       "AssemblyFencingToken" = COALESCE({fencingToken}, "AssemblyFencingToken"),
+                       "IntegrationBranch" = COALESCE({integrationBranch}, "IntegrationBranch"),
                        "UpdatedAt" = {now}
                  WHERE "Id" = {workPlanId}
                    AND "Status" = {WorkPlanStatus.Assembling}
                    AND "UpdatedAt" < {staleBefore}
+                   AND ({fencingToken} IS NULL OR "AssemblyFencingToken" < {fencingToken})
                 """, ct).ConfigureAwait(false);
             return rows > 0;
         }
@@ -111,12 +158,19 @@ public sealed class CoordinatorAssemblyStore
         var updated = await db.WorkPlans
             .Where(w => w.Id == workPlanId
                      && w.Status == WorkPlanStatus.Assembling
-                     && w.UpdatedAt < staleBefore)
+                     && w.UpdatedAt < staleBefore
+                     && (fencingToken == null || w.AssemblyFencingToken < fencingToken))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
                 .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.CoordinatorPodId,
+                    w => coordinatorPodId ?? w.CoordinatorPodId)
+                .SetProperty(w => w.AssemblyFencingToken,
+                    w => fencingToken ?? w.AssemblyFencingToken)
+                .SetProperty(w => w.IntegrationBranch,
+                    w => integrationBranch ?? w.IntegrationBranch)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return updated > 0;
@@ -135,6 +189,21 @@ public sealed class CoordinatorAssemblyStore
     /// </summary>
     public async Task<bool> TryReclaimStaleAssemblySteeringAsync(
         int workPlanId, DateTimeOffset staleBefore, CancellationToken ct)
+        => await TryReclaimStaleAssemblySteeringAsync(
+            workPlanId,
+            staleBefore,
+            coordinatorPodId: null,
+            fencingToken: null,
+            integrationBranch: null,
+            ct).ConfigureAwait(false);
+
+    public async Task<bool> TryReclaimStaleAssemblySteeringAsync(
+        int workPlanId,
+        DateTimeOffset staleBefore,
+        string? coordinatorPodId,
+        long? fencingToken,
+        string? integrationBranch,
+        CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -148,10 +217,14 @@ public sealed class CoordinatorAssemblyStore
                        "AssemblyStage" = NULL,
                        "AssemblyTerminalStage" = NULL,
                        "AssemblyStatusReason" = NULL,
+                       "CoordinatorPodId" = COALESCE({coordinatorPodId}, "CoordinatorPodId"),
+                       "AssemblyFencingToken" = COALESCE({fencingToken}, "AssemblyFencingToken"),
+                       "IntegrationBranch" = COALESCE({integrationBranch}, "IntegrationBranch"),
                        "UpdatedAt" = {now}
                  WHERE "Id" = {workPlanId}
                    AND "Status" = {WorkPlanStatus.AssemblySteering}
                    AND ("AssemblyStartedAt" IS NULL OR "AssemblyStartedAt" < {staleBefore})
+                   AND ({fencingToken} IS NULL OR "AssemblyFencingToken" < {fencingToken})
                 """, ct).ConfigureAwait(false);
             return rows > 0;
         }
@@ -159,12 +232,19 @@ public sealed class CoordinatorAssemblyStore
         var updated = await db.WorkPlans
             .Where(w => w.Id == workPlanId
                      && w.Status == WorkPlanStatus.AssemblySteering
-                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore))
+                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore)
+                     && (fencingToken == null || w.AssemblyFencingToken < fencingToken))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
                 .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.CoordinatorPodId,
+                    w => coordinatorPodId ?? w.CoordinatorPodId)
+                .SetProperty(w => w.AssemblyFencingToken,
+                    w => fencingToken ?? w.AssemblyFencingToken)
+                .SetProperty(w => w.IntegrationBranch,
+                    w => integrationBranch ?? w.IntegrationBranch)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return updated > 0;
@@ -463,6 +543,7 @@ public sealed class CoordinatorAssemblyStore
     public async Task<bool> TryClaimMergeRecoveryAsync(
         int workPlanId,
         string podId,
+        long? fencingToken,
         DateTimeOffset staleBefore,
         CancellationToken ct)
     {
@@ -475,12 +556,17 @@ public sealed class CoordinatorAssemblyStore
             var rows = await db.Database.ExecuteSqlInterpolatedAsync($"""
                 UPDATE "WorkPlans"
                    SET "CoordinatorPodId" = {podId},
+                       "AssemblyFencingToken" = COALESCE({fencingToken}, "AssemblyFencingToken"),
                        "UpdatedAt" = {now}
                  WHERE "Id" = {workPlanId}
                    AND "Status" = {WorkPlanStatus.Assembling}
                    AND "MergeEffectId" IS NOT NULL
                    AND "MergeEffectState" <> {MergeEffectState.Unknown}
-                   AND ("CoordinatorPodId" = {podId} OR "UpdatedAt" < {staleBefore})
+                   AND (({fencingToken} IS NULL
+                         AND ("CoordinatorPodId" = {podId} OR "UpdatedAt" < {staleBefore}))
+                     OR ({fencingToken} IS NOT NULL
+                         AND "UpdatedAt" < {staleBefore}
+                         AND "AssemblyFencingToken" < {fencingToken}))
                 """, ct).ConfigureAwait(false);
             return rows == 1;
         }
@@ -490,9 +576,14 @@ public sealed class CoordinatorAssemblyStore
                      && w.Status == WorkPlanStatus.Assembling
                      && w.MergeEffectId != null
                      && w.MergeEffectState != MergeEffectState.Unknown
-                     && (w.CoordinatorPodId == podId || w.UpdatedAt < staleBefore))
+                     && (fencingToken == null
+                         ? w.CoordinatorPodId == podId || w.UpdatedAt < staleBefore
+                         : w.UpdatedAt < staleBefore
+                           && w.AssemblyFencingToken < fencingToken))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.CoordinatorPodId, podId)
+                .SetProperty(w => w.AssemblyFencingToken,
+                    w => fencingToken ?? w.AssemblyFencingToken)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return updated == 1;
@@ -581,7 +672,9 @@ public sealed class CoordinatorAssemblyStore
                 w.MergeIntentJson,
                 w.MergeEffectState,
                 w.MergeEvidenceJson,
-                w.MergeRecoveryAction))
+                w.MergeRecoveryAction,
+                w.AssemblyFencingToken,
+                w.CoordinatorPodId))
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
     }
@@ -699,4 +792,6 @@ public sealed record WorkPlanAssemblyState(
     string? MergeIntentJson = null,
     string? MergeEffectState = null,
     string? MergeEvidenceJson = null,
-    string? MergeRecoveryAction = null);
+    string? MergeRecoveryAction = null,
+    long AssemblyFencingToken = 0,
+    string? CoordinatorPodId = null);

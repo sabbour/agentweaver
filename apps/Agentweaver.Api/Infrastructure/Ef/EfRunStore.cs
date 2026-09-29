@@ -542,9 +542,27 @@ public sealed class EfRunStore : IRunStore
             TreeContentSha256 = RunOutputRevision.Sha256(treeContent),
             CreatedAt = DateTimeOffset.UtcNow,
         };
+        var expectedCurrentRevisionId = run.CurrentOutputRevisionId;
+        var updated = await db.Runs
+            .Where(r => r.RunId == id
+                && r.LifecycleGeneration == generation
+                && (r.Status == "in_progress" || r.Status == "awaiting_review")
+                && r.TreeHash == treeHash
+                && r.Diff == diff
+                && r.CurrentOutputRevisionId == expectedCurrentRevisionId
+                && (requiredLease == null
+                    || (requiredLease.LifecycleGeneration == generation
+                        && r.OwnerId == requiredLease.OwnerId
+                        && r.FencingToken == requiredLease.FencingToken
+                        && r.LeaseExpiresAt > DateTimeOffset.UtcNow)))
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(r => r.CurrentOutputRevisionId, revisionId)
+                .SetProperty(r => r.ApprovedOutputRevisionId, (string?)null), ct)
+            .ConfigureAwait(false);
+        if (updated != 1)
+            throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
+
         db.RunOutputRevisions.Add(record);
-        run.CurrentOutputRevisionId = revisionId;
-        run.ApprovedOutputRevisionId = null;
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
         return ToOutputRevision(record);

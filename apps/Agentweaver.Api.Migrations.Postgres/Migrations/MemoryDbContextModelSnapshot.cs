@@ -3797,6 +3797,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<DateTimeOffset?>("AssemblyStartedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<long>("AssemblyFencingToken")
+                        .HasColumnType("bigint");
+
                     b.Property<string>("AssemblyStatusReason")
                         .HasColumnType("text");
 
