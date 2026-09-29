@@ -72,6 +72,19 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
             return;
         }
 
+        // Reclaim terminal-parent child claims immediately after restart, before the first pickup tick.
+        try
+        {
+            using var startupScope = _scopeFactory.CreateScope();
+            await startupScope.ServiceProvider.GetRequiredService<TerminalCoordinatorChildSandboxCleanup>()
+                .SweepAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Heartbeat: startup terminal child sandbox cleanup failed; retrying on ticks");
+        }
+
         using var timer = new PeriodicTimer(_interval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {

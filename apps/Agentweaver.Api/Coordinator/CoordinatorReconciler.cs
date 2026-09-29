@@ -46,6 +46,7 @@ public sealed class CoordinatorReconciler
     private readonly ICoordinatorDispatch _dispatch;
     private readonly ICoordinatorAssembly? _assembly;
     private readonly ILogger<CoordinatorReconciler> _logger;
+    private readonly TerminalCoordinatorChildSandboxCleanup? _childSandboxCleanup;
 
     /// <summary>Pod name used as distributed lease owner identity (matches WorkPlan.CoordinatorPodId).</summary>
     private readonly string _myPodId;
@@ -86,7 +87,8 @@ public sealed class CoordinatorReconciler
         ICoordinatorDispatch dispatch,
         ILogger<CoordinatorReconciler> logger,
         IConfiguration? configuration = null,
-        ICoordinatorAssembly? assembly = null)
+        ICoordinatorAssembly? assembly = null,
+        TerminalCoordinatorChildSandboxCleanup? childSandboxCleanup = null)
     {
         _scopeFactory = scopeFactory;
         _runStore = runStore;
@@ -94,6 +96,7 @@ public sealed class CoordinatorReconciler
         _dispatch = dispatch;
         _assembly = assembly;
         _logger = logger;
+        _childSandboxCleanup = childSandboxCleanup;
 
         _myPodId = configuration?.GetValue<string>("App:PodId")
                    ?? Environment.GetEnvironmentVariable("HOSTNAME")
@@ -116,6 +119,19 @@ public sealed class CoordinatorReconciler
     /// </summary>
     public async Task<int> SweepAsync(CancellationToken ct)
     {
+        if (_childSandboxCleanup is not null)
+        {
+            try
+            {
+                await _childSandboxCleanup.SweepAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Coordinator reconciler: terminal child sandbox sweep failed; will retry");
+            }
+        }
+
         List<PlanCandidate> candidates;
         using (var scope = _scopeFactory.CreateScope())
         {

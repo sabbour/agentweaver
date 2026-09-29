@@ -241,6 +241,11 @@ public sealed class PreviewPublicationLeaseRunStore(
 
     public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default) =>
         Inner.GetByStatusAsync(status, ct);
+    public Task<IReadOnlyList<string>> GetChildRunIdsAsync(string parentRunId, CancellationToken ct = default) =>
+        Inner.GetChildRunIdsAsync(parentRunId, ct);
+    public Task<IReadOnlyList<string>> GetTerminalCoordinatorRunIdsAsync(
+        int offset, int limit, CancellationToken ct = default) =>
+        Inner.GetTerminalCoordinatorRunIdsAsync(offset, limit, ct);
 
     public Task UpdateAssemblyArtifactsAsync(
         RunId runId, string treeHash, string diff, CancellationToken ct = default) =>

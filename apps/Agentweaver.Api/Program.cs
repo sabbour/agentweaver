@@ -548,6 +548,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Runs.PendingToolApprovalRunsQuery>
 builder.Services.AddSingleton<Agentweaver.Api.Runs.BoardProjectionService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorPickupService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorReconciler>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.TerminalCoordinatorChildSandboxCleanup>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.HeartbeatStatusStore>();
 builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbeatService>();
 

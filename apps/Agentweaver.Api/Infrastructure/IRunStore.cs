@@ -20,6 +20,13 @@ public interface IRunStore
         CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support immutable execution inputs.");
     Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default);
+    /// <summary>All direct child run identities (including prior revision attempts) of a coordinator.</summary>
+    Task<IReadOnlyList<string>> GetChildRunIdsAsync(string parentRunId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support child sandbox cleanup.");
+
+    /// <summary>One bounded page of terminal root coordinators, newest outcomes first.</summary>
+    Task<IReadOnlyList<string>> GetTerminalCoordinatorRunIdsAsync(int offset, int limit, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support terminal sandbox reconciliation.");
     Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default);
     Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default);
     Task UpdateAssemblyArtifactsAsync(RunId runId, string treeHash, string diff, CancellationToken ct = default) =>

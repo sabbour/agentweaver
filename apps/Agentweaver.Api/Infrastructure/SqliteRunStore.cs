@@ -18,6 +18,41 @@ public sealed class SqliteRunStore : IRunStore
         _logger = logger;
     }
 
+    public async Task<IReadOnlyList<string>> GetChildRunIdsAsync(string parentRunId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT run_id FROM runs WHERE parent_run_id = $parent ORDER BY run_id;";
+        command.Parameters.AddWithValue("$parent", parentRunId);
+        return await ReadRunIdsAsync(command, ct).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<string>> GetTerminalCoordinatorRunIdsAsync(
+        int offset, int limit, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT run_id FROM runs
+            WHERE parent_run_id IS NULL AND agent_name = 'Coordinator'
+              AND status IN ('failed', 'completed', 'merged', 'declined', 'merge_failed')
+            ORDER BY ended_at DESC, run_id LIMIT $limit OFFSET $offset;
+            """;
+        command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$offset", offset);
+        return await ReadRunIdsAsync(command, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadRunIdsAsync(SqliteCommand command, CancellationToken ct)
+    {
+        var ids = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
+        while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            ids.Add(reader.GetString(0));
+        return ids;
+    }
+
     public async Task InsertAsync(Run run, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
