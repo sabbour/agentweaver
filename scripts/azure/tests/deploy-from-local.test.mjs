@@ -16,8 +16,14 @@ import {
   verifyWarmPoolImage,
   DirtyWorkingTreeError,
   WARM_POOL_NAME,
-  WARM_POOL_POD_SELECTOR,
 } from "../deploy-from-local.mjs";
+
+const POOL_SELECTOR = "agents.x-k8s.io/warm-pool-sandbox=62f98307";
+const POOL_STATUS = { found: true, replicas: 2, readyReplicas: 2, selector: POOL_SELECTOR };
+const readyPod = (name, tag = "abc1234") => ({
+  name, phase: "Running", ready: "true", deletionTimestamp: "",
+  imageRef: `agentweaverregistry.azurecr.io/agentweaver-agent-host:${tag}`,
+});
 
 const CFG = Object.freeze({
   RESOURCE_GROUP: "agentweaver-rg",
@@ -92,11 +98,11 @@ test("getWarmPoolStatus: parses spec.replicas/status.readyReplicas from kubectl 
       code: 0,
       stdout: "",
       stderr: "",
-      json: { spec: { replicas: 2 }, status: { readyReplicas: 1 } },
+      json: { spec: { replicas: 2 }, status: { readyReplicas: 1, selector: POOL_SELECTOR } },
     }),
   };
   const status = await getWarmPoolStatus("agentweaver", { exec });
-  assert.deepEqual(status, { found: true, readyReplicas: 1, replicas: 2, raw: { spec: { replicas: 2 }, status: { readyReplicas: 1 } } });
+  assert.deepEqual(status, { found: true, readyReplicas: 1, replicas: 2, selector: POOL_SELECTOR, raw: { spec: { replicas: 2 }, status: { readyReplicas: 1, selector: POOL_SELECTOR } } });
 });
 
 test("waitForWarmPoolReady: polls not-ready then ready, and resolves once readyReplicas==replicas", async () => {
@@ -161,40 +167,78 @@ test("waitForWarmPoolReady: skips cleanly when the SandboxWarmPool/CRD is not fo
 test("verifyWarmPoolImage: ok=true when every warm pod runs the expected tag", async () => {
   const kubectl = {
     podStatusForSelector: async (selector, namespace) => {
-      assert.equal(selector, WARM_POOL_POD_SELECTOR);
+      assert.equal(selector, POOL_SELECTOR);
       assert.equal(namespace, "agentweaver");
       return [
-        { name: "agentweaver-agent-host-abc", imageRef: "agentweaverregistry.azurecr.io/agentweaver-agent-host:abc1234" },
-        { name: "agentweaver-agent-host-def", imageRef: "agentweaverregistry.azurecr.io/agentweaver-agent-host:abc1234" },
+        { ...readyPod("agentweaver-agent-host-abc"), labels: { app: "agentweaver-agent-host" } },
+        { ...readyPod("agentweaver-agent-host-def"), labels: { app: "agentweaver-agent-host" } },
       ];
     },
   };
   const log = noopLog();
-  const result = await verifyWarmPoolImage("agentweaver", "abc1234", { kubectl, log });
+  const result = await verifyWarmPoolImage("agentweaver", "abc1234", { kubectl, log, poolStatus: POOL_STATUS });
   assert.equal(result.ok, true);
+  assert.equal(result.pods.length, 2);
   assert.equal(result.mismatched.length, 0);
 });
 
 test("verifyWarmPoolImage: ok=false and lists mismatched pods running a stale digest/tag", async () => {
   const kubectl = {
     podStatusForSelector: async () => [
-      { name: "agentweaver-agent-host-abc", imageRef: "agentweaverregistry.azurecr.io/agentweaver-agent-host:abc1234" },
-      { name: "agentweaver-agent-host-stale", imageRef: "agentweaverregistry.azurecr.io/agentweaver-agent-host:oldtag9" },
+      readyPod("agentweaver-agent-host-abc"),
+      readyPod("agentweaver-agent-host-stale", "oldtag9"),
     ],
   };
   const log = noopLog();
-  const result = await verifyWarmPoolImage("agentweaver", "abc1234", { kubectl, log });
+  const result = await verifyWarmPoolImage("agentweaver", "abc1234", { kubectl, log, poolStatus: POOL_STATUS });
   assert.equal(result.ok, false);
   assert.equal(result.mismatched.length, 1);
   assert.equal(result.mismatched[0].name, "agentweaver-agent-host-stale");
 });
 
-test("verifyWarmPoolImage: no pods found is reported as ok (nothing to mismatch), not a failure", async () => {
-  const kubectl = { podStatusForSelector: async () => [] };
-  const log = noopLog();
-  const result = await verifyWarmPoolImage("agentweaver", "abc1234", { kubectl, log });
-  assert.equal(result.ok, true);
-  assert.equal(result.pods.length, 0);
+test("verifyWarmPoolImage: fails closed for absent, empty, and malformed controller selectors", async () => {
+  const kubectl = { podStatusForSelector: async () => assert.fail("must not query pods with an invalid selector") };
+  for (const selector of [undefined, null, "", " ", "app=agent-host,", "app in ()", "app=agent-host;other=pod", "agents..io/pool=foo", `pool=${"x".repeat(64)}`]) {
+    await assert.rejects(
+      () => verifyWarmPoolImage("agentweaver", "abc1234", { kubectl, poolStatus: { ...POOL_STATUS, selector } }),
+      /valid status.selector/,
+    );
+  }
+});
+
+test("verifyWarmPoolImage: rejects zero pods, count mismatch, and not-ready/terminating members", async () => {
+  for (const [pods, message] of [
+    [[], /returned 0 pods; expected 2/],
+    [[readyPod("one")], /returned 1 pods; expected 2/],
+    [[readyPod("one"), readyPod("two"), readyPod("three")], /returned 3 pods; expected 2/],
+    [[readyPod("one"), { ...readyPod("two"), ready: "false" }], /not-ready/],
+    [[readyPod("one"), { ...readyPod("two"), phase: "Pending" }], /not-ready/],
+    [[readyPod("one"), { ...readyPod("two"), deletionTimestamp: "2026-09-29T10:00:00Z" }], /terminating/],
+  ]) {
+    await assert.rejects(
+      () => verifyWarmPoolImage("agentweaver", "abc1234", {
+        kubectl: { podStatusForSelector: async (selector) => { assert.equal(selector, POOL_SELECTOR); return pods; } },
+        poolStatus: POOL_STATUS,
+      }),
+      message,
+    );
+  }
+  await assert.rejects(
+    () => verifyWarmPoolImage("agentweaver", "abc1234", {
+      kubectl: { podStatusForSelector: async () => assert.fail("pool is not ready") },
+      poolStatus: { ...POOL_STATUS, readyReplicas: 1 },
+    }),
+    /fully ready configured membership/,
+  );
+  for (const replicas of [0, -1, 1.5]) {
+    await assert.rejects(
+      () => verifyWarmPoolImage("agentweaver", "abc1234", {
+        kubectl: { podStatusForSelector: async () => assert.fail("pool has no valid configured membership") },
+        poolStatus: { ...POOL_STATUS, replicas },
+      }),
+      /positive, fully ready configured membership/,
+    );
+  }
 });
 
 test("verifyWarmPoolImage: digest-aware comparison treats a retag-forward (same digest, old tag string) as OK, not mismatched", async () => {
@@ -206,8 +250,11 @@ test("verifyWarmPoolImage: digest-aware comparison treats a retag-forward (same 
   const kubectl = {
     podStatusForSelector: async () => [
       {
-        name: "agentweaver-agent-host-1",
-        imageRef: "agentweaverregistry.azurecr.io/agentweaver-agent-host:oldtag9",
+        ...readyPod("agentweaver-agent-host-1", "oldtag9"),
+        imageId: "agentweaverregistry.azurecr.io/agentweaver-agent-host@sha256:" + "a".repeat(64),
+      },
+      {
+        ...readyPod("agentweaver-agent-host-2", "oldtag9"),
         imageId: "agentweaverregistry.azurecr.io/agentweaver-agent-host@sha256:" + "a".repeat(64),
       },
     ],
@@ -216,7 +263,7 @@ test("verifyWarmPoolImage: digest-aware comparison treats a retag-forward (same 
     capture: async () => ({ stdout: "sha256:" + "a".repeat(64) + "\n", stderr: "", code: 0 }),
   };
   const log = noopLog();
-  const result = await verifyWarmPoolImage("agentweaver", "newtag1", { kubectl, log, exec, acrName: "agentweaverregistry" });
+  const result = await verifyWarmPoolImage("agentweaver", "newtag1", { kubectl, log, exec, acrName: "agentweaverregistry", poolStatus: POOL_STATUS });
   assert.equal(result.ok, true);
   assert.equal(result.mismatched.length, 0);
 });
@@ -225,17 +272,17 @@ test("verifyWarmPoolImage: digest-aware comparison still fails a genuinely stale
   const kubectl = {
     podStatusForSelector: async () => [
       {
-        name: "agentweaver-agent-host-1",
-        imageRef: "agentweaverregistry.azurecr.io/agentweaver-agent-host:oldtag9",
+        ...readyPod("agentweaver-agent-host-1", "oldtag9"),
         imageId: "agentweaverregistry.azurecr.io/agentweaver-agent-host@sha256:" + "b".repeat(64),
       },
+      { ...readyPod("agentweaver-agent-host-2", "oldtag9"), imageId: "agentweaverregistry.azurecr.io/agentweaver-agent-host@sha256:" + "a".repeat(64) },
     ],
   };
   const exec = {
     capture: async () => ({ stdout: "sha256:" + "a".repeat(64) + "\n", stderr: "", code: 0 }),
   };
   const log = noopLog();
-  const result = await verifyWarmPoolImage("agentweaver", "newtag1", { kubectl, log, exec, acrName: "agentweaverregistry" });
+  const result = await verifyWarmPoolImage("agentweaver", "newtag1", { kubectl, log, exec, acrName: "agentweaverregistry", poolStatus: POOL_STATUS });
   assert.equal(result.ok, false);
   assert.equal(result.mismatched.length, 1);
 });
@@ -243,12 +290,13 @@ test("verifyWarmPoolImage: digest-aware comparison still fails a genuinely stale
 test("verifyWarmPoolImage: falls back to tag-string comparison when the ACR digest can't be resolved", async () => {
   const kubectl = {
     podStatusForSelector: async () => [
-      { name: "agentweaver-agent-host-1", imageRef: "agentweaverregistry.azurecr.io/agentweaver-agent-host:newtag1" },
+      readyPod("agentweaver-agent-host-1", "newtag1"),
+      readyPod("agentweaver-agent-host-2", "newtag1"),
     ],
   };
   const exec = { capture: async () => ({ stdout: "", stderr: "not found", code: 1 }) };
   const log = noopLog();
-  const result = await verifyWarmPoolImage("agentweaver", "newtag1", { kubectl, log, exec, acrName: "agentweaverregistry" });
+  const result = await verifyWarmPoolImage("agentweaver", "newtag1", { kubectl, log, exec, acrName: "agentweaverregistry", poolStatus: POOL_STATUS });
   assert.equal(result.ok, true);
 });
 
@@ -258,6 +306,8 @@ function makeOrchestrationFakes({
   dirty = false,
   warmPoolReplicas = 2,
   warmPoolReady = 2,
+  warmPoolSelector = POOL_SELECTOR,
+  selectedPods,
   imageMatch = true,
   verificationOk = true,
 } = {}) {
@@ -273,7 +323,7 @@ function makeOrchestrationFakes({
           code: 0,
           stdout: "",
           stderr: "",
-          json: { spec: { replicas: warmPoolReplicas }, status: { readyReplicas: warmPoolReady } },
+          json: { spec: { replicas: warmPoolReplicas }, status: { readyReplicas: warmPoolReady, selector: warmPoolSelector } },
         };
       }
       return { stdout: "", stderr: "", code: 0 };
@@ -289,12 +339,11 @@ function makeOrchestrationFakes({
   };
 
   const kubectl = {
-    podStatusForSelector: async () => [
-      {
-        name: "agentweaver-agent-host-1",
-        imageRef: `agentweaverregistry.azurecr.io/agentweaver-agent-host:${imageMatch ? "bbbbbbb" : "stale99"}`,
-      },
-    ],
+    podStatusForSelector: async (selector) => {
+      assert.equal(selector, warmPoolSelector);
+      return selectedPods ?? Array.from({ length: warmPoolReplicas }, (_, i) =>
+        readyPod(`agentweaver-agent-host-${i}`, imageMatch ? "bbbbbbb" : "stale99"));
+    },
   };
 
   const buildStep = {
@@ -395,6 +444,14 @@ test("run(): propagates a failed post-deploy health verification as ok:false", a
 test("run(): throws when the warm pool is ready but running a mismatched image (never silently succeeds)", async () => {
   const fakes = makeOrchestrationFakes({ imageMatch: false });
   await assert.rejects(() => run(CFG, fakes), /do not run the expected AgentHost tag/);
+});
+
+test("run(): blocks health verification when the controller selector is absent or selects zero pods", async () => {
+  for (const options of [{ warmPoolSelector: null }, { selectedPods: [] }]) {
+    const fakes = makeOrchestrationFakes(options);
+    await assert.rejects(() => run(CFG, fakes), /valid status.selector|returned 0 pods/);
+    assert.equal(fakes.calls.some((call) => call.type === "step40"), false);
+  }
 });
 
 test("run(): never issues a `kubectl delete pod` command during the warm-pool cycle", async () => {
