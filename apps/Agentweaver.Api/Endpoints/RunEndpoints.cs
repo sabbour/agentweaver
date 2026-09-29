@@ -2179,6 +2179,10 @@ app.MapPost("/api/runs/{id}/retry", async (
                 ExecutableWorkflowContentDigest = run.ExecutableWorkflowContentDigest,
                 ExecutableWorkflowDefinitionYaml = run.ExecutableWorkflowDefinitionYaml,
                 ExecutableWorkflowPinnedAt = run.ExecutableWorkflowPinnedAt,
+                ExecutionInputRequired = run.ExecutionInputRequired,
+                ExecutionInputSourceCommitHash = run.ExecutionInputSourceCommitHash,
+                ExecutionInputCommitHash = run.ExecutionInputCommitHash,
+                ExecutionInputCompositeId = run.ExecutionInputCompositeId,
             }.WithApprovalPolicySnapshot(new RunApprovalPolicySnapshot(
                 sourcePolicy.Policy,
                 "retry",

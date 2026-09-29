@@ -874,7 +874,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             ["prior_worktree_branch"] = feedback.PriorWorktreeBranch,
         };
 
-        var priorWorktreeUsable = !string.IsNullOrEmpty(priorChild.WorktreePath)
+        var priorWorktreeUsable = !newAgentRun.ExecutionInputRequired
+            && !string.IsNullOrEmpty(priorChild.WorktreePath)
             && Directory.Exists(priorChild.WorktreePath);
         if (priorWorktreeUsable)
         {
@@ -912,7 +913,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             try
             {
                 provisioned = _worktreeManager.AddWorktree(
-                    newAgentRun.RepositoryPath, feedback.PriorWorktreeBranch, newAgentRun.Id);
+                    newAgentRun.RepositoryPath,
+                    newAgentRun.ExecutionInputRequired
+                        ? ExecutionBase(newAgentRun) : feedback.PriorWorktreeBranch,
+                    newAgentRun.Id);
             }
             catch (Exception ex)
             {

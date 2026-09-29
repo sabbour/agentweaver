@@ -3005,6 +3005,108 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             "automated Build/Test request-changes should reuse the coordinator pod and detached worktree on the next assembly pass");
     }
 
+    [Fact]
+    public async Task RequestChanges_PinsExactReviewedAssemblyTreeBeforeRedispatch()
+    {
+        var path = Path.Combine(Environment.CurrentDirectory, ".issue-1660-assembly-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Repository.Init(path);
+            var coordinatorRunId = RunId.New().ToString();
+            var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(coordinatorRunId);
+            string commitHash;
+            string treeHash;
+            using (var repo = new Repository(path))
+            {
+                var sig = new Signature("Test", "test@localhost", DateTimeOffset.UnixEpoch);
+                var empty = repo.ObjectDatabase.CreateTree(new TreeDefinition());
+                var root = repo.ObjectDatabase.CreateCommit(sig, sig, "base", empty, [], false);
+                repo.Refs.Add("refs/heads/main", root.Id);
+                var definition = TreeDefinition.From(root.Tree);
+                definition.Add("ReleaseRadar/app.ts",
+                    repo.ObjectDatabase.CreateBlob(new MemoryStream("complete app"u8.ToArray())),
+                    Mode.NonExecutableFile);
+                definition.Add("ReleaseRadar/package.json",
+                    repo.ObjectDatabase.CreateBlob(new MemoryStream("""{"name":"release-radar"}"""u8.ToArray())),
+                    Mode.NonExecutableFile);
+                var tree = repo.ObjectDatabase.CreateTree(definition);
+                var integrated = repo.ObjectDatabase.CreateCommit(sig, sig, "integrated", tree, [root], false);
+                repo.Refs.Add("refs/heads/" + integrationBranch, integrated.Id);
+                commitHash = integrated.Sha;
+                treeHash = tree.Sha;
+            }
+
+            var manager = new WorktreeManager(new ConfigurationBuilder().Build(),
+                NullLogger<WorktreeManager>.Instance);
+            await _runStore.InsertAsync(new Run
+            {
+                Id = RunId.Parse(coordinatorRunId), RepositoryPath = path, OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot, Task = "goal", SubmittingUser = "alice",
+                Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow, AgentName = "Coordinator",
+            });
+            await _runStore.PinDefaultExecutableWorkflowForTestAsync(RunId.Parse(coordinatorRunId));
+            var (planId, ids) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.AssembleReady]);
+            await _runStore.UpdateAssemblyArtifactsAsync(RunId.Parse(coordinatorRunId), treeHash, "reviewed");
+            var run = (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!;
+            var candidate = await _runStore.PublishCollectiveCandidateAsync(
+                run.Id, run.LifecycleGeneration, planId.ToString(), treeHash, "reviewed",
+                RunOutputTreeCapture.Capture(path, treeHash));
+            _streamStore.Create(coordinatorRunId, "alice");
+            var sut = new CoordinatorAssemblyService(
+                _runStore, _streamStore, _assemblyStore, _reviewGate, _pipeline,
+                _scopeFactory, _provider, new TestHostApplicationLifetime(),
+                NullLogger<CoordinatorAssemblyService>.Instance,
+                worktreeManager: manager, providerBoundaryResolver: _providerBoundary);
+            var method = typeof(CoordinatorAssemblyService).GetMethod(
+                "RequestChangesAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            Task RequestChanges() => (Task)method.Invoke(sut, [
+                new CoordinatorDispatchContext(coordinatorRunId, path, "main", "alice", null),
+                planId, Array.Empty<(int, int)>(),
+                new AssemblyReviewDecision(false, true, "Revise the existing app",
+                    ["ReleaseRadar/app.ts"], "build-test"),
+                new Dictionary<int, IReadOnlySet<string>>
+                {
+                    [ids[0]] = new HashSet<string> { "ReleaseRadar/app.ts" },
+                }, CancellationToken.None,
+            ])!;
+
+            using (var repo = new Repository(path))
+                repo.Refs.UpdateTarget(repo.Refs["refs/heads/" + integrationBranch], repo.Branches["main"]!.Tip.Id);
+            await Assert.ThrowsAsync<RunOutputRevisionUnavailableException>(RequestChanges);
+            using (var unchangedScope = _provider.CreateScope())
+            {
+                var unchanged = await unchangedScope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+                    .Subtasks.AsNoTracking().SingleAsync(s => s.Id == ids[0]);
+                unchanged.Status.Should().Be(SubtaskStatus.AssembleReady);
+                unchanged.RevisionInputCommitHash.Should().BeNull();
+            }
+            using (var repo = new Repository(path))
+                repo.Refs.UpdateTarget(repo.Refs["refs/heads/" + integrationBranch], repo.Lookup<Commit>(commitHash)!.Id);
+            await RequestChanges();
+
+            using var scope = _provider.CreateScope();
+            var row = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+                .Subtasks.AsNoTracking().SingleAsync(s => s.Id == ids[0]);
+            row.RevisionInputRevisionId.Should().Be(candidate.RevisionId);
+            row.RevisionInputCommitHash.Should().Be(commitHash);
+            using var checkedRepo = new Repository(path);
+            var pinned = checkedRepo.Lookup<Commit>(row.RevisionInputCommitHash);
+            pinned!.Tree.Sha.Should().Be(treeHash);
+            ((Blob)pinned.Tree["ReleaseRadar/app.ts"].Target).GetContentText().Should().Be("complete app");
+            ((Blob)pinned.Tree["ReleaseRadar/package.json"].Target).GetContentText()
+                .Should().Contain("release-radar");
+        }
+        finally
+        {
+            if (Directory.Exists(path))
+            {
+                foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(file, FileAttributes.Normal);
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
+
     // ── Terminal coordinator-run status + reason (so the UI never shows a bare "Failed") ──────────
 
     [Fact]

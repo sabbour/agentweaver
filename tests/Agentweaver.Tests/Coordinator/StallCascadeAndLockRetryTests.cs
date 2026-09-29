@@ -618,6 +618,158 @@ public sealed class StallCascadeAndLockRetryTests : IAsyncDisposable
             .Be("agent_turn_internal_error");
     }
 
+    [Fact]
+    public async Task AssemblyRevisionInfrastructureRetryChain_KeepsPinnedTreeAndCompleteManifest()
+    {
+        var repoPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..", "r" + Guid.NewGuid().ToString("N")[..8]));
+        var worktrees = new WorktreeManager(new ConfigurationBuilder().Build(),
+            NullLogger<WorktreeManager>.Instance);
+        try
+        {
+            Repository.Init(repoPath);
+            string inputCommit;
+            using (var repo = new Repository(repoPath))
+            {
+                File.WriteAllText(Path.Combine(repoPath, "base.txt"), "base");
+                Commands.Stage(repo, "*");
+                var sig = new Signature("Test", "test@localhost", DateTimeOffset.UnixEpoch);
+                var initial = repo.Commit("base", sig, sig);
+                repo.Branches.Rename(repo.Head, "main");
+                var branch = repo.CreateBranch("agentweaver/integration/reviewed", initial);
+                var definition = TreeDefinition.From(initial.Tree);
+                definition.Add("ReleaseRadar/app.ts",
+                    repo.ObjectDatabase.CreateBlob(new MemoryStream("working app"u8.ToArray())),
+                    Mode.NonExecutableFile);
+                definition.Add("ReleaseRadar/package.json",
+                    repo.ObjectDatabase.CreateBlob(new MemoryStream("""{"name":"release-radar"}"""u8.ToArray())),
+                    Mode.NonExecutableFile);
+                var integrated = repo.ObjectDatabase.CreateCommit(
+                    sig, sig, "integrated", repo.ObjectDatabase.CreateTree(definition), [initial], false);
+                repo.Refs.UpdateTarget(repo.Refs[branch.CanonicalName], integrated.Id);
+                inputCommit = integrated.Sha;
+                // The integration ref is mutable; a retry must still use the previously reviewed commit.
+                repo.Refs.UpdateTarget(repo.Refs[branch.CanonicalName], initial.Id);
+            }
+
+            var stream = new SqliteRunEventStream(_streamConfig);
+            var coordinatorRunId = RunId.New();
+            var coord = coordinatorRunId.ToString();
+            await SeedCoordinatorRunAsync(coord);
+            var previous = await SeedChildRunAsync(RunStatus.Failed);
+            var (planId, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Pending, null)]);
+            using (var scope = _provider.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var row = await db.Subtasks.SingleAsync(s => s.Id == ids[0]);
+                row.PriorChildRunId = previous;
+                row.RevisionInputCommitHash = inputCommit;
+                row.RevisionInputRevisionId = "reviewed-assembly-revision";
+                await db.SaveChangesAsync();
+            }
+            _streamStore.Create(coord, "owner");
+            var launched = new List<Run>();
+            Exception? provisionError = null;
+            var sut = BuildDispatch(stream);
+            sut.StartChildRunOverride = async (run, ct) =>
+            {
+                launched.Add(run);
+                run.ExecutionInputRequired.Should().BeTrue();
+                run.ExecutionInputCommitHash.Should().Be(inputCommit);
+                run.ExecutionInputCompositeId.Should().Be("reviewed-assembly-revision");
+                var workspace = worktrees.AddWorktree(repoPath, run.ExecutionInputCommitHash!, run.Id);
+                try
+                {
+                    File.ReadAllText(Path.Combine(workspace.WorktreePath, "ReleaseRadar", "app.ts"))
+                        .Should().Be("working app");
+                    File.ReadAllText(Path.Combine(workspace.WorktreePath, "ReleaseRadar", "package.json"))
+                        .Should().Contain("release-radar");
+                    File.WriteAllText(Path.Combine(workspace.WorktreePath, "ReleaseRadar", "decision.txt"),
+                        "review addressed");
+                    using var childRepo = new Repository(workspace.WorktreePath);
+                    Commands.Stage(childRepo, "*");
+                    var sig = new Signature("Test", "test@localhost", DateTimeOffset.UnixEpoch);
+                    var committed = childRepo.Commit("review delta", sig, sig);
+                    RunOutputTree.Decode(RunOutputTreeCapture.Capture(repoPath, committed.Tree.Sha))
+                        .Select(file => file.Path).Should().Contain(
+                            ["base.txt", "ReleaseRadar/app.ts", "ReleaseRadar/package.json",
+                             "ReleaseRadar/decision.txt"]);
+                    if (launched.Count == 2)
+                    {
+                        const string siblingBranch = "agentweaver/revision-sibling";
+                        string siblingCommit;
+                        using (var baseRepo = new Repository(repoPath))
+                        {
+                            var pinned = baseRepo.Lookup<Commit>(inputCommit)!;
+                            var siblingTree = TreeDefinition.From(pinned.Tree);
+                            siblingTree.Add("ReleaseRadar/other.txt",
+                                baseRepo.ObjectDatabase.CreateBlob(new MemoryStream("sibling delta"u8.ToArray())),
+                                Mode.NonExecutableFile);
+                            var other = baseRepo.ObjectDatabase.CreateCommit(
+                                sig, sig, "sibling revision", baseRepo.ObjectDatabase.CreateTree(siblingTree),
+                                [pinned], false);
+                            baseRepo.Refs.Add("refs/heads/" + siblingBranch, other.Id);
+                            siblingCommit = other.Sha;
+                        }
+                        var assembled = worktrees.BuildIntegrationBranch(
+                            repoPath, "main", "agentweaver/integration/revised",
+                            [new IntegrationChildInput(workspace.BranchName, committed.Sha, inputCommit),
+                             new IntegrationChildInput(siblingBranch, siblingCommit, inputCommit)]);
+                        assembled.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+                        RunOutputTree.Decode(RunOutputTreeCapture.Capture(repoPath, assembled.TreeHash!))
+                            .Select(file => file.Path).Should().Contain(
+                                ["base.txt", "ReleaseRadar/app.ts", "ReleaseRadar/package.json",
+                                 "ReleaseRadar/decision.txt", "ReleaseRadar/other.txt"]);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    provisionError = ex;
+                    throw;
+                }
+                finally
+                {
+                    worktrees.RemoveWorktree(repoPath, workspace.WorktreePath, workspace.BranchName);
+                }
+
+                await _runStore.InsertAsync(run, ct);
+                if (launched.Count == 1)
+                {
+                    await stream.AppendAsync(run.Id.ToString(), new RunEvent(0, EventTypes.RunFailed,
+                        new { reason = "shell_execution_timeout", message = "Timed out.", retryable = true }), ct);
+                    await stream.CompleteAsync(run.Id.ToString(), ct);
+                    (await _runStore.TerminalizeForTestAsync(run.Id, RunStatus.Failed)).Should().BeTrue();
+                }
+                else
+                {
+                    await stream.AppendAsync(run.Id.ToString(), new RunEvent(
+                        0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }), ct);
+                    await stream.CompleteAsync(run.Id.ToString(), ct);
+                }
+            };
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+            if (provisionError is not null)
+                throw new InvalidOperationException("Pinned workspace assertion failed", provisionError);
+            var finalRow = await GetSubtaskAsync(ids[0]);
+            launched.Should().HaveCount(2,
+                $"subtask ended {finalRow.Status} with retry count {finalRow.InfrastructureRetryCount}; " +
+                $"events: {string.Join(", ", _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Select(e => e.Type))}");
+            launched[0].RetriedFrom.Should().Be(previous);
+            launched[1].RetriedFrom.Should().Be(launched[0].Id.ToString());
+            finalRow.Status.Should().Be(SubtaskStatus.AssembleReady);
+        }
+        finally
+        {
+            if (Directory.Exists(repoPath))
+            {
+                foreach (var file in Directory.GetFiles(repoPath, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(file, FileAttributes.Normal);
+                Directory.Delete(repoPath, recursive: true);
+            }
+        }
+    }
+
     [Theory]
     [InlineData(1, 30, 60)]
     [InlineData(2, 60, 120)]

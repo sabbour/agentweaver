@@ -1174,6 +1174,21 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             throw new InvalidOperationException(
                 $"Coordinator dispatch cannot resolve the durable parent run boundary for {context.CoordinatorRunId}.");
 
+        Run? priorChild = null;
+        if (RunId.TryParse(subtask.PriorChildRunId, out var priorChildId))
+            priorChild = await (_runStore ?? throw new InvalidOperationException("Run store is required for child dispatch"))
+                .GetAsync(priorChildId, ct).ConfigureAwait(false)
+                ?? throw new RunOutputRevisionUnavailableException("revision_retry_source_unavailable");
+        if ((subtask.RevisionInputCommitHash is null) != (subtask.RevisionInputRevisionId is null))
+            throw new RunOutputRevisionUnavailableException("assembly_revision_input_unbound");
+        if (subtask.InfrastructureRetryEligibleAt is not null
+            && priorChild?.ExecutionInputRequired == true
+            && (priorChild.ExecutionInputCommitHash != subtask.RevisionInputCommitHash
+                || priorChild.ExecutionInputCompositeId != subtask.RevisionInputRevisionId))
+            throw new RunOutputRevisionUnavailableException("assembly_revision_retry_input_mismatch");
+        var revisionCommit = subtask.RevisionInputCommitHash;
+        var revisionId = subtask.RevisionInputRevisionId;
+
         if (await GetStoppedCoordinatorWorkPlanStatusAsync(
                 context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false) is not null)
             return null;
@@ -1195,6 +1210,10 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             ParentRunId = context.CoordinatorRunId,
             SubtaskId = subtaskId.ToString(),
             RetriedFrom = subtask.PriorChildRunId,
+            ExecutionInputRequired = revisionCommit is not null,
+            ExecutionInputSourceCommitHash = revisionCommit,
+            ExecutionInputCommitHash = revisionCommit,
+            ExecutionInputCompositeId = revisionId,
         };
         if (childApprovalSnapshot is not null)
             childRun = childRun.WithApprovalPolicySnapshot(childApprovalSnapshot);
@@ -1247,6 +1266,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 existingReservedChild = true;
             }
         }
+
+        if ((await (_runStore ?? throw new InvalidOperationException("Run store is required for child dispatch"))
+                .GetAsync(childRun.Id, ct).ConfigureAwait(false)) is { } canonical
+            && (canonical.ExecutionInputRequired != childRun.ExecutionInputRequired
+                || canonical.ExecutionInputCommitHash != childRun.ExecutionInputCommitHash
+                || canonical.ExecutionInputCompositeId != childRun.ExecutionInputCompositeId))
+            throw new RunOutputRevisionUnavailableException("assembly_revision_reservation_mismatch");
 
         // Cascade the coordinator's per-run options (auto-approve-tools + Autopilot) to the child so
         // the child's runner honors auto-approve and the child's bubbled questions are eligible for
@@ -1478,7 +1504,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             row.RecoveryGuidance =
                 $"Prior child run {childRunId} ended with retryable infrastructure failure '{reason}'. " +
                 $"Automatic retry {attempt} of {MaxInfrastructureRetries} is eligible after {eligibleAt:O}. " +
-                "A fresh child run will start in a new worktree from the integration base; the timed-out " +
+                "A fresh child run will start in a new worktree from its pinned revision input (or integration base); the timed-out " +
                 "shell session and its uncommitted workspace are not resumed.";
             row.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
@@ -1826,7 +1852,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             var verification = DependencyBranchInclusion.Verify(
                 _worktreeManager!, context.RepositoryPath, run.WorktreeBranch, run.TreeHash);
             if (verification.Outcome == BranchInclusionOutcome.Include)
-                inputs.Add(verification.Input!);
+                inputs.Add(verification.Input! with
+                {
+                    RevisionBaseCommitSha = run.ExecutionInputRequired
+                        ? run.ExecutionInputCommitHash
+                            ?? throw new RunOutputRevisionUnavailableException("assembly_revision_input_unbound")
+                        : null,
+                });
             else if (DependencyBranchInclusion.RequiresArtifact(subtask)
                      || !string.IsNullOrWhiteSpace(run.WorktreeBranch)
                      || !string.IsNullOrWhiteSpace(run.TreeHash))
@@ -1918,7 +1950,13 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             switch (verification.Outcome)
             {
                 case BranchInclusionOutcome.Include:
-                    inputs.Add(verification.Input!);
+                    inputs.Add(verification.Input! with
+                    {
+                        RevisionBaseCommitSha = run!.ExecutionInputRequired
+                            ? run.ExecutionInputCommitHash
+                                ?? throw new RunOutputRevisionUnavailableException("assembly_revision_input_unbound")
+                            : null,
+                    });
                     break;
                 case BranchInclusionOutcome.ExcludeMissingBranch:
                     if (!expectedOutput)

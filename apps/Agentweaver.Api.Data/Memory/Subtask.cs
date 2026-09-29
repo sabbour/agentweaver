@@ -46,6 +46,11 @@ public sealed class Subtask
     /// </summary>
     public string? PriorChildRunId { get; set; }
 
+    /// <summary>Immutable integrated assembly commit pinned when review requests a fresh revision.</summary>
+    public string? RevisionInputCommitHash { get; set; }
+    /// <summary>Output revision that supplied <see cref="RevisionInputCommitHash"/>.</summary>
+    public string? RevisionInputRevisionId { get; set; }
+
     /// <summary>
     /// Optional bespoke charter authored inline by the coordinator's decomposition when no catalog
     /// role adequately covers this subtask's function. When set, it flows to the dispatched child
