@@ -292,10 +292,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("IntegrationBranch")
                         .HasColumnType("text");
 
-                    b.Property<string>("OwnerUser")
+                    b.Property<string>("OutputRevisionId")
                         .HasColumnType("text");
 
-                    b.Property<string>("OutputRevisionId")
+                    b.Property<string>("OwnerUser")
                         .HasColumnType("text");
 
                     b.Property<string>("Reviewer")
@@ -2763,11 +2763,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("schema_version");
 
-                    b.Property<string>("TreeHash")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("tree_hash");
-
                     b.Property<byte[]>("TreeContent")
                         .HasColumnType("bytea")
                         .HasColumnName("tree_content");
@@ -2775,6 +2770,11 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("TreeContentSha256")
                         .HasColumnType("text")
                         .HasColumnName("tree_content_sha256");
+
+                    b.Property<string>("TreeHash")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("tree_hash");
 
                     b.Property<string>("WorkPlanId")
                         .HasColumnType("text")
@@ -2891,6 +2891,24 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("executable_workflow_source");
 
+                    b.Property<string>("ExecutionInputCommitHash")
+                        .HasColumnType("text")
+                        .HasColumnName("execution_input_commit_hash");
+
+                    b.Property<string>("ExecutionInputCompositeId")
+                        .HasColumnType("text")
+                        .HasColumnName("execution_input_composite_id");
+
+                    b.Property<bool>("ExecutionInputRequired")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("execution_input_required");
+
+                    b.Property<string>("ExecutionInputSourceCommitHash")
+                        .HasColumnType("text")
+                        .HasColumnName("execution_input_source_commit_hash");
+
                     b.Property<long>("FencingToken")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint")
@@ -2947,24 +2965,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("originating_branch");
-
-                    b.Property<string>("ExecutionInputCommitHash")
-                        .HasColumnType("text")
-                        .HasColumnName("execution_input_commit_hash");
-
-                    b.Property<string>("ExecutionInputCompositeId")
-                        .HasColumnType("text")
-                        .HasColumnName("execution_input_composite_id");
-
-                    b.Property<bool>("ExecutionInputRequired")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false)
-                        .HasColumnName("execution_input_required");
-
-                    b.Property<string>("ExecutionInputSourceCommitHash")
-                        .HasColumnType("text")
-                        .HasColumnName("execution_input_source_commit_hash");
 
                     b.Property<string>("OwnerId")
                         .HasColumnType("text")
@@ -3543,6 +3543,12 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("integer");
 
                     b.Property<string>("RecoveryGuidance")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RevisionInputCommitHash")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RevisionInputRevisionId")
                         .HasColumnType("text");
 
                     b.Property<string>("Scope")

@@ -99,6 +99,14 @@ approval remains.
 
 When review feedback asks for changes, it goes through the coordinator's unified steering path. The timeline shows the feedback source and then the coordinator's decision: steer the existing child in place, dispatch fresh work, proceed, or record an advisory no-op. See [Unified autonomous steering](../experience/unified-steering.md).
 
+When the coordinator dispatches a fresh child to revise assembled work, that child starts
+from the exact integrated file tree reviewed by the gate. Existing files remain in its
+workspace for a focused edit; they do not need to be recreated from the feedback text.
+An infrastructure retry starts in a new workspace from the same pinned tree, without
+carrying over the failed attempt's uncommitted changes. If the reviewed tree cannot be
+verified, the coordinator reports an input error instead of dispatching against the
+project's original base.
+
 ## The file panel
 
 ### Stored review diffs (ordinary runs)

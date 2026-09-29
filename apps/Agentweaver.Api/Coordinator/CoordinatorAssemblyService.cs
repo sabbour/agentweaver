@@ -1542,7 +1542,13 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             switch (verification.Outcome)
             {
                 case BranchInclusionOutcome.Include:
-                    inputsInOrder.Add(verification.Input!);
+                    inputsInOrder.Add(verification.Input! with
+                    {
+                        RevisionBaseCommitSha = run.ExecutionInputRequired
+                            ? run.ExecutionInputCommitHash
+                                ?? throw new RunOutputRevisionUnavailableException("assembly_revision_input_unbound")
+                            : null,
+                    });
                     includedSubtaskIds.Add(id);
                     break;
                 case BranchInclusionOutcome.ExcludeMissingBranch:
@@ -2682,6 +2688,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             touchedFilesBySubtask, decision.TargetFiles, out var usedFallback, out var fallbackReason);
         var dependentIds = AssemblyPlanning.TransitiveDependents(implicatedIds, edges);
         var targetIds = implicatedIds.Concat(dependentIds).Distinct().OrderBy(x => x).ToList();
+        var revisionInput = targetIds.Count == 0 ? null
+            : await CaptureAssemblyRevisionInputAsync(context.CoordinatorRunId, workPlanId, ct)
+                .ConfigureAwait(false);
 
         if (usedFallback)
             EmitImplicatedScopeFallback(
@@ -2714,9 +2723,11 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // their transitive dependents that already built against the now-revised contract. Clear stage
         // and move the plan back to dispatching so the dispatch engine re-runs the affected frontier.
         await ResetSubtasksToPendingAsync(
-            context.CoordinatorRunId, implicatedIds, decision.Feedback ?? string.Empty, ct).ConfigureAwait(false);
+            context.CoordinatorRunId, implicatedIds, decision.Feedback ?? string.Empty,
+            revisionInput, ct).ConfigureAwait(false);
         await RedispatchDependentsAsync(
-            context.CoordinatorRunId, workPlanId, dependentIds, decision.Feedback ?? string.Empty, ct)
+            context.CoordinatorRunId, workPlanId, dependentIds, decision.Feedback ?? string.Empty,
+            revisionInput, ct)
             .ConfigureAwait(false);
         await _assemblyStore.SetStatusAndStageAsync(
             workPlanId, WorkPlanStatus.Dispatching, null, ct).ConfigureAwait(false);
@@ -2748,7 +2759,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// </summary>
     private async Task<IReadOnlyList<int>> RedispatchDependentsAsync(
         string coordinatorRunId, int workPlanId, IReadOnlyCollection<int> dependentSubtaskIds,
-        string feedback, CancellationToken ct)
+        string feedback, (string CommitHash, string RevisionId)? revisionInput, CancellationToken ct)
     {
         if (dependentSubtaskIds.Count == 0) return [];
 
@@ -2767,7 +2778,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         if (toRebuild.Count > 0)
         {
-            await ResetSubtasksToPendingAsync(coordinatorRunId, toRebuild, feedback, ct).ConfigureAwait(false);
+            await ResetSubtasksToPendingAsync(
+                coordinatorRunId, toRebuild, feedback, revisionInput, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "Collective assembly: #223 re-dispatching non-implicated dependents [{Ids}] for run {RunId} (rebuild against revised contract; authors NOT locked out)",
                 string.Join(",", toRebuild), coordinatorRunId);
@@ -3263,6 +3275,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         var targetIds = planned.Select(p => p.Subtask.Id).OrderBy(x => x).ToList();
+        var revisionInput = await CaptureAssemblyRevisionInputAsync(
+            context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
 
         Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyChangesRequested, new
         {
@@ -3343,6 +3357,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 Result = null,
                 WorktreePath = null,
                 WorktreeBranch = null,
+                ExecutionInputRequired = revisionInput is not null,
+                ExecutionInputSourceCommitHash = revisionInput?.CommitHash,
+                ExecutionInputCommitHash = revisionInput?.CommitHash,
+                ExecutionInputCompositeId = revisionInput?.RevisionId,
             };
 
             handoff ??= _serviceProvider.GetRequiredService<IChildRevisionHandoff>();
@@ -3352,7 +3370,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             // Point the subtask at the NEW child, retain the prior pointer, and mark Running so the
             // re-armed dispatch loop RE-OBSERVES this child (does not re-dispatch a duplicate).
             await SetSubtaskHandoffRunningAsync(
-                subtask.Id, newAgentRun.Id.ToString(), priorChildRunId!, ct).ConfigureAwait(false);
+                subtask.Id, newAgentRun.Id.ToString(), priorChildRunId!, revisionInput, ct).ConfigureAwait(false);
 
             _logger.LogInformation(
                 "Steering(lockout): subtask {SubtaskId} handed off to {Agent} via StartChildRevisionHandoffAsync " +
@@ -3363,14 +3381,16 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         // Targets with no reusable prior child → plain fresh dispatch (dispatch engine relaunches).
         if (freshFallbackIds.Count > 0)
-            await ResetSubtasksToPendingAsync(context.CoordinatorRunId, freshFallbackIds, feedback, ct)
+            await ResetSubtasksToPendingAsync(
+                context.CoordinatorRunId, freshFallbackIds, feedback, revisionInput, ct)
                 .ConfigureAwait(false);
 
         // #223: transitive dependents of the implicated subtasks are re-dispatched to rebuild against the
         // revised contract — but WITHOUT any author lockout (they authored nothing rejected). This runs
         // only on the re-dispatch path (never on escalation to human review), so a blameless dependent is
         // reset iff the plan is actually going back out for another round.
-        await RedispatchDependentsAsync(context.CoordinatorRunId, workPlanId, dependentSubtaskIds, feedback, ct)
+        await RedispatchDependentsAsync(
+            context.CoordinatorRunId, workPlanId, dependentSubtaskIds, feedback, revisionInput, ct)
             .ConfigureAwait(false);
 
         // Return the plan to dispatching and re-arm the loop, whose recovery-aware re-arm re-observes the
@@ -3402,7 +3422,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     /// guidance into the new agent's task prompt directly (avoids double-carrying it).
     /// </summary>
     private async Task SetSubtaskHandoffRunningAsync(
-        int subtaskId, string newChildRunId, string priorChildRunId, CancellationToken ct)
+        int subtaskId, string newChildRunId, string priorChildRunId,
+        (string CommitHash, string RevisionId)? revisionInput, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -3413,6 +3434,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 .SetProperty(s => s.Status, SubtaskStatus.Running)
                 .SetProperty(s => s.ChildRunId, newChildRunId)
                 .SetProperty(s => s.PriorChildRunId, priorChildRunId)
+                .SetProperty(s => s.RevisionInputCommitHash, revisionInput == null ? null : revisionInput.Value.CommitHash)
+                .SetProperty(s => s.RevisionInputRevisionId, revisionInput == null ? null : revisionInput.Value.RevisionId)
                 .SetProperty(s => s.UpdatedAt, now), ct)
             .ConfigureAwait(false);
     }
@@ -5085,7 +5108,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     }
 
     private async Task ResetSubtasksToPendingAsync(
-        string coordinatorRunId, IReadOnlyCollection<int> subtaskIds, string feedback, CancellationToken ct)
+        string coordinatorRunId, IReadOnlyCollection<int> subtaskIds, string feedback,
+        (string CommitHash, string RevisionId)? revisionInput, CancellationToken ct)
     {
         if (subtaskIds.Count == 0) return;
         // Req-1 (change #1 + #2): for EACH target subtask, build the STABLE AccumulatedReviewFeedback
@@ -5107,12 +5131,42 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 coordinatorRunId, s.Id, feedback, priorChild, ct).ConfigureAwait(false);
             if (!string.IsNullOrWhiteSpace(priorChild))
                 s.PriorChildRunId = priorChild;
+            if (revisionInput is { } input)
+            {
+                s.RevisionInputCommitHash = input.CommitHash;
+                s.RevisionInputRevisionId = input.RevisionId;
+            }
             s.Status = SubtaskStatus.Pending;
             s.ChildRunId = null;
+            s.InfrastructureRetryEligibleAt = null;
+            s.InfrastructureRetryCount = 0;
             s.RecoveryGuidance = bundle.RenderedGuidance;
             s.UpdatedAt = now;
         }
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<(string CommitHash, string RevisionId)?> CaptureAssemblyRevisionInputAsync(
+        string coordinatorRunId, int workPlanId, CancellationToken ct)
+    {
+        // Unit-only assembly fakes have no Git workspace. A real reviewed assembly must have
+        // both its immutable candidate and the exact Git commit that produced that candidate.
+        if (_worktreeManager is null)
+            return null;
+        var run = await TryGetCoordinatorRunAsync(coordinatorRunId, ct).ConfigureAwait(false)
+            ?? throw new RunOutputRevisionUnavailableException("assembly_revision_input_unavailable");
+        if (string.IsNullOrWhiteSpace(run.CurrentOutputRevisionId)
+            || string.IsNullOrWhiteSpace(run.TreeHash))
+            throw new RunOutputRevisionUnavailableException("assembly_revision_input_unavailable");
+        var revision = await RequireCurrentCandidateAsync(
+            coordinatorRunId, workPlanId, run.TreeHash, ct).ConfigureAwait(false);
+        var branch = IntegrationBranchName(coordinatorRunId);
+        var commit = _worktreeManager.GetBranchTipCommitSha(run.RepositoryPath, branch);
+        if (commit is null || _worktreeManager.GetBranchTipTreeSha(run.RepositoryPath, branch) != revision.TreeHash
+            || !RunOutputTreeCapture.Capture(run.RepositoryPath, revision.TreeHash)
+                .AsSpan().SequenceEqual(revision.TreeContent))
+            throw new RunOutputRevisionUnavailableException("assembly_revision_input_mismatch");
+        return (commit, revision.RevisionId);
     }
 
     /// <summary>

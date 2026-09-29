@@ -976,7 +976,20 @@ public sealed class WorktreeManager
             if (string.Equals(mergeBase.Sha, childTip.Sha, StringComparison.Ordinal))
                 continue;
 
-            var childChanges = repo.Diff.Compare<TreeChanges>(mergeBase.Tree, childTip.Tree);
+            var revisionBase = input.RevisionBaseCommitSha is null
+                ? mergeBase : repo.Lookup<Commit>(input.RevisionBaseCommitSha);
+            if (revisionBase is null
+                || !string.Equals(
+                    repo.ObjectDatabase.FindMergeBase(revisionBase, childTip)?.Sha,
+                    revisionBase.Sha, StringComparison.Ordinal))
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch, childBranch, [],
+                    $"Pinned revision input {input.RevisionBaseCommitSha} is unavailable or is not an ancestor of child '{childBranch}'.");
+
+            // A revision child inherits the entire reviewed assembly. Only its delta from that
+            // pinned input is owned by this child; retained sibling files must not look like
+            // conflicting edits when two independent revisions are assembled together.
+            var childChanges = repo.Diff.Compare<TreeChanges>(revisionBase.Tree, childTip.Tree);
             var overlapping = new HashSet<string>(StringComparer.Ordinal);
             var overlappingOwners = new Dictionary<string, (string Branch, Commit Tip)>(StringComparer.Ordinal);
             foreach (var change in childChanges)

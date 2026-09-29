@@ -285,10 +285,10 @@ namespace Agentweaver.Api.Migrations
                     b.Property<string>("IntegrationBranch")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("OwnerUser")
+                    b.Property<string>("OutputRevisionId")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("OutputRevisionId")
+                    b.Property<string>("OwnerUser")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Reviewer")
@@ -2399,6 +2399,12 @@ namespace Agentweaver.Api.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("RecoveryGuidance")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RevisionInputCommitHash")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RevisionInputRevisionId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Scope")
