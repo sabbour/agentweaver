@@ -3172,13 +3172,45 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                         [ids[0]] = new HashSet<string> { "index.html" },
                     };
                     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                    var redirected = await (Task<bool>)method.Invoke(sut, [
-                        new CoordinatorDispatchContext(coordinatorRunId, path, "main", "alice", null),
-                        planId, Array.Empty<(int, int)>(), source,
-                        "Re-apply the app files in the workspace.", new[] { "index.html" },
-                        touched, treeHash, cts.Token,
-                    ])!;
-                    redirected.Should().BeTrue();
+                    var context = new CoordinatorDispatchContext(coordinatorRunId, path, "main", "alice", null);
+                    var edges = Array.Empty<(int, int)>();
+                    var feedback = "Re-apply the app files in the workspace.";
+                    var decision = new AssemblyReviewDecision(
+                        false, true, feedback, ["index.html"], source, candidate.RevisionId);
+                    if (source == SteeringSource.Rubberduck)
+                    {
+                        var redirected = await (Task<bool>)method.Invoke(sut, [
+                            context, planId, edges, source, feedback, new[] { "index.html" },
+                            touched, treeHash, cts.Token,
+                        ])!;
+                        redirected.Should().BeTrue();
+                    }
+                    else
+                    {
+                        var entry = typeof(CoordinatorAssemblyService).GetMethod(
+                            source == SteeringSource.HumanReview
+                                ? "ApplyReviewDecisionAsync" : "ApplyAuthoredGateDecisionAsync",
+                            BindingFlags.Instance | BindingFlags.NonPublic)!;
+                        Task InvokeDecision(AssemblyReviewDecision submitted) => source == SteeringSource.HumanReview
+                            ? (Task)entry.Invoke(sut, [
+                                context, planId, edges, integrationBranch, treeHash, touched, submitted, cts.Token,
+                            ])!
+                            : (Task<bool>)entry.Invoke(sut, [
+                                context, planId, edges, touched, submitted, source, treeHash, cts.Token,
+                            ])!;
+
+                        var stale = await Assert.ThrowsAsync<RunOutputRevisionUnavailableException>(
+                            () => InvokeDecision(decision with { OutputRevisionId = "stale-revision" }));
+                        stale.Reason.Should().Be("stale_collective_decision");
+                        var approval = await Assert.ThrowsAsync<RunOutputRevisionUnavailableException>(
+                            () => InvokeDecision(decision with { Approved = true, RequestChanges = false }));
+                        approval.Reason.Should().Be("incomplete_manifest");
+                        var decline = await Assert.ThrowsAsync<RunOutputRevisionUnavailableException>(
+                            () => InvokeDecision(decision with { RequestChanges = false }));
+                        decline.Reason.Should().Be("incomplete_manifest");
+                        _dispatch.StartDispatchCalls.Should().BeEmpty();
+                        await InvokeDecision(decision);
+                    }
                     using var scope = _provider.CreateScope();
                     var row = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
                         .Subtasks.AsNoTracking().SingleAsync(s => s.Id == ids[0]);

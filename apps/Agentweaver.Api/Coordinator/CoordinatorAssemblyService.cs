@@ -1650,7 +1650,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         var candidate = await RequireCurrentCandidateAsync(
-            context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct).ConfigureAwait(false);
+            context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct,
+            allowIncompleteManifest: decision.RequestChanges && !decision.Approved).ConfigureAwait(false);
         if (decision.OutputRevisionId != candidate.RevisionId)
             throw new RunOutputRevisionUnavailableException("stale_collective_decision");
         if (decision.Approved)
@@ -1712,7 +1713,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         CancellationToken ct)
     {
         var candidate = await RequireCurrentCandidateAsync(
-            context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct).ConfigureAwait(false);
+            context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct,
+            allowIncompleteManifest: decision.RequestChanges && !decision.Approved).ConfigureAwait(false);
         if (decision.OutputRevisionId is not null && decision.OutputRevisionId != candidate.RevisionId)
             throw new RunOutputRevisionUnavailableException("stale_collective_decision");
         if (decision.Approved)
