@@ -28,7 +28,12 @@ public sealed class CoordinatorAssemblyStore
     /// which precedes RAI, shows no node live yet). Returns <c>true</c> for the single winner;
     /// <c>false</c> if the plan already moved past <c>awaiting_assembly</c>.
     /// </summary>
-    public async Task<bool> TryStartAssemblyAsync(int workPlanId, string integrationBranch, CancellationToken ct)
+    public Task<bool> TryStartAssemblyAsync(
+        int workPlanId, string integrationBranch, CancellationToken ct) =>
+        TryStartAssemblyAsync(workPlanId, integrationBranch, coordinatorPodId: null, ct);
+
+    public async Task<bool> TryStartAssemblyAsync(
+        int workPlanId, string integrationBranch, string? coordinatorPodId, CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -41,6 +46,7 @@ public sealed class CoordinatorAssemblyStore
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
                 .SetProperty(w => w.AssemblyStatusReason, (string?)null)
                 .SetProperty(w => w.AssemblyStartedAt, now)
+                .SetProperty(w => w.CoordinatorPodId, coordinatorPodId)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return rows > 0;
@@ -97,7 +103,7 @@ public sealed class CoordinatorAssemblyStore
                        "UpdatedAt" = {now}
                  WHERE "Id" = {workPlanId}
                    AND "Status" = {WorkPlanStatus.Assembling}
-                   AND ("AssemblyStartedAt" IS NULL OR "AssemblyStartedAt" < {staleBefore})
+                   AND "UpdatedAt" < {staleBefore}
                 """, ct).ConfigureAwait(false);
             return rows > 0;
         }
@@ -105,7 +111,7 @@ public sealed class CoordinatorAssemblyStore
         var updated = await db.WorkPlans
             .Where(w => w.Id == workPlanId
                      && w.Status == WorkPlanStatus.Assembling
-                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore))
+                     && w.UpdatedAt < staleBefore)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
                 .SetProperty(w => w.AssemblyStage, (string?)null)

@@ -42,6 +42,7 @@ public sealed class CoordinatorReconciler
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunStore _runStore;
+    private readonly IRunLeaseStore _runLeaseStore;
     private readonly RunStreamStore _streamStore;
     private readonly ICoordinatorDispatch _dispatch;
     private readonly ICoordinatorAssembly? _assembly;
@@ -88,10 +89,12 @@ public sealed class CoordinatorReconciler
         ILogger<CoordinatorReconciler> logger,
         IConfiguration? configuration = null,
         ICoordinatorAssembly? assembly = null,
-        TerminalCoordinatorChildSandboxCleanup? childSandboxCleanup = null)
+        TerminalCoordinatorChildSandboxCleanup? childSandboxCleanup = null,
+        IRunLeaseStore? runLeaseStore = null)
     {
         _scopeFactory = scopeFactory;
         _runStore = runStore;
+        _runLeaseStore = runLeaseStore ?? new NoOpRunLeaseStore();
         _streamStore = streamStore;
         _dispatch = dispatch;
         _assembly = assembly;
@@ -239,6 +242,10 @@ public sealed class CoordinatorReconciler
                         // healthy run, so skip while the lease is fresh. Only a STALE assembling plan
                         // (owner likely dead) is a genuine orphan to re-arm.
                         if (IsAssemblyActive(plan))
+                            continue;
+                        if (!string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
+                            && await _runLeaseStore.GetActiveClaimAsync(plan.CoordinatorRunId!, ct)
+                                .ConfigureAwait(false) is not null)
                             continue;
                         if ((DateTimeOffset.UtcNow - plan.UpdatedAt) < _staleLeaseTtl)
                             continue;

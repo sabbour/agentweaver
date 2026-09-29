@@ -250,6 +250,14 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task UpdateAssemblyArtifactsAsync(
         RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Inner.UpdateAssemblyArtifactsAsync(runId, treeHash, diff, ct);
+    public Task<bool> TryUpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,
+        CancellationToken ct = default) =>
+        Inner.TryUpdateAssemblyArtifactsAsync(runId, treeHash, diff, requiredLease, ct);
+    public Task<bool> TryUpdateStatusAsync(
+        RunId runId, RunStatus status, DateTimeOffset? endedAt, RunLeaseClaim requiredLease,
+        CancellationToken ct = default) =>
+        Inner.TryUpdateStatusAsync(runId, status, endedAt, requiredLease, ct);
 
     public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount,
         CancellationToken ct = default, DateTimeOffset? now = null) =>
@@ -276,10 +284,20 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task<RunOutputRevision> PublishCollectiveCandidateAsync(
         RunId runId, int generation, string workPlanId, string treeHash, string diff,
         byte[] treeContent, CancellationToken ct = default) =>
-        Inner.PublishCollectiveCandidateAsync(runId, generation, workPlanId, treeHash, diff, treeContent, ct);
+        Inner.PublishCollectiveCandidateAsync(
+            runId, generation, workPlanId, treeHash, diff, treeContent, ct);
+    public Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct, RunLeaseClaim requiredLease) =>
+        Inner.PublishCollectiveCandidateAsync(
+            runId, generation, workPlanId, treeHash, diff, treeContent, ct, requiredLease);
     public Task<bool> ApproveCollectiveCandidateAsync(
         RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
         Inner.ApproveCollectiveCandidateAsync(runId, generation, revisionId, ct);
+    public Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct,
+        RunLeaseClaim requiredLease) =>
+        Inner.ApproveCollectiveCandidateAsync(runId, generation, revisionId, ct, requiredLease);
 
     public Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>

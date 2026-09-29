@@ -301,6 +301,29 @@ public sealed class CoordinatorLeaseHeartbeatTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PeerReconciler_DoesNotRearmStalePlanWhileDurableRunLeaseIsActive()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord);
+        await SeedPlanAsync(
+            coord, OwnerPod, DateTimeOffset.UtcNow.AddMinutes(-5), WorkPlanStatus.Assembling);
+        var leases = new SqliteRunLeaseStore(_runDb.Db);
+        var claim = await leases.TryClaimAsync(
+            coord, "pod-owner:assembly:first", TimeSpan.FromMinutes(1));
+        claim.Claimed.Should().BeTrue();
+        var peerReconciler = BuildReconciler(PeerPod, leases);
+
+        (await peerReconciler.SweepAsync(default)).Should().Be(0,
+            "an unexpired run lease is authoritative proof that an assembly attempt is still active");
+        _assembly.Started.Should().BeEmpty();
+
+        await leases.ReleaseAsync(coord, "pod-owner:assembly:first", claim.FencingToken);
+        (await peerReconciler.SweepAsync(default)).Should().Be(1,
+            "after the durable owner releases or expires, recovery may re-arm the abandoned assembly");
+        _assembly.Started.Should().ContainSingle(c => c.CoordinatorRunId == coord);
+    }
+
+    [Fact]
     public async Task AssemblyHeartbeatTick_StopsWhenPeerOwnsRow()
     {
         const string coord = "coord-asm-peer";
@@ -423,14 +446,17 @@ public sealed class CoordinatorLeaseHeartbeatTests : IAsyncDisposable
             configuration: config);
     }
 
-    private CoordinatorReconciler BuildReconciler(string podId)
+    private CoordinatorReconciler BuildReconciler(string podId, IRunLeaseStore? runLeaseStore = null)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:PodId"] = podId })
             .Build();
         return new CoordinatorReconciler(
             _scopeFactory, _runStore, _streamStore, new RecordingDispatch(),
-            NullLogger<CoordinatorReconciler>.Instance, configuration: config, assembly: _assembly);
+            NullLogger<CoordinatorReconciler>.Instance,
+            configuration: config,
+            assembly: _assembly,
+            runLeaseStore: runLeaseStore);
     }
 
     private IntegrationBuildLock BuildIntegrationBuildLock(string podId)

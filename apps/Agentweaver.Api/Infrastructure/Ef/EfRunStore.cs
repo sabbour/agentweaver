@@ -264,6 +264,42 @@ public sealed class EfRunStore : IRunStore
         WarnIfNoRows(rows, runId, $"update status to {statusStr}");
     }
 
+    public async Task<bool> TryUpdateStatusAsync(
+        RunId runId, RunStatus status, DateTimeOffset? endedAt, RunLeaseClaim requiredLease,
+        CancellationToken ct = default)
+    {
+        RejectTerminalStatus(status);
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var statusStr = status.ToApiString();
+        var id = runId.ToString();
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.Runs
+            .Where(r => r.RunId == id
+                     && r.LifecycleGeneration == requiredLease.LifecycleGeneration
+                     && r.OwnerId == requiredLease.OwnerId
+                     && r.FencingToken == requiredLease.FencingToken
+                     && r.LeaseExpiresAt > now)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Status, statusStr)
+                .SetProperty(r => r.EndedAt, endedAt)
+                .SetProperty(r => r.CurrentOutputRevisionId,
+                    r => statusStr == "in_progress"
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? null : r.CurrentOutputRevisionId)
+                .SetProperty(r => r.ApprovedOutputRevisionId,
+                    r => statusStr == "in_progress"
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? null : r.ApprovedOutputRevisionId)
+                .SetProperty(r => r.ApprovalGeneration,
+                    r => r.Status == RunStatus.InProgress.ToApiString() && statusStr != RunStatus.InProgress.ToApiString()
+                        ? r.ApprovalGeneration + 1 : r.ApprovalGeneration)
+                .SetProperty(r => r.LifecycleGeneration,
+                    r => statusStr == RunStatus.InProgress.ToApiString()
+                         && new[] { "merged", "declined", "failed", "completed", "merge_failed", "assemble_ready" }.Contains(r.Status)
+                        ? r.LifecycleGeneration + 1 : r.LifecycleGeneration), ct);
+        return rows == 1;
+    }
+
     public async Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default)
     {
         RejectTerminalStatus(status);
@@ -304,6 +340,24 @@ public sealed class EfRunStore : IRunStore
                 .SetProperty(r => r.TreeHash, treeHash)
                 .SetProperty(r => r.Diff, diff), ct);
         WarnIfNoRows(rows, runId, "persist assembly artifacts");
+    }
+
+    public async Task<bool> TryUpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,
+        CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.Runs
+            .Where(r => r.RunId == runId.ToString()
+                     && r.LifecycleGeneration == requiredLease.LifecycleGeneration
+                     && r.OwnerId == requiredLease.OwnerId
+                     && r.FencingToken == requiredLease.FencingToken
+                     && r.LeaseExpiresAt > now)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.TreeHash, treeHash)
+                .SetProperty(r => r.Diff, diff), ct);
+        return rows == 1;
     }
 
     public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount,
@@ -414,7 +468,21 @@ public sealed class EfRunStore : IRunStore
 
     public async Task<RunOutputRevision> PublishCollectiveCandidateAsync(
         RunId runId, int generation, string workPlanId, string treeHash, string diff,
-        byte[] treeContent, CancellationToken ct = default)
+        byte[] treeContent, CancellationToken ct = default) =>
+        await PublishCollectiveCandidateCoreAsync(
+            runId, generation, workPlanId, treeHash, diff, treeContent, ct, requiredLease: null)
+            .ConfigureAwait(false);
+
+    public async Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct, RunLeaseClaim requiredLease) =>
+        await PublishCollectiveCandidateCoreAsync(
+            runId, generation, workPlanId, treeHash, diff, treeContent, ct, (RunLeaseClaim?)requiredLease)
+            .ConfigureAwait(false);
+
+    private async Task<RunOutputRevision> PublishCollectiveCandidateCoreAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct, RunLeaseClaim? requiredLease)
     {
         if (string.IsNullOrWhiteSpace(treeHash) || string.IsNullOrWhiteSpace(workPlanId))
             throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
@@ -426,9 +494,15 @@ public sealed class EfRunStore : IRunStore
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock(hashtextextended({id}, 0));", ct);
         var run = await db.Runs.SingleOrDefaultAsync(r => r.RunId == id, ct);
+        var now = DateTimeOffset.UtcNow;
         if (run is null || run.LifecycleGeneration != generation
             || run.Status is not ("in_progress" or "awaiting_review")
-            || run.TreeHash != treeHash || run.Diff != diff)
+            || run.TreeHash != treeHash || run.Diff != diff
+            || requiredLease is { } candidateLease
+               && (candidateLease.LifecycleGeneration != generation
+                   || run.OwnerId != candidateLease.OwnerId
+                   || run.FencingToken != candidateLease.FencingToken
+                   || run.LeaseExpiresAt <= now))
             throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
         RunOutputRevisionRecord? previous = null;
         if (run.CurrentOutputRevisionId is not null)
@@ -477,7 +551,19 @@ public sealed class EfRunStore : IRunStore
     }
 
     public async Task<bool> ApproveCollectiveCandidateAsync(
-        RunId runId, int generation, string revisionId, CancellationToken ct = default)
+        RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
+        await ApproveCollectiveCandidateCoreAsync(
+            runId, generation, revisionId, ct, requiredLease: null).ConfigureAwait(false);
+
+    public async Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct,
+        RunLeaseClaim requiredLease) =>
+        await ApproveCollectiveCandidateCoreAsync(
+            runId, generation, revisionId, ct, (RunLeaseClaim?)requiredLease).ConfigureAwait(false);
+
+    private async Task<bool> ApproveCollectiveCandidateCoreAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct,
+        RunLeaseClaim? requiredLease)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         var revision = await db.RunOutputRevisions.AsNoTracking()
@@ -490,7 +576,12 @@ public sealed class EfRunStore : IRunStore
                 && r.CurrentOutputRevisionId == revisionId
                 && r.TreeHash == revision.TreeHash
                 && r.Diff == System.Text.Encoding.UTF8.GetString(revision.DiffBytes!)
-                && r.ExecutableWorkflowContentDigest == revision.WorkflowDigest)
+                && r.ExecutableWorkflowContentDigest == revision.WorkflowDigest
+                && (requiredLease == null
+                    || (requiredLease.LifecycleGeneration == generation
+                        && r.OwnerId == requiredLease.OwnerId
+                        && r.FencingToken == requiredLease.FencingToken
+                        && r.LeaseExpiresAt > DateTimeOffset.UtcNow)))
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.ApprovedOutputRevisionId, revisionId), ct);
         return rows == 1;
     }
