@@ -79,8 +79,8 @@ export async function desiredDeploymentReplicas(deployment, namespace, { capture
 
 /**
  * Returns one row per matching pod: { name, phase, ready, imageRef, imageId,
- * deletionTimestamp }. Mirrors pod_status_lines_for_selector()/
- * Get-PodStatusLinesForSelector's tab-separated jsonpath projection.
+ * deletionTimestamp }. `ready` is the Pod Ready condition, not merely the
+ * first container's readiness; absent conditions remain not ready.
  */
 export async function podStatusForSelector(selector, namespace, { capture = defaultCapture } = {}) {
   try {
@@ -94,7 +94,7 @@ export async function podStatusForSelector(selector, namespace, { capture = defa
         "--selector",
         selector,
         "--output",
-        'jsonpath={range .items[*]}{.metadata.name}{"\\t"}{.status.phase}{"\\t"}{.status.containerStatuses[0].ready}{"\\t"}{.status.containerStatuses[0].image}{"\\t"}{.status.containerStatuses[0].imageID}{"\\t"}{.metadata.deletionTimestamp}{"\\n"}{end}',
+        'jsonpath={range .items[*]}{.metadata.name}{"\\t"}{.status.phase}{"\\t"}{.status.conditions[?(@.type=="Ready")].status}{"\\t"}{.status.containerStatuses[0].image}{"\\t"}{.status.containerStatuses[0].imageID}{"\\t"}{.metadata.deletionTimestamp}{"\\n"}{end}',
       ],
       { allowFailure: true },
     );
@@ -104,7 +104,7 @@ export async function podStatusForSelector(selector, namespace, { capture = defa
       .filter(Boolean)
       .map((line) => {
         const [name, phase, ready, imageRef, imageId, deletionTimestamp] = line.split("\t");
-        return { name, phase, ready, imageRef, imageId, deletionTimestamp: deletionTimestamp || "" };
+        return { name, phase, ready: ready?.toLowerCase(), imageRef, imageId, deletionTimestamp: deletionTimestamp || "" };
       });
   } catch {
     return [];

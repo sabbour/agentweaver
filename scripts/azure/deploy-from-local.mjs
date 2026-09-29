@@ -34,12 +34,9 @@
 //      30-deploy's apply, polls `kubectl get sandboxwarmpool
 //      agentweaver-agent-host -o json` until
 //      status.readyReplicas == spec.replicas (timeout ~180s), then verifies
-//      every warm pod (selector `app=agentweaver-sandbox,
-//      app.kubernetes.io/component=agent-host` -- see image-spec.mjs's
-//      agent-host `provenance.podSelector`, and k8s/sandbox-template-
-//      agenthost.yaml's podTemplate labels + k8s/sandbox-warmpool-
-//      agenthost.yaml) is running the expected image digest/tag. This
-//      function NEVER calls `kubectl delete pod`.
+//      every controller-selected warm pod (`SandboxWarmPool.status.selector`)
+//      is running the expected AgentHost image digest/tag. This function
+//      NEVER calls `kubectl delete pod`.
 //   7. Runs steps/40-verify.mjs after the deployment and warm pool are ready.
 //      A failed verification is returned as ok:false so every executable
 //      caller exits non-zero.
@@ -214,10 +211,10 @@ export async function resolveAcrDigestForTag(acrName, image, tag, { exec = execD
  * SAME manifest digest under a NEW tag string; warm pods that haven't
  * churned yet may still show the OLD tag string while running byte-identical
  * content. Comparing tag strings alone would falsely report these as
- * mismatched/stale and abort a correct deployment. Only fall back to tag-string
- * comparison if the expected digest can't be resolved from ACR (e.g. offline
- * test doubles, or a transient ACR read failure) -- log clearly when that
- * happens since it's a weaker check.
+ * mismatched/stale and abort a correct deployment. Only fall back to comparing
+ * repository and tag strings if the expected digest can't be resolved
+ * from ACR (e.g. offline test doubles or a transient ACR read failure) --
+ * log clearly when that happens since it's a weaker check.
  *
  * @param {string} namespace
  * @param {string} expectedTag The AgentHost tag just built/deployed.
@@ -270,19 +267,22 @@ export async function verifyWarmPoolImage(namespace, expectedTag, opts = {}) {
 
   const mismatched = [];
   for (const pod of pods) {
-    const tag = pod.imageRef && pod.imageRef.includes(":") ? pod.imageRef.slice(pod.imageRef.lastIndexOf(":") + 1) : "";
+    const imageRef = pod.imageRef || "";
+    const separator = imageRef.lastIndexOf(":");
+    const tag = separator >= 0 ? imageRef.slice(separator + 1) : "";
+    const repository = separator >= 0 ? imageRef.slice(0, separator) : "";
     if (expectedDigest) {
       const podDigest = imageDigestFromId(pod.imageId);
       if (podDigest !== expectedDigest) {
         mismatched.push({ name: pod.name, tag, digest: podDigest, imageRef: pod.imageRef });
       }
-    } else if (tag !== expectedTag) {
+    } else if (tag !== expectedTag || (repository !== imageName && !repository.endsWith(`/${imageName}`))) {
       mismatched.push({ name: pod.name, tag, imageRef: pod.imageRef });
     }
   }
   if (mismatched.length > 0) {
     for (const m of mismatched) {
-      const expectedDisplay = expectedDigest ? expectedDigest.slice(0, 19) : expectedTag;
+      const expectedDisplay = expectedDigest ? expectedDigest.slice(0, 19) : `${imageName}:${expectedTag}`;
       const actualDisplay = expectedDigest ? m.digest || "<unresolved digest>" : m.tag || "<unknown>";
       log.warn(`  warm pod ${m.name} runs ${actualDisplay} (${m.imageRef || "<no image>"}), expected ${expectedDisplay}`);
     }
