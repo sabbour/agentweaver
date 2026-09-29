@@ -8,6 +8,7 @@ public sealed class StartupRecoveryService : BackgroundService
 {
     private static readonly TimeSpan RetryInterval = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan SweepTimeout = TimeSpan.FromMinutes(5);
+    private const int MaxFailedLeaderSweeps = 3;
     private readonly Func<CancellationToken, Task<(bool IsLeader, IAsyncDisposable Lease)>> _acquire;
     private readonly Func<CancellationToken, Task> _recover;
     private readonly ILogger<StartupRecoveryService> _logger;
@@ -64,8 +65,10 @@ public sealed class StartupRecoveryService : BackgroundService
             return;
         if (_applicationStarted is { } signal)
             await HostStartup.WaitForStartAsync(signal, stoppingToken).ConfigureAwait(false);
+        var failedLeaderSweeps = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
+            var leaderSweepStarted = false;
             try
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -74,11 +77,13 @@ public sealed class StartupRecoveryService : BackgroundService
                 await using var _ = lease;
                 if (isLeader)
                 {
+                    leaderSweepStarted = true;
                     _logger.LogInformation("Startup recovery sweep started");
                     await _recover(timeout.Token).ConfigureAwait(false);
+                    timeout.Token.ThrowIfCancellationRequested();
                     _logger.LogInformation("Startup recovery sweep completed");
-                    // Keep the session advisory lock until this process stops. Releasing it
-                    // after success would let a waiting replica sweep newly created runs.
+                    // Keep the shared session lock until this process stops. Releasing it
+                    // after success would let another role sweep newly created runs.
                     await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken).ConfigureAwait(false);
                 }
             }
@@ -88,11 +93,33 @@ public sealed class StartupRecoveryService : BackgroundService
             }
             catch (OperationCanceledException)
             {
-                _logger.LogWarning("Startup recovery sweep exceeded {Timeout}; retrying", _sweepTimeout);
+                if (leaderSweepStarted)
+                {
+                    failedLeaderSweeps++;
+                    _logger.LogWarning(
+                        "Startup recovery sweep exceeded {Timeout} on attempt {Attempt}/{MaxAttempts}",
+                        _sweepTimeout, failedLeaderSweeps, MaxFailedLeaderSweeps);
+                }
+                else
+                    _logger.LogWarning("Startup recovery leader acquisition exceeded {Timeout}; retrying", _sweepTimeout);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Startup recovery sweep failed; retrying");
+                if (leaderSweepStarted)
+                {
+                    failedLeaderSweeps++;
+                    _logger.LogError(ex, "Startup recovery sweep failed on attempt {Attempt}/{MaxAttempts}",
+                        failedLeaderSweeps, MaxFailedLeaderSweeps);
+                }
+                else
+                    _logger.LogError(ex, "Startup recovery leader acquisition failed; retrying");
+            }
+
+            if (failedLeaderSweeps >= MaxFailedLeaderSweeps)
+            {
+                _logger.LogError("Startup recovery exhausted {MaxAttempts} failed leader sweeps; stopping recovery",
+                    MaxFailedLeaderSweeps);
+                return;
             }
 
             try

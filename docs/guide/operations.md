@@ -145,13 +145,15 @@ runtime.
 
 ### API restart recovery and health probes
 
-API and worker restart recovery run after their listeners start. Separate Postgres
-advisory locks serialize sweeps within each role; a healthy worker cannot prevent
-new API replicas from sweeping after an API-only restart. A successful leader
-holds its lock until that process stops, so followers cannot repeat a completed
-startup sweep over newly created runs. Followers retry acquiring leadership;
-if the leader exits or dies, another replica can take over recovery. A failed
-or timed-out sweep releases the lock and retries. The advisory lock
+API and worker restart recovery run after their listeners start. A shared
+Postgres advisory lock serializes sweeps across both roles. A successful
+API or worker leader holds it until that process stops, so no other replica
+can repeat a completed startup sweep over newly created runs. Followers
+retry acquiring leadership without a fixed attempt limit; if the leader
+exits or dies, either role can take over recovery. A failed or timed-out
+leader sweep releases the lock and retries up to three total sweep attempts
+per process. After the third failure, that process stops startup recovery
+and logs exhaustion; another replica can still acquire the lock. The advisory lock
 does not authorize mutations: durable run leases, coordinator plan claims, and
 child-dispatch reservations fence work across API and worker roles. Healthy child
 work on a surviving replica remains associated with its existing run identity.
@@ -180,9 +182,10 @@ between the grace and ten minutes). An absent/expired lease or exhausted cap
 restores normal stall recovery; neither setting changes lease fencing. Inspect
 the child's execution lease and terminal run events before increasing the cap.
 Both API replicas can answer `/api/ping` without waiting for a sweep.
-A sweep has a five-minute deadline; followers and failed sweeps retry after
-30 seconds, but a successful leader does not resweep. Look for
-`Startup recovery sweep started`, `completed`, `exceeded`, or `failed` in API logs
+A sweep has a five-minute deadline; followers and failed leader sweeps retry
+after 30 seconds, but a successful leader does not resweep. Look for
+`Startup recovery sweep started`, `completed`, `exceeded`, `failed`, or
+`exhausted` in API logs
 when diagnosing a restart. Readiness reflects workspace availability and successful initial static OAuth client
 reconciliation, not completion of the recovery backlog: operators should
 check the sweep log before assuming every interrupted run has been re-armed. `/api/health`,

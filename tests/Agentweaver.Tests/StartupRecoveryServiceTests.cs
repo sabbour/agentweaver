@@ -1,3 +1,4 @@
+using Agentweaver.Api;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Runs;
@@ -20,6 +21,21 @@ namespace Agentweaver.Tests;
 
 public sealed class StartupRecoveryServiceTests
 {
+    [Fact]
+    public void WebAndWorker_UseSameNewFleetRecoveryKey()
+    {
+        static IConfiguration ForRole(string role) => new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["App:Role"] = role })
+            .Build();
+
+        var webKey = StartupRecoveryLeader.LockKeyForRole(ForRole(AppRole.Web));
+        var workerKey = StartupRecoveryLeader.LockKeyForRole(ForRole(AppRole.Worker));
+        webKey.Should().Be(workerKey).And.Be(StartupRecoveryLeader.FleetAdvisoryLockKey);
+        webKey.Should().NotBe(0x4157_5243_5652_5900L)
+            .And.NotBe(0x4157_5243_5652_5901L)
+            .And.NotBe(0x4157_5243_5652_5902L);
+    }
+
     [Fact]
     public async Task TestHostInitializationOptOut_PreservesHealthWhileOAuthReconciliationIsPending()
     {
@@ -422,6 +438,78 @@ public sealed class StartupRecoveryServiceTests
         Volatile.Read(ref acquired).Should().Be(2);
         Volatile.Read(ref released).Should().Be(2);
         Volatile.Read(ref sweeps).Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ThreeFailedLeaderSweeps_ReleaseEachLeaseAndStopWithoutFourthAttempt(bool timeout)
+    {
+        var releasedThird = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var acquisitions = 0;
+        var sweeps = 0;
+        var releases = 0;
+        var service = new StartupRecoveryService(
+            _ =>
+            {
+                Interlocked.Increment(ref acquisitions);
+                return Task.FromResult<(bool, IAsyncDisposable)>((true, new Lease(() =>
+                {
+                    if (Interlocked.Increment(ref releases) == 3)
+                        releasedThird.TrySetResult();
+                })));
+            },
+            ct =>
+            {
+                Interlocked.Increment(ref sweeps);
+                return timeout
+                    ? Task.Delay(Timeout.InfiniteTimeSpan, ct)
+                    : Task.FromException(new InvalidOperationException("recovery failed"));
+            },
+            NullLogger<StartupRecoveryService>.Instance,
+            sweepTimeout: TimeSpan.FromMilliseconds(30),
+            retryInterval: TimeSpan.FromMilliseconds(10));
+        await using var app = CreateApp(service);
+        await app.StartAsync();
+        await releasedThird.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(100);
+        Volatile.Read(ref acquisitions).Should().Be(3);
+        Volatile.Read(ref sweeps).Should().Be(3);
+        Volatile.Read(ref releases).Should().Be(3);
+        await app.StopAsync();
+    }
+
+    [Fact]
+    public async Task FollowerAcquisitionMisses_DoNotConsumeLeaderSweepBudget()
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var acquisitions = 0;
+        var sweeps = 0;
+        var releases = 0;
+        var service = new StartupRecoveryService(
+            _ =>
+            {
+                var leader = Interlocked.Increment(ref acquisitions) == 6;
+                return Task.FromResult<(bool, IAsyncDisposable)>((leader,
+                    new Lease(() => Interlocked.Increment(ref releases))));
+            },
+            _ =>
+            {
+                Interlocked.Increment(ref sweeps);
+                completed.TrySetResult();
+                return Task.CompletedTask;
+            },
+            NullLogger<StartupRecoveryService>.Instance,
+            retryInterval: TimeSpan.FromMilliseconds(10));
+        await using var app = CreateApp(service);
+        await app.StartAsync();
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(100);
+        Volatile.Read(ref acquisitions).Should().Be(6);
+        Volatile.Read(ref sweeps).Should().Be(1);
+        Volatile.Read(ref releases).Should().Be(5);
+        await app.StopAsync();
+        Volatile.Read(ref releases).Should().Be(6);
     }
 
     [Fact]
