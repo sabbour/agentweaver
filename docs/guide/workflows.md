@@ -160,6 +160,10 @@ Each branch is durably keyed by the embedded coordinator run and subtask id. Its
 reserved before launch, and recovery adopts an already-created active or terminal run. After a
 process restart, an interrupted active branch is relaunched through the existing retry/recovery
 fencing under the same Run row and run id; no replacement branch Run is created.
+If a sibling was only reserved when the coordinator changed pods, the new owner reclaims the
+pending launch after fencing the former owner and starts that same child id. A reserved but
+unstarted child is not treated as an executing branch or left waiting for the ordinary agent
+stall timeout. Already-running and terminal siblings are observed, not launched again.
 
 Cancelling the parent durably suppresses both its top-level fan work plan and any nested fan
 continuations before the parent becomes terminal. Pending branches remain pending, active branch

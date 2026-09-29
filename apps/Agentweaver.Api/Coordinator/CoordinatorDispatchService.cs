@@ -365,7 +365,18 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 && !string.IsNullOrEmpty(s.ChildRunId))
             .ToList();
         foreach (var s in reArmed)
+        {
+            if (RunId.TryParse(s.ChildRunId, out var childId)
+                && await _runStore.GetAsync(childId, ct).ConfigureAwait(false) is { Status: RunStatus.Pending })
+            {
+                if (!await TryResetReservedPendingSubtaskAsync(workPlanId.Value, s.Id, s.ChildRunId!, ct)
+                    .ConfigureAwait(false))
+                    return;
+                statusById[s.Id] = SubtaskStatus.Pending;
+                continue;
+            }
             inFlight[s.Id] = ObserveChildAsync(context.CoordinatorRunId, workPlanId.Value, s.Id, s.ChildRunId!, seq, ct);
+        }
 
         foreach (var s in subtasks.Where(s =>
                      (s.Status == SubtaskStatus.Dispatched || s.Status == SubtaskStatus.Running)
@@ -1081,13 +1092,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         if (subtask is null) return null;
 
         Run? existingStaticChild = null;
+        var existingReservedChild = false;
         if (context.StaticWorkflowChild)
         {
             if (RunId.TryParse(subtask.ChildRunId, out var linkedChildRunId))
                 existingStaticChild = await _runStore.GetAsync(linkedChildRunId, ct).ConfigureAwait(false);
             existingStaticChild ??= await _runStore.FindChildAsync(
                 context.CoordinatorRunId, subtaskId.ToString(), ct).ConfigureAwait(false);
-            if (existingStaticChild is not null)
+            existingReservedChild = existingStaticChild?.Status == RunStatus.Pending;
+            if (existingStaticChild is not null && existingStaticChild.Status != RunStatus.Pending)
             {
                 var reattached = await TryUpdateOwnedSubtaskAsync(
                     workPlanId, subtaskId, SubtaskStatus.Running, existingStaticChild.Id.ToString(), ct).ConfigureAwait(false);
@@ -1205,8 +1218,12 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             if (await (_runStore ?? throw new InvalidOperationException("Run store is required for child dispatch"))
                     .GetAsync(childRun.Id, ct).ConfigureAwait(false) is { } reservedExisting)
             {
-                statusById[subtaskId] = SubtaskStatus.Running;
-                return reservedExisting.Id.ToString();
+                if (reservedExisting.Status != RunStatus.Pending)
+                {
+                    statusById[subtaskId] = SubtaskStatus.Running;
+                    return reservedExisting.Id.ToString();
+                }
+                existingReservedChild = true;
             }
         }
 
@@ -1226,7 +1243,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
         {
             await (StartChildRunOverride?.Invoke(childRun, ct)
                 ?? _orchestrator.StartChildRunAsync(childRun, ct, launchLease, authorize,
-                    launchLease is null ? null : coordinatorRun.LifecycleGeneration)).ConfigureAwait(false);
+                    launchLease is null ? null : coordinatorRun.LifecycleGeneration,
+                    existingReservedChild))
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested || launchLease is not null)
         {
@@ -3265,6 +3284,25 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             .ExecuteUpdateAsync(u => u
                 .SetProperty(s => s.Status, status)
                 .SetProperty(s => s.ChildRunId, childRunId)
+                .SetProperty(s => s.UpdatedAt, DateTimeOffset.UtcNow), ct)
+            .ConfigureAwait(false) == 1;
+    }
+
+    private async Task<bool> TryResetReservedPendingSubtaskAsync(
+        int workPlanId, int subtaskId, string childRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.Subtasks
+            .Where(s => s.Id == subtaskId && s.WorkPlanId == workPlanId
+                && s.ChildRunId == childRunId
+                && (s.Status == SubtaskStatus.Dispatched || s.Status == SubtaskStatus.Running)
+                && db.WorkPlans.Any(w => w.Id == workPlanId
+                    && w.CoordinatorPodId == _myPodId
+                    && w.Status == WorkPlanStatus.Dispatching
+                    && w.CoordinatorCancellationRequestedAt == null))
+            .ExecuteUpdateAsync(u => u
+                .SetProperty(s => s.Status, SubtaskStatus.Pending)
                 .SetProperty(s => s.UpdatedAt, DateTimeOffset.UtcNow), ct)
             .ConfigureAwait(false) == 1;
     }

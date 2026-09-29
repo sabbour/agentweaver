@@ -120,6 +120,71 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
             "replay on the new process instance delivers the persisted terminal event");
     }
 
+    [Theory]
+    [InlineData(SubtaskStatus.Pending)]
+    [InlineData(SubtaskStatus.Running)]
+    public async Task StaticFanRecovery_RunningAndReservedPending_RetainsBothIdsAndDispatchesPendingOnce(
+        string reservedSubtaskStatus)
+    {
+        var coordinatorId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorId, RunStatus.InProgress);
+        var runningId = await SeedChildRunAsync(RunStatus.InProgress);
+        var reservedId = RunId.New();
+        var (planId, subtaskIds) = await SeedPlanAsync(coordinatorId,
+            [(SubtaskStatus.Running, runningId), (reservedSubtaskStatus, reservedId.ToString())]);
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(p => p.Id == planId);
+            plan.ParentRunId = RunId.New().ToString();
+            plan.ParentWorkflowId = "fan-workflow";
+            plan.ParentWorkflowNodeId = "fan";
+            plan.ParentJoinNodeId = "join";
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Waiting;
+            await db.SaveChangesAsync();
+        }
+        await _runStore.InsertAsync(new Run
+        {
+            Id = reservedId,
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "reserved sibling",
+            SubmittingUser = "owner",
+            Status = RunStatus.Pending,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "morpheus",
+            ParentRunId = coordinatorId,
+            SubtaskId = subtaskIds[1].ToString(),
+        });
+        var stream = new SqliteRunEventStream(_streamConfig);
+        await stream.AppendAsync(runningId,
+            new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }));
+        _streamStore.Create(coordinatorId, "owner");
+        var dispatches = 0;
+        var sut = BuildDispatch(stream);
+        sut.StartChildRunOverride = async (child, ct) =>
+        {
+            Interlocked.Increment(ref dispatches);
+            child.Id.Should().Be(reservedId);
+            child.ParentRunId.Should().Be(coordinatorId);
+            child.SubtaskId.Should().Be(subtaskIds[1].ToString());
+            await _runStore.UpdateStatusAsync(child.Id, RunStatus.InProgress, null, ct);
+            await stream.AppendAsync(child.Id.ToString(),
+                new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }), ct);
+        };
+
+        await sut.RunDispatchLoopAsync(Context(coordinatorId, staticWorkflowChild: true), default);
+
+        dispatches.Should().Be(1);
+        (await GetSubtaskAsync(subtaskIds[0])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        var sibling = await GetSubtaskAsync(subtaskIds[1]);
+        sibling.Status.Should().Be(SubtaskStatus.AssembleReady);
+        sibling.ChildRunId.Should().Be(reservedId.ToString());
+        (await _runStore.GetRunsByParentAsync(coordinatorId)).Should().ContainSingle(
+            child => child.Id == reservedId);
+    }
+
     [Fact]
     public async Task StaticWorkflowChild_TwoDispatchedBranchesOverlap_AndWaitForBothBeforeJoin()
     {

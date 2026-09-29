@@ -284,7 +284,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         CancellationToken ct,
         RunLeaseClaim? existingLease = null,
         Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
-        int? expectedParentGeneration = null)
+        int? expectedParentGeneration = null,
+        bool existingReservedChild = false)
     {
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
@@ -300,7 +301,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         // Reserve the canonical child row before resolving providers or creating a worktree. Every
         // fallible launch path can now terminalize this generation instead of manufacturing a
         // placeholder failed row after the fact. An existing lease identifies an already-reserved row.
-        if (existingLease is null)
+        if (existingLease is null && !existingReservedChild)
         {
             var reserved = run with
             {
@@ -331,7 +332,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         try
         {
             await EnsureAuthorizedAsync().ConfigureAwait(false);
-            worktreeInfo = existingLease is null
+            worktreeInfo = existingLease is null && !existingReservedChild
                 ? _worktreeManager.AddWorktree(run.RepositoryPath, ExecutionBase(run), run.Id)
                 : _worktreeManager.EnsureWorktree(run.RepositoryPath, ExecutionBase(run), run.Id);
         }
@@ -429,7 +430,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 throw;
             }
         }
-        catch (OperationCanceledException) when (existingLease is not null)
+        catch (OperationCanceledException) when (existingLease is not null || existingReservedChild)
         {
             ownershipLost = true;
             _logger.LogInformation(
@@ -440,7 +441,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         finally
         {
             // A successor may already be using this run's worktree after a fence loss.
-            if (!launchCompleted && !ownershipLost && existingLease is null)
+            if (!launchCompleted && !ownershipLost && existingLease is null && !existingReservedChild)
                 CleanupWorktreeSafe(run.RepositoryPath, worktreeInfo, run.Id);
         }
     }

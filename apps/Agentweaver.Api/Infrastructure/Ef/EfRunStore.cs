@@ -120,7 +120,13 @@ public sealed class EfRunStore : IRunStore
             db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, FromRecord(child), ct));
 
         var now = _clock.GetUtcNow();
-        if (child.OwnerId is not null && child.LeaseExpiresAt >= now)
+        // A pending child has not started a turn. Once another coordinator pod owns the
+        // plan, the former pod's launch authorization is fenced by the plan-owner check;
+        // retaining its five-minute reservation would strand this sibling during recovery.
+        if (child.OwnerId is not null && child.LeaseExpiresAt >= now
+            && (!child.OwnerId.Contains("/child-dispatch/", StringComparison.Ordinal)
+                || child.OwnerId.StartsWith(
+                    coordinatorPodId + "/child-dispatch/", StringComparison.Ordinal)))
             return new ChildDispatchReservation(ChildDispatchReservationState.LeaseHeld, childId);
 
         child.OwnerId = leaseOwnerId;
