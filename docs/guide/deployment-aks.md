@@ -213,9 +213,10 @@ AgentHost warm-pool sandboxes (reapply-and-wait on the SandboxWarmPool —
 never manual pod deletion).
 The post-deploy image check queries the controller's live
 `SandboxWarmPool.status.selector` and requires exactly the configured number of
-ready pods before comparing every pod's AgentHost digest (or tag if the digest
-cannot be resolved). A missing selector, missing pods, or a count/readiness
-mismatch fails verification rather than reporting a successful deploy.
+ready pods before comparing every pod's AgentHost digest (or AgentHost image
+repository and tag if the digest cannot be resolved). A missing selector,
+missing pods, or a count/readiness mismatch fails verification rather than
+reporting a successful deploy.
 
 For an intentional personal development test, `--allow-dirty` is the explicit escape
 hatch. It is not release-candidate evidence; use an exact committed candidate for release validation.

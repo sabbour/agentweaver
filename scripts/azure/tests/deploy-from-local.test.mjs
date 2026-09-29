@@ -7,6 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { podStatusForSelector } from "../lib/kubectl.mjs";
 import {
   run,
   isWorkingTreeDirty,
@@ -298,6 +299,57 @@ test("verifyWarmPoolImage: falls back to tag-string comparison when the ACR dige
   const log = noopLog();
   const result = await verifyWarmPoolImage("agentweaver", "newtag1", { kubectl, log, exec, acrName: "agentweaverregistry", poolStatus: POOL_STATUS });
   assert.equal(result.ok, true);
+});
+
+test("verifyWarmPoolImage: tag fallback rejects a different repository with the expected tag", async () => {
+  const kubectl = {
+    podStatusForSelector: async () => [
+      readyPod("agentweaver-agent-host-1", "newtag1"),
+      { ...readyPod("agentweaver-agent-host-2", "newtag1"),
+        imageRef: "agentweaverregistry.azurecr.io/agentweaver-api:newtag1" },
+    ],
+  };
+  const exec = { capture: async () => ({ stdout: "", stderr: "not found", code: 1 }) };
+  const result = await verifyWarmPoolImage("agentweaver", "newtag1", {
+    kubectl, exec, log: noopLog(), acrName: "agentweaverregistry", poolStatus: POOL_STATUS,
+  });
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.mismatched.map((pod) => pod.name), ["agentweaver-agent-host-2"]);
+});
+
+test("verifyWarmPoolImage: rejects Running pod whose first container is ready but Pod Ready is false", async () => {
+  const pod = {
+    metadata: { name: "agentweaver-agent-host-1" },
+    status: {
+      phase: "Running",
+      containerStatuses: [{ ready: true, image: "agentweaverregistry.azurecr.io/agentweaver-agent-host:abc1234" }],
+      conditions: [{ type: "Ready", status: "False" }],
+    },
+  };
+  const capture = async (command, args) => {
+    assert.equal(command, "kubectl");
+    assert.equal(args[args.indexOf("--selector") + 1], POOL_SELECTOR);
+    const projection = args.at(-1);
+    const ready = projection.includes('conditions[?(@.type=="Ready")].status')
+      ? pod.status.conditions.find((condition) => condition.type === "Ready").status
+      : String(pod.status.containerStatuses[0].ready);
+    return {
+      stdout: `${pod.metadata.name}\t${pod.status.phase}\t${ready}\t${pod.status.containerStatuses[0].image}\t\t\n`,
+    };
+  };
+  const kubectl = { podStatusForSelector: (selector, namespace) => podStatusForSelector(selector, namespace, { capture }) };
+  await assert.rejects(
+    () => verifyWarmPoolImage("agentweaver", "abc1234", {
+      kubectl, log: noopLog(), poolStatus: { ...POOL_STATUS, replicas: 1, readyReplicas: 1 },
+    }),
+    /not-ready/,
+  );
+  pod.status.conditions[0].status = "True";
+  const result = await verifyWarmPoolImage("agentweaver", "abc1234", {
+    kubectl, log: noopLog(), poolStatus: { ...POOL_STATUS, replicas: 1, readyReplicas: 1 },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.pods[0].ready, "true");
 });
 
 // -------------------- run() orchestration --------------------
