@@ -11,6 +11,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Workflows;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
@@ -292,11 +293,76 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         workPlan.Should().NotBeNull();
         workPlan!.WorkflowId.Should().Be("content-authoring");
 
-        var run = await _factory.Services.GetRequiredService<IRunStore>()
-            .GetAsync(RunId.Parse(runId));
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        var pin = await PollAsync(async _ => (await store.GetAsync(RunId.Parse(runId)))?
+            .GetExecutableWorkflowPin());
+        var run = await store.GetAsync(RunId.Parse(runId));
         run!.AgentName.Should().Be("Coordinator");
-        run.GetExecutableWorkflowPin().Should().BeNull(
-            "non-fan overrides retain coordinator decomposition rather than entering the static fan runtime");
+        pin.Should().NotBeNull("the coordinator saves its selected workflow when the plan commits");
+        pin!.DefinitionId.Should().Be(workPlan.WorkflowId);
+        pin.ContentDigest.Should().Be(ExecutableWorkflowSnapshots.Digest(pin.DefinitionYaml));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PlannedCoordinator_UsesSavedReviewGates_AfterWorkflowEditOrDelete(bool delete)
+    {
+        var projectId = await CreateProjectAsync();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        var definition = BuiltInWorkflows.Default.Definition! with
+        {
+            Id = "frozen-review",
+            Name = "Frozen Review",
+            Nodes = BuiltInWorkflows.Default.Definition!.Nodes
+                .Select(node => node.Id == "review" ? node with { Label = "Pinned Review" } : node)
+                .ToList(),
+        };
+        var path = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", "frozen-review.yaml");
+        await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(definition));
+        var runId = await StartOrchestrationAsync(
+            projectId, "Draft release notes", workflowOverrideId: "frozen-review");
+        await WaitForGateAsync(runId);
+        (await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var plan = await PollAsync(async db => await db.WorkPlans.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+        plan.Should().NotBeNull();
+        plan!.WorkflowId.Should().Be("frozen-review");
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        var saved = await PollAsync(async _ => (await store.GetAsync(RunId.Parse(runId)))?
+            .GetExecutableWorkflowPin());
+        saved.Should().NotBeNull();
+        saved!.DefinitionId.Should().Be(plan.WorkflowId);
+        saved.ContentDigest.Should().Be(ExecutableWorkflowSnapshots.Digest(saved.DefinitionYaml));
+
+        if (delete)
+            File.Delete(path);
+        else
+            await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(
+                definition with
+                {
+                    Nodes = definition.Nodes.Select(node => node.Id == "review"
+                        ? node with { Label = "Edited Review" } : node).ToList(),
+                }));
+
+        using var scope = _factory.Services.CreateScope();
+        var gates = await CoordinatorAssemblyGateResolver.ResolveAsync(
+            scope.ServiceProvider, plan.Id, CancellationToken.None);
+        gates.Single(g => g.GateKind == "human-review").Label.Should().Be("Pinned Review");
+
+        await store.UpdateExecutableWorkflowPinAsync(RunId.Parse(runId),
+            saved with { ContentDigest = "sha256:" + new string('0', 64) });
+        var resolveCorrupt = () => CoordinatorAssemblyGateResolver.ResolveAsync(
+            scope.ServiceProvider, plan.Id, CancellationToken.None);
+        await resolveCorrupt.Should().ThrowAsync<WorkflowBindException>();
+
+        await store.UpdateExecutableWorkflowPinAsync(RunId.Parse(runId),
+            saved with { DefinitionYaml = "" });
+        var resolveMissing = () => CoordinatorAssemblyGateResolver.ResolveAsync(
+            scope.ServiceProvider, plan.Id, CancellationToken.None);
+        await resolveMissing.Should().ThrowAsync<WorkflowBindException>();
     }
 
     [Fact]

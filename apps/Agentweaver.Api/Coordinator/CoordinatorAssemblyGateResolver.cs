@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
@@ -29,7 +31,9 @@ public static class CoordinatorAssemblyGateResolver
         var projectStore = scopedServices.GetService<IProjectStore>();
         var workflowRegistry = scopedServices.GetService<WorkflowRegistry>();
         var codeClassifier = scopedServices.GetService<IAssemblyGateCodeClassifier>();
-        return ResolveAsync(db, projectStore, workflowRegistry, codeClassifier, workPlanId, ct);
+        return ResolveAsync(db, projectStore, workflowRegistry, codeClassifier, workPlanId, ct,
+            scopedServices.GetService<IRunStore>(),
+            scopedServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(CoordinatorAssemblyGateResolver)));
     }
 
     /// <summary>
@@ -55,27 +59,60 @@ public static class CoordinatorAssemblyGateResolver
         WorkflowRegistry? workflowRegistry,
         IAssemblyGateCodeClassifier? codeClassifier,
         int workPlanId,
-        CancellationToken ct)
+        CancellationToken ct,
+        IRunStore? runStore = null,
+        ILogger? logger = null)
     {
-        if (projectStore is null || workflowRegistry is null)
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
         var plan = await db.WorkPlans.AsNoTracking()
             .Where(w => w.Id == workPlanId)
             .Select(w => new { w.ProjectId, w.WorkflowId, w.CoordinatorRunId })
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
-        if (plan is null || !ProjectId.TryParse(plan.ProjectId, out var projectId))
+        if (plan is null)
             return CoordinatorGraphDescriptor.DefaultAssemblyGates;
 
-        var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
-        if (project is null)
-            return CoordinatorGraphDescriptor.DefaultAssemblyGates;
-
-        var workflow = !string.IsNullOrWhiteSpace(plan.WorkflowId)
-            ? workflowRegistry.Get(project, plan.WorkflowId!)?.Definition
-            : workflowRegistry.ResolveDefault(project).Definition;
-        workflow ??= workflowRegistry.ResolveDefault(project).Definition;
+        WorkflowDefinition? workflow = null;
+        Agentweaver.Domain.Run? coordinatorRun = null;
+        if (!string.IsNullOrWhiteSpace(plan.WorkflowId)
+            && runStore is not null && RunId.TryParse(plan.CoordinatorRunId, out var runId))
+        {
+            var run = coordinatorRun = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+            if (run?.GetExecutableWorkflowPin() is { } pin)
+            {
+                workflow = ExecutableWorkflowSnapshots.Load(plan.CoordinatorRunId, pin);
+                if (!string.Equals(workflow.Id, plan.WorkflowId, StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(plan.WorkflowId))
+                    throw new WorkflowBindException(
+                        $"Coordinator run '{plan.CoordinatorRunId}' saved workflow does not match work plan '{workPlanId}'.",
+                        plan.CoordinatorRunId);
+            }
+            else if (run?.ExecutableWorkflowPinRequired == true
+                && !string.IsNullOrWhiteSpace(plan.WorkflowId))
+            {
+                throw new WorkflowBindException(
+                    $"Coordinator run '{plan.CoordinatorRunId}' requires a saved workflow for work plan '{workPlanId}', but its manifest is missing.",
+                    plan.CoordinatorRunId);
+            }
+            else
+            {
+                logger?.LogWarning(
+                    "Legacy coordinator run {RunId} has no saved workflow for work plan {WorkPlanId}; resolving the current project workflow for compatibility.",
+                    plan.CoordinatorRunId, workPlanId);
+            }
+        }
+        if (workflow is null)
+        {
+            if (projectStore is null || workflowRegistry is null
+                || !ProjectId.TryParse(plan.ProjectId, out var projectId))
+                return CoordinatorGraphDescriptor.DefaultAssemblyGates;
+            var project = await projectStore.GetAsync(projectId, ct).ConfigureAwait(false);
+            if (project is null)
+                return CoordinatorGraphDescriptor.DefaultAssemblyGates;
+            workflow = !string.IsNullOrWhiteSpace(plan.WorkflowId)
+                ? workflowRegistry.Get(project, plan.WorkflowId!)?.Definition
+                : workflowRegistry.ResolveDefault(project).Definition;
+            workflow ??= workflowRegistry.ResolveDefault(project).Definition;
+        }
         if (workflow is null)
             return CoordinatorGraphDescriptor.DefaultAssemblyGates;
 
@@ -89,11 +126,12 @@ public static class CoordinatorAssemblyGateResolver
                 s.Title, s.Scope, s.Phase, s.DeclaredOutputPathsJson))
             .ToList();
 
-        var submittingUser = await db.Runs.AsNoTracking()
-            .Where(r => r.RunId == plan.CoordinatorRunId)
-            .Select(r => r.SubmittingUser)
-            .FirstOrDefaultAsync(ct)
-            .ConfigureAwait(false) ?? "";
+        var submittingUser = coordinatorRun?.SubmittingUser
+            ?? (db.Database.IsSqlite() ? "" : await db.Runs.AsNoTracking()
+                .Where(r => r.RunId == plan.CoordinatorRunId)
+                .Select(r => r.SubmittingUser)
+                .FirstOrDefaultAsync(ct)
+                .ConfigureAwait(false) ?? "");
         var classificationContext = new AssemblyGateCodeClassificationContext(
             plan.CoordinatorRunId,
             plan.ProjectId,

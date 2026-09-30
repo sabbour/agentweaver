@@ -1,0 +1,49 @@
+using System.Security.Cryptography;
+using System.Text;
+using Agentweaver.Domain;
+
+namespace Agentweaver.Api.Workflows;
+
+internal static class ExecutableWorkflowSnapshots
+{
+    public static ExecutableWorkflowPin Create(WorkflowDefinition definition, string source)
+    {
+        var yaml = WorkflowDefinitionYamlSerializer.Serialize(definition);
+        return new ExecutableWorkflowPin
+        {
+            ManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+            DefinitionId = definition.Id,
+            DefinitionVersion = definition.Version,
+            Source = source,
+            ContentDigest = Digest(yaml),
+            DefinitionYaml = yaml,
+            PinnedAt = DateTimeOffset.UtcNow,
+        };
+    }
+
+    public static string Digest(string yaml) =>
+        "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(yaml))).ToLowerInvariant();
+
+    public static WorkflowDefinition Load(string runId, ExecutableWorkflowPin pin)
+    {
+        if (pin.ManifestSchemaVersion != ExecutableWorkflowPin.CurrentSchemaVersion)
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow manifest schema version {pin.ManifestSchemaVersion} is not supported by this application.", runId);
+
+        if (!string.Equals(Digest(pin.DefinitionYaml), pin.ContentDigest, StringComparison.Ordinal))
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow content digest mismatch.", runId);
+
+        var loaded = WorkflowDefinitionLoader.Load(
+            pin.DefinitionYaml, pin.Source, validationMode: WorkflowDefinitionValidationMode.LegacyCompatible);
+        if (!loaded.IsValid || loaded.Definition is null)
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow '{pin.DefinitionId}' could not be loaded: {loaded.Error ?? "unknown workflow error"}", runId);
+
+        if (!string.Equals(loaded.Definition.Id, pin.DefinitionId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(loaded.Definition.Version, pin.DefinitionVersion, StringComparison.Ordinal))
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow identity or version does not match its manifest.", runId);
+        return loaded.Definition;
+    }
+}
