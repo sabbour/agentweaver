@@ -11,6 +11,7 @@ const TERMINAL = new Set(['failed', 'cancelled', 'canceled', 'blocked', 'assembl
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const normalize = (value) => String(value ?? '').toLowerCase().replaceAll(' ', '_');
 const bodyOf = (call) => call.transientResponseBody ?? call.responseBody;
+const coordinatorStreams = ['-coordinator-draft', '-coordinator-decompose', '-coordinator-orchestrate'];
 
 export class AcceptanceFailure extends Error {
   constructor(message, code = 'acceptance_failed') {
@@ -116,10 +117,12 @@ export async function runOracleAcceptance({
     schema: 'agentweaver.oracle-assembly-acceptance/v1', verdict: 'fail',
     phase: 'preflight', projectId, parentRunId: suppliedRunId ?? null,
     childRunIds: [], revisionIds: [], previews: [], decisions: [],
+    shellApprovalReconciliations: [],
     lastEvents: [], terminalDiagnostic: null, transcriptPath, resultPath, cleanup: [],
     phaseTimingsMs: {},
   };
   const owned = [];
+  const submittedShellApprovals = new Set();
   const deltas = new EventDeltas(request);
   let phaseStarted = clock();
   let phaseDeadline = Infinity;
@@ -207,6 +210,41 @@ export async function runOracleAcceptance({
       ...decision, output_revision_id: revisionId,
     }, { headers: { 'If-Model-Provider-Key': context.execution_key } }), 'assembly review', [200, 202]);
   };
+  const pendingShellApprovals = async (runIds) => {
+    const body = requireResponse(await checkedRequest('GET', path('/pending-approvals')), 'pending approvals');
+    if (!body || body.run_id !== result.parentRunId || !Array.isArray(body.approvals)
+      || !Number.isInteger(body.count) || body.count !== body.approvals.length) {
+      throw new AcceptanceFailure('Invalid pending approvals response for the tested root run.');
+    }
+    const scope = new Set(runIds);
+    const seen = new Set();
+    return body.approvals.filter((entry) => {
+      if (!entry || typeof entry.root_run_id !== 'string' || entry.root_run_id !== result.parentRunId
+        || typeof entry.owning_run_id !== 'string' || !entry.owning_run_id
+        || typeof entry.action_run_id !== 'string' || !entry.action_run_id
+        || typeof entry.request_id !== 'string' || !entry.request_id.trim()
+        || typeof entry.is_shell !== 'boolean') {
+        throw new AcceptanceFailure('Invalid pending approval identity or classification.');
+      }
+      const key = `${entry.owning_run_id}\0${entry.request_id}`;
+      if (seen.has(key)) throw new AcceptanceFailure('Duplicate pending approval identity.');
+      seen.add(key);
+      if (!scope.has(entry.action_run_id)) {
+        throw new AcceptanceFailure('Pending approval action run is outside the tested run tree.');
+      }
+      if (!entry.is_shell) {
+        if (entry.tool_name === 'run_command') throw new AcceptanceFailure('Conflicting pending shell classification.');
+        return false;
+      }
+      if (entry.tool_name !== 'run_command'
+        || !(entry.owning_run_id === entry.action_run_id
+          || (entry.action_run_id === result.parentRunId
+            && coordinatorStreams.some((suffix) => entry.owning_run_id === result.parentRunId + suffix)))) {
+        throw new AcceptanceFailure('Pending shell approval is outside the tested run tree or has conflicting classification.');
+      }
+      return true;
+    });
+  };
   const snapshot = async () => {
     const [run, plan, children] = await Promise.all([
       checkedRequest('GET', path('')), checkedRequest('GET', path('/work-plan')), checkedRequest('GET', path('/children')),
@@ -218,12 +256,31 @@ export async function runOracleAcceptance({
     const ids = [result.parentRunId, ...(Array.isArray(children.body) ? children.body.map((c) => c.childRunId).filter(Boolean) : [])];
     result.childRunIds = [...new Set([...result.childRunIds, ...ids.slice(1)])];
     for (const id of ids) {
-      const events = await deltas.poll(id);
-      for (const event of events) {
-        if (event.type !== 'shell.approval_required') continue;
-        const hash = event.payload?.commandHash ?? event.payload?.command_hash;
-        if (!approveShell || !hash) throw new AcceptanceFailure(`Shell approval required for ${id}; rerun with --approve-shell only for a disposable project.`);
-        requireResponse(await checkedRequest('POST', `/api/runs/${encodeURIComponent(id)}/shell-approvals`, { command_hash: hash }), 'shell approval', [200, 201, 202]);
+      await deltas.poll(id);
+    }
+    for (const approval of await pendingShellApprovals(ids)) {
+      const key = `${approval.action_run_id}\0${approval.request_id}`;
+      if (!approveShell) {
+        throw new AcceptanceFailure(`Shell approval required for ${approval.action_run_id}; rerun with --approve-shell only for a disposable project.`);
+      }
+      if (submittedShellApprovals.has(key)) {
+        throw new AcceptanceFailure(`Shell approval still pending after submission for ${approval.action_run_id}; refusing to replay the write.`);
+      }
+      submittedShellApprovals.add(key);
+      const response = await checkedRequest('POST', `/api/runs/${encodeURIComponent(approval.action_run_id)}/shell-approvals`, {
+        command_hash: approval.request_id,
+      });
+      if (response.status === 409 && response.body?.error === 'Run is not active.') {
+        const current = await pendingShellApprovals(ids);
+        if (current.some((entry) => entry.action_run_id === approval.action_run_id && entry.request_id === approval.request_id)) {
+          throw new AcceptanceFailure(`Shell approval conflict for ${approval.action_run_id}: request is still pending.`);
+        }
+        result.shellApprovalReconciliations.push({
+          actionRunId: approval.action_run_id, requestId: approval.request_id,
+          reason: 'Request no longer actionable after conflict; confirmed absent from fresh pending approvals.',
+        });
+      } else {
+        requireResponse(response, 'shell approval', [200, 201, 202]);
       }
     }
     result.lastEvents = deltas.recent;

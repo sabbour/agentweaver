@@ -93,6 +93,7 @@ test('pre-existing preview is never adopted or deleted', async () => {
         if (url === '/api/auth/session') return { status: 200, body: { authenticated: true } };
         if (url.endsWith('/work-plan')) return { status: 200, body: { status: 'in_review' } };
         if (url.endsWith('/children')) return { status: 200, body: [{ childRunId: 'child' }] };
+        if (url.endsWith('/pending-approvals')) return { status: 200, body: { run_id: 'parent', count: 0, approvals: [] } };
         if (url.includes('/events?')) return { status: 200, body: url.includes('/child/') && url.includes('after=0')
           ? [{ sequence: 1, type: 'sandbox.execution_pod.bound', payload: {} }] : [] };
         if (url.endsWith('/assembly/files')) return { status: 200, body: [{ path: 'index.html' }] };
@@ -125,6 +126,7 @@ test('timeout fails closed with phase, identifiers, last events, diagnostic and 
         if (url === '/api/projects/project') return { status: 200, body: { id: 'project' } };
         if (url.endsWith('/work-plan')) return { status: 404, body: {} };
         if (url.endsWith('/children')) return { status: 200, body: [] };
+        if (url.endsWith('/pending-approvals')) return { status: 200, body: { run_id: 'parent', count: 0, approvals: [] } };
         if (url.includes('/events?')) return { status: 200, body: [{ sequence: 1, type: 'run.started', payload: {} }].filter((e) => url.includes('after=0')) };
         return { status: 200, body: { status: 'in_progress', project_id: 'project', failureReason: 'waiting for planning' } };
       },
@@ -149,6 +151,7 @@ async function driveReviewFixture({
   rejectReviewHeader = false, staleDecision = false, advancePreviewRequestMs = 0,
   transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
   advanceThrownRunMs = 0, planningBudget = 6,
+  approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
 } = {}) {
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
@@ -158,6 +161,8 @@ async function driveReviewFixture({
     const opened = [];
     const deleted = [];
     const decisions = [];
+    const approvalPosts = [];
+    let pendingReads = 0;
     const active = new Set();
     let remainingTransientRunReads = transientRunReads;
     let remainingThrownRunReads = thrownRunReads;
@@ -175,14 +180,34 @@ async function driveReviewFixture({
       if (url === '/api/projects/project') return { status: 200, body: {} };
       if (url.endsWith('/work-plan')) return { status: 200, body: { status: approved ? 'complete' : 'in_review' } };
       if (url.endsWith('/children')) return { status: 200, body: [{ childRunId: 'first' }, ...(revised ? [{ childRunId: 'second' }] : [])] };
+      if (url.endsWith('/pending-approvals')) {
+        pendingReads++;
+        const current = approvals.filter((entry) => (!entry.onRevision || revised)
+          && !(entry.resolved || entry.expired || (entry.approved !== false && approvalPosts.some((post) =>
+            post.url === `/api/runs/${entry.action_run_id}/shell-approvals` && post.body.command_hash === entry.request_id)))
+          && !(approvalConflict === 'resolved' && approvalPosts.length));
+        return { status: 200, body: typeof pendingBody === 'function' ? pendingBody(pendingReads)
+          : pendingBody ?? { run_id: 'parent', count: current.length, approvals: current } };
+      }
       if (url.includes('/events?')) {
         const after = Number(new URL(url, 'https://example.test').searchParams.get('after'));
         if (url.includes('/parent/')) return { status: 200, body: [
           { sequence: 1, type: 'coordinator.assembly_review_requested', payload: missingInitialId ? {} : { outputRevisionId: 'revision-1' } },
           ...(revised ? [{ sequence: 2, type: 'coordinator.assembly_review_requested', payload: { outputRevisionId: staleCorrectedId ? 'revision-1' : 'revision-2' } }] : []),
         ].filter((event) => event.sequence > after) };
-        return { status: 200, body: (url.includes('/first/') || url.includes('/second/')) && after === 0
-          ? [{ sequence: 1, type: 'sandbox.execution_pod.bound', payload: {} }] : [] };
+        const owner = url.includes('/first/') ? 'first' : url.includes('/second/') ? 'second' : null;
+        return { status: 200, body: owner && after === 0
+          ? [{ sequence: 1, type: 'sandbox.execution_pod.bound', payload: {} },
+            ...approvals.filter((entry) => entry.owning_run_id === owner).map((entry, index) => ({
+              sequence: index + 2, type: 'shell.approval_required',
+              payload: { commandHash: entry.request_id, ...(entry.expired ? { expiresAt: '2020-01-01T00:00:00Z' } : {}) },
+            }))] : [] };
+      }
+      if (url.endsWith('/shell-approvals')) {
+        approvalPosts.push({ url, body });
+        if (approvalConflict === 'timeout') throw new AcceptanceFailure('POST shell approval timed out', 'request_timeout');
+        return approvalConflict ? { status: 409, body: { error: approvalConflict === 'other' ? 'Unrelated conflict.' : 'Run is not active.' } }
+          : { status: 200, body: { approved: true } };
       }
       if (url.endsWith('/assembly/files')) return { status: 200, body: [{ path: 'index.html', status: 'modified' }] };
       if (url.includes('/output-revisions/revision-')) {
@@ -233,12 +258,126 @@ async function driveReviewFixture({
       browser, transcriptPath: path.join(directory, 'trace.jsonl'), resultPath: path.join(directory, 'result.json'),
       budgets: { ...DEFAULT_BUDGETS, planning: planningBudget, correctedPreview: correctedBudget },
       clock: () => now, pause: async (ms) => { now += ms; },
+      approveShell,
     });
-    return { result, opened, decisions, deleted, runReadAttempts };
+    return { result, opened, decisions, deleted, runReadAttempts, approvalPosts, pendingReads };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+const shellApproval = (owner = 'first', hash = 'command-hash') => ({
+  root_run_id: 'parent', owning_run_id: owner, action_run_id: owner,
+  request_id: hash, tool_name: 'run_command', is_shell: true,
+});
+
+test('attaching at review keeps completed-child shell history but does not approve it', async () => {
+  const { result, approvalPosts, opened } = await driveReviewFixture({
+    approvals: [{ ...shellApproval(), resolved: true }],
+  });
+  assert.equal(result.verdict, 'pass');
+  assert.equal(approvalPosts.length, 0);
+  assert.deepEqual(opened.map((entry) => entry[1]), ['original', 'fixed']);
+  assert.ok(result.lastEvents.some((event) => event.type === 'shell.approval_required'));
+});
+
+test('resolved and expired historical approvals require no opt-in or POST', async () => {
+  for (const approveShell of [false, true]) {
+    const { result, approvalPosts, pendingReads } = await driveReviewFixture({
+      approveShell, approvals: [{ ...shellApproval('first', 'resolved'), resolved: true },
+        { ...shellApproval('first', 'expired'), expired: true }],
+    });
+    assert.equal(result.verdict, 'pass');
+    assert.equal(approvalPosts.length, 0);
+    assert.ok(pendingReads > 0);
+  }
+});
+
+test('owned actionable shell approval requires opt-in and uses its action run and hash', async () => {
+  const approval = shellApproval();
+  const denied = await driveReviewFixture({ approvals: [approval] });
+  assert.equal(denied.result.verdict, 'fail');
+  assert.match(denied.result.error.message, /Shell approval required/);
+  assert.equal(denied.approvalPosts.length, 0);
+  const allowed = await driveReviewFixture({ approvals: [approval], approveShell: true });
+  assert.equal(allowed.result.verdict, 'pass');
+  assert.deepEqual(allowed.approvalPosts, [{ url: '/api/runs/first/shell-approvals', body: { command_hash: 'command-hash' } }]);
+});
+
+test('new revision child shell request is handled after attachment', async () => {
+  const { result, approvalPosts, opened } = await driveReviewFixture({
+    approveShell: true,
+    approvals: [{ ...shellApproval(), resolved: true }, { ...shellApproval('second', 'new-hash'), onRevision: true }],
+  });
+  assert.equal(result.verdict, 'pass');
+  assert.deepEqual(approvalPosts, [{ url: '/api/runs/second/shell-approvals', body: { command_hash: 'new-hash' } }]);
+  assert.deepEqual(opened.map((entry) => entry[1]), ['original', 'fixed']);
+});
+
+test('synthetic coordinator stream uses the parent action run, and unrelated non-shell approvals do not trigger writes', async () => {
+  const synthetic = { ...shellApproval('parent-coordinator-decompose', 'synthetic-hash'), action_run_id: 'parent' };
+  const nonShell = { ...shellApproval('first', 'tool-id'), is_shell: false, tool_name: 'read_file' };
+  const { result, approvalPosts } = await driveReviewFixture({
+    approveShell: true, approvals: [synthetic, nonShell],
+  });
+  assert.equal(result.verdict, 'pass');
+  assert.deepEqual(approvalPosts, [{ url: '/api/runs/parent/shell-approvals', body: { command_hash: 'synthetic-hash' } }]);
+});
+
+test('unrelated, malformed, or inconsistently classified pending approvals fail closed', async () => {
+  const cases = [
+    { approvals: [shellApproval('other')] },
+    { approvals: [{ ...shellApproval(), root_run_id: 'other' }] },
+    { approvals: [{ ...shellApproval(), action_run_id: 'other' }] },
+    { approvals: [{ ...shellApproval(), request_id: '' }] },
+    { approvals: [{ ...shellApproval(), tool_name: 'some_other_tool' }] },
+    { approvals: [{ ...shellApproval(), is_shell: false }] },
+    { approvals: [shellApproval(), shellApproval()] },
+    { pendingBody: { run_id: 'parent', count: 1, approvals: [] } },
+    { pendingBody: { run_id: 'other', count: 0, approvals: [] } },
+    { pendingBody: { count: 0, approvals: [] } },
+    { pendingBody: { run_id: 'parent', count: 1, approvals: null } },
+  ];
+  for (const options of cases) {
+    const { result, approvalPosts } = await driveReviewFixture({ ...options, approveShell: true });
+    assert.equal(result.verdict, 'fail', JSON.stringify(options));
+    assert.match(result.error.message, /pending approval|pending shell/i);
+    assert.equal(approvalPosts.length, 0);
+  }
+});
+
+test('409 resolution race reconciles with one read, but pending or unrelated conflicts fail', async () => {
+  const approval = shellApproval();
+  const resolved = await driveReviewFixture({ approvals: [approval], approveShell: true, approvalConflict: 'resolved' });
+  assert.equal(resolved.result.verdict, 'pass');
+  assert.equal(resolved.approvalPosts.length, 1);
+  assert.deepEqual(resolved.result.shellApprovalReconciliations.map((entry) => entry.requestId), ['command-hash']);
+  assert.match(resolved.result.shellApprovalReconciliations[0].reason, /confirmed absent/);
+
+  for (const approvalConflict of ['pending', 'other']) {
+    const { result, approvalPosts } = await driveReviewFixture({
+      approvals: [{ ...approval, approved: false }], approveShell: true, approvalConflict,
+    });
+    assert.equal(result.verdict, 'fail');
+    assert.equal(approvalPosts.length, 1);
+    assert.match(result.error.message, /conflict|HTTP 409/i);
+  }
+  const timeout = await driveReviewFixture({
+    approvals: [{ ...approval, approved: false }], approveShell: true, approvalConflict: 'timeout',
+  });
+  assert.equal(timeout.result.verdict, 'fail');
+  assert.equal(timeout.result.error.code, 'request_timeout');
+  assert.equal(timeout.approvalPosts.length, 1);
+  const malformed = await driveReviewFixture({
+    approvals: [approval], approveShell: true, approvalConflict: 'resolved',
+    pendingBody: (read) => read === 1
+      ? { run_id: 'parent', count: 1, approvals: [approval] }
+      : { run_id: 'parent', count: 0 },
+  });
+  assert.equal(malformed.result.verdict, 'fail');
+  assert.equal(malformed.approvalPosts.length, 1);
+  assert.match(malformed.result.error.message, /Invalid pending approvals response/);
+});
 
 test('both preview gates pin fresh parent revisions and execution headers; metadata list can be identical', async () => {
   const { result, opened, decisions, deleted } = await driveReviewFixture();
