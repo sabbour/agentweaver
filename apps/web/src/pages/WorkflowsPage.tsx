@@ -98,10 +98,12 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
     flexWrap: 'wrap',
+    minWidth: 0,
   },
   mono: {
     fontFamily: tokens.fontFamilyMonospace,
     color: tokens.colorNeutralForeground3,
+    overflowWrap: 'anywhere',
   },
   rowWrap: {
     display: 'flex',
@@ -778,6 +780,8 @@ export function WorkflowsPage() {
     return (
       <div key={key} className={styles.rowWrap}>
         <ListRow
+          data-testid={`workflow-card-${key}`}
+          stacked
           media={<FlowRegular />}
           bubble
           primary={wf.name ?? wf.id ?? 'Unnamed workflow'}
