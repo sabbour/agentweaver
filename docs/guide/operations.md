@@ -17,8 +17,7 @@ Before preparing or publishing, deploy the exact committed candidate with
 `npm run azure:deploy-from-commit -- <candidate-sha>`. Run representative
 integration and feature-specific API/UI E2E acceptance against that deployment
 and record passing results bound to the SHA. A changed candidate must be
-redeployed and retested. Local k3s is optional diagnostic coverage, not a
-release gate until its complete provider-backed path is proven.
+redeployed and retested.
 
 Only after that acceptance passes, prepare and promote the release as described
 in [RELEASING.md](https://github.com/sabbour/agentweaver/blob/dev/RELEASING.md).

@@ -94,6 +94,11 @@ test("run: unknown command throws and logs an error", async () => {
   assert.ok(errors.some((e) => e.includes("bogus")));
 });
 
+test("run: retired local k3s release gate is not a CLI command", async () => {
+  assert.doesNotMatch(HELP_TEXT, /local-k3s-gate/);
+  await assert.rejects(run(["local-k3s-gate"], { log: noopLog() }), /Unknown command/);
+});
+
 test("run: routes 'provision-infra' with argv + log", async () => {
   let received;
   const modules = { "provision-infra": { run: async (opts) => { received = opts; return { ok: true }; } } };

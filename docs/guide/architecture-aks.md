@@ -254,53 +254,10 @@ They use the API image and injected `ConnectionStrings__MemoryDb` /
 embedded in the image or manifest. Local design-time commands default to SQLite;
 use `--postgres-migrations` only with configured PostgreSQL credentials.
 
-### Local deployment diagnostic
-
-The local production-path check is optional diagnostic/development coverage, not
-a release acceptance requirement:
-
-```bash
-npm run release:local-k3s-gate
-```
-
-Do not use its results as blocking release evidence until the complete
-provider-backed local deployment and smoke path is separately repaired and
-proven. For release acceptance, deploy the committed candidate with
+For release-candidate acceptance, deploy the committed candidate with
 `npm run azure:deploy-from-commit -- <candidate-sha>` and run representative
 integration plus feature-specific API/UI tests against that exact-SHA deployment
-before release preparation or publication. See [RELEASING.md](../../RELEASING.md).
-
-The command targets `Ubuntu-24.04` WSL k3s and attempts to provision or start k3s
-with the documented installer/service when the binary, process, or kubeconfig is
-absent. Every local `kubectl` operation is forced through
-`/etc/rancher/k3s/k3s.yaml`, so an existing AKS current context cannot receive
-the local manifests. The API image supports both `linux/amd64` and `linux/arm64`
-builds for local hosts; its Copilot CLI, GitHub CLI, and kubectl executables match
-the selected image platform. It renders the
-candidate Kubernetes manifests, fails before deployment if any AI execution
-producer/consumer does not use the same
-`AiExecution__ProviderKeySigningKey` `secretKeyRef`, waits for the local API, and
-runs the focused API harness smoke with `--auth-provider local-test`.
-
-The local identity is intentionally not Entra or GitHub. It is a deterministic
-Development-only bearer (`AGENTWEAVER_LOCAL_TEST_BEARER`) consumed in memory by
-the harness; the API reports `LocalTest` only when `ASPNETCORE_ENVIRONMENT` is
-`Development`, `Auth__Mode=LocalTest`, and `Testing__BypassGitHubTokenAuth=true`.
-Production mode refuses the underlying bypass flags at startup and the worker
-runs with `ASPNETCORE_ENVIRONMENT=Production`, so missing server-only
-configuration such as `AiExecution__ProviderKeySigningKey` fails closed instead
-of falling back to development defaults.
-
-The local API and worker remain separate deployments. They share only a local
-file-backed secret store mounted at `/var/agentweaver/local-secrets` so provider
-configuration written through the API is visible to the hosted worker process.
-That file store is for local multi-process validation only; Azure deployments
-continue to use Key Vault.
-
-Keep the staging identity smoke separate: use the default API harness
-recorder-session provider against staging to cover Microsoft Entra session
-creation, OAuth callbacks, and GitHub repository authorization. Do not add
-interactive identity to the local gate.
+before preparing or publishing the release. See [RELEASING.md](../../RELEASING.md).
 
 ### Ephemeral storage for testing
 
