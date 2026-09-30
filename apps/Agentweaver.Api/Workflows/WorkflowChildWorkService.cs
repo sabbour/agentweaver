@@ -450,7 +450,11 @@ internal sealed class WorkflowChildWorkService
             {
                 ProjectId = request.ParentRun.ProjectId?.ToString() ?? string.Empty,
                 CoordinatorRunId = childRunId,
-                Goal = composedPrompt ?? $"Execute workflow child work for node '{request.ParentWorkflowNodeId}'.",
+                Goal = composedPrompt is null
+                    ? $"Execute workflow child work for node '{request.ParentWorkflowNodeId}'."
+                    : $"{composedPrompt}\n\n[Parent workflow context]\n" +
+                      (request.IncomingInput?.Task
+                          ?? throw new InvalidOperationException("Composed child work requires the parent turn context.")),
                 DesiredOutcome = composedPrompt ?? "Complete every declared static branch and return one ordered result.",
                 Scope = $"Pinned parent workflow '{request.ParentWorkflowId}', node '{request.ParentWorkflowNodeId}'.",
                 Assumptions = composedPrompt is null

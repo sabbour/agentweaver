@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -875,6 +876,27 @@ public sealed class RunWatchLoopService
                     workPlanId = fanCompleted.WorkPlanId,
                     childCoordinatorRunId = fanCompleted.ChildCoordinatorRunId,
                 }, watchLease).ConfigureAwait(false);
+            return true;
+        }
+
+        if (woe.Is<WorkflowComposedCompletedOutput>(out var composedCompleted))
+        {
+            var result = new
+            {
+                workPlanId = composedCompleted.WorkPlanId,
+                childCoordinatorRunId = composedCompleted.ChildCoordinatorRunId,
+                integrationBranch = composedCompleted.Assembly.IntegrationBranch,
+                treeHash = composedCompleted.Assembly.TreeHash,
+                aggregateDiff = composedCompleted.Assembly.AggregateDiff,
+                includedChildRunIds = composedCompleted.Assembly.IncludedChildRunIds,
+            };
+            var changed = await SetTerminalOutcomeAsync(
+                parsedRunId, currentRun, RunStatus.Completed, EventTypes.RunCompleted,
+                new { result }, JsonSerializer.Serialize(result), now, watchLease).ConfigureAwait(false);
+            if (!changed) return false;
+            EmitTerminalMetrics(currentRun, now, "succeeded", changed: changed);
+            await CompleteTerminalOutcomeAsync(changed, runId, entry, EventTypes.RunCompleted,
+                new { result }, watchLease).ConfigureAwait(false);
             return true;
         }
 
