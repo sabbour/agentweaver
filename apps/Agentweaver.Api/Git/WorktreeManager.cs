@@ -1074,6 +1074,7 @@ public sealed class WorktreeManager
         if (publish)
         {
             // Publish only the complete result; on failure preserve the previous revision for diagnosis.
+            MigrateLegacyIntegrationBranch(repo, integrationBranch);
             var refName = $"refs/heads/{integrationBranch}";
             var intRef = repo.Refs[refName];
             if (intRef is null)
@@ -1087,6 +1088,40 @@ public sealed class WorktreeManager
             integrationBranch,
             integrationCommit.Tree.Sha,
             patch.Content);
+    }
+
+    private void MigrateLegacyIntegrationBranch(Repository repo, string integrationBranch)
+    {
+        var match = Regex.Match(integrationBranch, @"^agentweaver/integration/([^/]+)/attempt-[^/]+$");
+        if (!match.Success)
+            return;
+
+        var legacyName = $"agentweaver/integration/{match.Groups[1].Value}";
+        var legacy = repo.Branches[legacyName];
+        if (legacy is null)
+            return;
+
+        if (!repo.Info.IsHeadDetached && string.Equals(repo.Head.FriendlyName, legacyName, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Cannot migrate legacy integration branch '{legacyName}' while it is checked out in the primary worktree.");
+        foreach (var worktree in repo.Worktrees)
+        {
+            using var worktreeRepo = worktree.WorktreeRepository;
+            if (!worktreeRepo.Info.IsHeadDetached
+                && string.Equals(worktreeRepo.Head.FriendlyName, legacyName, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Cannot migrate legacy integration branch '{legacyName}' while it is checked out in worktree '{worktree.Name}'.");
+        }
+
+        var archivedName = $"agentweaver/legacy-integration/{match.Groups[1].Value}";
+        if (repo.Branches[archivedName] is not null)
+            throw new InvalidOperationException(
+                $"Cannot migrate legacy integration branch '{legacyName}': archive '{archivedName}' already exists.");
+
+        repo.Branches.Rename(legacy, archivedName);
+        _logger.LogInformation(
+            "Migrated legacy integration branch '{LegacyBranch}' to '{ArchivedBranch}' before publishing '{IntegrationBranch}'",
+            legacyName, archivedName, integrationBranch);
     }
 
     private static bool PathsOverlap(string first, string second) =>
