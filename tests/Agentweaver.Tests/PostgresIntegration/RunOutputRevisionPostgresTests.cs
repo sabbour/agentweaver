@@ -126,4 +126,55 @@ public sealed class RunOutputRevisionPostgresTests(PostgresFixture pg)
         (await store.ApproveCollectiveCandidateAsync(
             id, generation, secondCandidate.RevisionId, default, second)).Should().BeTrue();
     }
+
+    [PostgresFact]
+    public async Task DigestlessCollectiveCandidateAfterCorrections_HasResolvableFinalManifest()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var id = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = id,
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "revise collective assembly",
+            SubmittingUser = "test",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var generation = (await store.GetAsync(id))!.LifecycleGeneration;
+        var retained = new RunOutputTree.File("app.js", 33188, "retained"u8.ToArray());
+        RunOutputRevision? prior = null;
+        for (var round = 1; round <= 3; round++)
+        {
+            var treeHash = $"tree-{round}";
+            var diff = $"revision-{round}";
+            var tree = RunOutputTree.Encode([retained,
+                new RunOutputTree.File($"round-{round}.txt", 33188, [(byte)round])]);
+            await store.UpdateAssemblyArtifactsAsync(id, treeHash, diff);
+            var candidate = await store.PublishCollectiveCandidateAsync(
+                id, generation, "7", treeHash, diff, tree);
+            candidate.PredecessorRevisionId.Should().Be(prior?.RevisionId);
+            candidate.WorkflowDigest.Should().BeNull();
+            candidate.ManifestIncomplete.Should().BeFalse();
+            (await ((IRunStore)store).ResolveOutputRevisionAsync(id, candidate.RevisionId))
+                .ResolveFile("app.js").Bytes.Should().Equal("retained"u8.ToArray());
+            prior = candidate;
+            if (round != 3) continue;
+
+            (await store.ApproveCollectiveCandidateAsync(id, generation, candidate.RevisionId))
+                .Should().BeTrue();
+            (await store.TryMutateTerminalOutcomeAsync(id, new TerminalRunMutation(
+                TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted,
+                    new { result = "assembly_complete" }, DateTimeOffset.UtcNow, generation),
+                "assembly_complete", TreeHash: treeHash, MergedCommitHash: "commit-three",
+                CollectiveOutput: new CollectiveOutputPublication(
+                    "7", "effect-three", "commit-three", treeHash, false, tree),
+                ApprovedCollectiveRevisionId: candidate.RevisionId))).Should().BeTrue();
+            var final = (await store.GetLatestOutputRevisionAsync(id))!;
+            final.ManifestIncomplete.Should().BeFalse();
+            final.ResolveFile("app.js").Bytes.Should().Equal("retained"u8.ToArray());
+        }
+    }
 }

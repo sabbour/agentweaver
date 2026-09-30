@@ -604,7 +604,8 @@ public sealed class SqliteRunStore : IRunStore
         if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
             throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
         command.CommandText = """
-            SELECT tree_hash, diff, executable_workflow_content_digest, current_output_revision_id
+            SELECT tree_hash, diff, executable_workflow_content_digest, current_output_revision_id,
+                   executable_workflow_pin_required
               FROM runs WHERE run_id=$runId;
             """;
         string? previousId;
@@ -615,6 +616,8 @@ public sealed class SqliteRunStore : IRunStore
             if (reader.IsDBNull(0) || reader.GetString(0) != treeHash
                 || reader.IsDBNull(1) || reader.GetString(1) != diff)
                 throw new RunOutputRevisionUnavailableException("stale_collective_candidate");
+            if (reader.GetInt32(4) != 0 && reader.IsDBNull(2))
+                throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
             digest = reader.IsDBNull(2) ? null : reader.GetString(2);
             previousId = reader.IsDBNull(3) ? null : reader.GetString(3);
         }
@@ -624,6 +627,7 @@ public sealed class SqliteRunStore : IRunStore
                 ?? throw new RunOutputRevisionUnavailableException("missing_content");
             if (previous.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
                 && previous.LifecycleGeneration == generation && previous.WorkPlanId == workPlanId
+                && !previous.ManifestIncomplete
                 && previous.TreeHash == treeHash && previous.WorkflowDigest == digest
                 && previous.DiffBytes.AsSpan().SequenceEqual(bytes)
                 && (previous.TreeContent ?? []).AsSpan().SequenceEqual(treeContent))
@@ -645,7 +649,7 @@ public sealed class SqliteRunStore : IRunStore
             """;
         command.Parameters.AddWithValue("$revision", revisionId);
         command.Parameters.AddWithValue("$workflow", (object?)digest ?? DBNull.Value);
-        command.Parameters.AddWithValue("$incomplete", digest is null ? 1 : 0);
+        command.Parameters.AddWithValue("$incomplete", 0);
         command.Parameters.AddWithValue("$tree", treeHash);
         command.Parameters.AddWithValue("$sha", RunOutputRevision.Sha256(bytes));
         command.Parameters.AddWithValue("$previous", (object?)previousId ?? DBNull.Value);
@@ -1239,7 +1243,7 @@ public sealed class SqliteRunStore : IRunStore
                 """;
             publish.Parameters.AddWithValue("$revision", revisionId);
             publish.Parameters.AddWithValue("$workflow", (object?)workflowDigest ?? DBNull.Value);
-            publish.Parameters.AddWithValue("$incomplete", workflowDigest is null ? 1 : 0);
+            publish.Parameters.AddWithValue("$incomplete", 0);
             publish.Parameters.AddWithValue("$tree", output.TreeHash);
             publish.Parameters.AddWithValue("$digest", RunOutputRevision.Sha256(bytes));
             publish.Parameters.AddWithValue("$predecessor", (object?)predecessor ?? DBNull.Value);

@@ -495,6 +495,9 @@ public sealed class EfRunStore : IRunStore
             $"SELECT pg_advisory_xact_lock(hashtextextended({id}, 0));", ct);
         var run = await db.Runs.SingleOrDefaultAsync(r => r.RunId == id, ct);
         var now = DateTimeOffset.UtcNow;
+        if (run is { ExecutableWorkflowPinRequired: true }
+            && string.IsNullOrWhiteSpace(run.ExecutableWorkflowContentDigest))
+            throw new RunOutputRevisionUnavailableException("invalid_collective_manifest");
         if (run is null || run.LifecycleGeneration != generation
             || run.Status is not ("in_progress" or "awaiting_review")
             || run.TreeHash != treeHash || run.Diff != diff
@@ -514,6 +517,7 @@ public sealed class EfRunStore : IRunStore
             var revision = ToOutputRevision(previous);
             if (revision.SchemaVersion == RunOutputRevision.CollectiveCandidateSchemaVersion
                 && revision.LifecycleGeneration == generation && revision.WorkPlanId == workPlanId
+                && !revision.ManifestIncomplete
                 && revision.TreeHash == treeHash
                 && revision.WorkflowDigest == run.ExecutableWorkflowContentDigest
                 && revision.DiffBytes.AsSpan().SequenceEqual(bytes)
@@ -531,7 +535,7 @@ public sealed class EfRunStore : IRunStore
             RunId = id,
             LifecycleGeneration = generation,
             WorkflowDigest = run.ExecutableWorkflowContentDigest,
-            ManifestIncomplete = run.ExecutableWorkflowContentDigest is null,
+            ManifestIncomplete = false,
             TreeHash = treeHash,
             DiffSha256 = RunOutputRevision.Sha256(bytes),
             PredecessorRevisionId = previous?.RevisionId,
@@ -1032,7 +1036,7 @@ public sealed class EfRunStore : IRunStore
                 RunId = record.RunId,
                 LifecycleGeneration = record.LifecycleGeneration,
                 WorkflowDigest = record.ExecutableWorkflowContentDigest,
-                ManifestIncomplete = record.ExecutableWorkflowContentDigest is null,
+                ManifestIncomplete = false,
                 TreeHash = output.TreeHash,
                 DiffSha256 = RunOutputRevision.Sha256(bytes),
                 PredecessorRevisionId = predecessor,

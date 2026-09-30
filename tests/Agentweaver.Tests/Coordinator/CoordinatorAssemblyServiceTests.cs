@@ -1972,6 +1972,50 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RunAssembly_DigestlessCandidateAfterRepeatedCorrections_PassesReviewWithPreviewRequired()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId, pinWorkflow: false);
+        var (workPlanId, _) = await SeedPlanAsync(
+            coordinatorRunId, [SubtaskStatus.Completed, SubtaskStatus.AssembleReady]);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var runId = RunId.Parse(coordinatorRunId);
+        for (var round = 1; round <= 2; round++)
+        {
+            var tree = $"prior-tree-{round}";
+            var diff = $"prior correction {round}";
+            await _runStore.UpdateAssemblyArtifactsAsync(runId, tree, diff);
+            var candidate = await _runStore.PublishCollectiveCandidateAsync(
+                runId, 1, workPlanId.ToString(), tree, diff,
+                _pipeline.CaptureOutputTree("repo", tree));
+            candidate.ResolveFile("fixture.txt").Bytes.Should()
+                .Equal(System.Text.Encoding.UTF8.GetBytes(tree));
+        }
+
+        var assembly = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        var current = (await _runStore.GetAsync(runId))!;
+        var reviewed = (await _runStore.GetOutputRevisionAsync(runId, current.CurrentOutputRevisionId!))!;
+        reviewed.PredecessorRevisionId.Should().NotBeNull();
+        reviewed.WorkflowDigest.Should().BeNull();
+        reviewed.ManifestIncomplete.Should().BeFalse();
+        reviewed.ResolveFile("fixture.txt").Bytes.Should().Equal("agg-tree"u8.ToArray());
+        await InvokeEnsurePreviewApplicabilityRecordedAsync(
+            coordinatorRunId, workPlanId, reviewed.TreeHash, current.Diff!);
+        PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
+        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+            new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
+                TargetFiles: null, Reviewer: "alice", OutputRevisionId: reviewed.RevisionId))
+            .Should().Be(AssemblyReviewSubmitResult.Accepted);
+        await assembly;
+
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.Complete);
+        var completed = (await _runStore.GetLatestOutputRevisionAsync(runId))!;
+        completed.ManifestIncomplete.Should().BeFalse();
+        completed.ResolveFile("fixture.txt").Bytes.Should().Equal("agg-tree"u8.ToArray());
+    }
+
+    [Fact]
     public async Task RunAssembly_RecoveredAppliedReceipt_SkipsMergeReplayAndScribe()
     {
         var coordinatorRunId = RunId.New().ToString();
@@ -3119,7 +3163,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             var candidate = await _runStore.PublishCollectiveCandidateAsync(
                 run.Id, run.LifecycleGeneration, planId.ToString(), treeHash, "reviewed",
                 RunOutputTreeCapture.Capture(path, treeHash));
-            candidate.ManifestIncomplete.Should().BeTrue("coordinators need not have an executable workflow digest");
+            candidate.ManifestIncomplete.Should().BeFalse("the captured collective tree is complete without an executable workflow digest");
             _streamStore.Create(coordinatorRunId, "alice");
             var sut = new CoordinatorAssemblyService(
                 _runStore, _streamStore, _assemblyStore, _reviewGate, _pipeline,
@@ -3224,7 +3268,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                     var candidate = await _runStore.PublishCollectiveCandidateAsync(
                         run.Id, run.LifecycleGeneration, planId.ToString(), treeHash, "reviewed",
                         RunOutputTreeCapture.Capture(path, treeHash));
-                    candidate.ManifestIncomplete.Should().BeTrue();
+                    candidate.ManifestIncomplete.Should().BeFalse();
                     _streamStore.Create(coordinatorRunId, "alice");
 
                     var sut = new CoordinatorAssemblyService(
@@ -3271,12 +3315,6 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
                         var stale = await Assert.ThrowsAsync<RunOutputRevisionUnavailableException>(
                             () => InvokeDecision(decision with { OutputRevisionId = "stale-revision" }));
                         stale.Reason.Should().Be("stale_collective_decision");
-                        var approval = await Assert.ThrowsAsync<RunOutputRevisionUnavailableException>(
-                            () => InvokeDecision(decision with { Approved = true, RequestChanges = false }));
-                        approval.Reason.Should().Be("incomplete_manifest");
-                        var decline = await Assert.ThrowsAsync<RunOutputRevisionUnavailableException>(
-                            () => InvokeDecision(decision with { RequestChanges = false }));
-                        decline.Reason.Should().Be("incomplete_manifest");
                         _dispatch.StartDispatchCalls.Should().BeEmpty();
                         await InvokeDecision(decision);
                     }
@@ -4580,7 +4618,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     private async Task SeedCoordinatorRunAsync(
         string coordinatorRunId,
         string? modelId = null,
-        ProjectId? projectId = null)
+        ProjectId? projectId = null,
+        bool pinWorkflow = true)
     {
         await _runStore.InsertAsync(new Run
         {
@@ -4596,7 +4635,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             ModelId = modelId,
             ProjectId = projectId,
         });
-        await _runStore.PinDefaultExecutableWorkflowForTestAsync(RunId.Parse(coordinatorRunId));
+        if (pinWorkflow)
+            await _runStore.PinDefaultExecutableWorkflowForTestAsync(RunId.Parse(coordinatorRunId));
     }
 
     private async Task SeedChildRunAsync(

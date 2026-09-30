@@ -241,6 +241,85 @@ public sealed class RunOutputRevisionStoreTests
     }
 
     [Fact]
+    public async Task DigestlessCollectiveRevision_RetainsCompleteManifestAcrossRepeatedCorrectionsAndApproval()
+    {
+        await using var db = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(db.Db);
+        var id = await InsertAsync(store);
+        var generation = (await store.GetAsync(id))!.LifecycleGeneration;
+        var retained = new RunOutputTree.File("app.js", 33188, "original"u8.ToArray());
+
+        for (var round = 1; round <= 3; round++)
+        {
+            var treeHash = $"tree-{round}";
+            var diff = $"correction-{round}";
+            var tree = RunOutputTree.Encode([retained,
+                new RunOutputTree.File($"correction-{round}.txt", 33188, [(byte)round])]);
+            await store.UpdateAssemblyArtifactsAsync(id, treeHash, diff);
+            var candidate = await store.PublishCollectiveCandidateAsync(
+                id, generation, "7", treeHash, diff, tree);
+            candidate.WorkflowDigest.Should().BeNull();
+            candidate.ManifestIncomplete.Should().BeFalse();
+            (await ((IRunStore)store).ResolveOutputRevisionAsync(id, candidate.RevisionId))
+                .ResolveFile("app.js").Bytes.Should().Equal("original"u8.ToArray());
+            if (round == 3)
+            {
+                (await store.ApproveCollectiveCandidateAsync(id, generation, candidate.RevisionId))
+                    .Should().BeTrue();
+                var completed = await store.TryMutateTerminalOutcomeAsync(id, new TerminalRunMutation(
+                    TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted,
+                        new { result = "assembly_complete" }, DateTimeOffset.UtcNow, generation),
+                    "assembly_complete", TreeHash: treeHash, MergedCommitHash: "commit-three",
+                    CollectiveOutput: new CollectiveOutputPublication(
+                        "7", "effect-three", "commit-three", treeHash, false, tree),
+                    ApprovedCollectiveRevisionId: candidate.RevisionId));
+                completed.Should().BeTrue();
+                var final = (await store.GetLatestOutputRevisionAsync(id))!;
+                final.ManifestIncomplete.Should().BeFalse();
+                final.ResolveFile("app.js").Bytes.Should().Equal("original"u8.ToArray());
+            }
+
+        }
+    }
+
+    [Fact]
+    public void LegacyIncompleteCollectiveRevision_StillRejectsFileResolution()
+    {
+        var tree = RunOutputTree.Encode([new RunOutputTree.File("app.js", 33188, [1])]);
+        var revision = new RunOutputRevision(
+            "legacy", RunOutputRevision.CollectiveCandidateSchemaVersion, RunId.New(), 1,
+            null, true, "tree", RunOutputRevision.Sha256([]), null, [], DateTimeOffset.UtcNow,
+            outputKind: "collective", workPlanId: "7",
+            treeContent: tree, treeContentSha256: RunOutputRevision.Sha256(tree));
+
+        FluentActions.Invoking(() => revision.ResolveFiles())
+            .Should().Throw<RunOutputRevisionUnavailableException>()
+            .WithMessage("incomplete_manifest");
+        FluentActions.Invoking(() => new RunOutputRevision(
+                "corrupt", RunOutputRevision.CollectiveCandidateSchemaVersion, RunId.New(), 1,
+                null, false, "tree", RunOutputRevision.Sha256([]), null, [], DateTimeOffset.UtcNow,
+                outputKind: "collective", workPlanId: "7",
+                treeContent: tree, treeContentSha256: RunOutputRevision.Sha256([0])))
+            .Should().Throw<RunOutputRevisionUnavailableException>()
+            .WithMessage("corrupt_content");
+    }
+
+    [Fact]
+    public async Task RequiredExecutableWorkflowPin_CannotPublishDigestlessCollectiveCandidate()
+    {
+        await using var db = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(db.Db);
+        var id = await InsertAsync(store, workflowPinRequired: true);
+        await store.UpdateAssemblyArtifactsAsync(id, "tree", "diff");
+        var tree = RunOutputTree.Encode([new RunOutputTree.File("app.js", 33188, [1])]);
+
+        await FluentActions.Invoking(() => store.PublishCollectiveCandidateAsync(
+                id, 1, "7", "tree", "diff", tree))
+            .Should().ThrowAsync<RunOutputRevisionUnavailableException>()
+            .WithMessage("invalid_collective_manifest");
+    }
+
+    [Fact]
     public async Task CollectiveAssemblyWritesRejectSupersededLeaseToken()
     {
         await using var db = await TestSqliteDb.CreateAsync();
@@ -714,7 +793,8 @@ public sealed class RunOutputRevisionStoreTests
 
     private static async Task<RunId> InsertAsync(
         SqliteRunStore store,
-        bool executionInputRequired = false)
+        bool executionInputRequired = false,
+        bool workflowPinRequired = false)
     {
         var id = RunId.New();
         await store.InsertAsync(new Run
@@ -723,6 +803,7 @@ public sealed class RunOutputRevisionStoreTests
             RepositoryPath = "repo",
             OriginatingBranch = "main",
             ExecutionInputRequired = executionInputRequired,
+            ExecutableWorkflowPinRequired = workflowPinRequired,
             ModelSource = ModelSource.GitHubCopilot,
             Task = "output revision",
             SubmittingUser = "test",
