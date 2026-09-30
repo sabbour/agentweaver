@@ -457,6 +457,11 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
             _factory.Services.GetRequiredService<IStoryIndependenceClassifier>(),
             _factory.Services.GetRequiredService<IAssemblyGateCodeClassifier>(),
             "gpt-5-mini", null, null);
+        await store.UpdateExecutableWorkflowPinAsync(runId, saved! with { DefinitionYaml = "" });
+        var corrupted = () => executor.OrchestrateAsync(input, CancellationToken.None);
+        await corrupted.Should().ThrowAsync<WorkflowBindException>(
+            "an incomplete pending snapshot must not reselect from the current project");
+        await store.UpdateExecutableWorkflowPinAsync(runId, saved);
         var recovered = await executor.OrchestrateAsync(input, CancellationToken.None);
         using var verifyScope = _factory.Services.CreateScope();
         var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();

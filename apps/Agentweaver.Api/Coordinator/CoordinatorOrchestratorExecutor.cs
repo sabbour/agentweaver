@@ -589,6 +589,9 @@ public sealed class CoordinatorOrchestratorExecutor
                 input.RunId, selected.Id);
             return new WorkflowSelection(selected, IsExplicit: true, [selected], new HashSet<string>(StringComparer.Ordinal));
         }
+        if (run is not null && ExecutableWorkflowSnapshots.HasManifestData(run))
+            throw new WorkflowBindException(
+                $"Coordinator run '{input.RunId}' has an incomplete saved workflow manifest.", input.RunId);
 
         if (run?.RetriedFrom is null
             || !string.IsNullOrWhiteSpace(input.WorkflowOverrideId)
@@ -625,6 +628,10 @@ public sealed class CoordinatorOrchestratorExecutor
                 await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
                 return new WorkflowSelection(selected, IsExplicit: true, [selected], new HashSet<string>(StringComparer.Ordinal));
             }
+            if (ExecutableWorkflowSnapshots.HasManifestData(source))
+                throw new WorkflowBindException(
+                    $"Coordinator retry '{input.RunId}' source run '{currentSourceId}' has an incomplete saved workflow manifest.",
+                    input.RunId);
 
             if (source.ExecutableWorkflowPinRequired
                 && await db.WorkPlans.AsNoTracking().AnyAsync(

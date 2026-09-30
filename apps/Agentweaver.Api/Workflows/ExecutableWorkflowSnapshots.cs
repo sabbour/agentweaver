@@ -6,6 +6,15 @@ namespace Agentweaver.Api.Workflows;
 
 internal static class ExecutableWorkflowSnapshots
 {
+    public static bool HasManifestData(Run run) =>
+        run.ExecutableWorkflowManifestSchemaVersion is not null
+        || run.ExecutableWorkflowDefinitionId is not null
+        || run.ExecutableWorkflowDefinitionVersion is not null
+        || run.ExecutableWorkflowSource is not null
+        || run.ExecutableWorkflowContentDigest is not null
+        || run.ExecutableWorkflowDefinitionYaml is not null
+        || run.ExecutableWorkflowPinnedAt is not null;
+
     public static ExecutableWorkflowPin Create(WorkflowDefinition definition, string source)
     {
         var yaml = WorkflowDefinitionYamlSerializer.Serialize(definition);
