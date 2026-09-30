@@ -126,6 +126,11 @@ as the corrected version. The second gate requires changed assembly content and
 different rendered body before approving. The product's Build & Test gate precedes
 its human review/preview gate, so the first preview cannot be inspected earlier
 without changing the product workflow.
+Operator preview creation at `/sandbox/port-forward` sends `{ "targetPort": 3000 }`;
+the returned session fields remain snake_case. The separate agent-initiated
+`/sandbox/preview` endpoint accepts `{ "target_port": 3000 }`. A non-transient
+preview request rejection reports its HTTP status and error rather than a
+preview deadline timeout.
 
 Each assembly decision includes `output_revision_id` from the current parent
 `coordinator.assembly_review_requested` event (verified against parent output

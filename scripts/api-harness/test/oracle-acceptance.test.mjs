@@ -152,6 +152,7 @@ async function driveReviewFixture({
   transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
   advanceThrownRunMs = 0, planningBudget = 6,
   approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
+  previewReject = false, transientPreviewStatuses = [],
 } = {}) {
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
@@ -162,10 +163,12 @@ async function driveReviewFixture({
     const deleted = [];
     const decisions = [];
     const approvalPosts = [];
+    const previewPosts = [];
     let pendingReads = 0;
     const active = new Set();
     let remainingTransientRunReads = transientRunReads;
     let remainingThrownRunReads = thrownRunReads;
+    const pendingPreviewStatuses = [...transientPreviewStatuses];
     let runReadAttempts = 0;
     const browser = async (url, expected) => {
       opened.push([url, expected]);
@@ -228,6 +231,12 @@ async function driveReviewFixture({
         return { status: 200, body: {} };
       }
       if (url.endsWith('/sandbox/port-forward') && method === 'POST') {
+        previewPosts.push({ url, body });
+        if (!body || Object.keys(body).length !== 1 || !Number.isInteger(body.targetPort)
+          || body.targetPort < 1 || body.targetPort > 65535 || previewReject) {
+          return { status: 400, body: { error: 'target_port must be between 1 and 65535.' } };
+        }
+        if (pendingPreviewStatuses.length) return { status: pendingPreviewStatuses.shift(), body: { error: 'Not ready.' } };
         const session_id = revised ? 'second-preview' : 'first-preview';
         active.add(session_id);
         if (revised) now += advancePreviewRequestMs;
@@ -260,7 +269,7 @@ async function driveReviewFixture({
       clock: () => now, pause: async (ms) => { now += ms; },
       approveShell,
     });
-    return { result, opened, decisions, deleted, runReadAttempts, approvalPosts, pendingReads };
+    return { result, opened, decisions, deleted, runReadAttempts, approvalPosts, pendingReads, previewPosts };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -380,8 +389,12 @@ test('409 resolution race reconciles with one read, but pending or unrelated con
 });
 
 test('both preview gates pin fresh parent revisions and execution headers; metadata list can be identical', async () => {
-  const { result, opened, decisions, deleted } = await driveReviewFixture();
+  const { result, opened, decisions, deleted, previewPosts } = await driveReviewFixture();
   assert.equal(result.verdict, 'pass');
+  assert.deepEqual(previewPosts, [
+    { url: '/api/runs/parent/sandbox/port-forward', body: { targetPort: 3000 } },
+    { url: '/api/runs/parent/sandbox/port-forward', body: { targetPort: 3000 } },
+  ]);
   assert.equal(result.projectId, 'project');
   assert.deepEqual(opened.map((o) => o[1]), ['original', 'fixed']);
   assert.deepEqual(result.decisions.map((o) => o.decision), ['request_changes', 'approve']);
@@ -390,6 +403,31 @@ test('both preview gates pin fresh parent revisions and execution headers; metad
   assert.deepEqual([result.initialRevision.contentIdentity, result.correctedRevision.contentIdentity], ['content-original', 'content-revised']);
   assert.equal(result.cleanup.length, 2);
   assert.equal(deleted.length, 2);
+});
+
+test('operator preview validation rejection reports HTTP 400 and diagnostic without faking timeout or owning a session', async () => {
+  const { result, previewPosts, opened, decisions, deleted } = await driveReviewFixture({ previewReject: true });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.phase, 'initialPreview');
+  assert.notEqual(result.error.code, 'phase_timeout');
+  assert.match(result.error.message, /HTTP 400.*target_port must be between 1 and 65535/);
+  assert.equal(previewPosts.length, 1);
+  assert.deepEqual(opened, []);
+  assert.deepEqual(decisions, []);
+  assert.deepEqual(deleted, []);
+  assert.deepEqual(result.cleanup, []);
+});
+
+test('transient preview publication responses still retry while preserving ownership and both gates', async () => {
+  const { result, previewPosts, opened, deleted } = await driveReviewFixture({
+    transientPreviewStatuses: [404, 409, 503],
+  });
+  assert.equal(result.verdict, 'pass');
+  assert.equal(previewPosts.length, 5);
+  assert.ok(previewPosts.every((post) => post.body.targetPort === 3000));
+  assert.deepEqual(opened.map((entry) => entry[1]), ['original', 'fixed']);
+  assert.equal(deleted.length, 2);
+  assert.ok(result.cleanup.every((entry) => entry.deleted));
 });
 
 test('server rejection of missing review header or stale output revision fails closed', async () => {
