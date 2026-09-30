@@ -124,18 +124,55 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         var plan = await GetPlanAsync(first.WorkPlanId);
         plan.ParentJoinNodeId.Should().BeNull();
         plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Committed);
-        var expectedGoal = $"{request.Prompt}\n\n[Parent workflow context]\n{request.IncomingInput.Task}";
+        var expectedOutcome = $"{request.Prompt}\n\n[Parent workflow context]\n{request.IncomingInput.Task}";
         (await _runStore.GetAsync(RunId.Parse(first.ChildCoordinatorRunId)))!.Task
-            .Should().Be(expectedGoal);
+            .Should().Be(request.Prompt);
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await db.OutcomeSpecs.CountAsync()).Should().Be(1);
-        (await db.OutcomeSpecs.SingleAsync()).Goal.Should().Be(expectedGoal);
+        var spec = await db.OutcomeSpecs.SingleAsync();
+        spec.Goal.Should().Be(request.Prompt);
+        spec.DesiredOutcome.Should().Be(expectedOutcome);
+        var fallback = CoordinatorOrchestratorExecutor.DecomposeDeterministic(spec);
+        fallback.Should().ContainSingle();
+        CoordinatorDispatchService.BuildCanonicalSubtaskTask(new Subtask
+        {
+            Title = fallback[0].Title,
+            Scope = fallback[0].Scope,
+            Phase = fallback[0].Phase,
+            AssignedAgent = "core-implementer",
+            SelectedModelId = "test-model",
+            IsolationStrategy = "worktree",
+            Status = SubtaskStatus.Pending,
+        }).Should().Contain(request.IncomingInput.Task);
+        CoordinatorDispatchService.BuildComposedParentContext(plan)
+            .Should().Contain(request.IncomingInput.Task).And.NotContain("edited context");
         JsonSerializer.Deserialize<AgentTurnInput>(plan.ParentTurnInputJson!, JsonDefaults.Options)!
             .Task.Should().Be(request.IncomingInput.Task);
         (await db.WorkPlans.CountAsync()).Should().Be(1);
         (await db.Subtasks.CountAsync()).Should().Be(0);
         (await _runStore.GetRunsByParentAsync(_parent.Id.ToString())).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ComposedPlan_OversizedParentContext_FailsInsteadOfTruncatingBranchEvidence()
+    {
+        var request = ComposedRequest() with
+        {
+            IncomingInput = ComposedRequest().IncomingInput with
+            {
+                Task = new string('x', WorkflowChildWorkService.MaxComposedParentContextChars + 1),
+            },
+        };
+
+        var act = () => _service.PrepareComposedAsync(request);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*cannot be delivered intact*");
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.WorkPlans.CountAsync()).Should().Be(0);
+        (await db.OutcomeSpecs.CountAsync()).Should().Be(0);
     }
 
     [Fact]
@@ -319,6 +356,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
 
         _runtime.Deliveries.Should().ContainSingle()
             .Which.FailureReason.Should().Be("required_child_failed");
+        _runtime.Deliveries[0].Succeeded.Should().BeFalse();
         _runtime.Deliveries[0].Assembly.Should().BeNull();
         (await GetPlanAsync(attached.WorkPlanId)).Status.Should().Be(WorkPlanStatus.AssemblyFailed);
         (await _runStore.GetAsync(RunId.Parse(attached.ChildCoordinatorRunId)))!

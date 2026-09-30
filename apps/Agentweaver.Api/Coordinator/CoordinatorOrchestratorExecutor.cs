@@ -1137,7 +1137,7 @@ public sealed class CoordinatorOrchestratorExecutor
     /// deliverables classified deterministically so the
     /// decompose -> select -> persist path works fully offline.
     /// </summary>
-    private static List<SubtaskDraft> DecomposeDeterministic(OutcomeSpec spec)
+    internal static List<SubtaskDraft> DecomposeDeterministic(OutcomeSpec spec)
     {
         var scope = new StringBuilder()
             .Append("Deliver the confirmed outcome in a single pass. Desired outcome: ")
