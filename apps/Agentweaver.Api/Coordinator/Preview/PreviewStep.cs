@@ -101,7 +101,8 @@ public sealed class PreviewStep
         {
             // 1. Idempotency + applicability short-circuit. A terminal outcome (ready/failed/skipped)
             //    already recorded for this tree ⇒ nothing to do (also covers docs-only "skipped").
-            var latest = FindLatestTerminalKind(runId, request.WorkPlanId, request.TreeHash);
+            var latest = await FindLatestTerminalKindAsync(
+                runId, request.WorkPlanId, request.TreeHash, ct).ConfigureAwait(false);
             if (latest is not null)
             {
                 _logger.LogInformation(
@@ -678,7 +679,8 @@ public sealed class PreviewStep
     /// <see langword="null"/> when none yet. Mirrors the coordinator guard's authoritative
     /// latest-state logic so the two never disagree on "already has an outcome".
     /// </summary>
-    private string? FindLatestTerminalKind(string runId, int workPlanId, string treeHash)
+    private async Task<string?> FindLatestTerminalKindAsync(
+        string runId, int workPlanId, string treeHash, CancellationToken ct)
     {
         var events = _streamStore.Get(runId)?.GetSnapshotSince(0).Events;
         if (events is null || events.Count == 0)
@@ -699,7 +701,18 @@ public sealed class PreviewStep
             if (node is null || !TreeMatches(node, workPlanId, treeHash))
                 continue;
 
-            if (evt.Type == EventTypes.SandboxPreviewReady) return "ready";
+            if (evt.Type == EventTypes.SandboxPreviewReady)
+            {
+                var token = GetString(node, "session_id");
+                var pod = GetString(node, "pod_name");
+                var runner = GetString(node, "preview_runner_session_id");
+                var port = GetInt(node, "target_port");
+                if (token is not null && pod is not null && runner is not null && port is > 0
+                    && await _previewService.IsPreviewSessionLiveAsync(
+                        runId, token, pod, port.Value, runner, ct).ConfigureAwait(false))
+                    return "ready";
+                return null;
+            }
             if (evt.Type == EventTypes.SandboxPreviewFailed) return "failed";
             if (evt.Type == EventTypes.SandboxPreviewSkippedNotApplicable) return "skipped";
             if (evt.Type == EventTypes.SandboxPreviewApplicability

@@ -30,9 +30,12 @@ public sealed class SandboxPreviewServiceClusterTests
     private static IKubernetes ClientFor(FakeKubeHandler handler) =>
         new Kubernetes(new KubernetesClientConfiguration { Host = "http://localhost:8080" }, handler);
 
-    private static SandboxPreviewService NewService(FakeKubeHandler handler) =>
+    private static SandboxPreviewService NewService(
+        FakeKubeHandler handler, IPreviewRunnerHttpClient? runner = null,
+        IAgentHostOriginResolver? origin = null) =>
         new(ClientFor(handler), EnabledOptions(), NullLogger<SandboxPreviewService>.Instance,
-            publicationClient: new HttpClient(new PreviewPublicationHandler()));
+            publicationClient: new HttpClient(new PreviewPublicationHandler()),
+            previewRunnerClient: runner, originResolver: origin);
 
     // ── B1: replica-safe pod resolution from cluster state ───────────────────────
 
@@ -170,6 +173,9 @@ public sealed class SandboxPreviewServiceClusterTests
         using var listener = StartListener(out var targetPort);
 
         var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{SandboxClaimConventions.DeriveAgentHostClaimName(runId)}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agenthost-pod-1"}}}""");
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
             "{\"kind\":\"HTTPRouteList\",\"items\":[{\"metadata\":{\"name\":\"preview-x\",\"annotations\":{" +
             "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
@@ -238,6 +244,9 @@ public sealed class SandboxPreviewServiceClusterTests
         const string token = "swift-falcon-amber-k7m2q9x4n8b3r6t5w1z0c2";
 
         var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{SandboxClaimConventions.DeriveAgentHostClaimName(runId)}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agenthost-pod-gone"}}}""");
         handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
             "{\"kind\":\"HTTPRouteList\",\"items\":[" +
             "{\"metadata\":{\"name\":\"preview-x\",\"annotations\":{" +
@@ -254,6 +263,91 @@ public sealed class SandboxPreviewServiceClusterTests
         var sessions = await svc.ListForRunAsync(runId);
 
         sessions.Should().BeEmpty("a route whose bound pod no longer exists must not be reported active");
+    }
+
+    [Fact]
+    public async Task ReboundClaim_DoesNotExposeOldPodRoute_ButCleanupCanRemoveIt()
+    {
+        const string runId = "run-rebound";
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{SandboxClaimConventions.DeriveAgentHostClaimName(runId)}",
+            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"new-pod"}}}""");
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[{\"metadata\":{\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"old-token\"," +
+            "\"agentweaver.dev/preview-run\":\"" + PreviewReaper.PerRunLabel(runId) + "\"," +
+            "\"agentweaver.dev/preview-pod\":\"old-pod\"," +
+            "\"agentweaver.dev/preview-target-port\":\"8235\"}}}]}");
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods",
+            """{"kind":"PodList","items":[{"metadata":{"name":"new-pod"}}]}""");
+        var svc = NewService(handler);
+
+        (await svc.ListForRunAsync(runId)).Should().BeEmpty();
+        (await svc.ListForCleanupAsync(runId)).Should().ContainSingle()
+            .Which.PodName.Should().Be("old-pod");
+    }
+
+    [Fact]
+    public async Task ReadyRoute_RequiresHealthyRunnerOnActualDiscoveredPort()
+    {
+        const string runId = "run-live-preview";
+        const string token = "live-token";
+        const string sessionId = "runner-session";
+        var handler = HandlerWithBoundPod(runId, "current-pod");
+        handler.OnGet("/apis/gateway.networking.k8s.io/v1/namespaces/agentweaver/httproutes",
+            "{\"kind\":\"HTTPRouteList\",\"items\":[{\"metadata\":{\"annotations\":{" +
+            "\"agentweaver.dev/preview-token\":\"" + token + "\"," +
+            "\"agentweaver.dev/preview-run\":\"" + PreviewReaper.PerRunLabel(runId) + "\"," +
+            "\"agentweaver.dev/preview-pod\":\"current-pod\"," +
+            "\"agentweaver.dev/preview-target-port\":\"8235\"," +
+            "\"agentweaver.dev/preview-runner-session-id\":\"" + sessionId + "\"}}}]}");
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods",
+            """{"kind":"PodList","items":[{"metadata":{"name":"current-pod"}}]}""");
+        var runner = new LiveRunner();
+        var svc = NewService(handler, runner, new BoundPodOrigin());
+
+        (await svc.IsPreviewSessionLiveAsync(runId, token, "current-pod", 8235, sessionId))
+            .Should().BeTrue();
+        runner.LastPort.Should().Be(8235);
+        runner.Healthy = false;
+        (await svc.ListForRunAsync(runId)).Should().BeEmpty("the old route must not imply a running app");
+        (await svc.IsPreviewSessionLiveAsync(runId, token, "current-pod", 8235, sessionId))
+            .Should().BeFalse();
+    }
+
+    private sealed class BoundPodOrigin : IAgentHostOriginResolver
+    {
+        public Task<string?> TryResolveOriginAsync(string runId, CancellationToken ct) =>
+            throw new InvalidOperationException("The replica-local registry must not be used.");
+
+        public Task<string?> TryResolvePodOriginAsync(string podName, string runId, CancellationToken ct) =>
+            Task.FromResult<string?>(podName == "current-pod" ? "http://localhost:8088" : null);
+    }
+
+    private sealed class LiveRunner : IPreviewRunnerHttpClient
+    {
+        public bool Healthy = true;
+        public int LastPort;
+
+        public Task<PreviewRunnerStartResult> StartProcessAsync(
+            string runId, string? bearer, string command, string cwd, int? workPlanId, string? treeHash,
+            CancellationToken ct) => throw new NotSupportedException();
+        public Task<PreviewRunnerPortResult> ObserveBoundPortAsync(
+            string runId, string? bearer, string sessionId, int timeoutSeconds, string healthPath,
+            CancellationToken ct) => throw new NotSupportedException();
+        public Task<PreviewRunnerHealthResult> HealthCheckAsync(
+            string runId, string? bearer, string sessionId, int port, string path,
+            CancellationToken ct) => throw new NotSupportedException();
+        public Task StopProcessAsync(
+            string runId, string? bearer, string sessionId, string reason,
+            CancellationToken ct) => throw new NotSupportedException();
+        public Task<PreviewRunnerHealthResult> HealthCheckByOriginAsync(
+            string origin, string? bearer, string sessionId, int port, string path, CancellationToken ct)
+        {
+            LastPort = port;
+            return Task.FromResult(new PreviewRunnerHealthResult(sessionId, port, Healthy, Healthy ? 200 : null));
+        }
     }
 
     [Fact]

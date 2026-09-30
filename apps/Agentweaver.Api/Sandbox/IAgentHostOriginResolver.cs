@@ -24,6 +24,10 @@ public interface IAgentHostOriginResolver
     /// <see langword="null"/> when no pod is registered / bound / has an IP yet.
     /// </summary>
     Task<string?> TryResolveOriginAsync(string runId, CancellationToken ct);
+
+    /// <summary>Resolve a claim-verified pod by name, without relying on replica-local registry state.</summary>
+    Task<string?> TryResolvePodOriginAsync(string podName, string runId, CancellationToken ct) =>
+        throw new NotSupportedException($"{GetType().Name} cannot resolve a claim-bound pod origin.");
 }
 
 internal sealed class KubernetesAgentHostOriginResolver : IAgentHostOriginResolver
@@ -78,6 +82,11 @@ internal sealed class KubernetesAgentHostOriginResolver : IAgentHostOriginResolv
             return null;
         }
 
+        return await TryResolvePodOriginAsync(podName, runId, ct).ConfigureAwait(false);
+    }
+
+    public async Task<string?> TryResolvePodOriginAsync(string podName, string runId, CancellationToken ct)
+    {
         try
         {
             var pod = await ReadPodWithRetryAsync(podName, runId, ct).ConfigureAwait(false);
@@ -163,5 +172,8 @@ internal sealed class KubernetesAgentHostOriginResolver : IAgentHostOriginResolv
 internal sealed class NoOpAgentHostOriginResolver : IAgentHostOriginResolver
 {
     public Task<string?> TryResolveOriginAsync(string runId, CancellationToken ct)
+        => Task.FromResult<string?>(null);
+
+    public Task<string?> TryResolvePodOriginAsync(string podName, string runId, CancellationToken ct)
         => Task.FromResult<string?>(null);
 }

@@ -3701,6 +3701,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
     {
         var candidate = await RequireCurrentCandidateAsync(
             context.CoordinatorRunId, workPlanId, aggregateTreeHash, ct).ConfigureAwait(false);
+        await EnsureEscalationPreviewAsync(context, workPlanId, aggregateTreeHash, ct)
+            .ConfigureAwait(false);
         var won = await _assemblyStore.TryEscalateToInReviewAsync(
             workPlanId, ct, AssemblyOwner(context)).ConfigureAwait(false);
         var decider = _serviceProvider.GetRequiredService<CoordinatorSteeringDecider>();
@@ -3772,6 +3774,91 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         // escalation on recovery (change #1) rather than silently marking it applied.
         await decider.MarkDirectiveAppliedAsync(directiveId, ct).ConfigureAwait(false);
         return true;
+    }
+
+    private async Task EnsureEscalationPreviewAsync(
+        CoordinatorDispatchContext context, int workPlanId, string treeHash, CancellationToken ct)
+    {
+        var gates = await ResolveAssemblyGatesAsync(workPlanId, ct).ConfigureAwait(false);
+        var buildTestGate = gates.FirstOrDefault(g => g.GateKind == "build-test");
+        if (buildTestGate is null)
+            return;
+
+        var state = FindLatestPreviewState(context.CoordinatorRunId, workPlanId, treeHash);
+        var buildTestRecorded = await HasPersistedBuildTestEvidenceAsync(
+            context.CoordinatorRunId, treeHash, ct).ConfigureAwait(false);
+        if (!buildTestRecorded)
+        {
+            var run = await TryGetCoordinatorRunAsync(context.CoordinatorRunId, ct).ConfigureAwait(false)
+                ?? throw new RunOutputRevisionUnavailableException("run_missing");
+            var diff = run.Diff ?? string.Empty;
+            await EnsurePreviewApplicabilityRecordedAsync(
+                context.CoordinatorRunId, workPlanId, treeHash, diff,
+                context.SubmittingUser, context.ProjectId?.Value.ToString(), ct).ConfigureAwait(false);
+
+            var provider = await ResolveAssemblyProviderBoundaryAsync(context.CoordinatorRunId, ct)
+                .ConfigureAwait(false);
+            CollectiveGateDecision verdict;
+            try
+            {
+                verdict = await _pipeline.RunBuildTestAsync(
+                    new CollectiveBuildTestRequest(
+                        context.CoordinatorRunId, context.ProjectId?.Value.ToString(),
+                        context.RepositoryPath,
+                        IntegrationBranchName(context.CoordinatorRunId, context.AssemblyAttemptToken),
+                        treeHash, diff, context.SubmittingUser,
+                        buildTestGate.GraphNodeId, buildTestGate.Label, buildTestGate.AgentId,
+                        provider.ModelSource, provider.ByokProviderFingerprint,
+                        context.AssemblyAttemptToken),
+                    ct).ConfigureAwait(false);
+            }
+            catch (CollectiveBuildTestInfrastructureException ex)
+            {
+                Emit(context.CoordinatorRunId, EventTypes.SandboxPreviewFailed, new
+                {
+                    run_id = context.CoordinatorRunId,
+                    work_plan_id = workPlanId,
+                    tree_hash = treeHash,
+                    source = "escalation-guard",
+                    reason = $"build_test_infra_{ex.Reason}",
+                    message = "Build & Test infrastructure failed before a preview could be verified.",
+                });
+                await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+                throw;
+            }
+            Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyBuildTestCompleted, new
+            {
+                workPlanId,
+                treeHash,
+                escalated = true,
+                verdict.Approved,
+                verdict.RequestChanges,
+                verdict.Feedback,
+            });
+            await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
+            if (!ShouldRunDeterministicPreviewStep(_previewStep is not null, verdict))
+            {
+                await EnsureFinalPreviewOutcomeBeforeApprovalAsync(
+                    context.CoordinatorRunId, workPlanId, treeHash, ct).ConfigureAwait(false);
+                return;
+            }
+        }
+
+        if (_previewStep is not null && state.Kind is PreviewOutcomeKind.None or PreviewOutcomeKind.Ready)
+        {
+            await RunPreviewStepDefensivelyAsync(
+                () => _previewStep.RunAsync(
+                    new Preview.PreviewStepRequest(
+                        context.CoordinatorRunId, workPlanId, treeHash,
+                        _pipeline.GetBuildTestWorktreePath(
+                            context.CoordinatorRunId, context.AssemblyAttemptToken),
+                        context.SubmittingUser,
+                        _podRegistry?.TryGetEffectiveWorkingDirectory(context.CoordinatorRunId)), ct),
+                context.CoordinatorRunId, _logger, ct).ConfigureAwait(false);
+        }
+
+        await EnsureFinalPreviewOutcomeBeforeApprovalAsync(
+            context.CoordinatorRunId, workPlanId, treeHash, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -5021,7 +5108,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             if (previewService is null || !previewService.Enabled)
                 return;
 
-            var previews = await previewService.ListForRunAsync(runId, ct).ConfigureAwait(false);
+            var previews = await previewService.ListForCleanupAsync(runId, ct).ConfigureAwait(false);
             foreach (var preview in previews)
                 await previewService.StopPreviewAsync(preview.Token, ct).ConfigureAwait(false);
         }

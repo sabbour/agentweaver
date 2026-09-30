@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using LibGit2Sharp;
@@ -20,6 +22,7 @@ using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Api.Sandbox;
+using Agentweaver.Api.Workflows;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Tests.Helpers;
@@ -389,6 +392,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _streamStore.Create(coordinatorRunId, "alice");
         var (workPlanId, subtaskIds) = await SeedPlanAsync(
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        await BindSoftwareWorkflowAsync(coordinatorRunId, workPlanId);
         // Autonomous budget already exhausted → the decider returns Proceed.
         await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6);
         await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "tree-abc", "verified-diff");
@@ -403,11 +407,19 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var route = InvokeRouteAssemblyGateThroughSteeringAsync(
             Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
             "Two server.js bugs remain.", touched, "tree-abc", cts.Token);
-        await WaitForEventAsync(coordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, cts.Token);
+        await WaitForEventAsync(coordinatorRunId, EventTypes.SandboxPreviewFailed, cts.Token);
+        await WaitUntilArmedAsync(coordinatorRunId);
         cts.Cancel();
         try { await route; } catch (OperationCanceledException) { }
 
         var types = EventTypes_(coordinatorRunId);
+        _pipeline.BuildTests.Should().Be(1, "escalation cannot skip Build & Test for the current candidate");
+        types.Should().ContainInOrder(EventTypes.CoordinatorAssemblyBuildTestCompleted,
+            EventTypes.SandboxPreviewFailed, EventTypes.CoordinatorAssemblyReviewRequested);
+        var previewFailure = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Single(e => e.Type == EventTypes.SandboxPreviewFailed);
+        JsonSerializer.SerializeToNode(previewFailure.Payload)!["tree_hash"]!.GetValue<string>()
+            .Should().Be("tree-abc");
         types.Should().NotContain(EventTypes.CoordinatorAssemblyBlocked,
             "budget exhaustion must escalate to human review, NEVER latch terminal AssemblyBlocked");
 
@@ -572,6 +584,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _streamStore.Create(coordinatorRunId, "alice");
         var (workPlanId, subtaskIds) = await SeedPlanAsync(
             coordinatorRunId, new[] { SubtaskStatus.AssembleReady, SubtaskStatus.AssembleReady });
+        await BindSoftwareWorkflowAsync(coordinatorRunId, workPlanId);
         // Simulate a crash AFTER MarkDirectiveExecuting but BEFORE the review opened: the plan is still
         // in the AssemblySteering lease, NO durable review request exists, and the Proceed directive is
         // left `executing`. A status-only recovery would silently mark it applied (drop the escalation).
@@ -584,6 +597,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             Context(coordinatorRunId), workPlanId, cts.Token);
 
         redrove.Should().BeTrue("recovery re-drives the unfinished escalation and stops the assembly pass");
+        _pipeline.BuildTests.Should().Be(1, "recovery must not bypass the candidate's Build & Test");
+        EventTypes_(coordinatorRunId).Should().ContainInOrder(
+            EventTypes.CoordinatorAssemblyBuildTestCompleted,
+            EventTypes.SandboxPreviewFailed, EventTypes.CoordinatorAssemblyReviewRequested);
         var (_, _, status, stage) = await GetPlanSteeringStateAsync(workPlanId);
         status.Should().Be(WorkPlanStatus.InReview, "the escalation is completed on recovery, never dropped");
         stage.Should().Be(AssemblyStage.Review);
@@ -592,6 +609,28 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         EventTypes_(coordinatorRunId).Should().Contain(EventTypes.CoordinatorAssemblyReviewRequested);
         (await GetDirectiveAsync(directiveId))!.Status.Should().Be(SteeringStatus.Applied,
             "the directive settles only after the review is durably open");
+    }
+
+    [Fact]
+    public async Task Escalation_AfterRepeatedCorrections_RequiresEachCurrentTreeAndReusesItsCheckpoint()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.AssembleReady]);
+        await BindSoftwareWorkflowAsync(coordinatorRunId, workPlanId);
+
+        foreach (var (tree, expectedBuilds) in new[] { ("tree-1", 1), ("tree-1", 1), ("tree-2", 2), ("tree-3", 3) })
+        {
+            await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, tree, "verified-diff");
+            await InvokeEnsureEscalationPreviewAsync(Context(coordinatorRunId), workPlanId, tree);
+            _pipeline.BuildTests.Should().Be(expectedBuilds);
+        }
+
+        var failures = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.SandboxPreviewFailed)
+            .Select(e => JsonSerializer.SerializeToNode(e.Payload)!["tree_hash"]!.GetValue<string>());
+        failures.Should().Equal(["tree-1", "tree-2", "tree-3"]);
     }
 
     [Fact]
@@ -4255,6 +4294,15 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         return await task.ConfigureAwait(false);
     }
 
+    private Task InvokeEnsureEscalationPreviewAsync(
+        CoordinatorDispatchContext context, int workPlanId, string treeHash)
+    {
+        var method = typeof(CoordinatorAssemblyService).GetMethod(
+            "EnsureEscalationPreviewAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+        method.Should().NotBeNull();
+        return (Task)method!.Invoke(_sut, [context, workPlanId, treeHash, CancellationToken.None])!;
+    }
+
     private async Task<bool> InvokeParkAtHumanReviewAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
@@ -4722,6 +4770,51 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         }
 
         return (plan.Id, ids);
+    }
+
+    private async Task BindSoftwareWorkflowAsync(string coordinatorRunId, int workPlanId)
+    {
+        var workflow = new WorkflowDefinition
+        {
+            Id = "software-preview-test",
+            Name = "Software Preview Test",
+            Start = "start",
+            Nodes =
+            [
+                new() { Id = "start", Type = WorkflowNodeType.Prompt, Label = "Start" },
+                new() { Id = "rubberduck", Type = WorkflowNodeType.Check, Label = "Rubberduck",
+                    GateKind = "rubberduck", Branches = ["review"] },
+                new() { Id = "build-test", Type = WorkflowNodeType.BuildTest, Label = "Build & Test" },
+                new() { Id = "human-review", Type = WorkflowNodeType.Check, Label = "Human Review",
+                    GateKind = "human-review", Branches = ["approved"] },
+                new() { Id = "done", Type = WorkflowNodeType.Terminal, Label = "Done" },
+            ],
+            Edges =
+            [
+                new() { From = "start", To = "rubberduck" },
+                new() { From = "rubberduck", To = "build-test", When = "review" },
+                new() { From = "build-test", To = "human-review", When = "approved" },
+                new() { From = "human-review", To = "done", When = "approved" },
+            ],
+        };
+        var yaml = WorkflowDefinitionYamlSerializer.Serialize(workflow);
+        await _runStore.UpdateExecutableWorkflowPinAsync(
+            RunId.Parse(coordinatorRunId),
+            new ExecutableWorkflowPin
+            {
+                ManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+                DefinitionId = workflow.Id,
+                DefinitionVersion = workflow.Version,
+                Source = "test",
+                ContentDigest = "sha256:" + Convert.ToHexString(
+                    SHA256.HashData(Encoding.UTF8.GetBytes(yaml))).ToLowerInvariant(),
+                DefinitionYaml = yaml,
+                PinnedAt = DateTimeOffset.UtcNow,
+            });
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.WorkPlans.SingleAsync(w => w.Id == workPlanId)).WorkflowId = workflow.Id;
+        await db.SaveChangesAsync();
     }
 
     private async Task SeedPreparedMergeAsync(

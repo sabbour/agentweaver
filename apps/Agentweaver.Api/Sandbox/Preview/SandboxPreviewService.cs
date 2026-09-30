@@ -16,7 +16,8 @@ public sealed record PreviewSession(
     string PodName,
     int TargetPort,
     string PreviewUrl,
-    DateTimeOffset StartedAt);
+    DateTimeOffset StartedAt,
+    string? PreviewRunnerSessionId = null);
 
 public sealed class PreviewPublicationException(string message) : InvalidOperationException(message);
 public sealed class PreviewPublicationRunEndedException(string message) : InvalidOperationException(message);
@@ -67,6 +68,16 @@ public interface ISandboxPreviewService
     Task<PreviewSession> StartPreviewAsync(
         string runId, int targetPort, string ownerUserId, CancellationToken ct = default,
         string? previewRunnerSessionId = null);
+
+    /// <summary>Checks a published session against the current claim binding and its supervised listener.</summary>
+    Task<bool> IsPreviewSessionLiveAsync(
+        string runId, string token, string podName, int targetPort,
+        string previewRunnerSessionId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support preview-session liveness checks.");
+
+    /// <summary>Includes stale bindings so terminal cleanup can remove their routes as well.</summary>
+    Task<IReadOnlyList<PreviewSession>> ListForCleanupAsync(string runId, CancellationToken ct = default) =>
+        ListForRunAsync(runId, ct);
 
     /// <summary>
     /// Run-bound variant that keeps the caller's durable publication lease current while waiting
@@ -911,9 +922,21 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         return result;
     }
 
-    public async Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default)
+    public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
+        ListForRunAsync(runId, requireCurrentBinding: true, ct);
+
+    public Task<IReadOnlyList<PreviewSession>> ListForCleanupAsync(string runId, CancellationToken ct = default) =>
+        ListForRunAsync(runId, requireCurrentBinding: false, ct);
+
+    private async Task<IReadOnlyList<PreviewSession>> ListForRunAsync(
+        string runId, bool requireCurrentBinding, CancellationToken ct)
     {
         EnsureReady();
+        var boundPod = requireCurrentBinding
+            ? await ResolveBoundPodNameAsync(runId, ct).ConfigureAwait(false)
+            : null;
+        if (requireCurrentBinding && string.IsNullOrEmpty(boundPod))
+            return [];
         var sanitizedRun = PreviewReaper.PerRunLabel(runId);
         var raw = await _client!.CustomObjects.ListNamespacedCustomObjectAsync(
             HttpRouteGroup, HttpRouteVersion, _options.Namespace, HttpRoutePlural,
@@ -926,19 +949,25 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         {
             ct.ThrowIfCancellationRequested();
 
-            if (string.IsNullOrWhiteSpace(route.PodName) || route.TargetPort is null or <= 0)
+            if (string.IsNullOrWhiteSpace(route.PodName)
+                || (requireCurrentBinding && !string.Equals(route.PodName, boundPod, StringComparison.Ordinal))
+                || route.TargetPort is null or <= 0)
                 continue;
 
             // Liveness proxy under isolation: we cannot TCP-probe podIP:targetPort from the API pod
             // (denied by the sandbox NetworkPolicy). Use the allowed control-plane pod-existence check
             // (label selector) instead so a torn-down pod stops being reported as active.
-            if (!await PodExistsForRunAsync(sanitizedRun, ct).ConfigureAwait(false))
+            if (requireCurrentBinding && !await PodExistsForRunAsync(sanitizedRun, ct).ConfigureAwait(false))
             {
                 _logger.LogInformation(
                     "SandboxPreviewService: preview {Fingerprint} for run {RunId} is not reporting active because no bound pod exists for the run",
                     Fingerprint(route.Token), runId);
                 continue;
             }
+            if (requireCurrentBinding && !string.IsNullOrWhiteSpace(route.PreviewRunnerSessionId)
+                && !await IsRunnerHealthyAsync(
+                    runId, route.PodName, route.PreviewRunnerSessionId, route.TargetPort.Value, ct).ConfigureAwait(false))
+                continue;
 
             sessions.Add(new PreviewSession(
                 route.Token,
@@ -946,10 +975,46 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 route.PodName,
                 route.TargetPort.Value,
                 $"https://{PreviewToken.HostLabel(route.Token)}.{_options.ZoneSuffix}",
-                PreviewReaper.ParseTimestamp(route.StartedAt) ?? DateTimeOffset.MinValue));
+                PreviewReaper.ParseTimestamp(route.StartedAt) ?? DateTimeOffset.MinValue,
+                route.PreviewRunnerSessionId));
         }
 
         return sessions;
+    }
+
+    public async Task<bool> IsPreviewSessionLiveAsync(
+        string runId, string token, string podName, int targetPort,
+        string previewRunnerSessionId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(previewRunnerSessionId))
+            return false;
+
+        var sessions = await ListForRunAsync(runId, ct).ConfigureAwait(false);
+        return sessions.Any(s => s.Token == token && s.PodName == podName
+            && s.TargetPort == targetPort && s.PreviewRunnerSessionId == previewRunnerSessionId);
+    }
+
+    private async Task<bool> IsRunnerHealthyAsync(
+        string runId, string podName, string sessionId, int port, CancellationToken ct)
+    {
+        if (_previewRunnerClient is null || _originResolver is null)
+            return false;
+        var origin = await _originResolver.TryResolvePodOriginAsync(podName, runId, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(origin))
+            return false;
+        var bearer = await ResolvePreviewRunnerBearerAsync(runId, ct).ConfigureAwait(false);
+        try
+        {
+            var health = await _previewRunnerClient.HealthCheckByOriginAsync(
+                origin, bearer, sessionId, port, "/", ct).ConfigureAwait(false);
+            return health.Healthy && health.Port == port && health.SessionId == sessionId;
+        }
+        catch (PreviewRunnerHttpException ex)
+        {
+            _logger.LogWarning(ex,
+                "Preview runner health check failed for run {RunId}; preview is not ready.", runId);
+            return false;
+        }
     }
 
     public async Task<PreviewLifecycleState> ReconcilePreviewLifecycleAsync(
@@ -1435,7 +1500,8 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
                 GetString(ann, PreviewReaper.AnnotationMaxUntil),
                 GetString(ann, PreviewReaper.AnnotationPod),
                 TryParseInt(GetString(ann, PreviewReaper.AnnotationTargetPort)),
-                GetString(ann, PreviewReaper.AnnotationStartedAt)));
+                GetString(ann, PreviewReaper.AnnotationStartedAt),
+                GetString(ann, PreviewReaper.AnnotationPreviewRunnerSessionId)));
         }
 
         return result;
@@ -1496,5 +1562,6 @@ public sealed class SandboxPreviewService : ISandboxPreviewService
         string? MaxUntil,
         string? PodName,
         int? TargetPort,
-        string? StartedAt);
+        string? StartedAt,
+        string? PreviewRunnerSessionId);
 }

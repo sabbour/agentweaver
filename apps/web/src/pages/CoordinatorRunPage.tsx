@@ -69,7 +69,10 @@ import { useSeededRunStream } from '../hooks/useSeededRunStream';
 import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
+import { latestPreviewStateFromEvents } from '../state/runPreviewState';
+import type { RunPreviewState } from '../state/runPreviewState';
 import { formatModelLabel } from '../utils/agentIdentity';
+import { readStr } from '../utils/readStr';
 import { layoutDagBalancedGrid, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H } from '../utils/dagLayout';
 import {
   ArrowMaximizeRegular,
@@ -393,14 +396,6 @@ function outcomePlanRedraftIsActive(
   return latestDraftingSequence > latestOutcomeSequence;
 }
 
-function readStr(p: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const k of keys) {
-    const v = p[k];
-    if (v != null && String(v).trim() !== '') return String(v);
-  }
-  return undefined;
-}
-
 function apiErrorCode(err: unknown): string | undefined {
   if (!(err instanceof ApiError) || typeof err.payload !== 'object' || err.payload === null) return undefined;
   const error = (err.payload as Record<string, unknown>).error;
@@ -579,51 +574,6 @@ function terminalizedStatus(status: string | undefined, terminal: boolean, termi
 
 function previewUrlFromSession(session: PortForwardSessionDto | undefined): string | null {
   return session?.preview_url ?? session?.previewUrl ?? null;
-}
-
-type RunPreviewState =
-  | { status: 'none' }
-  | { status: 'ready'; previewUrl: string; targetPort?: string; eventSequence: number }
-  | { status: 'pending'; targetPort?: string }
-  | {
-    status: 'failed';
-    reason: string;
-    message?: string;
-    retryAvailable: boolean;
-    approvalRequestId?: string;
-  };
-
-function latestPreviewStateFromEvents(events: RunStreamEvent[]): RunPreviewState {
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const evt = events[i];
-    if (evt.type === 'sandbox.preview_ready' || evt.type === 'coordinator.preview_ready') {
-      const preview = evt.payload['preview_url'] ?? evt.payload['previewUrl'];
-      if (preview != null && String(preview).trim() !== '') {
-        const targetPort = evt.payload['target_port'] ?? evt.payload['targetPort'];
-        return {
-          status: 'ready',
-          previewUrl: String(preview),
-          targetPort: targetPort == null ? undefined : String(targetPort),
-          eventSequence: evt.sequence,
-        };
-      }
-    }
-    if (evt.type === 'sandbox.preview_pending') {
-      const targetPort = evt.payload['target_port'] ?? evt.payload['targetPort'];
-      return {
-        status: 'pending',
-        targetPort: targetPort == null ? undefined : String(targetPort),
-      };
-    }
-    if (evt.type === 'sandbox.preview_failed') {
-      const reason = readStr(evt.payload, ['reason']) ?? 'unknown';
-      const message = readStr(evt.payload, ['message']);
-      const retryAvailable = evt.payload['retry_available'] === true;
-      const approvalRequestId = readStr(evt.payload, ['approval_request_id', 'approvalRequestId']);
-      return { status: 'failed', reason, message, retryAvailable, approvalRequestId };
-    }
-  }
-  return { status: 'none' };
 }
 
 function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }>): string {
@@ -2415,6 +2365,7 @@ export function CoordinatorRunPage() {
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [previewTargetPort, setPreviewTargetPort] = useState('3000');
   const [previewSession,    setPreviewSession]    = useState<PortForwardSessionDto | undefined>(undefined);
+  const [manualPreviewSessionId, setManualPreviewSessionId] = useState<string | null>(null);
   const [previewSessions,   setPreviewSessions]   = useState<PortForwardSessionDto[]>([]);
   const [previewBusy,       setPreviewBusy]       = useState(false);
   const [previewError,      setPreviewError]      = useState<string | undefined>(undefined);
@@ -2863,22 +2814,36 @@ export function CoordinatorRunPage() {
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
-    apiClient.listPortForwards(runId)
-      .then((sessions) => {
-        if (cancelled) return;
-        setPreviewSessions(sessions);
-        setPreviewSession((current) => {
-          if (current && sessions.some((session) => session.session_id === current.session_id)) return current;
-          return sessions.find((session) => previewUrlFromSession(session)) ?? sessions[0];
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setPreviewSessions([]);
-      });
-    return () => { cancelled = true; };
+    let inFlight = false;
+    const refresh = () => {
+      if (inFlight) return;
+      inFlight = true;
+      apiClient.listPortForwards(runId)
+        .then((sessions) => {
+          if (cancelled) return;
+          setPreviewSessions(sessions);
+          setPreviewSession((current) => {
+            if (current && sessions.some((session) => session.session_id === current.session_id)) return current;
+            return sessions.find((session) => previewUrlFromSession(session)) ?? sessions[0];
+          });
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPreviewSessions([]);
+            setPreviewSession(undefined);
+          }
+        })
+        .finally(() => { inFlight = false; });
+    };
+    refresh();
+    const timer = setInterval(refresh, 15_000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, [runId, events.length]);
 
-  const runPreviewState = useMemo(() => latestPreviewStateFromEvents(events), [events]);
+  const runPreviewState = useMemo(
+    () => latestPreviewStateFromEvents(events, previewSessions),
+    [events, previewSessions],
+  );
   const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
   const activePreviewUrl = runPreviewState.status === 'ready' ? runPreviewState.previewUrl : null;
   const previewDnsProbeKey = runPreviewState.status === 'ready'
@@ -3950,6 +3915,7 @@ export function CoordinatorRunPage() {
     setPreviewError(undefined);
     apiClient.startPortForward(runId, port)
       .then((session) => {
+        setManualPreviewSessionId(session.session_id);
         setPreviewSession(session);
         setPreviewSessions((sessions) => [session, ...sessions.filter((s) => s.session_id !== session.session_id)]);
       })
@@ -3962,6 +3928,7 @@ export function CoordinatorRunPage() {
     setPreviewBusy(true);
     apiClient.stopPortForward(runId, activePreviewSession.session_id)
       .then(() => {
+        setManualPreviewSessionId(null);
         setPreviewSession(undefined);
         setPreviewSessions((sessions) => sessions.filter((s) => s.session_id !== activePreviewSession.session_id));
       })
@@ -3972,7 +3939,9 @@ export function CoordinatorRunPage() {
   const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
   const showPreviewSandboxButton = isKubernetesSandbox
     && (runPreviewState.status !== 'none' || Boolean(activePreviewSession));
-  const previewUrl = activePreviewUrl ?? previewUrlFromSession(activePreviewSession);
+  const previewUrl = activePreviewUrl ?? (activePreviewSession?.session_id === manualPreviewSessionId
+    ? previewUrlFromSession(activePreviewSession)
+    : null);
   const keepaliveUrl = activePreviewSession?.keepalive_url ?? activePreviewSession?.keepaliveUrl ?? null;
 
   useEffect(() => {
