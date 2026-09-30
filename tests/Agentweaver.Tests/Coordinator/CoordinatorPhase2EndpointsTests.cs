@@ -1536,6 +1536,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     {
         var store = _factory.Services.GetRequiredService<SqliteRunStore>();
         var runId = RunId.Parse(coordinatorRunId);
+        await store.PinDefaultExecutableWorkflowForTestAsync(runId);
         await store.UpdateAssemblyArtifactsAsync(runId, "tree-hash", "review diff");
         var run = (await store.GetAsync(runId))!;
         var candidate = await store.PublishCollectiveCandidateAsync(
