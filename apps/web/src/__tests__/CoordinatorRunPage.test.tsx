@@ -3,6 +3,7 @@ import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
+import { latestPreviewStateFromEvents } from '../state/runPreviewState';
 import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DESCRIPTOR_DELEGATED, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -1069,8 +1070,16 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
     });
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
-      { sequence: 2, type: 'sandbox.preview_ready', payload: { preview_url: 'https://preview.example.test', target_port: 3000 } },
+      { sequence: 2, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'build-test', treeHash: 'tree-current' } },
+      { sequence: 3, type: 'sandbox.preview_ready', payload: {
+        preview_url: 'https://preview.example.test', target_port: 8235,
+        tree_hash: 'tree-current', session_id: 'session-current', pod_name: 'pod-current',
+      } },
     ]);
+    vi.mocked(apiClient.listPortForwards).mockResolvedValue([{
+      session_id: 'session-current', pod_name: 'pod-current', target_port: 8235,
+      local_port: 0, started_at: '2026-09-30T12:00:00Z', preview_url: 'https://preview.example.test',
+    }]);
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
@@ -1083,6 +1092,27 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     const previewCta = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });
     expect(previewCta.textContent).toContain('Preview from Build & Test is active');
     expect(previewCta.textContent).toContain('Open preview');
+  });
+
+  it.each([
+    ['prior tree', 'old-tree', 'old-pod', 'old-pod'],
+    ['replaced sandbox', 'current-tree', 'old-pod', 'new-pod'],
+  ])('does not offer a %s preview as current readiness', (_, previewTree, previewPod, listedPod) => {
+    const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
+      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'old-tree', gateKind: 'build-test' } },
+      { sequence: 2, type: 'sandbox.preview_ready', payload: {
+        tree_hash: previewTree, session_id: 'old-token', pod_name: previewPod,
+        target_port: 8235, preview_url: 'https://old.example.test',
+      } },
+      { sequence: 3, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 4, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'current-tree', gateKind: 'build-test' } },
+    ];
+    const sessions: Parameters<typeof latestPreviewStateFromEvents>[1] = [{
+      session_id: 'old-token', pod_name: listedPod, target_port: 8235,
+      local_port: 0, started_at: '2026-09-30T12:00:00Z', preview_url: 'https://old.example.test',
+    }];
+
+    expect(latestPreviewStateFromEvents(events, sessions)).toEqual({ status: 'none' });
   });
 
   it('projects Build & Test running/completed from build-test gateKind events without arming human review', async () => {
@@ -1486,10 +1516,12 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
     });
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      { sequence: 2, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'build-test', treeHash: 'current-tree' } },
       {
-        sequence: 2,
+        sequence: 3,
         type: 'sandbox.preview_failed',
         payload: {
+          tree_hash: 'current-tree',
           reason: 'approval_timed_out',
           approval_request_id: 'expired-preview-request',
           retry_available: true,
