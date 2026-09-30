@@ -242,6 +242,13 @@ included.
 
 ### Publishing and deploying a release
 
+First deploy the committed release candidate with
+`npm run azure:deploy-from-commit -- <candidate-sha>` and pass representative
+integration plus feature-specific API/UI E2E acceptance against that exact-SHA
+deployment. Only then prepare/promote and publish the release identity.
+Local k3s is diagnostic, not a release acceptance gate. See the
+[release runbook](../../RELEASING.md) for the complete sequence.
+
 ```bash
 npm run release:publish
 npm run azure:deploy-from-release -- vX.Y.Z

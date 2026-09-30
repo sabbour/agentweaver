@@ -254,13 +254,21 @@ They use the API image and injected `ConnectionStrings__MemoryDb` /
 embedded in the image or manifest. Local design-time commands default to SQLite;
 use `--postgres-migrations` only with configured PostgreSQL credentials.
 
-### Local release gate
+### Local deployment diagnostic
 
-Run the local production-path gate before promoting images or deploying a release:
+The local production-path check is optional diagnostic/development coverage, not
+a release acceptance requirement:
 
 ```bash
 npm run release:local-k3s-gate
 ```
+
+Do not use its results as blocking release evidence until the complete
+provider-backed local deployment and smoke path is separately repaired and
+proven. For release acceptance, deploy the committed candidate with
+`npm run azure:deploy-from-commit -- <candidate-sha>` and run representative
+integration plus feature-specific API/UI tests against that exact-SHA deployment
+before release preparation or publication. See [RELEASING.md](../../RELEASING.md).
 
 The command targets `Ubuntu-24.04` WSL k3s and attempts to provision or start k3s
 with the documented installer/service when the binary, process, or kubeconfig is
