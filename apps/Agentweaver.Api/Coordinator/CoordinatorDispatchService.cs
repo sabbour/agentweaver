@@ -3559,12 +3559,16 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             """;
     }
 
-    private async Task<string> ComposeChildTaskAsync(
+    internal async Task<string> ComposeChildTaskAsync(
         CoordinatorDispatchContext context,
         int workPlanId,
         Subtask subtask,
         CancellationToken ct)
     {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plan = await db.WorkPlans.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.Id == workPlanId, ct).ConfigureAwait(false);
         var baseTask = BuildCanonicalSubtaskTask(subtask);
         if (context.StaticWorkflowChild && !string.IsNullOrWhiteSpace(context.StaticParentTask))
         {
@@ -3577,6 +3581,9 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 {baseTask}
                 """;
         }
+        if (context.ComposedWorkflowChild)
+            baseTask += "\n\n" + BuildComposedParentContext(plan
+                ?? throw new InvalidOperationException($"Composed work plan {workPlanId} was not found."));
 
         if (!string.IsNullOrWhiteSpace(subtask.RecoveryGuidance))
             baseTask = $"{baseTask}\n\n{subtask.RecoveryGuidance}";
@@ -3598,10 +3605,6 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
         sb.AppendLine("## Coordinator context");
 
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var plan = await db.WorkPlans.AsNoTracking()
-            .FirstOrDefaultAsync(w => w.Id == workPlanId, ct).ConfigureAwait(false);
         if (plan is not null)
         {
             var outcome = await db.OutcomeSpecs.AsNoTracking()
@@ -3718,6 +3721,15 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
             written. If no outputs were declared, still apply this folder convention to planning
             prose you create.
             """;
+    }
+
+    internal static string BuildComposedParentContext(WorkPlan plan)
+    {
+        if (plan.ParentRunId is null || plan.ParentJoinNodeId is not null)
+            throw new InvalidOperationException($"Work plan {plan.Id} is not a composed child.");
+        var incoming = WorkflowChildWorkService.DeserializeIncomingInput(plan)
+            ?? throw new InvalidOperationException($"Composed work plan {plan.Id} lost its pinned parent turn.");
+        return $"## Pinned parent workflow context\n{incoming.Task}";
     }
 
     private async Task<string?> CompletionSummaryAsync(Subtask subtask, CancellationToken ct)

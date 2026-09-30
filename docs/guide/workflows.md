@@ -139,9 +139,11 @@ workflow.
 
 The parent workflow checkpoints before decomposition while the coordinator persists a correlated
 child run and work plan, executes the runtime-derived dependency graph, and assembles the result.
-The child plan receives the node prompt together with the pinned parent turn's predecessor context
-(including ordered fan-in text when this stage follows a static join); a retry reuses that saved
-context rather than reading a changed workflow definition.
+The child planner and dispatched subtasks receive the node prompt together with the pinned parent
+turn's predecessor context (including ordered fan-in text when this stage follows a static join).
+The composed context must fit the 24,000-character intake limit; oversized context fails explicitly
+instead of being silently truncated. A retry reuses the original saved context rather than reading
+a changed workflow definition.
 The typed completion includes the child run and work-plan identities, integration branch, verified
 tree hash, aggregate diff, and included child runs. Before the parent continues, Agentweaver stages
 and fast-forwards that verified tree into the parent's isolated run branch. Transfer rejects a

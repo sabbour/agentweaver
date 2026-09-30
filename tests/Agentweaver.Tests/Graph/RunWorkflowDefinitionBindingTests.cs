@@ -306,6 +306,9 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
     [Fact]
     public async Task StartAsync_ComposedCoordinator_SuspendsAtChildWorkPort_AndReturnsTypedAssembly()
     {
+        const string joinedContext = "[Ordered parallel branch results]\n" +
+            "[1. incident-brief-writer]\nSynthetic incident details\n\n" +
+            "[2. response-checklist-writer]\nRecovery checklist";
         using var baseFactory = new WorkflowWebApplicationFactory();
         using var testFactory = baseFactory.WithWebHostBuilder(builder =>
             builder.ConfigureTestServices(services =>
@@ -360,7 +363,7 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             RepositoryPath = workingDirectory,
             OriginatingBranch = "main",
             ModelSource = ModelSource.GitHubCopilot,
-            Task = "derive and execute a dependent plan",
+            Task = $"derive and execute a dependent plan\n\n{joinedContext}",
             SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
             Status = DomainRunStatus.InProgress,
             StartedAt = DateTimeOffset.UtcNow,
@@ -397,6 +400,32 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
                 plan.ParentRunId.Should().Be(run.Id.ToString());
                 plan.ParentWorkflowNodeId.Should().Be("compose");
                 plan.ParentJoinNodeId.Should().BeNull();
+                var dispatch = services.GetRequiredService<CoordinatorDispatchService>();
+                var dispatchContext = new CoordinatorDispatchContext(pause.ChildCoordinatorRunId,
+                    workingDirectory, worktree.BranchName, run.SubmittingUser,
+                    project.Id, ComposedWorkflowChild: true);
+                var subtask = new Subtask
+                {
+                    Title = "Write the summary",
+                    Scope = "Read verified source documents and write demo/summary.md.",
+                    Phase = "execution",
+                    AssignedAgent = "Morpheus",
+                    SelectedModelId = "test-model",
+                    IsolationStrategy = "worktree",
+                    Status = SubtaskStatus.Pending,
+                    DeclaredOutputPathsJson = "[\"demo/summary.md\"]",
+                };
+                var actualChildTask = await dispatch.ComposeChildTaskAsync(
+                    dispatchContext, plan.Id, subtask, CancellationToken.None);
+                actualChildTask.Should().Contain(joinedContext);
+                var reattached = await services.GetRequiredService<WorkflowChildWorkService>()
+                    .PrepareComposedAsync(new WorkflowComposedWorkRequest(
+                        run, "composed", "compose", "Derive dependent tasks",
+                        input with { Task = "edited context" }, "edited-tree"));
+                reattached.WorkPlanId.Should().Be(plan.Id);
+                var resumedChildTask = await dispatch.ComposeChildTaskAsync(
+                    dispatchContext, plan.Id, subtask, CancellationToken.None);
+                resumedChildTask.Should().Contain(joinedContext).And.NotContain("edited context");
 
                 var assembly = new WorkflowComposedAssembly(
                     "agentweaver/integration-child",

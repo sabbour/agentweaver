@@ -262,6 +262,7 @@ internal sealed class WorkflowChildWorkRuntime(
 /// </summary>
 internal sealed class WorkflowChildWorkService
 {
+    internal const int MaxComposedParentContextChars = 24_000;
     private static readonly TimeSpan DeliveryClaimStaleAfter = TimeSpan.FromSeconds(15);
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunStore _runStore;
@@ -446,16 +447,21 @@ internal sealed class WorkflowChildWorkService
 
             var now = DateTimeOffset.UtcNow;
             var childRunId = RunId.New().ToString();
+            var composedContext = composedPrompt is null
+                ? null
+                : request.IncomingInput?.Task
+                    ?? throw new InvalidOperationException("Composed child work requires the parent turn context.");
+            if (composedContext?.Length > MaxComposedParentContextChars)
+                throw new InvalidOperationException(
+                    $"Composed parent context exceeds {MaxComposedParentContextChars} characters; it cannot be delivered intact.");
             var outcomeSpec = new OutcomeSpec
             {
                 ProjectId = request.ParentRun.ProjectId?.ToString() ?? string.Empty,
                 CoordinatorRunId = childRunId,
-                Goal = composedPrompt is null
-                    ? $"Execute workflow child work for node '{request.ParentWorkflowNodeId}'."
-                    : $"{composedPrompt}\n\n[Parent workflow context]\n" +
-                      (request.IncomingInput?.Task
-                          ?? throw new InvalidOperationException("Composed child work requires the parent turn context.")),
-                DesiredOutcome = composedPrompt ?? "Complete every declared static branch and return one ordered result.",
+                Goal = composedPrompt ?? $"Execute workflow child work for node '{request.ParentWorkflowNodeId}'.",
+                DesiredOutcome = composedPrompt is null
+                    ? "Complete every declared static branch and return one ordered result."
+                    : $"{composedPrompt}\n\n[Parent workflow context]\n{composedContext}",
                 Scope = $"Pinned parent workflow '{request.ParentWorkflowId}', node '{request.ParentWorkflowNodeId}'.",
                 Assumptions = composedPrompt is null
                     ? "Static branch declarations are immutable for this parent run and workflow node."
@@ -1480,7 +1486,7 @@ internal sealed class WorkflowChildWorkService
             .SingleAsync(ct).ConfigureAwait(false);
     }
 
-    private static AgentTurnInput? DeserializeIncomingInput(WorkPlan plan)
+    internal static AgentTurnInput? DeserializeIncomingInput(WorkPlan plan)
     {
         if (string.IsNullOrWhiteSpace(plan.ParentTurnInputJson))
             return null;
