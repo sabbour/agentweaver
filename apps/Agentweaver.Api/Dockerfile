@@ -15,19 +15,19 @@ COPY Directory.Build.props .
 # exactly one copy on its own — no duplicates from /src/ projects to collide with.
 ARG COPILOT_CLI_VERSION=1.0.57
 ARG COPILOT_NPM_REGISTRY_URL=https://registry.npmjs.org
-# npm registry dist.shasum for @github/copilot-linux-{x64,arm64}@1.0.57.
-ARG COPILOT_CLI_SHA1_AMD64=7938f9f6dfc3248efc1a23e1c76bf98fa4554141
-ARG COPILOT_CLI_SHA1_ARM64=3fe206bfe1bd5a32636530e1dd3f3815cea1b336
+# npm registry dist.integrity SHA-512 for @github/copilot-linux-{x64,arm64}@1.0.57.
+ARG COPILOT_CLI_SHA512_AMD64=10e3a753863ebd91dfc5597c78100fec9b524e6bb9778643502f70086a4003993bd379449e9bbc50ebf4e264c7467f0a4f36fc823fa28cd8710d67b75e58db6b
+ARG COPILOT_CLI_SHA512_ARM64=e9aa4d63fbfb08cc4a938e4272d5192f342775d069206f647927a774529837e901204052772fffb3f0b3ff86105f5884467925a606513fb16f73068ab34ffb60
 ARG TARGETARCH
 RUN case "${TARGETARCH}" in \
-      amd64) runtime_arch=x64; copilot_sha1="${COPILOT_CLI_SHA1_AMD64}" ;; \
-      arm64) runtime_arch=arm64; copilot_sha1="${COPILOT_CLI_SHA1_ARM64}" ;; \
+      amd64) runtime_arch=x64; copilot_sha512="${COPILOT_CLI_SHA512_AMD64}" ;; \
+      arm64) runtime_arch=arm64; copilot_sha512="${COPILOT_CLI_SHA512_ARM64}" ;; \
       *) echo "Unsupported API image TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac && \
     mkdir -p /copilot-bin && \
     printf '%s' "${runtime_arch}" > /copilot-bin/runtime-arch && \
     curl -fsSL -o /tmp/copilot.tgz "${COPILOT_NPM_REGISTRY_URL}/@github/copilot-linux-${runtime_arch}/-/copilot-linux-${runtime_arch}-${COPILOT_CLI_VERSION}.tgz" && \
-    echo "${copilot_sha1}  /tmp/copilot.tgz" | sha1sum -c - && \
+    echo "${copilot_sha512}  /tmp/copilot.tgz" | sha512sum -c - && \
     tar -xzf /tmp/copilot.tgz --strip-components=1 -C /copilot-bin && \
     rm -f /tmp/copilot.tgz && \
     chmod +x /copilot-bin/copilot

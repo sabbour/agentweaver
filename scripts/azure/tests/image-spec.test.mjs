@@ -45,13 +45,14 @@ const apiDockerfile = readFileSync(
 test("api image maps TARGETARCH to pinned, verified Copilot CLI packages and native runtime paths", () => {
   assert.match(apiDockerfile, /ARG COPILOT_CLI_VERSION=1\.0\.57/);
   assert.match(apiDockerfile, /ARG COPILOT_NPM_REGISTRY_URL=https:\/\/registry\.npmjs\.org/);
-  assert.match(apiDockerfile, /ARG COPILOT_CLI_SHA1_AMD64=7938f9f6dfc3248efc1a23e1c76bf98fa4554141/);
-  assert.match(apiDockerfile, /ARG COPILOT_CLI_SHA1_ARM64=3fe206bfe1bd5a32636530e1dd3f3815cea1b336/);
-  assert.match(apiDockerfile, /amd64\) runtime_arch=x64; copilot_sha1="\$\{COPILOT_CLI_SHA1_AMD64\}"/);
-  assert.match(apiDockerfile, /arm64\) runtime_arch=arm64; copilot_sha1="\$\{COPILOT_CLI_SHA1_ARM64\}"/);
+  assert.match(apiDockerfile, /ARG COPILOT_CLI_SHA512_AMD64=10e3a753863ebd91dfc5597c78100fec9b524e6bb9778643502f70086a4003993bd379449e9bbc50ebf4e264c7467f0a4f36fc823fa28cd8710d67b75e58db6b/);
+  assert.match(apiDockerfile, /ARG COPILOT_CLI_SHA512_ARM64=e9aa4d63fbfb08cc4a938e4272d5192f342775d069206f647927a774529837e901204052772fffb3f0b3ff86105f5884467925a606513fb16f73068ab34ffb60/);
+  assert.match(apiDockerfile, /amd64\) runtime_arch=x64; copilot_sha512="\$\{COPILOT_CLI_SHA512_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) runtime_arch=arm64; copilot_sha512="\$\{COPILOT_CLI_SHA512_ARM64\}"/);
   assert.match(apiDockerfile, /printf '%s' "\$\{runtime_arch\}" > \/copilot-bin\/runtime-arch/);
   assert.match(apiDockerfile, /\$\{COPILOT_NPM_REGISTRY_URL\}\/@github\/copilot-linux-\$\{runtime_arch\}\/-\/copilot-linux-\$\{runtime_arch\}-\$\{COPILOT_CLI_VERSION\}\.tgz/);
-  assert.match(apiDockerfile, /echo "\$\{copilot_sha1\}  \/tmp\/copilot\.tgz" \| sha1sum -c - && \\\s+tar -xzf/);
+  assert.match(apiDockerfile, /echo "\$\{copilot_sha512\}  \/tmp\/copilot\.tgz" \| sha512sum -c - && \\\s+tar -xzf/);
+  assert.doesNotMatch(apiDockerfile, /sha1sum|COPILOT_CLI_SHA1/);
   assert.equal((apiDockerfile.match(/runtime_arch="\$\(cat \/copilot-bin\/runtime-arch\)"/g) ?? []).length, 2);
   assert.match(apiDockerfile, /\/app\/publish\/runtimes\/linux-\$\{runtime_arch\}\/native\/copilot/);
   assert.match(apiDockerfile, /--runtime "linux-\$\{runtime_arch\}"/);
