@@ -19,10 +19,11 @@ ARG COPILOT_NPM_REGISTRY_URL=https://registry.npmjs.org
 ARG COPILOT_CLI_SHA512_AMD64=10e3a753863ebd91dfc5597c78100fec9b524e6bb9778643502f70086a4003993bd379449e9bbc50ebf4e264c7467f0a4f36fc823fa28cd8710d67b75e58db6b
 ARG COPILOT_CLI_SHA512_ARM64=e9aa4d63fbfb08cc4a938e4272d5192f342775d069206f647927a774529837e901204052772fffb3f0b3ff86105f5884467925a606513fb16f73068ab34ffb60
 ARG TARGETARCH
-RUN case "${TARGETARCH}" in \
+RUN target_arch="${TARGETARCH:-amd64}" && \
+    case "${target_arch}" in \
       amd64) runtime_arch=x64; copilot_sha512="${COPILOT_CLI_SHA512_AMD64}" ;; \
       arm64) runtime_arch=arm64; copilot_sha512="${COPILOT_CLI_SHA512_ARM64}" ;; \
-      *) echo "Unsupported API image TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+      *) echo "Unsupported API image TARGETARCH: ${target_arch}" >&2; exit 1 ;; \
     esac && \
     mkdir -p /copilot-bin && \
     printf '%s' "${runtime_arch}" > /copilot-bin/runtime-arch && \
@@ -90,13 +91,14 @@ ARG GH_CLI_VERSION=2.98.0
 ARG GH_CLI_SHA256_AMD64=f65a3fa2fa0eb2e97c445ee3f5e087a40aae03b64847f45a8f13805e504535d6
 ARG GH_CLI_SHA256_ARM64=bbc4ac7964c2a091fd555cd1758d10a7cfcfdc472e405f0b0fb958f05d535cb6
 ARG TARGETARCH
-RUN case "${TARGETARCH}" in \
+RUN target_arch="${TARGETARCH:-amd64}" && \
+    case "${target_arch}" in \
       amd64) gh_sha256="${GH_CLI_SHA256_AMD64}" ;; \
       arm64) gh_sha256="${GH_CLI_SHA256_ARM64}" ;; \
-      *) echo "Unsupported API image TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+      *) echo "Unsupported API image TARGETARCH: ${target_arch}" >&2; exit 1 ;; \
     esac \
     && curl -fsSLo /tmp/gh.deb \
-        "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_${TARGETARCH}.deb" \
+        "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_${target_arch}.deb" \
     && echo "${gh_sha256}  /tmp/gh.deb" | sha256sum -c - \
     && apt-get update \
     && apt-get install -y --no-install-recommends /tmp/gh.deb \
@@ -105,12 +107,13 @@ RUN case "${TARGETARCH}" in \
 
 ARG KUBECTL_SHA256_AMD64=5de4e9f2266738fd112b721265a0c1cd7f4e5208b670f811861f699474a100a3
 ARG KUBECTL_SHA256_ARM64=d595d1a26b7444e0beb122e25750ee4524e74414bbde070b672b423139295ce6
-RUN case "${TARGETARCH}" in \
+RUN target_arch="${TARGETARCH:-amd64}" && \
+    case "${target_arch}" in \
       amd64) kubectl_sha256="${KUBECTL_SHA256_AMD64}" ;; \
       arm64) kubectl_sha256="${KUBECTL_SHA256_ARM64}" ;; \
-      *) echo "Unsupported API image TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+      *) echo "Unsupported API image TARGETARCH: ${target_arch}" >&2; exit 1 ;; \
     esac \
-    && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+    && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${target_arch}/kubectl" \
     && echo "${kubectl_sha256}  /usr/local/bin/kubectl" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/kubectl \
     && kubectl version --client=true

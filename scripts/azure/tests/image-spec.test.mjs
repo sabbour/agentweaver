@@ -68,7 +68,7 @@ test("api image installs architecture-matched GitHub CLI from pinned, verified r
   assert.match(dockerfile, /arm64\) gh_sha256="\$\{GH_CLI_SHA256_ARM64\}"/);
   assert.match(
     dockerfile,
-    /github\.com\/cli\/cli\/releases\/download\/v\$\{GH_CLI_VERSION\}\/gh_\$\{GH_CLI_VERSION\}_linux_\$\{TARGETARCH\}\.deb/,
+    /github\.com\/cli\/cli\/releases\/download\/v\$\{GH_CLI_VERSION\}\/gh_\$\{GH_CLI_VERSION\}_linux_\$\{target_arch\}\.deb/,
   );
   assert.match(dockerfile, /echo "\$\{gh_sha256\}  \/tmp\/gh\.deb" \| sha256sum -c -/);
   assert.doesNotMatch(dockerfile, /apt-get install[^\n]*gh=\$\{GH_CLI_VERSION\}/);
@@ -76,15 +76,27 @@ test("api image installs architecture-matched GitHub CLI from pinned, verified r
 
 test("api image pins architecture-matched kubectl and rejects unsupported TARGETARCH before downloads", () => {
   assert.equal((apiDockerfile.match(/ARG TARGETARCH/g) ?? []).length, 2);
-  assert.equal((apiDockerfile.match(/\*\) echo "Unsupported API image TARGETARCH: \$\{TARGETARCH\}" >&2; exit 1/g) ?? []).length, 3);
+  assert.equal((apiDockerfile.match(/\*\) echo "Unsupported API image TARGETARCH: \$\{target_arch\}" >&2; exit 1/g) ?? []).length, 3);
   assert.match(apiDockerfile, /ARG KUBECTL_SHA256_AMD64=5de4e9f2266738fd112b721265a0c1cd7f4e5208b670f811861f699474a100a3/);
   assert.match(apiDockerfile, /ARG KUBECTL_SHA256_ARM64=d595d1a26b7444e0beb122e25750ee4524e74414bbde070b672b423139295ce6/);
   assert.match(apiDockerfile, /amd64\) kubectl_sha256="\$\{KUBECTL_SHA256_AMD64\}"/);
   assert.match(apiDockerfile, /arm64\) kubectl_sha256="\$\{KUBECTL_SHA256_ARM64\}"/);
-  assert.match(apiDockerfile, /\/bin\/linux\/\$\{TARGETARCH\}\/kubectl/);
+  assert.match(apiDockerfile, /\/bin\/linux\/\$\{target_arch\}\/kubectl/);
   assert.match(apiDockerfile, /echo "\$\{kubectl_sha256\}  \/usr\/local\/bin\/kubectl" \| sha256sum -c -/);
   assert.doesNotMatch(apiDockerfile, /kubectl\.sha256/);
   assert.doesNotMatch(apiDockerfile, /\/bin\/linux\/amd64\/kubectl/);
+});
+
+test("api image defaults missing TARGETARCH to amd64 in build and runtime without overriding buildx arm64", () => {
+  assert.doesNotMatch(apiDockerfile, /ARG TARGETARCH=/);
+  assert.equal((apiDockerfile.match(/RUN target_arch="\$\{TARGETARCH:-amd64\}" && \\\s+case "\$\{target_arch\}" in/g) ?? []).length, 3);
+  assert.match(apiDockerfile, /amd64\) runtime_arch=x64; copilot_sha512="\$\{COPILOT_CLI_SHA512_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) runtime_arch=arm64; copilot_sha512="\$\{COPILOT_CLI_SHA512_ARM64\}"/);
+  assert.match(apiDockerfile, /amd64\) gh_sha256="\$\{GH_CLI_SHA256_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) gh_sha256="\$\{GH_CLI_SHA256_ARM64\}"/);
+  assert.match(apiDockerfile, /amd64\) kubectl_sha256="\$\{KUBECTL_SHA256_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) kubectl_sha256="\$\{KUBECTL_SHA256_ARM64\}"/);
+  assert.doesNotMatch(apiDockerfile, /\$\{TARGETARCH\}/);
 });
 
 test("image-spec: agent-host uses AGENTHOST_IMAGE_TAG; others use IMAGE_TAG", () => {
