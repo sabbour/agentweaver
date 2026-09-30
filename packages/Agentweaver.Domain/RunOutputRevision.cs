@@ -52,16 +52,17 @@ public sealed class RunOutputRevision
                 throw new RunOutputRevisionUnavailableException("corrupt_content");
             RunOutputTree.Decode(treeContent);
         }
+        // Collective output completeness is determined by its captured files; coordinators may have no workflow digest.
         if (string.IsNullOrWhiteSpace(treeHash) || string.IsNullOrWhiteSpace(revisionId)
             || (schemaVersion == CurrentSchemaVersion && manifestIncomplete == (workflowDigest is not null))
             || (schemaVersion == CollectiveSchemaVersion
                 && (outputKind != "collective" || string.IsNullOrWhiteSpace(mergedCommitHash)
                     || string.IsNullOrWhiteSpace(workPlanId) || string.IsNullOrWhiteSpace(mergeEffectId)
-                    || manifestIncomplete != (workflowDigest is null)))
+                    || (manifestIncomplete && workflowDigest is not null)))
             || (schemaVersion == CollectiveCandidateSchemaVersion
                 && (outputKind != "collective" || string.IsNullOrWhiteSpace(workPlanId)
                     || mergedCommitHash is not null || mergeEffectId is not null || treeContent is null
-                    || manifestIncomplete != (workflowDigest is null)))
+                    || (manifestIncomplete && workflowDigest is not null)))
             || (schemaVersion == NoChangeSchemaVersion
                 && (outputKind != "no_change" || !acceptedNoChange || diffBytes.Length != 0
                     || string.IsNullOrWhiteSpace(mergedCommitHash)

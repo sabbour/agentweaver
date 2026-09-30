@@ -17,6 +17,10 @@ When an assembly gate (including rubber-duck or Build & Test) or a human reviewe
 requests a fresh revision, its workspace starts from the exact integrated tree
 reviewed at that gate. The revised output retains those files alongside the new edits;
 retrying that revision keeps the same pinned input.
+Collective revisions retain the complete integrated file tree across repeated
+corrections, including when the coordinator has no executable-workflow pin.
+The current tree's captured files must still validate before review approval
+and merge; a missing or corrupt capture is not treated as complete.
 
 The coordinator verifies each file-producing child's recorded tree against its Git
 branch and assembles from that exact verified commit, even if the branch moves later.
