@@ -90,7 +90,8 @@ read-only; duplicate one into the project to customize it.
 
 From a project, navigate to **Workflows** in the sidebar. Each workflow card shows:
 
-- The workflow name and its source file
+- The workflow name, ID, and description above its source file and actions. On narrow screens,
+  the source and actions wrap below the summary rather than narrowing the description.
 - Validation status: **Valid**, **Invalid** (with an error), or **Warning**
 - Whether it is the project's **default** workflow
 
