@@ -102,20 +102,25 @@ from its exact matching section; do not run another changelog generator.
    fails and prints the same `git merge` command.
 
    CI enforces this rule on `release/*` pull requests into `main`.
-6. Promote the prepared branch to `main` through a green PR, merged with
-   **"Squash and merge"**.
-   Squash promotion creates a different `main` commit; confirm its source
-   content matches the accepted candidate apart from prepared release metadata
-   and reviewed promotion changes. Any substantive change requires another
-   exact-SHA deployment and acceptance before publication.
+6. Promote the prepared branch to `main` through a green PR using a **merge
+   commit**, not rebase or squash:
 
-> **Promotion history is not release identity.** Squash merging creates a new `main`
-> commit; it does not preserve the release branch's individual commits or guarantee
-> that later promotions are conflict-free. The `release:prepare` ancestry merge remains
-> the mechanism that incorporates `origin/main` into the release branch before release
-> metadata changes. Inspect the actual merge base and review every conflict resolution;
-> do not treat `-X ours` as proof that conflicts are cosmetic. `release:publish`
-> requires the exact fetched `origin/main` SHA.
+   ```bash
+   gh pr merge <release-pr-number> --merge
+   ```
+
+   After promotion, confirm the resulting `main` source content matches the
+   accepted candidate apart from prepared release metadata and reviewed
+   promotion changes. Any substantive change requires another exact-SHA
+   deployment and acceptance before publication.
+
+> **Promotion history is not release identity.** The merge commit preserves the
+> release branch's ancestry on `main` but does not guarantee that later promotions
+> are conflict-free. The `release:prepare` ancestry merge incorporates `origin/main`
+> into the release branch before release metadata changes. Inspect the actual merge
+> base and review every conflict resolution; do not treat `-X ours` as proof that
+> conflicts are cosmetic. `release:publish` requires the exact fetched `origin/main`
+> SHA, not the release branch tip.
 
 > `release:prepare` runs from a normal dev checkout — you do **not** need to
 > delete `node_modules/` or build output first (the script itself invokes the
