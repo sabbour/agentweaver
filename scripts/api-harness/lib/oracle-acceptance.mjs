@@ -306,7 +306,7 @@ export async function runOracleAcceptance({
       if (!Array.isArray(prior) || prior.length > 0) {
         throw new AcceptanceFailure(`${label}: pre-existing preview session; refusing to adopt or delete it.`);
       }
-      const response = await checkedRequest('POST', path('/sandbox/port-forward'), { target_port: port }, { allowLateResponse: true });
+      const response = await checkedRequest('POST', path('/sandbox/port-forward'), { targetPort: port }, { allowLateResponse: true });
       const value = response.body;
       if (response.status === 200 && value?.session_id && value?.preview_url) {
         owned.push({ runId: result.parentRunId, sessionId: value.session_id });
@@ -323,7 +323,13 @@ export async function runOracleAcceptance({
         return checked;
       }
       last = `HTTP ${response.status}`;
-      if (response.status >= 400 && ![404, 409, 503].includes(response.status)) break;
+      if (response.status >= 400 && ![404, 409, 503].includes(response.status)) {
+        const diagnostic = response.body?.error ?? response.body?.message;
+        throw new AcceptanceFailure(
+          `${label}: preview request rejected: HTTP ${response.status}${typeof diagnostic === 'string' ? `: ${diagnostic}` : ''}.`,
+          'preview_rejected',
+        );
+      }
       await pause(Math.min(pollMs, remaining()));
     }
     throw new AcceptanceFailure(`${label}: preview not ready (${last ?? 'deadline'}).`, 'phase_timeout');

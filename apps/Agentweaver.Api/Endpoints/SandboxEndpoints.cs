@@ -20,7 +20,7 @@ public static class SandboxEndpoints
         // When Sandbox:Preview:Enabled=true (in-cluster), this provisions a Gateway-direct preview
         // (per-preview HTTPRoute -> per-run ClusterIP Service -> sandbox pod) and returns
         // preview_url + keepalive_url. Otherwise it falls back to the legacy kubectl port-forward
-        // (local-dev) path. Body: { "target_port": 3000 }.
+        // (local-dev) path. Body: { "targetPort": 3000 }.
         app.MapPost("/api/runs/{runId}/sandbox/port-forward", async (
             HttpContext httpContext,
             string runId,
