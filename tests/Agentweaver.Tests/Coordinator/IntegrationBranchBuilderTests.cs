@@ -134,6 +134,94 @@ public sealed class IntegrationBranchBuilderTests : IDisposable
     }
 
     [Fact]
+    public void BuildIntegrationBranch_LegacyFlatRef_AllowsAttemptBranchWithoutTouchingOtherRefs()
+    {
+        var repoPath = CreateTempGitRepo();
+        const string legacy = "agentweaver/integration/coord-legacy";
+        const string attempt = legacy + "/attempt-2";
+        const string unrelated = "agentweaver/integration/another-run";
+        CommitOnNewBranch(repoPath, legacy, "previous.txt", "previous", "old assembly");
+        CommitOnNewBranch(repoPath, unrelated, "unrelated.txt", "unrelated", "other assembly");
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "alpha.txt", "alpha", "child");
+        var legacyTip = _manager.GetBranchTipCommitSha(repoPath, legacy);
+        var unrelatedTip = _manager.GetBranchTipCommitSha(repoPath, unrelated);
+
+        var result = _manager.BuildIntegrationBranch(repoPath, "main", attempt, ["agentweaver/child-a"]);
+
+        result.Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        using var repo = new Repository(repoPath);
+        repo.Branches[legacy].Should().BeNull();
+        repo.Branches["agentweaver/legacy-integration/coord-legacy"].Tip.Sha.Should().Be(legacyTip);
+        repo.Branches[attempt].Tip["alpha.txt"].Should().NotBeNull();
+        repo.Branches[unrelated].Tip.Sha.Should().Be(unrelatedTip);
+        repo.Branches["main"].Tip["alpha.txt"].Should().BeNull();
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_RetryAndNextAttempt_KeepMigratedRefAndResetOnlyRequestedAttempt()
+    {
+        var repoPath = CreateTempGitRepo();
+        const string legacy = "agentweaver/integration/coord-retry";
+        const string attempt = legacy + "/attempt-2";
+        CommitOnNewBranch(repoPath, legacy, "previous.txt", "previous", "old assembly");
+        CommitOnNewBranch(repoPath, "agentweaver/child-a", "alpha.txt", "alpha", "child a");
+        CommitOnNewBranch(repoPath, "agentweaver/child-b", "beta.txt", "beta", "child b");
+        var legacyTip = _manager.GetBranchTipCommitSha(repoPath, legacy);
+
+        _manager.BuildIntegrationBranch(repoPath, "main", attempt, ["agentweaver/child-a"])
+            .Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        _manager.BuildIntegrationBranch(repoPath, "main", attempt, ["agentweaver/child-a", "agentweaver/child-b"])
+            .Outcome.Should().Be(IntegrationBranchOutcome.Built);
+        _manager.BuildIntegrationBranch(repoPath, "main", legacy + "/attempt-3", ["agentweaver/child-b"])
+            .Outcome.Should().Be(IntegrationBranchOutcome.Built);
+
+        using var repo = new Repository(repoPath);
+        repo.Branches["agentweaver/legacy-integration/coord-retry"].Tip.Sha.Should().Be(legacyTip);
+        repo.Branches[attempt].Tip["alpha.txt"].Should().NotBeNull();
+        repo.Branches[attempt].Tip["beta.txt"].Should().NotBeNull();
+        repo.Branches[legacy + "/attempt-3"].Tip["alpha.txt"].Should().BeNull();
+        repo.Branches[legacy + "/attempt-3"].Tip["beta.txt"].Should().NotBeNull();
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_MissingInput_DoesNotMigrateLegacyRefOrPublishAttempt()
+    {
+        var repoPath = CreateTempGitRepo();
+        const string legacy = "agentweaver/integration/coord-missing";
+        CommitOnNewBranch(repoPath, legacy, "previous.txt", "previous", "old assembly");
+        var legacyTip = _manager.GetBranchTipCommitSha(repoPath, legacy);
+
+        _manager.BuildIntegrationBranch(repoPath, "main", legacy + "/attempt-2", ["agentweaver/missing"])
+            .Outcome.Should().Be(IntegrationBranchOutcome.MissingInput);
+
+        using var repo = new Repository(repoPath);
+        repo.Branches[legacy].Tip.Sha.Should().Be(legacyTip);
+        repo.Branches[legacy + "/attempt-2"].Should().BeNull();
+        repo.Branches["agentweaver/legacy-integration/coord-missing"].Should().BeNull();
+    }
+
+    [Fact]
+    public void BuildIntegrationBranch_ArchiveOccupied_RefusesToOverwriteEitherRef()
+    {
+        var repoPath = CreateTempGitRepo();
+        const string legacy = "agentweaver/integration/coord-occupied";
+        const string archive = "agentweaver/legacy-integration/coord-occupied";
+        CommitOnNewBranch(repoPath, legacy, "previous.txt", "previous", "old assembly");
+        CommitOnNewBranch(repoPath, archive, "archived.txt", "archived", "unrelated archive");
+        var legacyTip = _manager.GetBranchTipCommitSha(repoPath, legacy);
+        var archiveTip = _manager.GetBranchTipCommitSha(repoPath, archive);
+
+        Action build = () => _manager.BuildIntegrationBranch(
+            repoPath, "main", legacy + "/attempt-2", Array.Empty<string>());
+        build.Should().Throw<InvalidOperationException>().WithMessage("*archive*already exists*");
+
+        using var repo = new Repository(repoPath);
+        repo.Branches[legacy].Tip.Sha.Should().Be(legacyTip);
+        repo.Branches[archive].Tip.Sha.Should().Be(archiveTip);
+        repo.Branches[legacy + "/attempt-2"].Should().BeNull();
+    }
+
+    [Fact]
     public void BuildIntegrationBranch_WhenMainRepoIsOnIntegrationBranch_ChecksOutOriginAndResets()
     {
         var repoPath = CreateTempGitRepo();
