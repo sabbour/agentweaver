@@ -139,6 +139,24 @@ public sealed class CoordinatorOrchestratorExecutor
         var composed = existing is { ParentRunId: not null, ParentWorkflowNodeId: not null, ParentJoinNodeId: null };
         if (existing is not null && !composed)
         {
+            if (!string.IsNullOrWhiteSpace(existing.WorkflowId))
+            {
+                var run = await scope.ServiceProvider.GetRequiredService<IRunStore>()
+                    .GetAsync(RunId.Parse(input.RunId), ct).ConfigureAwait(false);
+                var pin = run?.GetExecutableWorkflowPin();
+                if (pin is not null)
+                {
+                    var saved = ExecutableWorkflowSnapshots.Load(input.RunId, pin);
+                    if (!string.Equals(saved.Id, existing.WorkflowId, StringComparison.OrdinalIgnoreCase))
+                        throw new WorkflowBindException(
+                            $"Coordinator run '{input.RunId}' saved workflow does not match its work plan.",
+                            input.RunId);
+                }
+                else if (run?.ExecutableWorkflowPinRequired == true)
+                    throw new WorkflowBindException(
+                        $"Coordinator run '{input.RunId}' has a committed work plan but its required saved workflow is missing.",
+                        input.RunId);
+            }
             _logger.LogInformation("Coordinator orchestrate: work plan already exists for run {RunId}; skipping", input.RunId);
             var promoted = await db.BacklogTasks.AsNoTracking()
                 .Where(t => t.ProjectId == input.ProjectId && t.ParentPrdRunId == input.RunId)
@@ -294,10 +312,12 @@ public sealed class CoordinatorOrchestratorExecutor
                 ?? throw new InvalidOperationException("Coordinator plan write requires a run lock."),
                 input.RunId, pin, ct).ConfigureAwait(false);
         }
-        if (sqlitePlanTx is not null)
-            await sqlitePlanTx.CommitAsync(ct).ConfigureAwait(false);
+        // SQLite keeps the run and work plan in separate databases. Commit the selected pin
+        // first: if the plan commit fails, a later attempt must reuse that durable choice.
         if (planTx is not null)
             await planTx.CommitAsync(ct).ConfigureAwait(false);
+        if (sqlitePlanTx is not null)
+            await sqlitePlanTx.CommitAsync(ct).ConfigureAwait(false);
         if (composedTx is not null)
             await composedTx.CommitAsync(ct).ConfigureAwait(false);
 
@@ -414,6 +434,9 @@ public sealed class CoordinatorOrchestratorExecutor
     {
         WorkflowDefinition? defaultDef = null;
         var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        var savedSelection = await ResolveSavedSelectionAsync(scope, runStore, input, ct).ConfigureAwait(false);
+        if (savedSelection is not null)
+            return savedSelection;
         try
         {
             var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
@@ -543,6 +566,78 @@ public sealed class CoordinatorOrchestratorExecutor
             }
             return new WorkflowSelection(defaultDef, IsExplicit: false, [], new HashSet<string>(StringComparer.Ordinal));
         }
+    }
+
+    private async Task<WorkflowSelection?> ResolveSavedSelectionAsync(
+        IServiceScope scope, IRunStore runStore, CoordinatorDraftInput input, CancellationToken ct)
+    {
+        if (!RunId.TryParse(input.RunId, out var runId))
+            return null;
+        var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (run?.GetExecutableWorkflowPin() is { } ownPin)
+        {
+            var selected = ExecutableWorkflowSnapshots.Load(input.RunId, ownPin);
+            if ((!string.IsNullOrWhiteSpace(input.WorkflowOverrideId)
+                    && !string.Equals(input.WorkflowOverrideId, selected.Id, StringComparison.OrdinalIgnoreCase))
+                || (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var requested)
+                    && !string.Equals(requested, selected.Id, StringComparison.OrdinalIgnoreCase)))
+                throw new WorkflowBindException(
+                    $"Coordinator run '{input.RunId}' already saved workflow '{selected.Id}'; start a new run to change it.",
+                    input.RunId);
+            _logger.LogInformation(
+                "Coordinator run {RunId} is resuming its saved workflow '{WorkflowId}' before plan commit.",
+                input.RunId, selected.Id);
+            return new WorkflowSelection(selected, IsExplicit: true, [selected], new HashSet<string>(StringComparer.Ordinal));
+        }
+
+        if (run?.RetriedFrom is null
+            || !string.IsNullOrWhiteSpace(input.WorkflowOverrideId)
+            || WorkflowSelector.TryParseOverride(input.ReviseFeedback, out _))
+            return null;
+
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var sourceId = run.RetriedFrom;
+        for (var depth = 0; depth < 4 && sourceId is not null; depth++)
+        {
+            if (!RunId.TryParse(sourceId, out var parsed))
+                throw new WorkflowBindException(
+                    $"Coordinator retry '{input.RunId}' has an invalid source run id.", input.RunId);
+            var currentSourceId = parsed.ToString();
+            var source = await runStore.GetAsync(parsed, ct).ConfigureAwait(false);
+            if (source is null || source.ProjectId != run.ProjectId || source.AgentName != CoordinatorAgentName)
+                throw new WorkflowBindException(
+                    $"Coordinator retry '{input.RunId}' cannot resolve its source run '{sourceId}'.", input.RunId);
+
+            if (source.GetExecutableWorkflowPin() is { } pin)
+            {
+                var selected = ExecutableWorkflowSnapshots.Load(currentSourceId, pin);
+                var sourcePlan = await db.WorkPlans.AsNoTracking()
+                    .Where(w => w.CoordinatorRunId == currentSourceId)
+                    .Select(w => w.WorkflowId)
+                    .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+                if (sourcePlan is not null
+                    && !string.Equals(sourcePlan, selected.Id, StringComparison.OrdinalIgnoreCase))
+                    throw new WorkflowBindException(
+                        $"Coordinator retry '{input.RunId}' source workflow does not match its work plan.",
+                        input.RunId);
+                var reason = $"Reused '{selected.Name}' from the saved workflow of retry source '{currentSourceId}'.";
+                EmitWorkflowSelectedEvent(input.RunId, selected, reason, wasAutoSelected: false, [selected]);
+                await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
+                return new WorkflowSelection(selected, IsExplicit: true, [selected], new HashSet<string>(StringComparer.Ordinal));
+            }
+
+            if (source.ExecutableWorkflowPinRequired
+                && await db.WorkPlans.AsNoTracking().AnyAsync(
+                    w => w.CoordinatorRunId == currentSourceId && w.WorkflowId != null, ct).ConfigureAwait(false))
+                throw new WorkflowBindException(
+                    $"Coordinator retry '{input.RunId}' source work plan requires a saved workflow, but none is stored.",
+                    input.RunId);
+            sourceId = source.RetriedFrom;
+        }
+        if (sourceId is not null)
+            throw new WorkflowBindException(
+                $"Coordinator retry '{input.RunId}' exceeded the supported source run chain.", input.RunId);
+        return null;
     }
 
     private async Task<WorkflowSelection> ValidateWorkflowAfterDecompositionAsync(

@@ -614,31 +614,22 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
                 .OrderBy(row => row.WorkflowBranchOrdinal)
                 .ToArrayAsync();
             branches.Should().HaveCount(2);
-            foreach (var branch in branches)
+            var dispatched = await PollUntilAsync(async () =>
             {
-                var selectedChild = new Agentweaver.Domain.Run
-                {
-                    Id = RunId.New(),
-                    RepositoryPath = workingDirectory,
-                    OriginatingBranch = "main",
-                    ModelSource = ModelSource.Byok,
-                    ModelId = branch.SelectedModelId,
-                    Task = branch.Scope,
-                    SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
-                    Status = RunStatus.Pending,
-                    StartedAt = DateTimeOffset.UtcNow,
-                    ProjectId = ProjectId.Parse(projectId),
-                    AgentName = branch.AssignedAgent,
-                    ParentRunId = plans[0].CoordinatorRunId,
-                    SubtaskId = branch.Id.ToString(),
-                };
-                await factory.Services.GetRequiredService<RunOrchestrator>()
-                    .StartChildRunAsync(selectedChild, CancellationToken.None);
-            }
-            var childIds = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
-                .Where(snapshot => snapshot.RunId != runId
-                    && snapshot.RunId != plans[0].CoordinatorRunId)
-                .Select(snapshot => snapshot.RunId)
+                var current = await db.Subtasks.AsNoTracking()
+                    .Where(row => row.WorkPlanId == plans[0].Id)
+                    .ToListAsync();
+                if (current.Count != 2 || current.Any(row => row.ChildRunId is null))
+                    return false;
+                var ids = current.Select(row => row.ChildRunId!).ToArray();
+                return await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                    .CountAsync(snapshot => ids.Contains(snapshot.RunId)) == 2;
+            });
+            dispatched.Should().BeTrue(
+                "the actual dispatched branches must inherit the parent repository capability");
+            var childIds = await db.Subtasks.AsNoTracking()
+                .Where(row => row.WorkPlanId == plans[0].Id)
+                .Select(row => row.ChildRunId!)
                 .ToArrayAsync();
             var childSnapshots = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
                 .Where(snapshot => childIds.Contains(snapshot.RunId))

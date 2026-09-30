@@ -366,6 +366,117 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task SQLite_InterruptedPlanCommit_ReusesDurableSelection_AndRejectsStaleOwner()
+    {
+        var projectId = await CreateProjectAsync();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        var definition = BuiltInWorkflows.Default.Definition! with
+        {
+            Id = "interrupted-plan",
+            Name = "Interrupted Plan",
+            Nodes = BuiltInWorkflows.Default.Definition!.Nodes
+                .Select(node => node.Id == "review" ? node with { Label = "Saved Before Plan" } : node)
+                .ToList(),
+        };
+        var path = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", "interrupted-plan.yaml");
+        await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(definition));
+
+        var runId = RunId.New();
+        var now = DateTimeOffset.UtcNow;
+        await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = project.WorkingDirectory,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "Draft release notes",
+            SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress,
+            StartedAt = now,
+            ProjectId = ProjectId.Parse(projectId),
+            AgentName = "Coordinator",
+        });
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                CoordinatorRunId = runId.ToString(),
+                ProjectId = projectId,
+                Goal = "Draft release notes",
+                DesiredOutcome = "Draft release notes",
+                Scope = "Documentation",
+                Assumptions = "",
+                Status = "confirmed",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var runTx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+                db, runId.ToString(), null, CancellationToken.None,
+                scope.ServiceProvider.GetRequiredService<SqliteDb>(), lockUnfenced: true);
+            await using (runTx)
+            {
+                await using (var interruptedPlanTx = await db.Database.BeginTransactionAsync())
+                {
+                    db.WorkPlans.Add(new WorkPlan
+                    {
+                        CoordinatorRunId = runId.ToString(),
+                        OutcomeSpecId = spec.Id,
+                        ProjectId = projectId,
+                        WorkflowId = definition.Id,
+                        Status = WorkPlanStatus.Planned,
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    });
+                    await db.SaveChangesAsync();
+                    await CoordinatorOrchestratorExecutor.PinSelectedWorkflowAsync(
+                        db, runTx!, runId.ToString(),
+                        ExecutableWorkflowSnapshots.Create(definition, "coordinator-selection"),
+                        CancellationToken.None);
+                    await runTx!.CommitAsync(CancellationToken.None);
+                }
+            }
+        }
+
+        File.Delete(path);
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        var saved = (await store.GetAsync(runId))!.GetExecutableWorkflowPin();
+        saved.Should().NotBeNull("the run pin committed even though the separate plan transaction rolled back");
+
+        var input = new CoordinatorDraftInput(
+            runId.ToString(), projectId, "Draft release notes",
+            CoordinatorWebApplicationFactory.OwnerUser, project.WorkingDirectory, "test-model");
+        var executor = new CoordinatorOrchestratorExecutor(
+            new DependentDagWorkflowAgentFactory(),
+            _factory.Services.GetRequiredService<RunStreamStore>(),
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            _factory.Services.GetRequiredService<ILoggerFactory>(),
+            _factory.Services.GetRequiredService<IStoryIndependenceClassifier>(),
+            _factory.Services.GetRequiredService<IAssemblyGateCodeClassifier>(),
+            "gpt-5-mini", null, null);
+        var recovered = await executor.OrchestrateAsync(input, CancellationToken.None);
+        using var verifyScope = _factory.Services.CreateScope();
+        var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verify.WorkPlans.SingleAsync(w => w.CoordinatorRunId == runId.ToString()))
+            .WorkflowId.Should().Be(definition.Id);
+        var gates = await CoordinatorAssemblyGateResolver.ResolveAsync(
+            verifyScope.ServiceProvider, recovered.WorkPlanId, CancellationToken.None);
+        gates.Single(g => g.GateKind == "human-review").Label.Should().Be("Saved Before Plan");
+        (await store.GetAsync(runId))!.GetExecutableWorkflowPin()!.DefinitionYaml
+            .Should().Be(saved!.DefinitionYaml);
+
+        var staleOwner = () => CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            verify, runId.ToString(), new RunLeaseFence("losing-owner", 0, 1),
+            CancellationToken.None, verifyScope.ServiceProvider.GetRequiredService<SqliteDb>());
+        await staleOwner.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
+        (await store.GetAsync(runId))!.GetExecutableWorkflowPin()!.DefinitionYaml
+            .Should().Be(saved.DefinitionYaml);
+    }
+
+    [Fact]
     public void ProviderConnectionFailure_CannotFallBackToDeterministicDecomposition()
     {
         var exception = new ModelProviderConnectionRequiredException(ProjectId.New());

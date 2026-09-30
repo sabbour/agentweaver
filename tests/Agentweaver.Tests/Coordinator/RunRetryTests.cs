@@ -12,6 +12,8 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
@@ -90,6 +92,92 @@ public sealed class RunRetryTests : IDisposable
         sourceResp.StatusCode.Should().Be(HttpStatusCode.OK);
         (await sourceResp.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("status").GetString().Should().Be("failed", "a retry never mutates the failed source run");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task FreshCoordinatorRetry_KeepsSavedReviewWorkflow_AfterEditOrDelete(
+        bool pickup, bool delete)
+    {
+        var projectId = await CreateProjectAsync();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        var definition = BuiltInWorkflows.Default.Definition! with
+        {
+            Id = "retry-saved-review",
+            Name = "Retry Saved Review",
+            Version = "1",
+            Nodes = BuiltInWorkflows.Default.Definition!.Nodes
+                .Select(node => node.Id == "review"
+                    ? node with { Label = "Original Review" } : node).ToList(),
+        };
+        var path = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", "retry-saved-review.yaml");
+        await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(definition));
+        var source = await SeedRunAsync(
+            RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator",
+            origin: pickup ? RunOrigin.BacklogPickup : RunOrigin.Interactive,
+            projectId: ProjectId.Parse(projectId),
+            executableWorkflowYaml: WorkflowDefinitionYamlSerializer.Serialize(definition),
+            executableWorkflowId: definition.Id);
+        var (planId, subtaskId) = await SeedRecoverablePlanAsync(source);
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.WorkPlans.SingleAsync(w => w.Id == planId)).WorkflowId = definition.Id;
+            (await db.Subtasks.SingleAsync(s => s.Id == subtaskId)).RecoveryAttempts = 3;
+            await db.SaveChangesAsync();
+        }
+
+        if (delete)
+            File.Delete(path);
+        else
+            await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(
+                definition with
+                {
+                    Nodes = definition.Nodes.Select(node => node.Id == "review"
+                        ? node with { Label = "Edited Review" } : node).ToList(),
+                }));
+
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
+        var response = await _owner.PostAsync($"/api/runs/{source.Id}/retry", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Created,
+            await response.Content.ReadAsStringAsync());
+        var retryId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+        retryId.Should().NotBe(source.Id.ToString(), "exhausted recovery must mint a fresh run");
+        var pending = _factory.Services.GetRequiredService<PendingRequestStore>();
+        (await PollUntilAsync(async () => await pending.GetAsync(retryId) is not null))
+            .Should().BeTrue("the new coordinator reaches its outcome confirmation gate");
+        (await _owner.PostAsync($"/api/runs/{retryId}/outcome-spec/confirm", null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        WorkPlan? retryPlan = null;
+        (await PollUntilAsync(async () =>
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            retryPlan = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+                .WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == retryId);
+            return retryPlan is not null;
+        })).Should().BeTrue();
+        retryPlan!.WorkflowId.Should().Be(definition.Id);
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        (await PollUntilAsync(async () =>
+            (await runStore.GetAsync(RunId.Parse(retryId)))?.GetExecutableWorkflowPin() is not null))
+            .Should().BeTrue("the fresh plan saves the inherited selected definition");
+        var retry = await runStore.GetAsync(RunId.Parse(retryId));
+        retry!.AgentName.Should().Be("Coordinator", "saved coordinator workflows are not static executable runs");
+        retry.GetExecutableWorkflowPin()!.DefinitionYaml.Should().Be(source.ExecutableWorkflowDefinitionYaml);
+        await using var gateScope = _factory.Services.CreateAsyncScope();
+        var gates = await CoordinatorAssemblyGateResolver.ResolveAsync(
+            gateScope.ServiceProvider, retryPlan.Id, CancellationToken.None);
+        gates.Single(g => g.GateKind == "human-review").Label.Should().Be("Original Review");
+        var graph = await _owner.GetAsync($"/api/runs/{retryId}/graph");
+        graph.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await graph.Content.ReadAsStringAsync()).Should().Contain("Original Review",
+            "the retry's visible graph must use the same saved review gate");
     }
 
     // =========================================================================

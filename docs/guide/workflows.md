@@ -48,6 +48,10 @@ compatibility re-selection. Review gates and the coordinator graph then use that
 definition, even if the project workflow is edited or deleted before review, retry, or recovery.
 An explicit override remains the selected workflow; a dynamically composed child does not select
 another project workflow.
+When an in-place retry is no longer possible, a fresh coordinator retry plans from the failed run's
+saved workflow rather than selecting a changed project definition. A new explicit choice before
+planning can still select another workflow. If the failed run predates saved coordinator workflows,
+the retry uses the legacy current-project selection behavior.
 
 ## Resume safety and workflow pinning
 
@@ -70,6 +74,10 @@ Older coordinator work plans without a saved selected definition also continue r
 workflow from the current project for compatibility. This does **not** mean today's definition
 is the one originally selected. New coordinator plans that require a saved workflow instead fail
 clearly if their manifest is missing or damaged; they never silently adopt the current workflow.
+SQLite stores run pins and work plans in separate databases. The pin is committed first so a
+restart after an interrupted plan commit can reuse the saved choice. An interrupted attempt may
+therefore leave a saved selection without a work plan; the next planning attempt finishes that
+plan from the saved definition. This is a recovery rule, not an atomic transaction across databases.
 
 ## Workflows in your project
 
