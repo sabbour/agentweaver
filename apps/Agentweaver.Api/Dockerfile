@@ -103,8 +103,15 @@ RUN case "${TARGETARCH}" in \
     && rm -f /tmp/gh.deb \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
-    && echo "$(curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl.sha256")  /usr/local/bin/kubectl" | sha256sum -c - \
+ARG KUBECTL_SHA256_AMD64=5de4e9f2266738fd112b721265a0c1cd7f4e5208b670f811861f699474a100a3
+ARG KUBECTL_SHA256_ARM64=d595d1a26b7444e0beb122e25750ee4524e74414bbde070b672b423139295ce6
+RUN case "${TARGETARCH}" in \
+      amd64) kubectl_sha256="${KUBECTL_SHA256_AMD64}" ;; \
+      arm64) kubectl_sha256="${KUBECTL_SHA256_ARM64}" ;; \
+      *) echo "Unsupported API image TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+    && echo "${kubectl_sha256}  /usr/local/bin/kubectl" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/kubectl \
     && kubectl version --client=true
 
