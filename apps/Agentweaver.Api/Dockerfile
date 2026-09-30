@@ -14,14 +14,20 @@ COPY Directory.Build.props .
 # The EF bundle temp project at /tmp/ does NOT inherit /src/Directory.Build.props, so it downloads
 # exactly one copy on its own — no duplicates from /src/ projects to collide with.
 ARG COPILOT_CLI_VERSION=1.0.57
-# SHA-1 shasum published by the npm registry for this exact tarball (from
-# `npm view @github/copilot-linux-x64@${COPILOT_CLI_VERSION} dist.shasum`),
-# verified before extraction so a compromised/replaced tarball at this URL
-# can't be piped into `tar` and run unchecked as part of the image build.
-ARG COPILOT_CLI_SHA1=7938f9f6dfc3248efc1a23e1c76bf98fa4554141
-RUN mkdir -p /copilot-bin && \
-    curl -fsSL -o /tmp/copilot.tgz "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-${COPILOT_CLI_VERSION}.tgz" && \
-    echo "${COPILOT_CLI_SHA1}  /tmp/copilot.tgz" | sha1sum -c - && \
+ARG COPILOT_NPM_REGISTRY_URL=https://registry.npmjs.org
+# npm registry dist.shasum for @github/copilot-linux-{x64,arm64}@1.0.57.
+ARG COPILOT_CLI_SHA1_AMD64=7938f9f6dfc3248efc1a23e1c76bf98fa4554141
+ARG COPILOT_CLI_SHA1_ARM64=3fe206bfe1bd5a32636530e1dd3f3815cea1b336
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64) runtime_arch=x64; copilot_sha1="${COPILOT_CLI_SHA1_AMD64}" ;; \
+      arm64) runtime_arch=arm64; copilot_sha1="${COPILOT_CLI_SHA1_ARM64}" ;; \
+      *) echo "Unsupported API image TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    mkdir -p /copilot-bin && \
+    printf '%s' "${runtime_arch}" > /copilot-bin/runtime-arch && \
+    curl -fsSL -o /tmp/copilot.tgz "${COPILOT_NPM_REGISTRY_URL}/@github/copilot-linux-${runtime_arch}/-/copilot-linux-${runtime_arch}-${COPILOT_CLI_VERSION}.tgz" && \
+    echo "${copilot_sha1}  /tmp/copilot.tgz" | sha1sum -c - && \
     tar -xzf /tmp/copilot.tgz --strip-components=1 -C /copilot-bin && \
     rm -f /tmp/copilot.tgz && \
     chmod +x /copilot-bin/copilot
@@ -38,19 +44,21 @@ RUN dotnet publish "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
     --output /app/publish
 
 # Place the Copilot CLI binary that CopilotSkipCliDownload=true suppressed from the SDK targets.
-RUN mkdir -p /app/publish/runtimes/linux-x64/native && \
-    cp /copilot-bin/copilot /app/publish/runtimes/linux-x64/native/copilot
+RUN runtime_arch="$(cat /copilot-bin/runtime-arch)" && \
+    mkdir -p "/app/publish/runtimes/linux-${runtime_arch}/native" && \
+    cp /copilot-bin/copilot "/app/publish/runtimes/linux-${runtime_arch}/native/copilot"
 
 RUN dotnet tool install --global dotnet-ef --version 9.0.7
 ENV PATH="${PATH}:/root/.dotnet/tools"
 # EF bundle temp project at /tmp/ downloads its own single copy (no /src/ duplicates to
 # conflict with), so no extra flags needed.
-RUN dotnet ef migrations bundle \
+RUN runtime_arch="$(cat /copilot-bin/runtime-arch)" && \
+    dotnet ef migrations bundle \
     --project "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
     --startup-project "apps/Agentweaver.Api/Agentweaver.Api.csproj" \
     --context MemoryDbContext \
     --configuration Release \
-    --runtime linux-x64 \
+    --runtime "linux-${runtime_arch}" \
     --self-contained \
     --output /app/publish/efbundle
 
@@ -79,17 +87,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # integrations invoke `gh` from the API process. The apt repository retains
 # only its latest package, so use the immutable release artifact for this pin.
 ARG GH_CLI_VERSION=2.98.0
-ARG GH_CLI_SHA256=f65a3fa2fa0eb2e97c445ee3f5e087a40aae03b64847f45a8f13805e504535d6
-RUN curl -fsSLo /tmp/gh.deb \
-        "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_amd64.deb" \
-    && echo "${GH_CLI_SHA256}  /tmp/gh.deb" | sha256sum -c - \
+ARG GH_CLI_SHA256_AMD64=f65a3fa2fa0eb2e97c445ee3f5e087a40aae03b64847f45a8f13805e504535d6
+ARG GH_CLI_SHA256_ARM64=bbc4ac7964c2a091fd555cd1758d10a7cfcfdc472e405f0b0fb958f05d535cb6
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64) gh_sha256="${GH_CLI_SHA256_AMD64}" ;; \
+      arm64) gh_sha256="${GH_CLI_SHA256_ARM64}" ;; \
+      *) echo "Unsupported API image TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSLo /tmp/gh.deb \
+        "https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_linux_${TARGETARCH}.deb" \
+    && echo "${gh_sha256}  /tmp/gh.deb" | sha256sum -c - \
     && apt-get update \
     && apt-get install -y --no-install-recommends /tmp/gh.deb \
     && rm -f /tmp/gh.deb \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
-    && echo "$(curl -fsSL https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c - \
+RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+    && echo "$(curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl.sha256")  /usr/local/bin/kubectl" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/kubectl \
     && kubectl version --client=true
 
