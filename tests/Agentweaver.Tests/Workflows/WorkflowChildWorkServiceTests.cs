@@ -104,9 +104,18 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     [Fact]
     public async Task ComposedPlan_ReattachesBeforeDecomposition_WithoutCreatingStaticBranches()
     {
-        var request = ComposedRequest();
+        var request = ComposedRequest() with
+        {
+            IncomingInput = ComposedRequest().IncomingInput with
+            {
+                Task = "Original request\n\n[Ordered parallel branch results]\n" +
+                       "[1. incident-brief-writer]\nSynthetic incident details\n\n" +
+                       "[2. response-checklist-writer]\nRecovery checklist",
+            },
+        };
         var first = await _service.PrepareComposedAsync(request);
-        var second = await BuildService("second-pod", _runtime).PrepareComposedAsync(request);
+        var second = await BuildService("second-pod", _runtime).PrepareComposedAsync(
+            request with { IncomingInput = request.IncomingInput with { Task = "edited context" } });
 
         second.Reattached.Should().BeTrue();
         second.WorkPlanId.Should().Be(first.WorkPlanId);
@@ -115,11 +124,15 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         var plan = await GetPlanAsync(first.WorkPlanId);
         plan.ParentJoinNodeId.Should().BeNull();
         plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Committed);
+        var expectedGoal = $"{request.Prompt}\n\n[Parent workflow context]\n{request.IncomingInput.Task}";
         (await _runStore.GetAsync(RunId.Parse(first.ChildCoordinatorRunId)))!.Task
-            .Should().Be(request.Prompt);
+            .Should().Be(expectedGoal);
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         (await db.OutcomeSpecs.CountAsync()).Should().Be(1);
+        (await db.OutcomeSpecs.SingleAsync()).Goal.Should().Be(expectedGoal);
+        JsonSerializer.Deserialize<AgentTurnInput>(plan.ParentTurnInputJson!, JsonDefaults.Options)!
+            .Task.Should().Be(request.IncomingInput.Task);
         (await db.WorkPlans.CountAsync()).Should().Be(1);
         (await db.Subtasks.CountAsync()).Should().Be(0);
         (await _runStore.GetRunsByParentAsync(_parent.Id.ToString())).Should().ContainSingle();

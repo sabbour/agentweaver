@@ -243,6 +243,41 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Fact]
+    public void StaticFanThenVerificationAndComposedCoordinator_BindsTerminalResult()
+    {
+        var fan = StaticFanDefinition();
+        var definition = fan with
+        {
+            Nodes =
+            [
+                .. fan.Nodes.Where(node => node.Id != "done"),
+                Node("verify-inputs", WorkflowNodeType.Prompt) with { Prompt = "Validate ordered branch text" },
+                Node("summary-coordinator", WorkflowNodeType.CoordinatorComposed) with
+                {
+                    Prompt = "Compose the verified documentation",
+                },
+                Node("done", WorkflowNodeType.Terminal),
+            ],
+            Edges =
+            [
+                .. fan.Edges.Where(edge => edge.To != "done"),
+                new WorkflowEdge { From = "join", To = "verify-inputs" },
+                new WorkflowEdge { From = "verify-inputs", To = "summary-coordinator" },
+                new WorkflowEdge { From = "summary-coordinator", To = "done" },
+            ],
+        };
+
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition).Should().BeEmpty();
+        RunWorkflowGraphBinder.GetTransitionIssues(definition).Should().BeEmpty();
+        var bindings = FakeBindings.Create();
+        var builder = new GraphDescriptorBuilder(bindings.AgentInputStorer);
+        RunWorkflowGraphBinder.WireFull(builder, definition, bindings);
+        var descriptor = builder.BuildDescriptor("fan-composed", "full");
+        descriptor.Nodes.Select(node => node.Id).Should().Contain(
+            ["fan-out", "fan-in", "agent", "compose"]);
+    }
+
+    [Fact]
     public void StaticFanTopology_RejectsNestedPairs()
     {
         var definition = StaticFanDefinition() with

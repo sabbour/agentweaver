@@ -89,6 +89,36 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
     }
 
     [Fact]
+    public async Task HandleTerminalOutput_ComposedCompletion_RetainsVerifiedAssembly()
+    {
+        var (svc, entry, runId) = CreateServiceAndEntry();
+        var assembly = new WorkflowComposedAssembly(
+            "agentweaver/integration-child", new string('a', 40),
+            "diff --git a/demo/summary.md b/demo/summary.md", ["child-a"]);
+        var output = new WorkflowComposedCompletedOutput(runId, 270, "coordinator-child", assembly);
+
+        (await svc.HandleTerminalOutputAsync(runId,
+            new WorkflowOutputEvent(output, "composed-to-terminal"), entry, CancellationToken.None))
+            .Should().BeTrue();
+
+        using var scope = _factory.Services.CreateScope();
+        var run = await scope.ServiceProvider.GetRequiredService<IRunStore>()
+            .GetAsync(RunId.Parse(runId));
+        run!.Status.Should().Be(RunStatus.Completed);
+        var stored = JsonDocument.Parse(run.Result!).RootElement;
+        stored.GetProperty("workPlanId").GetInt32().Should().Be(270);
+        stored.GetProperty("childCoordinatorRunId").GetString().Should().Be("coordinator-child");
+        stored.GetProperty("integrationBranch").GetString().Should().Be(assembly.IntegrationBranch);
+        stored.GetProperty("treeHash").GetString().Should().Be(assembly.TreeHash);
+        stored.GetProperty("aggregateDiff").GetString().Should().Be(assembly.AggregateDiff);
+        stored.GetProperty("includedChildRunIds").EnumerateArray()
+            .Select(item => item.GetString()).Should().Equal("child-a");
+        entry.GetSnapshotSince(0).Events.Should().ContainSingle(e => e.Type == EventTypes.RunCompleted);
+        entry.HasEventType(EventTypes.RunFailed).Should().BeFalse();
+        entry.IsCompleted.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task HandleTerminalOutput_Declined_ReturnsTrue()
     {
         var (svc, entry, runId) = CreateServiceAndEntry();
@@ -312,6 +342,7 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
     [InlineData("child_failed")]
     [InlineData("assemble_ready")]
     [InlineData("fan_completed")]
+    [InlineData("composed_completed")]
     [InlineData("unknown")]
     [InlineData("generic_failure")]
     [InlineData("watch_loop_timeout")]
@@ -345,6 +376,8 @@ public sealed class RunWatchLoopTerminalOutputTests : IClassFixture<ReviewWebApp
             "child_failed" => new ChildTurnFailedOutput(runId, "child_error"),
             "assemble_ready" => new AssembleReadyOutput(runId, "branch", "tree", "diff", true, 1),
             "fan_completed" => new WorkflowFanCompletedOutput(runId, "joined", 1, runId),
+            "composed_completed" => new WorkflowComposedCompletedOutput(runId, 1, "child",
+                new WorkflowComposedAssembly("integration", "tree", "diff", ["child"])),
             _ => new object(),
         };
         var stale = new RunLeaseClaim("same-owner", owner.FencingToken, 1);

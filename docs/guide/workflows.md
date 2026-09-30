@@ -139,12 +139,18 @@ workflow.
 
 The parent workflow checkpoints before decomposition while the coordinator persists a correlated
 child run and work plan, executes the runtime-derived dependency graph, and assembles the result.
+The child plan receives the node prompt together with the pinned parent turn's predecessor context
+(including ordered fan-in text when this stage follows a static join); a retry reuses that saved
+context rather than reading a changed workflow definition.
 The typed completion includes the child run and work-plan identities, integration branch, verified
 tree hash, aggregate diff, and included child runs. Before the parent continues, Agentweaver stages
 and fast-forwards that verified tree into the parent's isolated run branch. Transfer rejects a
 dirty, moved, or diverged parent tree, never updates the user's branch, and reconciles a restart
 between the Git transfer and durable run-tree update. Failure and cancellation remain failures;
 they do not produce a success-shaped continuation.
+When this stage leads directly to a terminal node, the completed run retains the child work-plan
+identity, integration branch, verified tree hash, aggregate diff, and included child runs as its
+result; an absent or failed assembly is not a successful terminal result.
 
 Use this node only for genuinely runtime-dependent work. Prefer ordinary sequential edges when the
 steps are known while authoring, or a static fan region when the branches are known and independent.
@@ -195,6 +201,11 @@ the launch race cannot continue detached from its cancelled parent.
 `fan_out` / `fan_in` is an execution primitive, not coordinator assembly. It does not create or
 update an integration Git branch, merge branch output, open or review a pull request, publish
 artifacts, or invoke Scribe. Each branch may still use its ordinary isolated child-run worktree.
+The join gives downstream prompts ordered branch text, not the branch files: declared output paths
+describe independent branch write scopes, not files guaranteed to exist in the parent worktree.
+If a downstream prompt or composed coordinator needs physical files, it must create them from
+the joined content in its own workspace; a read-only file check against the parent cannot verify
+files written only in child worktrees.
 While the parent is suspended for branch completion, REST, MCP, and the UI identify the pending
 request as `workflow_child_work`; this automated wait cannot be approved through `/review` or
 `run_review`. `GET /api/runs/{parentRunId}/work-plan` and `/children` resolve the embedded child
@@ -212,8 +223,9 @@ execution owner is lost after the fan continuation was delivered, recovery fails
 `workflow_parent_active_recovery_unavailable` (or `workflow_parent_parked_after_resume` for a
 previously parked parent) rather than replaying non-idempotent synthesis or reporting an
 inactive AgentHost dispatch.
-Nested fans, dynamic branches, quorum/first-success joins, and `coordinator_composed` remain
-unsupported for authored workflows.
+Nested fans, dynamic branches, and quorum/first-success joins remain unsupported. One
+`coordinator_composed` stage may follow a static join, outside the fan region; it receives
+the joined text as predecessor context, not the branch files.
 
 ```yaml
 start: parallel-research
