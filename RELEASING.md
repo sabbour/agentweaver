@@ -23,6 +23,8 @@ local HEAD SHA
 arbitrary branch / PR tip / commit
   └─ azure:deploy-from-commit -- <sha-or-ref>
        └─ detached exact-commit worktree → image:<short-SHA> → running environment
+            └─ representative integration + feature-specific API/UI E2E acceptance
+                 └─ only if passing: prepare and promote release
 
 prepared exact main SHA
   └─ release:publish
@@ -56,34 +58,39 @@ from its exact matching section; do not run another changelog generator.
    forward-port. Never bypass that guard: create a short-lived branch from
    current `dev`, run `npm run release:sync-dev -- <release-preparation-sha>`,
    merge that PR, and plan again.
-2. Before image promotion or Azure deployment, run the local production-path gate:
+2. Create `release/vX.Y.Z` from that SHA and soak it. After stabilization fixes
+   are committed, record the exact candidate SHA and deploy it before preparing
+   release metadata or creating any release identity:
 
    ```bash
-   npm run release:local-k3s-gate
+   npm run azure:deploy-from-commit -- <candidate-sha>
+   npm run azure:verify
    ```
 
-   The command targets the `Ubuntu-24.04` WSL k3s cluster, starts or provisions
-   k3s when it is absent, forces local `kubectl` through the k3s kubeconfig
-   instead of the active AKS context, validates that API and Worker manifests
-   share `AiExecution__ProviderKeySigningKey`, waits for the local target, and
-   runs the focused API smoke with the Development-only local test identity. The
-   local API and Production-mode worker are separate deployments that share a
-   local file-backed secret store so configured provider state is visible to the
-   hosted worker. Keep the
-   separate staging identity smoke (`node scripts/api-harness/run-persona.mjs`
-   against the staging URL with the default recorder-session auth provider) for
-   Entra/GitHub login, callbacks, and repository authorization; do not fold
-   interactive identity into this local gate.
-3. Create `release/vX.Y.Z` from that SHA and soak it.
-4. On the clean release branch run:
+   Run intermediate end-to-end tests **against this exact-SHA deployment**:
+   representative integration coverage and feature-specific API/UI acceptance
+   for everything shipping. Include the staging identity smoke
+   (`node scripts/api-harness/run-persona.mjs` against the deployed staging URL
+   with the default recorder-session auth provider) when identity or repository
+   authorization is affected. Record the candidate SHA, deployment identity,
+   selected tests, and passing results as release evidence. Failures block
+   preparation, promotion, publication, and release deployment; fix the
+   candidate, commit, redeploy its new SHA, and rerun acceptance.
+
+   `npm run release:local-k3s-gate` remains an optional local diagnostic, **not
+   release acceptance evidence or a blocking release gate** until its complete
+   provider-backed deployment and smoke path is separately repaired and proven.
+   Its Development-only local test identity cannot replace staging identity
+   coverage.
+3. Only after exact-SHA candidate acceptance passes, on the clean release branch run:
 
    ```bash
    npm run release:prepare -- --expected X.Y.Z
    ```
 
-5. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
+4. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
    fragments as `chore(release): prepare vX.Y.Z`.
-6. Push the release branch.
+5. Push the release branch.
 
    `release:prepare` fetches `origin/main` before it changes release files. If
    `origin/main` is not an ancestor, it runs:
@@ -100,30 +107,12 @@ from its exact matching section; do not run another changelog generator.
    fails and prints the same `git merge` command.
 
    CI enforces this rule on `release/*` pull requests into `main`.
-7. Promote the prepared branch to `main` through a green PR, merged with
+6. Promote the prepared branch to `main` through a green PR, merged with
    **"Squash and merge"**.
-8. Reconcile the milestones against what the release actually consumed. Merge order
-   decides the real contents, so a milestone set before the cut can name the wrong
-   release. `release:prepare` consumes the changeset fragments it shipped. Map each
-   consumed fragment back to the pull request that added it:
-
-   ```bash
-   git log origin/dev --oneline --diff-filter=A -- ".changeset/<fragment>.md"
-   ```
-
-   Put every pull request that appears in that list on this release's milestone. Move
-   every pull request that does not appear to the next milestone.
-
-9. Create the next milestone (`vX.Y.Z+1`) and close the milestone for the release
-   you just published. Move any unshipped work to the new milestone:
-
-   ```bash
-   gh api repos/<owner>/<repo>/milestones -f title="vX.Y.Z+1" -f state=open
-   gh api repos/<owner>/<repo>/milestones/<number> -X PATCH -f state=closed
-   ```
-
-   See [CONTRIBUTING.md → Target release
-   milestone](CONTRIBUTING.md#target-release-milestone) for the contributor side.
+   Squash promotion creates a different `main` commit; confirm its source
+   content matches the accepted candidate apart from prepared release metadata
+   and reviewed promotion changes. Any substantive change requires another
+   exact-SHA deployment and acceptance before publication.
 
 > **Promotion history is not release identity.** Squash merging creates a new `main`
 > commit; it does not preserve the release branch's individual commits or guarantee
@@ -148,7 +137,9 @@ From a clean checkout at the exact resulting `origin/main` SHA (including no
 untracked or unexpected git-ignored files). Publication uses the same ignored-file
 policy as preparation: normal dependency, build, test, and harness outputs are
 allowed, while stray ignored files outside those recognized locations still block
-the release:
+the release. **Do not publish until the exact-SHA candidate deployment and its
+representative integration and feature-specific API/UI acceptance have passed**
+as described above:
 
 ```bash
 # Repository identity only: tag + GHCR images + GitHub Release
@@ -252,6 +243,28 @@ Before deleting the release branch, create a short-lived branch from current
 npm run release:sync-dev -- <release-preparation-sha>
 ```
 
+After publication, reconcile the milestones against what the release actually
+consumed. Merge order decides the real contents, so a milestone set before the cut
+can name the wrong release. `release:prepare` consumes the changeset fragments it
+shipped. Map each consumed fragment back to the pull request that added it:
+
+```bash
+git log origin/dev --oneline --diff-filter=A -- ".changeset/<fragment>.md"
+```
+
+Put every pull request that appears in that list on this release's milestone.
+Move every pull request that does not appear to the next milestone. Create the
+next milestone (`vX.Y.Z+1`) and close the milestone for the release just
+published; move any unshipped work to the new milestone:
+
+```bash
+gh api repos/<owner>/<repo>/milestones -f title="vX.Y.Z+1" -f state=open
+gh api repos/<owner>/<repo>/milestones/<number> -X PATCH -f state=closed
+```
+
+See [CONTRIBUTING.md → Target release
+milestone](CONTRIBUTING.md#target-release-milestone) for the contributor side.
+
 ## Published container images
 
 Alongside the Azure/ACR deployment path, eligible branch and release-flow triggers
@@ -322,8 +335,9 @@ uncommitted changes and has no dirty-tree override.
 After any deployment, use `npm run azure:verify` or inspect the cluster directly
 before considering the change shipped.
 
-For a consolidated PR, release acceptance continues after the PR is merged, the release
-is created, and that released build is deployed: run a Preview harness pass and targeted
-API-harness smoke tests against the deployed system. Record their results with the release
-evidence. Do not target production before the release exists; failures in either harness
-gate block promotion until the deployed release is corrected and revalidated.
+After the release is created and its identity deployed, run the separate
+post-deployment acceptance boundary above against the released build (including
+Preview harness and targeted API smoke where applicable). These results do not
+replace the passing pre-publication exact-SHA candidate E2E evidence. Do not
+target production before the release exists; failures block further promotion
+until corrected and revalidated.
