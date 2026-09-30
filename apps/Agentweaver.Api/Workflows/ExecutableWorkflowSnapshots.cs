@@ -30,9 +30,10 @@ internal static class ExecutableWorkflowSnapshots
             throw new WorkflowBindException(
                 $"Run '{runId}' pinned executable workflow manifest schema version {pin.ManifestSchemaVersion} is not supported by this application.", runId);
 
-        if (!string.Equals(Digest(pin.DefinitionYaml), pin.ContentDigest, StringComparison.Ordinal))
+        var actualDigest = Digest(pin.DefinitionYaml);
+        if (!string.Equals(actualDigest, pin.ContentDigest, StringComparison.Ordinal))
             throw new WorkflowBindException(
-                $"Run '{runId}' pinned executable workflow content digest mismatch.", runId);
+                $"Run '{runId}' pinned executable workflow content digest mismatch: expected {pin.ContentDigest}, computed {actualDigest}.", runId);
 
         var loaded = WorkflowDefinitionLoader.Load(
             pin.DefinitionYaml, pin.Source, validationMode: WorkflowDefinitionValidationMode.LegacyCompatible);
@@ -40,10 +41,12 @@ internal static class ExecutableWorkflowSnapshots
             throw new WorkflowBindException(
                 $"Run '{runId}' pinned executable workflow '{pin.DefinitionId}' could not be loaded: {loaded.Error ?? "unknown workflow error"}", runId);
 
-        if (!string.Equals(loaded.Definition.Id, pin.DefinitionId, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(loaded.Definition.Version, pin.DefinitionVersion, StringComparison.Ordinal))
+        if (!string.Equals(loaded.Definition.Id, pin.DefinitionId, StringComparison.OrdinalIgnoreCase))
             throw new WorkflowBindException(
-                $"Run '{runId}' pinned executable workflow identity or version does not match its manifest.", runId);
+                $"Run '{runId}' pinned executable workflow identity mismatch: manifest references '{pin.DefinitionId}' but content contains '{loaded.Definition.Id}'.", runId);
+        if (!string.Equals(loaded.Definition.Version, pin.DefinitionVersion, StringComparison.Ordinal))
+            throw new WorkflowBindException(
+                $"Run '{runId}' pinned executable workflow version mismatch: manifest references '{pin.DefinitionVersion}' but content contains '{loaded.Definition.Version}'.", runId);
         return loaded.Definition;
     }
 }
