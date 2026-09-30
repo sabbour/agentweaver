@@ -138,9 +138,15 @@ content. Artifact readiness and browser verification share the single
 `correctedPreview` deadline.
 
 Shell approvals fail fast by default; `--approve-shell` is an explicit opt-in
-**only for a disposable project**, using command hashes observed in new event
-deltas. No speculative approvals are issued. Timeouts and terminal errors fail
-closed. The append-only redacted transcript (`--transcript`) and result JSON
+**only for a disposable project**. Event deltas retain history for evidence;
+`GET /api/runs/{id}/pending-approvals` determines which shell requests are
+currently actionable in the tested run tree. Approvals use its `action_run_id`
+and `request_id` (the shell command hash), never old approval-required events.
+An HTTP 409 is not retried: only a "Run is not active." conflict followed by
+a fresh pending read confirming that request is gone is recorded as a
+resolution race; any still-pending request or other conflict fails. No
+speculative approvals are issued. Timeouts and terminal errors fail closed.
+The append-only redacted transcript (`--transcript`) and result JSON
 (`--result`) default to `transcripts/` and `verdicts/`; failure retains current
 phase, parent/child/revision IDs, recent events and diagnostic. Exit 0 means
 both objective preview gates and terminal completion passed; it is not an
