@@ -147,7 +147,7 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
     }
 
     [Fact]
-    public async Task CollectiveRevisionWithoutPinnedInputFailsExactRetrievalExplicitly()
+    public async Task CollectiveRevisionWithoutPinnedInputRetainsCapturedFiles()
     {
         var (run, _) = await SetupRunAwaitingReviewAsync(dir =>
             File.WriteAllText(Path.Combine(dir, "legacy.txt"), "legacy"));
@@ -164,13 +164,17 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
                 RunOutputTree.Encode([new RunOutputTree.File("legacy.txt", 33188,
                     System.Text.Encoding.UTF8.GetBytes("legacy"))]))))).Should().BeTrue();
         var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
-        revision.ManifestIncomplete.Should().BeTrue();
+        revision.ManifestIncomplete.Should().BeFalse();
 
         var response = await _ownerClient.GetAsync(
             $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
-        response.StatusCode.Should().Be(HttpStatusCode.Gone);
-        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        body.RootElement.GetProperty("error").GetString().Should().Be("incomplete_manifest");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var file = await _ownerClient.GetAsync(
+            $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}/files/legacy.txt");
+        file.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var body = JsonDocument.Parse(await file.Content.ReadAsStringAsync());
+        Convert.FromBase64String(body.RootElement.GetProperty("content_base64").GetString()!)
+            .Should().Equal(System.Text.Encoding.UTF8.GetBytes("legacy"));
     }
 
     // =========================================================================
