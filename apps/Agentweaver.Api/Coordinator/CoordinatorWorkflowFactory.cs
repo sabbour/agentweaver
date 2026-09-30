@@ -683,9 +683,10 @@ public sealed class CoordinatorWorkflowFactory
     }
 
     internal static async Task<CoordinatorFencedWrite?> BeginFencedWriteAsync(
-        MemoryDbContext db, string runId, RunLeaseFence? fence, CancellationToken ct, SqliteDb? sqliteDb)
+        MemoryDbContext db, string runId, RunLeaseFence? fence, CancellationToken ct, SqliteDb? sqliteDb,
+        bool lockUnfenced = false)
     {
-        if (fence is null)
+        if (fence is null && !lockUnfenced)
             return null;
 
         if (db.Database.IsSqlite())
@@ -703,13 +704,28 @@ public sealed class CoordinatorWorkflowFactory
                 {
                     await using var command = connection.CreateCommand();
                     command.Transaction = runTx;
-                    command.CommandText = """
+                    command.CommandText = fence is null ? """
+                        UPDATE runs SET status = status
+                        WHERE run_id = $runId AND status = 'in_progress'
+                        """ : """
                         UPDATE runs SET status = status
                         WHERE run_id = $runId AND status = 'in_progress'
                           AND lifecycle_generation = $generation
+                          AND EXISTS (
+                              SELECT 1 FROM run_execution_leases lease
+                              WHERE lease.run_id = runs.run_id
+                                AND lease.owner_id = $ownerId
+                                AND lease.fencing_token = $fencingToken
+                                AND lease.lease_expires_at > $now)
                         """;
                     command.Parameters.AddWithValue("$runId", runId);
-                    command.Parameters.AddWithValue("$generation", fence.LifecycleGeneration);
+                    if (fence is not null)
+                    {
+                        command.Parameters.AddWithValue("$generation", fence.LifecycleGeneration);
+                        command.Parameters.AddWithValue("$ownerId", fence.OwnerId);
+                        command.Parameters.AddWithValue("$fencingToken", fence.FencingToken);
+                        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+                    }
                     if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
                         throw new CoordinatorExecutionFenceLostException(runId);
                     return new CoordinatorFencedWrite(null, connection, runTx);
@@ -730,13 +746,15 @@ public sealed class CoordinatorWorkflowFactory
         var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
         try
         {
-            var active = db.Runs.Where(r => r.RunId == runId
-                && r.Status == "in_progress"
-                && r.LifecycleGeneration == fence.LifecycleGeneration);
-            var now = DateTimeOffset.UtcNow;
-            active = active.Where(r => r.OwnerId == fence.OwnerId
-                && r.FencingToken == fence.FencingToken
-                && r.LeaseExpiresAt > now);
+            var active = db.Runs.Where(r => r.RunId == runId && r.Status == "in_progress");
+            if (fence is not null)
+            {
+                var now = DateTimeOffset.UtcNow;
+                active = active.Where(r => r.LifecycleGeneration == fence.LifecycleGeneration
+                    && r.OwnerId == fence.OwnerId
+                    && r.FencingToken == fence.FencingToken
+                    && r.LeaseExpiresAt > now);
+            }
 
             // A conditional write locks the run row until commit. Cancellation, generation changes,
             // and lease takeover serialize against the spec/plan write rather than racing a read.
@@ -759,6 +777,8 @@ internal sealed class CoordinatorFencedWrite(
     SqliteConnection? runConnection,
     SqliteTransaction? runTransaction) : IAsyncDisposable
 {
+    public SqliteConnection? RunConnection => runConnection;
+    public SqliteTransaction? RunTransaction => runTransaction;
     public async Task CommitAsync(CancellationToken ct)
     {
         if (dbTransaction is not null)

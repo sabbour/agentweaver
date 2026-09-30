@@ -1707,7 +1707,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
 
             if (run.GetExecutableWorkflowPin() is { } existingPin)
             {
-                effectiveDefinition = LoadPinnedExecutableWorkflow(runId, existingPin);
+                effectiveDefinition = ExecutableWorkflowSnapshots.Load(runId, existingPin);
             }
             else
             {
@@ -1862,7 +1862,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         CancellationToken ct)
     {
         if (run?.GetExecutableWorkflowPin() is { } pin)
-            return LoadPinnedExecutableWorkflow(runId, pin);
+            return ExecutableWorkflowSnapshots.Load(runId, pin);
 
         if (run?.ExecutableWorkflowPinRequired == true && !captureIfMissing)
         {
@@ -1888,69 +1888,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 $"Run '{runId}' executable workflow could not be pinned because no resolved definition was available.",
                 runId.ToString());
 
-        var yaml = WorkflowDefinitionYamlSerializer.Serialize(resolved.Definition);
-        var pin = new ExecutableWorkflowPin
-        {
-            ManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
-            DefinitionId = resolved.Definition.Id,
-            DefinitionVersion = resolved.Definition.Version,
-            Source = resolved.Source,
-            ContentDigest = ComputeSha256Digest(yaml),
-            DefinitionYaml = yaml,
-            PinnedAt = DateTimeOffset.UtcNow,
-        };
+        var pin = ExecutableWorkflowSnapshots.Create(resolved.Definition, resolved.Source);
         await _runStore.UpdateExecutableWorkflowPinAsync(runId, pin, ct).ConfigureAwait(false);
-    }
-
-    private static WorkflowDefinition LoadPinnedExecutableWorkflow(string runId, ExecutableWorkflowPin pin)
-    {
-        if (pin.ManifestSchemaVersion != ExecutableWorkflowPin.CurrentSchemaVersion)
-        {
-            throw new WorkflowBindException(
-                $"Run '{runId}' pinned executable workflow manifest schema version {pin.ManifestSchemaVersion} is not supported by this application.",
-                runId);
-        }
-
-        var actualDigest = ComputeSha256Digest(pin.DefinitionYaml);
-        if (!string.Equals(actualDigest, pin.ContentDigest, StringComparison.Ordinal))
-        {
-            throw new WorkflowBindException(
-                $"Run '{runId}' pinned executable workflow content digest mismatch: expected {pin.ContentDigest}, computed {actualDigest}.",
-                runId);
-        }
-
-        var loaded = WorkflowDefinitionLoader.Load(
-            pin.DefinitionYaml,
-            pin.Source,
-            validationMode: WorkflowDefinitionValidationMode.LegacyCompatible);
-        if (!loaded.IsValid || loaded.Definition is null)
-        {
-            throw new WorkflowBindException(
-                $"Run '{runId}' pinned executable workflow '{pin.DefinitionId}' could not be loaded: {loaded.Error ?? "unknown workflow error"}",
-                runId);
-        }
-
-        if (!string.Equals(loaded.Definition.Id, pin.DefinitionId, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new WorkflowBindException(
-                $"Run '{runId}' pinned executable workflow identity mismatch: manifest references '{pin.DefinitionId}' but content contains '{loaded.Definition.Id}'.",
-                runId);
-        }
-
-        if (!string.Equals(loaded.Definition.Version, pin.DefinitionVersion, StringComparison.Ordinal))
-        {
-            throw new WorkflowBindException(
-                $"Run '{runId}' pinned executable workflow version mismatch: manifest references '{pin.DefinitionVersion}' but content contains '{loaded.Definition.Version}'.",
-                runId);
-        }
-
-        return loaded.Definition;
-    }
-
-    private static string ComputeSha256Digest(string content)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(content));
-        return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private async Task<string?> ResolveWorkflowOverrideIdAsync(string? runId, CancellationToken ct)

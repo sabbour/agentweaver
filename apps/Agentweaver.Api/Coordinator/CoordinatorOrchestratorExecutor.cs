@@ -249,9 +249,13 @@ public sealed class CoordinatorOrchestratorExecutor
         }
 
         await using var planTx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
-            db, input.RunId, recoveredFence, ct, scope.ServiceProvider.GetService<SqliteDb>()).ConfigureAwait(false);
+            db, input.RunId, recoveredFence, ct, scope.ServiceProvider.GetService<SqliteDb>(),
+            lockUnfenced: !composed).ConfigureAwait(false);
         await using var composedTx = composed && planTx is null
             ? await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false)
+            : null;
+        await using var sqlitePlanTx = !composed && db.Database.IsSqlite()
+            ? await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
             : null;
         if (planTx is not null || composedTx is not null)
         {
@@ -280,6 +284,18 @@ public sealed class CoordinatorOrchestratorExecutor
             ct,
             composed ? existing : null)
             .ConfigureAwait(false);
+        if (!composed)
+        {
+            var definition = workflowSelection.Definition
+                ?? throw new InvalidOperationException(
+                    $"Coordinator run '{input.RunId}' cannot commit a plan without a selected workflow.");
+            var pin = ExecutableWorkflowSnapshots.Create(definition, "coordinator-selection");
+            await PinSelectedWorkflowAsync(db, planTx
+                ?? throw new InvalidOperationException("Coordinator plan write requires a run lock."),
+                input.RunId, pin, ct).ConfigureAwait(false);
+        }
+        if (sqlitePlanTx is not null)
+            await sqlitePlanTx.CommitAsync(ct).ConfigureAwait(false);
         if (planTx is not null)
             await planTx.CommitAsync(ct).ConfigureAwait(false);
         if (composedTx is not null)
@@ -294,6 +310,87 @@ public sealed class CoordinatorOrchestratorExecutor
             persisted,
             partition.Warnings.Concat(workflowCompatibilityWarnings).ToList());
         return new CoordinatorOrchestrationResult(workPlanId, inlineDrafts.Count, promotedTaskIds);
+    }
+
+    internal static async Task PinSelectedWorkflowAsync(
+        MemoryDbContext db, CoordinatorFencedWrite tx, string runId,
+        ExecutableWorkflowPin pin, CancellationToken ct)
+    {
+        if (tx.RunConnection is { } connection)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = tx.RunTransaction;
+            command.CommandText = """
+                SELECT executable_workflow_definition_yaml, executable_workflow_content_digest,
+                       executable_workflow_definition_id, executable_workflow_manifest_schema_version
+                FROM runs WHERE run_id = $runId
+                """;
+            command.Parameters.AddWithValue("$runId", runId);
+            await using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+                    throw new CoordinatorExecutionFenceLostException(runId);
+                if (!reader.IsDBNull(0))
+                {
+                    ValidateExistingPin(runId, reader.GetString(0),
+                        reader.IsDBNull(1) ? null : reader.GetString(1),
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetInt32(3), pin);
+                    return;
+                }
+            }
+
+            command.CommandText = """
+                UPDATE runs SET executable_workflow_pin_required = 1,
+                    executable_workflow_manifest_schema_version = $schema,
+                    executable_workflow_definition_id = $id,
+                    executable_workflow_definition_version = $version,
+                    executable_workflow_source = $source,
+                    executable_workflow_content_digest = $digest,
+                    executable_workflow_definition_yaml = $yaml,
+                    executable_workflow_pinned_at = $pinnedAt
+                WHERE run_id = $runId AND executable_workflow_definition_yaml IS NULL
+                """;
+            command.Parameters.AddWithValue("$schema", pin.ManifestSchemaVersion);
+            command.Parameters.AddWithValue("$id", pin.DefinitionId);
+            command.Parameters.AddWithValue("$version", (object?)pin.DefinitionVersion ?? DBNull.Value);
+            command.Parameters.AddWithValue("$source", pin.Source);
+            command.Parameters.AddWithValue("$digest", pin.ContentDigest);
+            command.Parameters.AddWithValue("$yaml", pin.DefinitionYaml);
+            command.Parameters.AddWithValue("$pinnedAt", pin.PinnedAt.ToString("O"));
+            if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+                throw new CoordinatorExecutionFenceLostException(runId);
+            return;
+        }
+
+        var run = await db.Runs.SingleAsync(r => r.RunId == runId, ct).ConfigureAwait(false);
+        if (run.ExecutableWorkflowDefinitionYaml is { } existingYaml)
+        {
+            ValidateExistingPin(runId, existingYaml, run.ExecutableWorkflowContentDigest,
+                run.ExecutableWorkflowDefinitionId, run.ExecutableWorkflowManifestSchemaVersion, pin);
+            return;
+        }
+        run.ExecutableWorkflowPinRequired = true;
+        run.ExecutableWorkflowManifestSchemaVersion = pin.ManifestSchemaVersion;
+        run.ExecutableWorkflowDefinitionId = pin.DefinitionId;
+        run.ExecutableWorkflowDefinitionVersion = pin.DefinitionVersion;
+        run.ExecutableWorkflowSource = pin.Source;
+        run.ExecutableWorkflowContentDigest = pin.ContentDigest;
+        run.ExecutableWorkflowDefinitionYaml = pin.DefinitionYaml;
+        run.ExecutableWorkflowPinnedAt = pin.PinnedAt;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    private static void ValidateExistingPin(
+        string runId, string yaml, string? digest, string? definitionId,
+        int? schemaVersion, ExecutableWorkflowPin selected)
+    {
+        if (!string.Equals(yaml, selected.DefinitionYaml, StringComparison.Ordinal)
+            || !string.Equals(digest, ExecutableWorkflowSnapshots.Digest(yaml), StringComparison.Ordinal)
+            || !string.Equals(definitionId, selected.DefinitionId, StringComparison.Ordinal)
+            || schemaVersion != ExecutableWorkflowPin.CurrentSchemaVersion)
+            throw new InvalidOperationException(
+                $"Coordinator run '{runId}' already pins an invalid or different executable workflow.");
     }
 
     // -----------------------------------------------------------------------

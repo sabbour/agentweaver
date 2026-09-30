@@ -1,4 +1,6 @@
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
@@ -21,6 +23,52 @@ namespace Agentweaver.Tests.PostgresIntegration;
 [Trait("Category", "PostgresIntegration")]
 public sealed class MigrationValidityTests(PostgresFixture pg)
 {
+    [PostgresFact]
+    public async Task CoordinatorPin_CommitsWithRunLock_AndRollsBackWithPlanTransaction()
+    {
+        var runId = Guid.NewGuid().ToString();
+        await using var db = await pg.CreateDbContextAsync();
+        db.Runs.Add(new RunRecord
+        {
+            RunId = runId,
+            RepositoryPath = "/r",
+            OriginatingBranch = "main",
+            ModelSource = "github_copilot",
+            Task = "draft",
+            SubmittingUser = "u",
+            Status = "in_progress",
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var definition = BuiltInWorkflows.Default.Definition!;
+        var pin = ExecutableWorkflowSnapshots.Create(definition, "coordinator-selection");
+
+        await using (var tx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, runId, null, CancellationToken.None, null, lockUnfenced: true))
+        {
+            await CoordinatorOrchestratorExecutor.PinSelectedWorkflowAsync(
+                db, tx!, runId, pin, CancellationToken.None);
+        }
+
+        await using (var verify = await pg.CreateDbContextAsync())
+            (await verify.Runs.SingleAsync(r => r.RunId == runId))
+                .ExecutableWorkflowDefinitionYaml.Should().BeNull();
+
+        db.ChangeTracker.Clear();
+        await using (var tx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, runId, null, CancellationToken.None, null, lockUnfenced: true))
+        {
+            await CoordinatorOrchestratorExecutor.PinSelectedWorkflowAsync(
+                db, tx!, runId, pin, CancellationToken.None);
+            await tx!.CommitAsync(CancellationToken.None);
+        }
+
+        await using var committed = await pg.CreateDbContextAsync();
+        var row = await committed.Runs.SingleAsync(r => r.RunId == runId);
+        row.ExecutableWorkflowDefinitionId.Should().Be(definition.Id);
+        row.ExecutableWorkflowContentDigest.Should().Be(ExecutableWorkflowSnapshots.Digest(row.ExecutableWorkflowDefinitionYaml!));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 1. MIGRATION: schema applied cleanly, all tables / indexes / triggers exist
     // ─────────────────────────────────────────────────────────────────────────

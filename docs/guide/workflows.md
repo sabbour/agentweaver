@@ -43,6 +43,11 @@ warning instead of silently changing the user's choice.
 
 The matched workflow is shown in the run detail. If the auto-match picks the wrong one, you can
 override it at submission time.
+For coordinator runs, the final choice is saved with the work plan, after any Build & Test
+compatibility re-selection. Review gates and the coordinator graph then use that saved
+definition, even if the project workflow is edited or deleted before review, retry, or recovery.
+An explicit override remains the selected workflow; a dynamically composed child does not select
+another project workflow.
 
 ## Resume safety and workflow pinning
 
@@ -61,6 +66,10 @@ If a post-v0.34 run requires a workflow pin but the stored manifest is missing, 
 schema version, or fails its content-digest check, resume fails explicitly instead of selecting the
 current project default. Legacy in-flight runs created before workflow pinning do not have complete
 manifests; they keep the previous compatibility behavior rather than being broken by the upgrade.
+Older coordinator work plans without a saved selected definition also continue resolving their
+workflow from the current project for compatibility. This does **not** mean today's definition
+is the one originally selected. New coordinator plans that require a saved workflow instead fail
+clearly if their manifest is missing or damaged; they never silently adopt the current workflow.
 
 ## Workflows in your project
 
