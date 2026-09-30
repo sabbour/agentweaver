@@ -266,7 +266,9 @@ The command targets `Ubuntu-24.04` WSL k3s and attempts to provision or start k3
 with the documented installer/service when the binary, process, or kubeconfig is
 absent. Every local `kubectl` operation is forced through
 `/etc/rancher/k3s/k3s.yaml`, so an existing AKS current context cannot receive
-the local manifests. It renders the
+the local manifests. The API image supports both `linux/amd64` and `linux/arm64`
+builds for local hosts; its Copilot CLI, GitHub CLI, and kubectl executables match
+the selected image platform. It renders the
 candidate Kubernetes manifests, fails before deployment if any AI execution
 producer/consumer does not use the same
 `AiExecution__ProviderKeySigningKey` `secretKeyRef`, waits for the local API, and
