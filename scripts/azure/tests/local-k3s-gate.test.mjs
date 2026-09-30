@@ -104,7 +104,7 @@ test("probeWslK3s reports unavailable when binary or kubeconfig is absent", asyn
   };
   const probe = await probeWslK3s({ exec });
   assert.equal(probe.available, false);
-  assert.match(k3sInstallGuidance(probe.distro), /curl -sfL https:\/\/get\.k3s\.io/);
+  assert.match(k3sInstallGuidance(probe.distro), /azure:deploy-from-commit/);
 });
 
 test("ensureWslK3s attempts reproducible install when probe is absent", async () => {

@@ -29,10 +29,7 @@ function isLoopbackTarget(target) {
     || /^127(?:\.\d{1,3}){0,3}$/.test(host);
 }
 
-export const HELP_TEXT = `Agentweaver local k3s release gate
-
-Usage:
-  node scripts/azure/cli.mjs local-k3s-gate [options]
+export const HELP_TEXT = `Legacy local k3s check (not a release command)
 
 Options:
   --target <url>                       Existing loopback target to smoke instead of deploying.
@@ -42,8 +39,8 @@ Options:
   --negative-omit-worker-signing-key   Prove the gate fails when the worker omits AiExecution__ProviderKeySigningKey.
   --timeout <seconds>                  Readiness/smoke timeout (default: 900).
 
-The gate targets Ubuntu-24.04 WSL k3s. If k3s is absent it prints the reproducible
-install command and stops before touching any AKS context.
+This module is not exposed by the Azure CLI. Release candidates must use
+npm run azure:deploy-from-commit -- <sha-or-ref>.
 `;
 
 export function parseArgs(argv = []) {
@@ -112,11 +109,9 @@ export async function probeWslK3s({ exec = execDefault } = {}) {
 
 export function k3sInstallGuidance(distro = "Ubuntu-24.04") {
   return [
-    `Local k3s is not installed or not initialized in WSL distro ${distro}.`,
-    "Provision it reproducibly with:",
-    `  wsl -d ${distro} -- sh -lc "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--write-kubeconfig-mode 644 --disable traefik' sh -"`,
-    "Then rerun:",
-    "  npm run release:local-k3s-gate",
+    `Local k3s is unavailable in WSL distro ${distro}.`,
+    "This legacy path is not release acceptance; deploy the exact committed candidate with",
+    "npm run azure:deploy-from-commit -- <sha-or-ref>.",
   ].join("\n");
 }
 

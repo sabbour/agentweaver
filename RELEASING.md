@@ -77,11 +77,6 @@ from its exact matching section; do not run another changelog generator.
    preparation, promotion, publication, and release deployment; fix the
    candidate, commit, redeploy its new SHA, and rerun acceptance.
 
-   `npm run release:local-k3s-gate` remains an optional local diagnostic, **not
-   release acceptance evidence or a blocking release gate** until its complete
-   provider-backed deployment and smoke path is separately repaired and proven.
-   Its Development-only local test identity cannot replace staging identity
-   coverage.
 3. Only after exact-SHA candidate acceptance passes, on the clean release branch run:
 
    ```bash
