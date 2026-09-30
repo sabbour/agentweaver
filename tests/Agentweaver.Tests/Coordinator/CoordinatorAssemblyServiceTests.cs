@@ -634,6 +634,41 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Escalation_DocumentationOnlyPlan_DoesNotStartBuildTestOrPreview()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, [SubtaskStatus.AssembleReady]);
+        await BindSoftwareWorkflowAsync(coordinatorRunId, workPlanId);
+        await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var subtask = await db.Subtasks.SingleAsync(s => s.WorkPlanId == workPlanId);
+            subtask.Phase = "planning";
+            await db.SaveChangesAsync();
+        }
+        await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "docs-tree", "documentation-only diff");
+
+        var touched = subtaskIds.ToDictionary(
+            id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var route = InvokeRouteAssemblyGateThroughSteeringAsync(
+            Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+            "Tighten the guide.", touched, "docs-tree", cts.Token);
+        await WaitUntilArmedAsync(coordinatorRunId);
+        cts.Cancel();
+        try { await route; } catch (OperationCanceledException) { }
+
+        _pipeline.BuildTests.Should().Be(0);
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.InReview);
+        EventTypes_(coordinatorRunId).Should().NotContain(t => t.StartsWith("sandbox.preview_", StringComparison.Ordinal),
+            "non-code deliverables have no app to run and no preview requirement");
+    }
+
+    [Fact]
     public async Task DriveOutstanding_ProceedDirective_ReviewAlreadyOpen_SettlesWithoutReDriving()
     {
         var coordinatorRunId = RunId.New().ToString();

@@ -64,9 +64,11 @@ For projects that produce a browser preview, the run tree shows the preview stat
 - **Preview unavailable** includes the reason and does not block human review; you can still inspect the diff and approve, request changes, or decline.
 
 The same preview status appears in the human-review file panel so you do not have to search the event timeline for the URL.
-If autonomous review exhausts its correction budget before reaching Build & Test, the
-coordinator runs Build & Test and records a preview outcome for the current assembled
-tree before opening human review. An earlier revision's preview URL is not evidence
+If autonomous review exhausts its correction budget before reaching an applicable
+Build & Test gate, the coordinator runs that gate and records a preview outcome for
+the current assembled tree before opening human review. Documentation-only work
+without a Build & Test gate remains preview-not-applicable; no app server is started.
+An earlier revision's preview URL is not evidence
 for the current tree. A ready URL is shown only while its published session still
 belongs to the current sandbox and its supervised app process is healthy. Preview
 failures remain visible and do not prevent a human decision; the platform discovers
