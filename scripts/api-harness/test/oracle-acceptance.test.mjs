@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { DEFAULT_BUDGETS, EventDeltas, cleanupOwnedPreviews, runOracleAcceptance } from '../lib/oracle-acceptance.mjs';
+import { AcceptanceFailure, DEFAULT_BUDGETS, EventDeltas, cleanupOwnedPreviews, createAcceptanceTransport, runOracleAcceptance } from '../lib/oracle-acceptance.mjs';
 import { parseOracleArgs } from '../run-oracle-acceptance.mjs';
 import { verifyRenderedPreview } from '../../harness-shared/preview-browser.mjs';
 
@@ -147,7 +147,8 @@ async function driveReviewFixture({
   missingInitialId = false, staleCorrectedId = false, missingExecutionKey = false,
   unchangedContent = false, advanceBrowserMs = 0, correctedBudget = 5,
   rejectReviewHeader = false, staleDecision = false, advancePreviewRequestMs = 0,
-  transientRunReads = 0,
+  transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
+  advanceThrownRunMs = 0, planningBudget = 6,
 } = {}) {
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
@@ -159,6 +160,8 @@ async function driveReviewFixture({
     const decisions = [];
     const active = new Set();
     let remainingTransientRunReads = transientRunReads;
+    let remainingThrownRunReads = thrownRunReads;
+    let runReadAttempts = 0;
     const browser = async (url, expected) => {
       opened.push([url, expected]);
       if (revised) now += advanceBrowserMs;
@@ -210,9 +213,17 @@ async function driveReviewFixture({
       if (url.endsWith('/output-revisions')) return { status: 200, body: [
         { revision_id: 'revision-1' }, ...(revised ? [{ revision_id: 'revision-2' }] : []),
       ] };
-      if (url === '/api/runs/parent' && remainingTransientRunReads > 0) {
-        remainingTransientRunReads--;
-        return { status: 0, body: { error: 'transport_error', message: 'fetch failed' } };
+      if (url === '/api/runs/parent') {
+        runReadAttempts++;
+        if (remainingThrownRunReads > 0 && (!skipInitialRunRead || runReadAttempts > 1)) {
+          remainingThrownRunReads--;
+          now += advanceThrownRunMs;
+          throw new AcceptanceFailure('GET /api/runs/parent: timed out', 'request_timeout');
+        }
+        if (remainingTransientRunReads > 0) {
+          remainingTransientRunReads--;
+          return { status: 0, body: { error: 'transport_error', message: 'fetch failed' } };
+        }
       }
       return { status: 200, body: { status: approved ? 'completed' : 'in_progress', project_id: 'project' } };
     };
@@ -220,10 +231,10 @@ async function driveReviewFixture({
       request, runId: 'parent', expectedText: 'original', correctedText: 'fixed',
       feedback: 'The initial app is missing a visible feature.', targetFiles: ['index.html'],
       browser, transcriptPath: path.join(directory, 'trace.jsonl'), resultPath: path.join(directory, 'result.json'),
-      budgets: { ...DEFAULT_BUDGETS, correctedPreview: correctedBudget },
+      budgets: { ...DEFAULT_BUDGETS, planning: planningBudget, correctedPreview: correctedBudget },
       clock: () => now, pause: async (ms) => { now += ms; },
     });
-    return { result, opened, decisions, deleted };
+    return { result, opened, decisions, deleted, runReadAttempts };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -299,4 +310,101 @@ test('idempotent polling retries bounded transient transport failures', async ()
   assert.equal(exhausted.result.verdict, 'fail');
   assert.equal(exhausted.result.error.code, 'transport_error');
   assert.match(exhausted.result.error.message, /GET \/api\/runs\/parent: fetch failed/);
+});
+
+test('thrown GET request timeout recovers without changing preview or review checks', async () => {
+  const { result, opened, decisions, runReadAttempts } = await driveReviewFixture({ thrownRunReads: 2 });
+  assert.equal(result.verdict, 'pass');
+  assert.equal(runReadAttempts, (await driveReviewFixture()).runReadAttempts + 2);
+  assert.deepEqual(opened.map((entry) => entry[1]), ['original', 'fixed']);
+  assert.deepEqual(decisions.map((entry) => entry.body.output_revision_id), ['revision-1', 'revision-2']);
+});
+
+async function runPreflightFailure({ method = 'GET', error }) {
+  const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
+  try {
+    let attempts = 0;
+    let pauses = 0;
+    const result = await runOracleAcceptance({
+      projectId: 'project', goal: 'test',
+      transcriptPath: path.join(directory, 'trace.jsonl'), resultPath: path.join(directory, 'result.json'),
+      pause: async () => { pauses++; },
+      request: async (requestMethod, url) => {
+        if (requestMethod === method && url === (method === 'GET' ? '/api/version' : '/api/ai/execution-context')) {
+          attempts++;
+          throw error;
+        }
+        if (url === '/api/version') return { status: 200, body: {} };
+        if (url === '/openapi/v1.json') return { status: 200, body: { paths: {} } };
+        if (url === '/api/auth/session') return { status: 200, body: { authenticated: true } };
+        if (url === '/api/projects/project') return { status: 200, body: {} };
+        throw new Error(`Unexpected request: ${requestMethod} ${url}`);
+      },
+    });
+    return { result, attempts, pauses };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+test('thrown transient GET errors stop after three attempts and retain the final code', async () => {
+  for (const code of ['request_timeout', 'transport_error']) {
+    const { result, attempts, pauses } = await runPreflightFailure({
+      error: new AcceptanceFailure('GET /api/version: temporary read failure', code),
+    });
+    assert.equal(result.verdict, 'fail');
+    assert.equal(result.error.code, code);
+    assert.match(result.error.message, /temporary read failure/);
+    assert.equal(attempts, 3);
+    assert.equal(pauses, 2);
+  }
+});
+
+test('thrown POST failure and unexpected GET error never retry', async () => {
+  const post = await runPreflightFailure({
+    method: 'POST', error: new AcceptanceFailure('POST /api/ai/execution-context: timed out', 'request_timeout'),
+  });
+  assert.equal(post.result.error.code, 'request_timeout');
+  assert.equal(post.attempts, 1);
+  assert.equal(post.pauses, 0);
+
+  const unexpected = await runPreflightFailure({ error: new Error('unexpected parsing error') });
+  assert.equal(unexpected.result.error.code, 'acceptance_failed');
+  assert.match(unexpected.result.error.message, /unexpected parsing error/);
+  assert.equal(unexpected.attempts, 1);
+  assert.equal(unexpected.pauses, 0);
+
+  for (const code of ['phase_timeout', 'request_cancelled']) {
+    const failure = await runPreflightFailure({ error: new AcceptanceFailure('GET /api/version: stopped', code) });
+    assert.equal(failure.result.error.code, code);
+    assert.equal(failure.attempts, 1);
+    assert.equal(failure.pauses, 0);
+  }
+});
+
+test('expired phase budget prevents another GET after a thrown timeout', async () => {
+  const { result, runReadAttempts } = await driveReviewFixture({
+    thrownRunReads: 2, skipInitialRunRead: true, advanceThrownRunMs: 61, planningBudget: 0.001,
+  });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.error.code, 'phase_timeout');
+  assert.equal(result.phase, 'planning');
+  assert.equal(runReadAttempts, 2);
+});
+
+test('explicit transport cancellation is not classified as a retryable timeout', async () => {
+  const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
+  try {
+    const abort = new AbortController();
+    abort.abort(new Error('cancelled by caller'));
+    const request = createAcceptanceTransport({
+      call: async () => { throw abort.signal.reason; },
+    }, path.join(directory, 'trace.jsonl'));
+    await assert.rejects(
+      request('GET', '/api/runs/parent', undefined, { signal: abort.signal }),
+      (error) => error.code === 'request_cancelled',
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

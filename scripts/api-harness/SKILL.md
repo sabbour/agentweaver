@@ -112,9 +112,10 @@ and child. Default budgets in minutes are: planning 6, claimProvisioning 6,
 implementation 18, initialPreview 5, buildTestReview 10, revisionProvisioning 12,
 correctedPreview 5, terminalCompletion 8. Override with repeatable
 `--budget phase=minutes`; `--poll-ms` defaults to 5000.
-Idempotent GET polling retries at most two transient transport, 502, 503, or
-504 responses within the same phase deadline; decisions and other writes are
-never retried.
+Idempotent GET polling retries at most two times after transient transport
+responses, thrown request timeouts or transport errors, or HTTP 502, 503, or
+504, within the same phase deadline. Expired phase budgets and cancellations
+fail explicitly; decisions and other writes are never retried.
 
 At the first assembly review the driver verifies changed files, a listed ready
 preview session, HTTP 200 in installed Chrome, visible expected application text,
