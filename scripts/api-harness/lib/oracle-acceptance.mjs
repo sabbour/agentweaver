@@ -28,7 +28,9 @@ export function createAcceptanceTransport(client, transcriptPath) {
     try {
       call = await client.call(method, path, body, { ...options, signal });
     } catch (error) {
-      const code = signal.aborted ? 'request_timeout' : 'transport_error';
+      const code = signal.aborted
+        ? signal.reason?.name === 'TimeoutError' ? 'request_timeout' : 'request_cancelled'
+        : 'transport_error';
       await appendRedactedJsonLine(transcriptPath, {
         at: new Date().toISOString(), request: { method, path, body },
         error: { code, message: String(error.message) },
@@ -137,10 +139,19 @@ export async function runOracleAcceptance({
     const { allowLateResponse = false, ...requestOptions } = options;
     const maxAttempts = method === 'GET' ? 3 : 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const response = await request(method, url, body, {
-        ...requestOptions,
-        signal: AbortSignal.timeout(Math.max(1, Math.min(remaining(), method === 'POST' ? 180_000 : 30_000))),
-      });
+      const signal = AbortSignal.timeout(Math.max(1, Math.min(remaining(), method === 'POST' ? 180_000 : 30_000)));
+      let response;
+      try {
+        response = await request(method, url, body, { ...requestOptions, signal });
+      } catch (error) {
+        if (method !== 'GET' || !(error instanceof AcceptanceFailure)
+          || !['request_timeout', 'transport_error'].includes(error.code)
+          || (signal.aborted && signal.reason?.name !== 'TimeoutError')) throw error;
+        remaining();
+        if (attempt === maxAttempts) throw error;
+        await pause(Math.min(250 * attempt, remaining()));
+        continue;
+      }
       if (!allowLateResponse) remaining();
       const transientRead = method === 'GET' && [0, 502, 503, 504].includes(response.status);
       if (!transientRead) return response;
