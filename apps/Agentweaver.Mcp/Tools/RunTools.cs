@@ -162,7 +162,7 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "run_task", UseStructuredContent = true), Description("Run the common coordinator workflow in one call: start the run, poll status until it completes or hits a gate, and return the artifacts or next action.")]
+    [McpServerTool(Name = "run_task", UseStructuredContent = true), Description("Start a coordinator run once, poll the same run until completion, a proven human review or confirmation gate, or timeout. For automated child waits and timeouts, continue with run_status or run_watch; never rerun run_task to resume.")]
     public async Task<RunTaskResult> RunTaskAsync(
         [Description("Project ID")] string project_id,
         [Description("Task or goal for the coordinator")] string task,
@@ -232,7 +232,7 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
                         Artifacts = Array.Empty<JsonElement>(),
                         Hint = waitingForChildren
                             ? $"Run {runId} is waiting for automated workflow children or parent continuation. Inspect coordinator_work_plan_get and coordinator_children_get for this existing run; call run_status to poll it, or run_watch to follow its stream. Do not start another run."
-                            : "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
+                            : $"Run {runId} is still active. Call run_status for a quick snapshot or run_watch to follow its live stream; do not call run_task again to continue.",
                         Run = latestRun.Deserialize<RunEmbedded>()
                     };
                 }
@@ -558,13 +558,13 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         var pendingRequestKind = GetString(run, "pending_request_kind");
 
         if (string.Equals(status, "awaiting_review", StringComparison.OrdinalIgnoreCase)
-            && pendingRequestKind is null or "workflow_review")
+            && pendingRequestKind == "workflow_review")
         {
             response = new RunTaskResult
             {
                 RunId = runId,
                 Status = "awaiting_review",
-                ReviewPrompt = $"Run {runId} is awaiting human review. Inspect its artifacts, call run_review for this run if appropriate, then poll the same run with run_status.",
+                ReviewPrompt = $"Run {runId} has a current human review request. Inspect its artifacts, manually call run_review for this run if appropriate, then poll the same run with run_status. Never start a second execution to continue.",
                 Run = run.Deserialize<RunEmbedded>()
             };
             return true;
@@ -611,13 +611,10 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
             return false;
         }
 
-        if (plan.ValueKind != JsonValueKind.Object
-            || GetString(plan, "parentRunId") != runId
-            || string.IsNullOrWhiteSpace(GetString(plan, "parentWorkflowNodeId"))
-            || GetString(plan, "status") == "in_review")
-            return false;
-
-        return GetString(plan, "parentResumeState") is "waiting" or "ready" or "delivering";
+        return plan.ValueKind == JsonValueKind.Object
+            && GetString(plan, "parentRunId") == runId
+            && !string.IsNullOrWhiteSpace(GetString(plan, "parentWorkflowNodeId"))
+            && GetString(plan, "parentResumeState") is "waiting" or "ready" or "delivering";
     }
 
     private static string? GetString(JsonElement element, string propertyName) =>

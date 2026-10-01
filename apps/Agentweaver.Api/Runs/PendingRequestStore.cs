@@ -9,6 +9,7 @@ using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Workflows;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Runs;
 
@@ -36,7 +37,7 @@ public sealed class PendingRequestStore
     /// <summary>Arms (or re-arms) the pending gate for a run. Upserts by the unique run id.</summary>
     public async Task SetAsync(
         string runId, ExternalRequest request, string ownerUser, CancellationToken ct = default,
-        int? lifecycleGeneration = null)
+        int? lifecycleGeneration = null, string? reviewOutputRevisionId = null)
     {
         var requestId = request.RequestId;
         using var scope = _scopeFactory.CreateScope();
@@ -50,7 +51,7 @@ public sealed class PendingRequestStore
             : existing is null ? null
                 : JsonSerializer.Deserialize<PendingRequestEnvelope>(
                     existing.RequestJson, JsonDefaults.Options)?.PreviousDecisionHash;
-        var json = SerializeRequest(request, lifecycleGeneration, previousDecisionHash);
+        var json = SerializeRequest(request, lifecycleGeneration, previousDecisionHash, reviewOutputRevisionId);
 
         if (existing is null)
         {
@@ -173,12 +174,59 @@ public sealed class PendingRequestStore
         if (!string.IsNullOrWhiteSpace(row.DeliveryKind))
             return row.DeliveryKind;
 
+        var envelope = JsonSerializer.Deserialize<PendingRequestEnvelope>(row.RequestJson, JsonDefaults.Options)
+            ?? throw new InvalidOperationException("Stored pending request could not be deserialized.");
+        if (!string.IsNullOrWhiteSpace(envelope.RequestKind))
+            return envelope.RequestKind;
+
         var request = DeserializeRequest(row.RequestJson);
         if (request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out _))
             return PendingRequestDeliveryKinds.WorkflowChildWork;
         if (request.TryGetDataAs<WorkflowReviewRequest>(out _))
             return PendingRequestDeliveryKinds.WorkflowReview;
         return null;
+    }
+
+    /// <summary>Advisory GET projection only; queued decisions retain their independent POST gate.</summary>
+    public async Task<string?> GetActionableRequestKindAsync(
+        Agentweaver.Domain.Run run, RunOutputRevision? latestReviewRevision, CancellationToken ct = default)
+    {
+        if (run.Status != Agentweaver.Domain.RunStatus.AwaitingReview)
+            return null;
+
+        var runId = run.Id.ToString();
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.RunId == runId, ct).ConfigureAwait(false);
+        if (row is null || row.DeliveryState != PendingRequestDeliveryStates.Waiting
+            || row.DecisionIdentity is not null || row.ResponseJson is not null)
+            return null;
+
+        var envelope = JsonSerializer.Deserialize<PendingRequestEnvelope>(row.RequestJson, JsonDefaults.Options)
+            ?? throw new InvalidOperationException("Stored pending request could not be deserialized.");
+        if (string.IsNullOrWhiteSpace(row.RequestId) || row.RequestId != envelope.RequestId
+            || envelope.LifecycleGeneration != run.LifecycleGeneration)
+            return null;
+
+        var plan = await db.WorkPlans.AsNoTracking()
+            .Where(p => p.ParentRunId == runId && p.ParentWorkflowNodeId != null)
+            .OrderByDescending(p => p.Id)
+            .Select(p => new { p.ParentResumeState, p.ParentResumeRequestId })
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        var activePlan = plan?.ParentResumeState is "committed" or "waiting" or "ready" or "delivering";
+        if (envelope.RequestKind == PendingRequestDeliveryKinds.WorkflowChildWork)
+            return activePlan && plan!.ParentResumeRequestId == row.RequestId
+                ? PendingRequestDeliveryKinds.WorkflowChildWork : null;
+        if (envelope.RequestKind != PendingRequestDeliveryKinds.WorkflowReview || activePlan
+            || string.IsNullOrWhiteSpace(envelope.ReviewOutputRevisionId)
+            || envelope.ReviewOutputRevisionId != run.CurrentOutputRevisionId)
+            return null;
+        return latestReviewRevision is not null
+            && latestReviewRevision.RevisionId == envelope.ReviewOutputRevisionId
+            && latestReviewRevision.RunId == run.Id
+            && latestReviewRevision.LifecycleGeneration == run.LifecycleGeneration
+            && latestReviewRevision.TreeHash == run.TreeHash ? PendingRequestDeliveryKinds.WorkflowReview : null;
     }
 
     public async Task<PendingDeliveryState?> GetDeliveryStateAsync(
@@ -525,7 +573,8 @@ public sealed class PendingRequestStore
 
     private sealed record PendingRequestEnvelope(
         RequestPortInfo PortInfo, string RequestId, int? LifecycleGeneration = null,
-        string? PreviousDecisionHash = null);
+        string? PreviousDecisionHash = null, string? RequestKind = null,
+        string? ReviewOutputRevisionId = null);
 
     private static string HashDecision(string responseJson) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(responseJson)));
@@ -539,10 +588,16 @@ public sealed class PendingRequestStore
     }
 
     private static string SerializeRequest(
-        ExternalRequest request, int? lifecycleGeneration, string? previousDecisionHash) =>
+        ExternalRequest request, int? lifecycleGeneration, string? previousDecisionHash,
+        string? reviewOutputRevisionId) =>
         JsonSerializer.Serialize(
             new PendingRequestEnvelope(
-                request.PortInfo, request.RequestId, lifecycleGeneration, previousDecisionHash), JsonDefaults.Options);
+                request.PortInfo, request.RequestId, lifecycleGeneration, previousDecisionHash,
+                request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out _)
+                    ? PendingRequestDeliveryKinds.WorkflowChildWork
+                    : request.TryGetDataAs<WorkflowReviewRequest>(out _)
+                        ? PendingRequestDeliveryKinds.WorkflowReview : null,
+                reviewOutputRevisionId), JsonDefaults.Options);
 
     private static ExternalRequest DeserializeRequest(string json)
     {

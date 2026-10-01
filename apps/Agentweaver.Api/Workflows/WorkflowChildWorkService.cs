@@ -387,7 +387,8 @@ internal sealed class WorkflowChildWorkService
             snapshot.Plan.ParentRunId,
             continuation,
             ownerUser,
-            ct).ConfigureAwait(false);
+            ct,
+            lifecycleGeneration: parent.LifecycleGeneration).ConfigureAwait(false);
         await MarkContinuationArmedAsync(workPlanId, continuation.RequestId, ct).ConfigureAwait(false);
         await EnsureParentWaitingAsync(snapshot.Plan, parent, ct).ConfigureAwait(false);
         await _runtime.PublishParentGraphAsync(
