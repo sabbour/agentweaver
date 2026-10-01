@@ -165,7 +165,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `run_output_file` | Read retained exact file bytes (base64), independent of the current branch or worktree. |
 | `run_output_history` | List immutable output revisions for a run, including collective output identities. |
 | `run_output_revision` | Read the exact immutable output revision and retained file inventory. |
-| `run_retry` | Retry a failed run by creating a fresh run from its original inputs. |
+| `run_retry` | Retry a failed run. Eligible coordinators and pre-dispatch composed failures resume the original run; other retries create a fresh run. |
 | `run_review` | Approve or reject a run that is awaiting review. |
 | `run_show_artifacts` | List the files changed by a run. |
 | `run_status` | Get the current status of a run. |
