@@ -2231,7 +2231,8 @@ internal sealed class WorkflowChildWorkService
                     && run.LifecycleGeneration == projection.ParentLifecycleGeneration
                     && run.Status == "awaiting_review"
                     && run.WorktreeBranch == parent.WorktreeBranch
-                    && (run.TreeHash == null || run.TreeHash == projection.BaseTreeHash))
+                    && (run.TreeHash == null || run.TreeHash == projection.BaseTreeHash
+                        || run.TreeHash == projection.PreparedTreeHash))
                 .ExecuteUpdateAsync(updates => updates.SetProperty(run => run.TreeHash,
                     projection.PreparedTreeHash), ct).ConfigureAwait(false) == 1
             : await _runStore.TryRecordFanInputProjectionAsync(

@@ -597,6 +597,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     [InlineData(true, false, "cancel_before_apply")]
     [InlineData(true, false, "reopened_before_apply")]
     [InlineData(true, false, "missing_worktree")]
+    [InlineData(false, false, "missing_worktree_after_receipt")]
     [InlineData(false, false, "late_cross_project")]
     [InlineData(false, false, "late_owner_takeover")]
     public async Task DeclaredFanArtifacts_ProjectBeforeResume_AndComposedChildInheritsSameBytes(
@@ -678,7 +679,8 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             if (invalidSource is not null
                 && invalidSource is not ("moved_parent" or "late_cross_project" or "late_owner_takeover"
                     or "wrong_generation"
-                    or "cancel_before_apply" or "reopened_before_apply" or "missing_worktree"))
+                    or "cancel_before_apply" or "reopened_before_apply" or "missing_worktree"
+                    or "missing_worktree_after_receipt"))
             {
                 if (invalidSource is "cross_project" or "missing_revision")
                 {
@@ -846,6 +848,28 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
                 .Should().Be(WorkflowChildWorkResumeStates.Ready);
             _runtime.Deliveries.Should().ContainSingle();
+            if (invalidSource == "missing_worktree_after_receipt")
+            {
+                Directory.Delete(parentWorktree.WorktreePath, recursive: true);
+                await _runStore.UpdateWorktreeAsync(parent.Id,
+                    Path.Combine(repositoryPath, "missing-recorded-checkout"), parentWorktree.BranchName);
+                IRunStore guarded = new PreviewPublicationLeaseRunStore(
+                    new RunActiveClaimGuardedRunStore(
+                        _runStore, _provider.GetRequiredService<RunActiveClaimGuard>()));
+                _runtime.DeliverResult = true;
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await BuildService("reattached-receipt-pod", _runtime, runStore: guarded).SweepAsync(deadline.Token);
+                var restored = (await guarded.GetAsync(parent.Id))!;
+                restored.WorktreePath.Should().Be(parentWorktree.WorktreePath);
+                File.ReadAllText(Path.Combine(restored.WorktreePath!, "demo", "incident-brief.md"))
+                    .Should().Be(original[0]);
+                File.ReadAllText(Path.Combine(restored.WorktreePath!, "demo", "response-checklist.md"))
+                    .Should().Be(original[1]);
+                (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+                    .Should().Be(WorkflowChildWorkResumeStates.Delivered);
+                manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
+                return;
+            }
             if (invalidSource is "late_cross_project" or "late_owner_takeover")
             {
                 var recoveredService = BuildService("recovered-pod", _runtime);
