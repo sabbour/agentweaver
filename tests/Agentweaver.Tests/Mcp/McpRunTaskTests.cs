@@ -383,6 +383,56 @@ public sealed class McpRunTaskTests
     }
 
     [Fact]
+    public async Task RunTask_ConfirmedCoordinatorPlanNotReady_PollsExistingRunInsteadOfReview()
+    {
+        var planReads = 0;
+        var tools = CreateRunTools((request, _) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (request.Method == HttpMethod.Post && path == "/api/projects/proj-1/orchestrations")
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = JsonContent.Create(new { runId = "plan-pending" })
+                });
+            if (request.Method == HttpMethod.Get && path == "/api/runs/plan-pending")
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        run_id = "plan-pending", status = "awaiting_review",
+                        agent_name = "Coordinator", is_coordinator_plan = true,
+                        pending_request_kind = (string?)null, step_count = 0,
+                        tree_hash = (string?)null, sandbox = (object?)null
+                    })
+                });
+            if (request.Method == HttpMethod.Get && path == "/api/runs/plan-pending/work-plan")
+            {
+                planReads++;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = JsonContent.Create(new
+                    {
+                        error = "work_plan_not_ready",
+                        message = "The coordinator work plan is still being created."
+                    })
+                });
+            }
+            throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
+        });
+
+        var result = await tools.RunTaskAsync("proj-1", "Plan it",
+            timeout_seconds: 1, poll_interval_seconds: 1, ct: CancellationToken.None);
+
+        planReads.Should().BeGreaterThan(0);
+        result.RunId.Should().Be("plan-pending");
+        result.Status.Should().Be("timed_out");
+        result.Run!.Status.Should().Be("awaiting_review");
+        result.ReviewPrompt.Should().BeNull();
+        result.Hint.Should().Contain("plan-pending").And.Contain("run_status")
+            .And.NotContain("run_review").And.NotContain("run_task");
+    }
+
+    [Fact]
     public async Task RunTask_CoordinatorWithoutChildPlan_PreservesHumanReview()
     {
         var tools = CreateRunTools((request, _) =>
