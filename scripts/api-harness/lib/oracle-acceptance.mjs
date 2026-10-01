@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { appendRedactedJsonLine } from '../../harness-shared/safe-jsonl.mjs';
 import { writeLifecycleJson } from '../../harness-shared/persona-lifecycle.mjs';
 import { verifyRenderedPreview } from '../../harness-shared/preview-browser.mjs';
@@ -60,6 +61,9 @@ export class EventDeltas {
     this.recent = [];
     this.boundClaims = new Set();
     this.reviewRequests = new Map();
+    this.previewEvents = new Map();
+    this.podBindings = new Map();
+    this.buildTests = new Map();
   }
 
   async poll(runId) {
@@ -78,8 +82,22 @@ export class EventDeltas {
         cursor = event.sequence;
         added.push(event);
         if (event.type === 'sandbox.execution_pod.bound') this.boundClaims.add(runId);
+        if (event.type === 'sandbox.execution_pod.bound' || event.type === 'sandbox.execution_pod.unbound') {
+          this.podBindings.set(runId, { sequence: cursor, type: event.type, podName: event.payload?.podName });
+        }
+        if (event.type === 'coordinator.assembly_build_test_completed') {
+          this.buildTests.set(runId, { sequence: cursor, ...event.payload });
+        }
+        if (['sandbox.preview_ready', 'sandbox.preview_failed', 'sandbox.preview_skipped_not_applicable'].includes(event.type)) {
+          const events = this.previewEvents.get(runId) ?? [];
+          events.push(event);
+          this.previewEvents.set(runId, events);
+        }
         if (event.type === 'coordinator.assembly_review_requested' && event.payload?.outputRevisionId) {
-          this.reviewRequests.set(runId, { id: event.payload.outputRevisionId, sequence: cursor });
+          this.reviewRequests.set(runId, {
+            id: event.payload.outputRevisionId, sequence: cursor,
+            treeHash: event.payload.treeHash, workPlanId: event.payload.workPlanId,
+          });
         }
         if (/^(run\.|assembly\.|coordinator\.|sandbox\.|shell\.|preview\.|workflow\.)/.test(event.type ?? '')) {
           this.recent.push({ runId, sequence: cursor, type: event.type, payload: event.payload });
@@ -90,6 +108,60 @@ export class EventDeltas {
       if (body.length < this.limit) return added;
     }
   }
+}
+
+const nonempty = (value) => typeof value === 'string' && value.trim().length > 0;
+
+export function selectCurrentAutomaticPreview({ runId, plan, run, revision, deltas, sessions }) {
+  if (!Array.isArray(sessions)) throw new AcceptanceFailure('Preview sessions response must be an array.');
+  const review = deltas.reviewRequests.get(runId);
+  if (!Number.isInteger(plan?.workPlanId) || plan.workPlanId < 1
+    || plan.coordinatorRunId !== runId || normalize(plan.status) !== 'in_review' || !review
+    || review.workPlanId !== plan.workPlanId || !nonempty(review.treeHash)
+    || revision?.tree_hash !== review.treeHash || revision.work_plan_id !== plan.workPlanId) {
+    throw new AcceptanceFailure('Current review, work plan and revision tree do not match.');
+  }
+  const binding = deltas.podBindings.get(runId);
+  if (binding?.type !== 'sandbox.execution_pod.bound' || !nonempty(binding.podName)
+    || run?.sandbox?.backend !== 'kubernetes-sandbox-claim'
+    || run.sandbox.phase !== 'Bound' || !nonempty(run.sandbox.claim_name)
+    || run.sandbox.pod_name !== binding.podName) {
+    throw new AcceptanceFailure('Current run has no active claim-bound execution pod matching the preview.');
+  }
+  const build = deltas.buildTests.get(runId);
+  if (!build || build.workPlanId !== plan.workPlanId || build.treeHash !== review.treeHash
+    || build.sequence >= review.sequence) {
+    throw new AcceptanceFailure('Current review has no completed Build & Test for its tree.');
+  }
+  const events = (deltas.previewEvents.get(runId) ?? [])
+    .filter((event) => event.payload?.run_id === runId
+      && event.payload?.work_plan_id === plan.workPlanId
+      && event.payload?.tree_hash === review.treeHash
+      && event.payload?.source === 'preview-step'
+      && event.sequence < review.sequence);
+  if (events.some((event) => event.type !== 'sandbox.preview_ready')) {
+    throw new AcceptanceFailure('Current automatic preview failed or was skipped.');
+  }
+  const ready = events.filter((event) => event.type === 'sandbox.preview_ready');
+  if (ready.length > 1) throw new AcceptanceFailure('Ambiguous current automatic preview events.');
+  if (sessions.length > 1) throw new AcceptanceFailure('Ambiguous preview sessions for current run.');
+  if (!ready.length && !sessions.length) return null;
+  if (!ready.length) throw new AcceptanceFailure('Preview session has no current automatic preview-ready event.');
+  const event = ready[0].payload;
+  if (!nonempty(event.session_id) || !nonempty(event.preview_runner_session_id)
+    || !nonempty(event.preview_url) || !nonempty(event.pod_name)
+    || !Number.isInteger(event.target_port) || event.target_port < 1 || event.target_port > 65535
+    || event.pod_name !== binding.podName || binding.sequence >= ready[0].sequence) {
+    throw new AcceptanceFailure('Automatic preview event has no active matching pod, runner, port or URL.');
+  }
+  if (!sessions.length) return null;
+  const session = sessions[0];
+  if (session.session_id !== event.session_id || session.preview_runner_session_id !== event.preview_runner_session_id
+    || session.pod_name !== event.pod_name || session.target_port !== event.target_port
+    || session.preview_url !== event.preview_url) {
+    throw new AcceptanceFailure('Preview session does not match the current automatic preview event.');
+  }
+  return { sessionId: event.session_id, previewUrl: event.preview_url, targetPort: event.target_port };
 }
 
 export async function cleanupOwnedPreviews(request, owned) {
@@ -109,7 +181,7 @@ export async function cleanupOwnedPreviews(request, owned) {
 
 export async function runOracleAcceptance({
   request, transcriptPath, resultPath, projectId, runId: suppliedRunId, goal, workflowId,
-  expectedText, correctedText, feedback, targetFiles, port = 3000,
+  expectedText, correctedText, feedback, targetFiles,
   budgets = DEFAULT_BUDGETS, pollMs = 5000, browser = verifyRenderedPreview,
   clock = () => Date.now(), pause = sleep, approveShell = false,
 }) {
@@ -139,13 +211,12 @@ export async function runOracleAcceptance({
     return ms;
   };
   const checkedRequest = async (method, url, body, options = {}) => {
-    const { allowLateResponse = false, ...requestOptions } = options;
     const maxAttempts = method === 'GET' ? 3 : 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const signal = AbortSignal.timeout(Math.max(1, Math.min(remaining(), method === 'POST' ? 180_000 : 30_000)));
       let response;
       try {
-        response = await request(method, url, body, { ...requestOptions, signal });
+        response = await request(method, url, body, { ...options, signal });
       } catch (error) {
         if (method !== 'GET' || !(error instanceof AcceptanceFailure)
           || !['request_timeout', 'transport_error'].includes(error.code)
@@ -155,7 +226,7 @@ export async function runOracleAcceptance({
         await pause(Math.min(250 * attempt, remaining()));
         continue;
       }
-      if (!allowLateResponse) remaining();
+      remaining();
       const transientRead = method === 'GET' && [0, 502, 503, 504].includes(response.status);
       if (!transientRead) return response;
       if (attempt === maxAttempts) {
@@ -198,7 +269,33 @@ export async function runOracleAcceptance({
     if (typeof contentIdentity !== 'string' || !contentIdentity) {
       throw new AcceptanceFailure('Review revision has no artifact content identity.');
     }
-    return { ...requested, contentIdentity };
+    if (detail.tree_hash !== requested.treeHash || detail.work_plan_id !== latest.plan?.workPlanId
+      || !nonempty(detail.tree_content_sha256) || !Array.isArray(detail.files) || !detail.files.length) {
+      throw new AcceptanceFailure('Review revision tree does not match current work plan.');
+    }
+    return { ...requested, contentIdentity, detail };
+  };
+  const verifyRevisionSource = async (revision, text) => {
+    let matched = false;
+    for (const file of revision.detail.files) {
+      if (!nonempty(file.path) || !/^[a-f0-9]{64}$/i.test(file.sha256 ?? '')) {
+        throw new AcceptanceFailure('Review revision file has no valid source identity.');
+      }
+      const data = requireResponse(await checkedRequest('GET', path(
+        `/output-revisions/${encodeURIComponent(revision.id)}/files/${file.path.split('/').map(encodeURIComponent).join('/')}`,
+      )), 'revision source bytes');
+      if (data.revision_id !== revision.id || data.path !== file.path || data.sha256 !== file.sha256
+        || typeof data.content_base64 !== 'string'
+        || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data.content_base64)) {
+        throw new AcceptanceFailure('Review revision source bytes do not match their manifest.');
+      }
+      const bytes = Buffer.from(data.content_base64, 'base64');
+      if (bytes.length !== file.size || createHash('sha256').update(bytes).digest('hex') !== file.sha256) {
+        throw new AcceptanceFailure('Review revision source hash or size mismatch.');
+      }
+      if (bytes.toString('utf8').includes(text)) matched = true;
+    }
+    if (!matched) throw new AcceptanceFailure('Expected application text is absent from the reviewed source bytes.');
   };
   const submitReview = async (decision, revisionId) => {
     if (!revisionId) throw new AcceptanceFailure('A current output revision is required for review.');
@@ -298,41 +395,31 @@ export async function runOracleAcceptance({
       await pause(Math.min(pollMs, remaining()));
     }
   };
-  const preview = async (label, text, { keepPhase = false } = {}) => {
+  const preview = async (label, text, revision, { keepPhase = false } = {}) => {
     if (!keepPhase) phase(label);
-    let last;
-    while (remaining() > 0) {
-      const prior = requireResponse(await checkedRequest('GET', path('/sandbox/port-forward')), 'existing preview sessions');
-      if (!Array.isArray(prior) || prior.length > 0) {
-        throw new AcceptanceFailure(`${label}: pre-existing preview session; refusing to adopt or delete it.`);
-      }
-      const response = await checkedRequest('POST', path('/sandbox/port-forward'), { targetPort: port }, { allowLateResponse: true });
-      const value = response.body;
-      if (response.status === 200 && value?.session_id && value?.preview_url) {
-        owned.push({ runId: result.parentRunId, sessionId: value.session_id });
+    for (;;) {
+      await snapshot();
+      const sessions = requireResponse(await checkedRequest('GET', path('/sandbox/port-forward')), 'automatic preview sessions');
+      const selected = selectCurrentAutomaticPreview({
+        runId: result.parentRunId, plan: latest.plan, run: latest.run, revision: revision.detail, deltas, sessions,
+      });
+      if (selected) {
+        const checked = await browser(selected.previewUrl, text, { timeoutMs: remaining() });
         remaining();
-        const listed = requireResponse(await checkedRequest('GET', path('/sandbox/port-forward')), 'preview readiness');
-        if (!Array.isArray(listed) || !listed.some((s) => s.session_id === value.session_id)) {
-          throw new AcceptanceFailure(`${label}: created preview not listed as ready.`);
-        }
-        remaining();
-        const checked = await browser(value.preview_url, text, { timeoutMs: remaining() });
-        remaining();
-        result.previews.push({ phase: label, sessionId: value.session_id, ...checked });
         if (!checked.ready) throw new AcceptanceFailure(`${label}: rendered preview failed acceptance.`);
+        await snapshot();
+        const current = requireResponse(await checkedRequest('GET', path('/sandbox/port-forward')), 'preview still active');
+        const rechecked = selectCurrentAutomaticPreview({
+          runId: result.parentRunId, plan: latest.plan, run: latest.run, revision: revision.detail, deltas, sessions: current,
+        });
+        if (!rechecked || rechecked.sessionId !== selected.sessionId) {
+          throw new AcceptanceFailure(`${label}: automatic preview changed or stopped during browser verification.`);
+        }
+        result.previews.push({ phase: label, sessionId: selected.sessionId, targetPort: selected.targetPort, ...checked });
         return checked;
-      }
-      last = `HTTP ${response.status}`;
-      if (response.status >= 400 && ![404, 409, 503].includes(response.status)) {
-        const diagnostic = response.body?.error ?? response.body?.message;
-        throw new AcceptanceFailure(
-          `${label}: preview request rejected: HTTP ${response.status}${typeof diagnostic === 'string' ? `: ${diagnostic}` : ''}.`,
-          'preview_rejected',
-        );
       }
       await pause(Math.min(pollMs, remaining()));
     }
-    throw new AcceptanceFailure(`${label}: preview not ready (${last ?? 'deadline'}).`, 'phase_timeout');
   };
   try {
     const [version, spec, auth] = await Promise.all([
@@ -373,10 +460,11 @@ export async function runOracleAcceptance({
     await wait('buildTestReview', (s) => normalize(s.plan?.status) === 'in_review' || normalize(s.plan?.assemblyStage).includes('review'));
     const firstFiles = requireResponse(await checkedRequest('GET', path('/assembly/files')), 'initial assembly files');
     if (!Array.isArray(firstFiles) || !firstFiles.length) throw new AcceptanceFailure('No assembled files at initial review.');
-    await preview('initialPreview', expectedText);
-    await collectRevisions();
     const firstRevision = await currentReviewRevision();
     result.initialRevision = firstRevision;
+    await verifyRevisionSource(firstRevision, expectedText);
+    await preview('initialPreview', expectedText, firstRevision);
+    await collectRevisions();
     if (!feedback?.trim() || !correctedText?.trim() || !targetFiles?.length) {
       throw new AcceptanceFailure('Grounded request_changes requires feedback, target files, and corrected application evidence.');
     }
@@ -405,7 +493,8 @@ export async function runOracleAcceptance({
     });
     const revisedFiles = requireResponse(await checkedRequest('GET', path('/assembly/files')), 'revised assembly files');
     if (!Array.isArray(revisedFiles) || !revisedFiles.length) throw new AcceptanceFailure('No revised assembly artifacts.');
-    const corrected = await preview('correctedPreview', correctedText, { keepPhase: true });
+    await verifyRevisionSource(correctedRevision, correctedText);
+    const corrected = await preview('correctedPreview', correctedText, correctedRevision, { keepPhase: true });
     if (result.previews[0].bodySha256 === corrected.bodySha256) throw new AcceptanceFailure('Corrected preview is identical to initial render.');
     result.correctedRevision = correctedRevision;
     await collectRevisions();

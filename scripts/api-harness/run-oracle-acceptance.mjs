@@ -14,7 +14,7 @@ export function parseOracleArgs(argv) {
     ['--target', 'target'], ['--project-id', 'projectId'], ['--run-id', 'runId'], ['--goal', 'goal'],
     ['--workflow-id', 'workflowId'], ['--expected-text', 'expectedText'],
     ['--corrected-text', 'correctedText'], ['--feedback', 'feedback'], ['--target-files', 'targetFiles'],
-    ['--port', 'port'], ['--poll-ms', 'pollMs'], ['--budget', 'budget'],
+    ['--poll-ms', 'pollMs'], ['--budget', 'budget'],
     ['--transcript', 'transcriptPath'], ['--result', 'resultPath'],
     ['--recorder-auth-root', 'authRoot'], ['--auth-provider', 'authProvider'],
   ]);
@@ -38,10 +38,10 @@ export function parseOracleArgs(argv) {
     budgets[phase] = Number(minutes);
   }
   values.budgets = budgets;
-  for (const key of ['port', 'pollMs']) {
+  for (const key of ['pollMs']) {
     if (values[key] === undefined) continue;
     values[key] = Number(values[key]);
-    if (!Number.isInteger(values[key]) || values[key] < 1 || (key === 'port' && values[key] > 65535)) {
+    if (!Number.isInteger(values[key]) || values[key] < 1) {
       throw new Error(`Invalid ${key}.`);
     }
   }
@@ -52,7 +52,7 @@ export function parseOracleArgs(argv) {
 export async function main(argv = process.argv.slice(2)) {
   const args = parseOracleArgs(argv);
   if (args.help) {
-    console.log('Usage: node scripts/api-harness/run-oracle-acceptance.mjs --target <url> --project-id <uuid> (--run-id <uuid> | --goal <text>) --expected-text <text> --corrected-text <text> --feedback <grounded feedback> --target-files <comma-separated paths> [--workflow-id <id>] [--recorder-auth-root scripts/ui-harness/.auth] [--budget phase=minutes] [--approve-shell] [--poll-ms 5000] [--port 3000] [--transcript path] [--result path]');
+    console.log('Usage: node scripts/api-harness/run-oracle-acceptance.mjs --target <url> --project-id <uuid> (--run-id <uuid> | --goal <text>) --expected-text <text> --corrected-text <text> --feedback <grounded feedback> --target-files <comma-separated paths> [--workflow-id <id>] [--recorder-auth-root scripts/ui-harness/.auth] [--budget phase=minutes] [--approve-shell] [--poll-ms 5000] [--transcript path] [--result path]');
     return 0;
   }
   if (!args.target || (!args.runId && (!args.projectId || !args.goal)) || !args.expectedText || !args.correctedText || !args.feedback || !args.targetFiles?.length) {

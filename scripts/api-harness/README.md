@@ -6,6 +6,10 @@ For deterministic Oracle **release acceptance** (one assembly review,
 one grounded revision, two browser-verified previews and scoped cleanup), run
 `node scripts/api-harness/run-oracle-acceptance.mjs --help`. Supply a disposable
 project, expected text for both versions, observed feedback and affected files.
+The driver observes the runtime-owned automatic preview for each reviewed tree;
+it never starts a server, guesses a port, posts a manual preview, or deletes
+automatic or unrelated sessions. Missing or unproven automatic previews fail
+acceptance rather than becoming a manual fallback.
 See [the API harness skill](SKILL.md#deterministic-oracle-assemblyrevision-release-acceptance)
 and [the validation guide](../../docs/guide/validation.md#oracle-release-acceptance).
 PersonaActor remains the free-form exploration path; do not substitute it for

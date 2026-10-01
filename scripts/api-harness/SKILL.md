@@ -103,8 +103,8 @@ Oracle **release acceptance** is the exception to free-form PersonaActor explora
 the lifecycle and preview safety checks are deterministic; Oracle's grounded review
 decision is supplied as bounded input, not inferred from a hard-coded transcript.
 Use `run-oracle-acceptance.mjs`, **not** an `agent-driver` command or
-`run-persona.mjs --scenario oracle`. Use a disposable repository-backed project
-with an executable app and server already configured to listen on the chosen port.
+`run-persona.mjs --scenario oracle`. Use a disposable repository-backed project with an executable app; the runtime
+discovers the actual listener port and publishes each automatic preview.
 Either attach to an already-started coordinator with `--run-id`, or provide
 `--goal` to launch a `direct` orchestration in that project.
 
@@ -112,12 +112,11 @@ Either attach to an already-started coordinator with `--run-id`, or provide
 node scripts/api-harness/run-oracle-acceptance.mjs `
   --target https://<staging-origin> `
   --project-id <disposable-project-uuid> `
-  --goal "Build a working app and serve it on port 3000" `
+  --goal "Build a working app with an executable server" `
   --expected-text "Visible original app text" `
   --corrected-text "Visible revised app text" `
   --feedback "Observed missing behavior in the original preview; make the revised app show the corrected behavior" `
   --target-files "src/App.tsx" `
-  --port 3000 `
   --budget revisionProvisioning=15
 ```
 
@@ -134,20 +133,18 @@ responses, thrown request timeouts or transport errors, or HTTP 502, 503, or
 504, within the same phase deadline. Expired phase budgets and cancellations
 fail explicitly; decisions and other writes are never retried.
 
-At the first assembly review the driver verifies changed files, a listed ready
-preview session, HTTP 200 in installed Chrome, visible expected application text,
-and absence of fatal page/console/network errors. **Only then** does it submit the
-one `request_changes` with your observed feedback and target files. It removes
-its first preview before revision to prevent a stale session from masquerading
-as the corrected version. The second gate requires changed assembly content and
-different rendered body before approving. The product's Build & Test gate precedes
-its human review/preview gate, so the first preview cannot be inspected earlier
-without changing the product workflow.
-Operator preview creation at `/sandbox/port-forward` sends `{ "targetPort": 3000 }`;
-the returned session fields remain snake_case. The separate agent-initiated
-`/sandbox/preview` endpoint accepts `{ "target_port": 3000 }`. A non-transient
-preview request rejection reports its HTTP status and error rather than a
-preview deadline timeout.
+At each assembly review the driver verifies the current work-plan ID, review
+tree, immutable revision tree and source bytes, completed Build & Test event,
+and runtime-owned `sandbox.preview_ready` event (`source: preview-step`).
+It matches the event's run, tree, claim-bound pod, supervised runner session,
+actual target port, session token and URL against the current GET listing.
+Stale, manual, foreign, ambiguous, mismatched or failed sessions are never
+adopted or deleted. Missing automatic previews are polled read-only within
+the phase budget, then fail closed. HTTP 200 in Chrome, expected application
+text and absence of fatal browser errors are required before `request_changes`
+or approval. The route is rechecked after browser verification. The corrected
+revision must have different source content and rendered body. The driver
+does not publish manual previews or assume port 3000; `--port` is unsupported.
 
 Each assembly decision includes `output_revision_id` from the current parent
 `coordinator.assembly_review_requested` event (verified against parent output
@@ -157,7 +154,9 @@ run detail, rejecting a mismatched explicit project. The second review must
 publish a new parent revision with a different `tree_content_sha256` (falling
 back to `tree_hash`); `/assembly/files` lists paths/statuses, **not** file
 content. Artifact readiness and browser verification share the single
-`correctedPreview` deadline.
+`correctedPreview` deadline. Each revision's file bytes are fetched read-only
+and checked against manifest size/SHA-256; expected visible text must also
+occur in the reviewed source. These checks do not substitute for the browser.
 
 Shell approvals fail fast by default; `--approve-shell` is an explicit opt-in
 **only for a disposable project**. Event deltas retain history for evidence;
@@ -173,14 +172,11 @@ The append-only redacted transcript (`--transcript`) and result JSON
 phase, parent/child/revision IDs, recent events and diagnostic. Exit 0 means
 both objective preview gates and terminal completion passed; it is not an
 independent subjective Judge verdict. Cleanup deletes and confirms **only**
-preview session IDs created by this invocation, including on failure; an
-unconfirmed cleanup changes the verdict to fail. Do not interpret a successful
-port-forward response alone as proof of a rendered app.
-The current port-forward response does not atomically distinguish a newly created
-session from a concurrently reused session. The driver refuses any session
-already listed before publication, but another caller racing between list and
-start requires a product `created`/ownership indicator for a strict
-multi-writer ownership guarantee. Use a dedicated run for this gate.
+manual preview session IDs actually created by this invocation (none in the
+automatic-only flow), including on failure; an unconfirmed cleanup changes
+the verdict to fail. A ready event or listed route alone is not proof of a
+working app. This fixture-only contract does not establish live release
+acceptance; a deployed run needs its own browser and terminal evidence.
 
 Before choosing a persona for a dynamic API run, check
 `scripts/persona-briefs/catalog.json` through
