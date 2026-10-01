@@ -195,6 +195,9 @@ public sealed class RunOutputRevisionPostgresTests(PostgresFixture pg)
         (await store.TryRecordFanInputProjectionAsync(parentId, 1,
             "base-tree", "projected-tree", parentBranch)).Should().BeTrue();
         (await store.TryRecordFanInputProjectionAsync(parentId, 1,
+            "base-tree", "projected-tree", parentBranch, "reattached-parent-worktree")).Should().BeTrue();
+        (await store.GetAsync(parentId))!.WorktreePath.Should().Be("reattached-parent-worktree");
+        (await store.TryRecordFanInputProjectionAsync(parentId, 1,
             "base-tree", "different-tree", parentBranch)).Should().BeFalse();
         (await store.GetAsync(parentId))!.TreeHash.Should().Be("projected-tree");
     }

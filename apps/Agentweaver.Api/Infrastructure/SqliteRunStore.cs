@@ -1027,7 +1027,7 @@ public sealed class SqliteRunStore : IRunStore
                 worktree_path=COALESCE($recovered, worktree_path)
             WHERE run_id=$run AND lifecycle_generation=$generation
               AND status='awaiting_review' AND worktree_branch=$branch
-              AND (tree_hash IS NULL OR tree_hash=$base);
+              AND (tree_hash IS NULL OR tree_hash=$base OR tree_hash=$projected);
             """;
         update.Parameters.AddWithValue("$projected", projectedTree);
         update.Parameters.AddWithValue("$run", runId.ToString());

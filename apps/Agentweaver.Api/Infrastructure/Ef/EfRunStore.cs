@@ -891,7 +891,7 @@ public sealed class EfRunStore : IRunStore
                 && r.LifecycleGeneration == generation
                 && r.Status == "awaiting_review"
                 && r.WorktreeBranch == worktreeBranch
-                && (r.TreeHash == null || r.TreeHash == expectedBaseTree))
+                && (r.TreeHash == null || r.TreeHash == expectedBaseTree || r.TreeHash == projectedTree))
             .ExecuteUpdateAsync(updates => updates
                 .SetProperty(r => r.TreeHash, projectedTree)
                 .SetProperty(r => r.WorktreePath, r => recoveredWorktreePath ?? r.WorktreePath), ct)
