@@ -45,7 +45,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
     public PostgresAppBootTests(AppFixture fixture) => _fixture = fixture;
 
     [PostgresFact]
-    public async Task WorkerHost_ResolvesChildWorkProjectionClaimFromSharedSingleton()
+    public async Task WorkerHost_ProjectionClaimDoesNotBlockPostgresApprovalLookup()
     {
         using var worker = new PostgresWebApplicationFactory(_fixture.ConnectionString, AppRole.Worker);
         using var client = worker.CreateClient();
@@ -59,15 +59,37 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         scope.ServiceProvider.GetRequiredService<RunActiveClaimGuard>().Should().BeSameAs(guard);
 
         var runId = RunId.New();
-        await using var claim = await guard.AcquireAsync(runId, CancellationToken.None);
-        using var waiting = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        var acquireAgain = async () =>
+        await using (var claim = await guard.AcquireAsync(runId, CancellationToken.None))
         {
-            await using var second = await scope.ServiceProvider
-                .GetRequiredService<RunActiveClaimGuard>()
-                .AcquireAsync(runId, waiting.Token);
-        };
-        await acquireAgain.Should().ThrowAsync<OperationCanceledException>();
+            using var waiting = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var acquireAgain = async () =>
+            {
+                await using var second = await scope.ServiceProvider
+                    .GetRequiredService<RunActiveClaimGuard>()
+                    .AcquireAsync(runId, waiting.Token);
+            };
+            await acquireAgain.Should().ThrowAsync<OperationCanceledException>();
+        }
+
+        await services.GetRequiredService<IRunStore>().InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = "/repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "approval lookup under fan projection claim",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var gate = services.GetRequiredService<DurableToolApprovalGate>();
+        (await gate.PersistAgentHostApprovalAsync(
+            runId.ToString(), "req-policy", "web_fetch", "https://example.test",
+            ApprovalScope.Run)).Should().BeTrue();
+
+        await using var projectionClaim = await guard.AcquireAsync(runId, CancellationToken.None);
+        var lookup = Task.Run(() => gate.IsAutoApproved(runId.ToString(), "web_fetch", "https://example.test"));
+        (await lookup.WaitAsync(TimeSpan.FromSeconds(3))).Should().BeTrue();
     }
 
     [PostgresFact]
