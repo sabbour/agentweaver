@@ -274,6 +274,27 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task WorkPlan_ParentAddressedTerminalChild_UsesSelectedCoordinatorReason()
+    {
+        const string childReason = "assembly_blocked: child integration conflict";
+        var parentRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunStatus.Failed,
+            result: "parent workflow failed for another reason");
+        var coordinatorRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunStatus.Failed, result: childReason);
+        var childRunId = await SeedAssembleReadyChildRunAsync("child");
+        await SeedParentNodePlanAsync(parentRunId, coordinatorRunId, "fan",
+            WorkPlanStatus.AssemblyBlocked, "waiting", childRunId);
+
+        var plan = await _owner.GetFromJsonAsync<JsonElement>(
+            $"/api/runs/{parentRunId}/work-plan");
+
+        plan.GetProperty("coordinatorRunId").GetString().Should().Be(coordinatorRunId);
+        plan.GetProperty("status").GetString().Should().Be(WorkPlanStatus.AssemblyBlocked);
+        plan.GetProperty("statusReason").GetString().Should().Be(childReason);
+    }
+
+    [Fact]
     public async Task EmbeddedStaticCoordinator_RunAndGraph_ProjectCoordinatorPlanWithoutAssemblyStages()
     {
         var parentRunId = RunId.New().ToString();

@@ -2969,13 +2969,14 @@ public sealed class CoordinatorRunService
         // Surface the durable assembly reason first; fall back to the coordinator run's terminal result
         // for older rows written before AssemblyStatusReason existed.
         string? statusReason = plan.AssemblyStatusReason;
-        if (plan.Status is WorkPlanStatus.AssemblyBlocked
-                        or WorkPlanStatus.AssemblyFailed
-                        or WorkPlanStatus.AssemblyUnknown
-                        or WorkPlanStatus.AssemblyDeclined
-                        or WorkPlanStatus.RaiBlocked
-                        or WorkPlanStatus.NeedsResolution
-            && RunId.TryParse(coordinatorRunId, out var coordRunId))
+        if (statusReason is null
+            && plan.Status is (WorkPlanStatus.AssemblyBlocked
+                               or WorkPlanStatus.AssemblyFailed
+                               or WorkPlanStatus.AssemblyUnknown
+                               or WorkPlanStatus.AssemblyDeclined
+                               or WorkPlanStatus.RaiBlocked
+                               or WorkPlanStatus.NeedsResolution)
+            && RunId.TryParse(plan.CoordinatorRunId, out var coordRunId))
         {
             var run = await _runStore.GetAsync(coordRunId, ct).ConfigureAwait(false);
             statusReason ??= run?.Result;
