@@ -45,6 +45,32 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
     public PostgresAppBootTests(AppFixture fixture) => _fixture = fixture;
 
     [PostgresFact]
+    public async Task WorkerHost_ResolvesChildWorkProjectionClaimFromSharedSingleton()
+    {
+        using var worker = new PostgresWebApplicationFactory(_fixture.ConnectionString, AppRole.Worker);
+        using var client = worker.CreateClient();
+        (await client.GetAsync("/readyz")).EnsureSuccessStatusCode();
+
+        var services = worker.Services;
+        var childWork = services.GetRequiredService<Agentweaver.Api.Workflows.WorkflowChildWorkService>();
+        childWork.Should().NotBeNull();
+        var guard = services.GetRequiredService<RunActiveClaimGuard>();
+        using var scope = services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<RunActiveClaimGuard>().Should().BeSameAs(guard);
+
+        var runId = RunId.New();
+        await using var claim = await guard.AcquireAsync(runId, CancellationToken.None);
+        using var waiting = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var acquireAgain = async () =>
+        {
+            await using var second = await scope.ServiceProvider
+                .GetRequiredService<RunActiveClaimGuard>()
+                .AcquireAsync(runId, waiting.Token);
+        };
+        await acquireAgain.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [PostgresFact]
     public async Task PostgresLeader_ExcludesOtherRole_UntilLeaderExits()
     {
         const long isolatedTestLockKey = 0x4157_5243_5652_5903L;
@@ -94,6 +120,8 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
             "Postgres mode must bind IRunStore to EfRunStore");
         RunStoreChain.Find<SqliteRunStore>(runStore).Should().BeNull(
             "no SQLite store may appear anywhere in the Postgres run-store chain");
+        sp.GetRequiredService<RunActiveClaimGuard>().Should().BeSameAs(
+            _fixture.Services.GetRequiredService<RunActiveClaimGuard>());
 
         // Nothing may resolve a concrete SqliteRunStore in Postgres mode — the raw SQLite
         // registration is gone, so a stray concrete injection would fail fast at boot instead
@@ -213,9 +241,12 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         private readonly string _checkpointsPath;
         private readonly string _coordinatorCheckpointsPath;
 
-        public PostgresWebApplicationFactory(string connectionString)
+        private readonly string _role;
+
+        public PostgresWebApplicationFactory(string connectionString, string role = AppRole.Web)
         {
             _connectionString = connectionString;
+            _role = role;
             _worktreesPath = Path.Combine(Path.GetTempPath(), $"aw-pg-wt-{Guid.NewGuid():N}");
             _checkpointsPath = Path.Combine(Path.GetTempPath(), $"aw-pg-cp-{Guid.NewGuid():N}");
             _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"aw-pg-ccp-{Guid.NewGuid():N}");
@@ -231,6 +262,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
             // for it.
             builder.UseSetting("Database:Provider", "postgres");
             builder.UseSetting("ConnectionStrings:Postgres", _connectionString);
+            builder.UseSetting("App:Role", _role);
 
             // Program.cs registers BOTH AddDbContextFactory<MemoryDbContext> (singleton) and
             // AddDbContext<MemoryDbContext> (scoped) in Postgres mode. That is a valid production
@@ -251,6 +283,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
                     // Belt-and-suspenders: also present as app configuration for lazy reads.
                     ["Database:Provider"] = "postgres",
                     ["ConnectionStrings:Postgres"] = _connectionString,
+                    ["App:Role"] = _role,
 
                     ["Worktrees:BasePath"] = _worktreesPath,
                     ["Checkpoints:Path"] = _checkpointsPath,

@@ -119,6 +119,9 @@ if (!isWorker)
 // SqliteDb is still registered so SQLite-dependent singletons that aren't yet migrated compile fine;
 // it is harmless when Postgres is used (the DB is simply never opened).
 builder.Services.AddSingleton<SqliteDb>();
+// Fan projection also takes this per-run claim on Postgres workers. SQLite's run-store
+// decorator uses the same singleton to fence status transitions.
+builder.Services.AddSingleton<RunActiveClaimGuard>();
 // Provider-aware run stores. In Postgres mode the EF-backed equivalents are registered in the
 // Database:Provider block below; the concrete SQLite stores must NOT be registered or injected then,
 // otherwise consumers binding the concrete type would open an empty ephemeral SQLite DB and crash.
@@ -133,7 +136,6 @@ builder.Services.AddSingleton<SqliteDb>();
         // ACID transaction with the run store the way Postgres's FOR UPDATE does. Wrapping the
         // store in RunActiveClaimGuardedRunStore gives DurableToolApprovalGate a real in-process
         // mutual-exclusion claim to close that gap instead of relying on another racy pre-read.
-        builder.Services.AddSingleton<RunActiveClaimGuard>();
         // PreviewPublicationLeaseRunStore sits OUTSIDE the claim guard: it waits for an in-flight
         // preview publication before terminalizing, and the publication's conditional append takes
         // the very same claim, so waiting while holding it would deadlock (#1315).
