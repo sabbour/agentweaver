@@ -138,6 +138,11 @@ public sealed class RunOutputRevisionStoreTests
             revision.ResolveFile("demo/incident-brief.md").Bytes.Should().Equal(original);
             var prepared = manager.PrepareFanInputProjection(path, parent.WorktreePath,
                 parentId, baseline.Sha, baseline.Tree.Sha, revision.ResolveFiles());
+            var preparedWithoutWorktree = manager.PrepareFanInputProjection(path,
+                Path.Combine(path, "missing-parent-worktree"), parentId,
+                baseline.Sha, baseline.Tree.Sha, revision.ResolveFiles());
+            preparedWithoutWorktree.Should().Be(prepared,
+                "immutable preparation only needs the verified durable parent ref; checkout recovery happens under the apply fence");
             FluentActions.Invoking(() => manager.PrepareFanInputProjection(
                 path, parent.WorktreePath, parentId, baseline.Sha, baseline.Tree.Sha,
                 [new RunOutputTree.File("base.txt", 33188, "overwrite"u8.ToArray())]))

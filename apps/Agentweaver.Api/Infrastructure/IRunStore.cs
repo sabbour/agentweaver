@@ -38,6 +38,7 @@ public interface IRunStore
     Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default);
     Task UpdateAssemblyArtifactsAsync(RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Task.CompletedTask;
+    /// <summary>Caller holds the parent-run claim and child-work plan fence across Git apply and this receipt.</summary>
     Task<bool> TryRecordFanInputProjectionAsync(
         RunId runId, int generation, string expectedBaseTree, string projectedTree,
         string worktreeBranch, CancellationToken ct = default) =>
