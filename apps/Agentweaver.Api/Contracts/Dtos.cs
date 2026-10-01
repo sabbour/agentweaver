@@ -1700,7 +1700,7 @@ public sealed record ReadyAllResponse
 /// <summary>
 /// Response body for POST /api/runs/{id}/retry. Two shapes: (1) a freshly created retry run
 /// (<c>resumed=false</c>, new <c>run_id</c>, <c>retried_from</c> pointing at the source), or (2) an
-/// in-place RESUME of a coordinator run from its last failure point (#332) — same <c>run_id</c> as the
+/// in-place resume of a coordinator or eligible pre-dispatch composed workflow — same <c>run_id</c> as the
 /// source, <c>retried_from=null</c>, <c>resumed=true</c> — which preserves already-completed work and
 /// the original run options instead of restarting the whole coordinator lifecycle.
 /// </summary>
@@ -1710,7 +1710,7 @@ public sealed record RetryRunResponse
     [JsonPropertyName("retried_from")] public required string? RetriedFrom { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }
 
-    /// <summary>True when the source coordinator run was resumed in place from its failure point
+    /// <summary>True when the source coordinator or composed workflow resumed in place
     /// (no fresh run minted, no outcome-spec redraft). False for a fresh full retry.</summary>
     [JsonPropertyName("resumed")] public bool Resumed { get; init; }
 }

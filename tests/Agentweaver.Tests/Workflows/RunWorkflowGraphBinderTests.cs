@@ -111,6 +111,29 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Fact]
+    public void ComposedRecovery_EntersOnlySavedComposedNode_WithoutChangingAuthoredStart()
+    {
+        var definition = ComposedDefinition();
+        var bindings = FakeBindings.Create();
+        var builder = new GraphDescriptorBuilder(bindings.AgentInputStorer);
+        RunWorkflowGraphBinder.WireFull(builder, definition, bindings, "compose");
+        var descriptor = builder.BuildDescriptor("recovery", "full");
+        descriptor.StartNodeId.Should().Be("compose");
+        definition.Start.Should().Be("entry");
+        RunWorkflowGraphBinder.GetBindabilityErrors(definition with { Start = "compose" })
+            .Should().Contain(error => error.Contains("requires one unconditional incoming edge"));
+    }
+
+    [Fact]
+    public void ComposedRecovery_RejectsArbitraryEntryOverride()
+    {
+        var bindings = FakeBindings.Create();
+        var builder = new GraphDescriptorBuilder(bindings.AgentInputStorer);
+        var action = () => RunWorkflowGraphBinder.WireFull(builder, ComposedDefinition(), bindings, "entry");
+        action.Should().Throw<WorkflowBindException>();
+    }
+
+    [Fact]
     public void ComposedNode_RejectsMissingPromptAndMultipleNodes()
     {
         var original = ComposedDefinition();

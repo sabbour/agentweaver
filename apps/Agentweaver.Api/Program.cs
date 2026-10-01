@@ -169,6 +169,7 @@ builder.Services.AddSingleton<PendingRequestStore>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowChildWorkRuntime,
     Agentweaver.Api.Workflows.WorkflowChildWorkRuntime>();
 builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowChildWorkService>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowComposedRecoveryService>();
 builder.Services.AddSingleton<IWorktreeOperations, WorktreeOperationsAdapter>();
 builder.Services.AddSingleton<IMergeCoordinator, MergeCoordinator>();
 builder.Services.AddSingleton<RunWorkflowFactory>();

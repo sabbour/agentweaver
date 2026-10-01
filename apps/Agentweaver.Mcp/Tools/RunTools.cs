@@ -9,8 +9,9 @@ namespace Agentweaver.Mcp.Tools;
 
 internal sealed record RetryRunResponse(
     [property: JsonPropertyName("run_id")]      string RunId,
-    [property: JsonPropertyName("retried_from")] string RetriedFrom,
-    [property: JsonPropertyName("status")]      string Status);
+    [property: JsonPropertyName("retried_from")] string? RetriedFrom,
+    [property: JsonPropertyName("status")]      string Status,
+    [property: JsonPropertyName("resumed")]     bool Resumed = false);
 
 internal sealed record StartCoordinatorRunResponse(
     [property: JsonPropertyName("runId")] string RunId);
@@ -476,7 +477,7 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
-    [McpServerTool(Name = "run_retry"), Description("Retry a failed run by creating a fresh run from its original inputs.")]
+    [McpServerTool(Name = "run_retry"), Description("Retry a failed run. Eligible coordinators and pre-dispatch composed failures resume the original run; other retries create a fresh run.")]
     public async Task<string> RunRetryAsync(
         [Description("Run ID")] string run_id,
         CancellationToken ct)
@@ -489,7 +490,9 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
                 operation: "retry",
                 runId: run_id,
                 ct: ct);
-            return $"Retried run {Uri.EscapeDataString(run_id)} -> new run {result.RunId}.";
+            return result.Resumed
+                ? $"Resumed run {result.RunId} in place from its failure point; no new run was created."
+                : $"Retried run {Uri.EscapeDataString(run_id)} -> new run {result.RunId}.";
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }

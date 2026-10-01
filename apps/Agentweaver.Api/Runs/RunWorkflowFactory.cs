@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -428,7 +429,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
 
     private (Workflow Workflow, GraphDescriptor Descriptor, IReadOnlyDictionary<string, ExecutorNodeMeta> ExecutorMeta) BuildWorkflow(
         bool isChild = false,
-        WorkflowDefinition? effectiveDefinition = null)
+        WorkflowDefinition? effectiveDefinition = null,
+        string? recoveryComposedNodeId = null)
     {
         // A fresh worker agent per workflow build (per run), resolved through the injectable
         // IWorkflowAgentFactory seam. In production this builds a CopilotAIAgent — an AIAgent the
@@ -1083,7 +1085,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 ComposedPauseBinding: composedPauseBinding,
                 ComposedFailureBinding: composedFailureBinding,
                 MaxIterations: MaxIterations,
-                Wiring: wiringSupport));
+                Wiring: wiringSupport),
+            recoveryComposedNodeId);
 
         var wf = fullBuilder.Build();
         var descriptor = fullBuilder.BuildDescriptor("agentweaver-workflow-full", "full");
@@ -1697,7 +1700,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     /// agent terminating assemble-ready, with no per-child RAI / review gate / merge / scribe.
     /// </summary>
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false,
-        int? steeringDirectiveId = null, int? steeringAttempt = null)
+        int? steeringDirectiveId = null, int? steeringAttempt = null,
+        string? recoveryComposedNodeId = null)
     {
         WorkflowDefinition? effectiveDefinition = null;
         if (!isChild)
@@ -1732,7 +1736,10 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         }
         if (!isChild)
             _workflowWorktreeMaterializer?.TryMaterialize(input.WorktreePath, effectiveDefinition);
-        var (workflow, descriptor, executorMeta) = BuildWorkflow(isChild, effectiveDefinition);
+        if (recoveryComposedNodeId is not null && (isChild || effectiveDefinition is null))
+            throw new WorkflowBindException("Composed recovery requires a pinned root workflow.", runId);
+        var (workflow, descriptor, executorMeta) = BuildWorkflow(
+            isChild, effectiveDefinition, recoveryComposedNodeId);
         // Capture the executorId -> render-metadata map so the watch loop can translate MAF executor
         // lifecycle events into workflow.step UI events for nodes without a dedicated self-emitter.
         _runExecutorMeta[runId] = executorMeta;
@@ -1962,9 +1969,22 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 : await ResolveExecutableWorkflowDefinitionAsync(
                     run, run.ProjectId?.ToString(), checkpointInfo.SessionId, captureIfMissing: false, ct)
                     .ConfigureAwait(false);
+            string? recoveryComposedNodeId = null;
+            if (!isChild)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                recoveryComposedNodeId = await db.WorkPlans.AsNoTracking()
+                    .Where(plan => plan.ParentRunId == run.Id.ToString()
+                        && plan.ParentRecoveryGeneration == run.LifecycleGeneration
+                        && plan.ParentJoinNodeId == null)
+                    .Select(plan => plan.ParentWorkflowNodeId)
+                    .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+            }
             if (!isChild)
                 _workflowWorktreeMaterializer?.TryMaterialize(run.WorktreePath ?? string.Empty, effectiveDefinition);
-            var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(isChild, effectiveDefinition);
+            var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(
+                isChild, effectiveDefinition, recoveryComposedNodeId);
             _runExecutorMeta[checkpointInfo.SessionId] = executorMetaForRun;
             return await InProcessExecution.ResumeStreamingAsync(
                 workflowForRun, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);

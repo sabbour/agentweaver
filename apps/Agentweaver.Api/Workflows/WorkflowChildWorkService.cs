@@ -617,6 +617,20 @@ internal sealed class WorkflowChildWorkService
             {
                 throw;
             }
+            catch (CoordinatorExecutionFenceLostException ex)
+            {
+                _logger.LogInformation(ex,
+                    "Composed coordinator {RunId} lost the persistence fence for plan {WorkPlanId}",
+                    child.Id, workPlanId);
+                return false;
+            }
+            catch (Exception ex) when (DecisionPromotion.IsRetryable(ex))
+            {
+                _logger.LogWarning(ex,
+                    "Deferring composed coordinator {RunId} plan {WorkPlanId} after database contention",
+                    child.Id, workPlanId);
+                return false;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex,
@@ -1358,6 +1372,8 @@ internal sealed class WorkflowChildWorkService
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         return await db.WorkPlans.AsNoTracking()
             .Where(plan => plan.ParentRunId == parentRunId && plan.ParentWorkflowNodeId != null)
+            .OrderByDescending(plan => plan.Id)
+            .Take(1)
             .AnyAsync(plan => plan.ParentResumeState == WorkflowChildWorkResumeStates.Delivered
                 || db.PendingRequests.Any(request => request.RunId == parentRunId
                     && request.RequestId == plan.ParentResumeRequestId

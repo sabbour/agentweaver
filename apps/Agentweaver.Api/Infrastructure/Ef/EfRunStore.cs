@@ -706,35 +706,49 @@ public sealed class EfRunStore : IRunStore
 
     public async Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default)
     {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        if (!await TryReopenTerminalOnContextAsync(db, runId, ct).ConfigureAwait(false))
+            return false;
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    internal static async Task<bool> TryReopenTerminalOnContextAsync(
+        MemoryDbContext db, RunId runId, CancellationToken ct,
+        Run? expectedRun = null, RunLeaseClaim? requiredLease = null, bool clearResult = false)
+    {
         var terminalStatuses = new[]
         {
             RunStatus.Failed.ToApiString(),
             RunStatus.MergeFailed.ToApiString(),
             RunStatus.AssembleReady.ToApiString(),
         };
-        await using var db = await _factory.CreateDbContextAsync(ct);
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
         var id = runId.ToString();
         var now = DateTimeOffset.UtcNow;
-        var rows = await db.Runs
+        var eligible = db.Runs
             .Where(r => r.RunId == id && terminalStatuses.Contains(r.Status)
                 && (r.PreviewPublicationLeaseUntil == null
-                    || r.PreviewPublicationLeaseUntil <= now))
+                    || r.PreviewPublicationLeaseUntil <= now));
+        if (expectedRun is not null)
+            eligible = eligible.Where(r => r.LifecycleGeneration == expectedRun.LifecycleGeneration
+                && r.Status == expectedRun.Status.ToApiString() && r.Result == expectedRun.Result);
+        if (requiredLease is not null)
+            eligible = eligible.Where(r => r.OwnerId == requiredLease.OwnerId
+                && r.FencingToken == requiredLease.FencingToken && r.LeaseExpiresAt > now);
+        var rows = await eligible
             .ExecuteUpdateAsync(updates => updates
                 .SetProperty(r => r.Status, RunStatus.InProgress.ToApiString())
                 .SetProperty(r => r.EndedAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.Result, r => clearResult ? null : r.Result)
                 .SetProperty(r => r.CurrentOutputRevisionId, (string?)null)
                 .SetProperty(r => r.ApprovedOutputRevisionId, (string?)null)
                 .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1), ct);
         if (rows != 1)
-        {
-            await tx.RollbackAsync(ct);
             return false;
-        }
         var record = await db.Runs.AsNoTracking().SingleAsync(r => r.RunId == id, ct);
         db.ExecutionIdentities.Add(await CreateExecutionIdentityAsync(db, FromRecord(record), ct));
         await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
         return true;
     }
 
@@ -1701,7 +1715,7 @@ public sealed class EfRunStore : IRunStore
         ReviewReadyAt = null,
     };
 
-    private static Run FromRecord(RunRecord r) => new()
+    internal static Run FromRecord(RunRecord r) => new()
     {
         Id = RunId.Parse(r.RunId),
         RepositoryPath = r.RepositoryPath,

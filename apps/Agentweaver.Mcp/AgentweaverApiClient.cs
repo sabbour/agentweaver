@@ -590,8 +590,14 @@ public sealed class AgentweaverApiClient
                 || parentElement.ValueKind == JsonValueKind.Null)
             && run.TryGetProperty("agent_name", out var agentNameElement)
             && string.Equals(agentNameElement.GetString(), "Coordinator", StringComparison.Ordinal);
+        var isComposedRecovery = (!run.TryGetProperty("parent_run_id", out var composedParent)
+                || composedParent.ValueKind == JsonValueKind.Null)
+            && run.TryGetProperty("result", out var resultElement)
+            && resultElement.ValueKind == JsonValueKind.String
+            && resultElement.GetString()?.StartsWith(
+                "composed_decomposition_failed:", StringComparison.Ordinal) == true;
         var resolvedOperation = operation == "retry"
-            ? isCoordinator ? "orchestration" : "agent_turn"
+            ? isCoordinator || isComposedRecovery ? "orchestration" : "agent_turn"
             : operation;
         return await PostAiAsync<T>(
             path,

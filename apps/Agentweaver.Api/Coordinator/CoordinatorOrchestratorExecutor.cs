@@ -179,6 +179,12 @@ public sealed class CoordinatorOrchestratorExecutor
                 existing!.Id,
                 await db.Subtasks.CountAsync(s => s.WorkPlanId == existing.Id, ct).ConfigureAwait(false),
                 []);
+        var composedParentGeneration = composed && db.Database.IsNpgsql()
+            ? await db.Runs.AsNoTracking()
+                .Where(run => run.RunId == existing!.ParentRunId)
+                .Select(run => (int?)run.LifecycleGeneration)
+                .SingleAsync(ct).ConfigureAwait(false)
+            : null;
 
         // Feature 015 US5: pick the best-fit functional workflow for THIS task from the project's
         // available set and surface it (with rationale + override hint). Single-workflow projects skip
@@ -266,25 +272,29 @@ public sealed class CoordinatorOrchestratorExecutor
             assigned.Add(new AssignedSubtask(d, agentName, model));
         }
 
+        if (composed)
+        {
+            var (composedPlanId, composedSubtasks, created) = await PersistComposedPlanWithRetryAsync(
+                input, existing!.Id, composedParentGeneration, assigned, cycleNote, ct).ConfigureAwait(false);
+            if (created)
+                EmitWorkPlanEvent(input.RunId, composedPlanId, null, WorkPlanStatus.Planned,
+                    composedSubtasks, partition.Warnings.ToList());
+            return new CoordinatorOrchestrationResult(composedPlanId, composedSubtasks.Count, promotedTaskIds);
+        }
+
         await using var planTx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
             db, input.RunId, recoveredFence, ct, scope.ServiceProvider.GetService<SqliteDb>(),
-            lockUnfenced: !composed).ConfigureAwait(false);
-        await using var composedTx = composed && planTx is null
-            ? await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct).ConfigureAwait(false)
-            : null;
-        await using var sqlitePlanTx = !composed && db.Database.IsSqlite()
+            lockUnfenced: true).ConfigureAwait(false);
+        await using var sqlitePlanTx = db.Database.IsSqlite()
             ? await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
             : null;
-        if (planTx is not null || composedTx is not null)
+        if (planTx is not null)
         {
             // The earlier idempotency read precedes model planning; another owner may have
             // committed the plan while we were planning. Recheck under the run-row write lock.
             var persistedPlan = await db.WorkPlans.AsNoTracking()
                 .FirstOrDefaultAsync(w => w.CoordinatorRunId == input.RunId, ct).ConfigureAwait(false);
-            if (persistedPlan is not null
-                && (!composed
-                    || persistedPlan.Status != WorkPlanStatus.Planned
-                    || await db.Subtasks.AnyAsync(s => s.WorkPlanId == persistedPlan.Id, ct).ConfigureAwait(false)))
+            if (persistedPlan is not null)
             {
                 var inlineCount = await db.Subtasks.AsNoTracking()
                     .CountAsync(s => s.WorkPlanId == persistedPlan.Id, ct).ConfigureAwait(false);
@@ -300,26 +310,21 @@ public sealed class CoordinatorOrchestratorExecutor
             workflowSelection.Definition?.Id,
             inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned,
             ct,
-            composed ? existing : null)
+            null)
             .ConfigureAwait(false);
-        if (!composed)
-        {
-            var definition = workflowSelection.Definition
-                ?? throw new InvalidOperationException(
-                    $"Coordinator run '{input.RunId}' cannot commit a plan without a selected workflow.");
-            var pin = ExecutableWorkflowSnapshots.Create(definition, "coordinator-selection");
-            await PinSelectedWorkflowAsync(db, planTx
-                ?? throw new InvalidOperationException("Coordinator plan write requires a run lock."),
-                input.RunId, pin, ct).ConfigureAwait(false);
-        }
+        var definition = workflowSelection.Definition
+            ?? throw new InvalidOperationException(
+                $"Coordinator run '{input.RunId}' cannot commit a plan without a selected workflow.");
+        var selectedPin = ExecutableWorkflowSnapshots.Create(definition, "coordinator-selection");
+        await PinSelectedWorkflowAsync(db, planTx
+            ?? throw new InvalidOperationException("Coordinator plan write requires a run lock."),
+            input.RunId, selectedPin, ct).ConfigureAwait(false);
         // SQLite keeps the run and work plan in separate databases. Commit the selected pin
         // first: if the plan commit fails, a later attempt must reuse that durable choice.
         if (planTx is not null)
             await planTx.CommitAsync(ct).ConfigureAwait(false);
         if (sqlitePlanTx is not null)
             await sqlitePlanTx.CommitAsync(ct).ConfigureAwait(false);
-        if (composedTx is not null)
-            await composedTx.CommitAsync(ct).ConfigureAwait(false);
 
         var workPlanStatus = inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned;
         EmitWorkPlanEvent(
@@ -330,6 +335,89 @@ public sealed class CoordinatorOrchestratorExecutor
             persisted,
             partition.Warnings.Concat(workflowCompatibilityWarnings).ToList());
         return new CoordinatorOrchestrationResult(workPlanId, inlineDrafts.Count, promotedTaskIds);
+    }
+
+    private async Task<(int PlanId, List<PersistedSubtask> Subtasks, bool Created)> PersistComposedPlanWithRetryAsync(
+        CoordinatorDraftInput input, int planId, int? parentGeneration, List<AssignedSubtask> assigned,
+        string? cycleNote, CancellationToken ct)
+    {
+        return await RetryComposedSerializationAsync(async token =>
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var postgres = db.Database.IsNpgsql();
+            // The planning context predates the model turn. Lock and reload the reserved row
+            // using a fresh READ COMMITTED snapshot, rather than updating its stale tracked copy.
+            await using var tx = postgres
+                ? await db.Database.BeginTransactionAsync(
+                    System.Data.IsolationLevel.ReadCommitted, token).ConfigureAwait(false)
+                : await db.Database.BeginTransactionAsync(token).ConfigureAwait(false);
+            var locked = await db.WorkPlans
+                .Where(plan => plan.Id == planId && plan.CoordinatorRunId == input.RunId
+                    && plan.ParentRunId != null && plan.ParentWorkflowNodeId != null
+                    && plan.ParentJoinNodeId == null
+                    && (!postgres || plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting)
+                    && plan.Status == WorkPlanStatus.Planned
+                    && plan.CoordinatorCancellationRequestedAt == null)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(plan => plan.UpdatedAt, plan => plan.UpdatedAt), token)
+                .ConfigureAwait(false);
+            if (locked != 1)
+                throw new CoordinatorExecutionFenceLostException(input.RunId);
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId, token)
+                .ConfigureAwait(false);
+            if (postgres)
+            {
+                var parentLocked = await db.Runs
+                    .Where(run => run.RunId == plan.ParentRunId && run.Status == "awaiting_review"
+                        && run.LifecycleGeneration == parentGeneration)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(run => run.HeartbeatAt, run => run.HeartbeatAt), token)
+                    .ConfigureAwait(false);
+                var childLocked = await db.Runs
+                    .Where(run => run.RunId == input.RunId && run.ParentRunId == plan.ParentRunId
+                        && (run.Status == "pending" || run.Status == "in_progress"))
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(run => run.HeartbeatAt, run => run.HeartbeatAt), token)
+                    .ConfigureAwait(false);
+                if (parentLocked != 1 || childLocked != 1)
+                    throw new CoordinatorExecutionFenceLostException(input.RunId);
+            }
+            if (await db.Subtasks.AnyAsync(row => row.WorkPlanId == planId, token).ConfigureAwait(false))
+            {
+                var rows = await db.Subtasks.AsNoTracking()
+                    .Where(row => row.WorkPlanId == planId)
+                    .ToListAsync(token).ConfigureAwait(false);
+                return (planId, rows.Select(row => new PersistedSubtask(
+                    row.Id, row.Title, row.AssignedAgent, row.SelectedModelId,
+                    row.Phase, row.IsolationStrategy, Array.Empty<int>())).ToList(), false);
+            }
+            var spec = await db.OutcomeSpecs.SingleAsync(row => row.Id == plan.OutcomeSpecId, token)
+                .ConfigureAwait(false);
+            var persisted = await PersistPlanAsync(db, input, spec, assigned, cycleNote,
+                null, WorkPlanStatus.Planned, token, plan).ConfigureAwait(false);
+            await tx.CommitAsync(token).ConfigureAwait(false);
+            return (persisted.WorkPlanId, persisted.Subtasks, true);
+        }, _logger, planId, ct).ConfigureAwait(false);
+    }
+
+    internal static async Task<T> RetryComposedSerializationAsync<T>(
+        Func<CancellationToken, Task<T>> persist, ILogger logger, int planId, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await persist(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < 2 && DecisionPromotion.IsRetryable(ex))
+            {
+                logger.LogWarning(ex,
+                    "Retrying composed plan {PlanId} transaction after database contention (attempt {Attempt})",
+                    planId, attempt + 1);
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * (attempt + 1)), ct).ConfigureAwait(false);
+            }
+        }
     }
 
     internal static async Task PinSelectedWorkflowAsync(

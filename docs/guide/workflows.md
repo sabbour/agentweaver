@@ -155,6 +155,27 @@ result; an absent or failed assembly is not a successful terminal result.
 Use this node only for genuinely runtime-dependent work. Prefer ordinary sequential edges when the
 steps are known while authoring, or a static fan region when the branches are known and independent.
 
+### Recovering a composed planning failure
+
+Database contention while saving a composed plan retries only the persistence transaction, with a
+fresh context and guarded parent/plan rows. It does not repeat the model turn inside that retry or
+dispatch duplicate children.
+
+On PostgreSQL, if a root workflow failed with `composed_decomposition_failed` before any subtask
+was persisted or dispatched, **Retry** (REST `POST /api/runs/{id}/retry` or MCP `run_retry`) can
+resume the original run at its saved composed node. The response has the same `run_id` and
+`resumed: true`. The parent and composed coordinator retain their identities, input files, saved
+workflow and predecessor context; completed fan branches and preceding prompt steps are not replayed.
+The new lifecycle attempt retains the prior failure history.
+
+Recovery requires the original clean parent tree, correlated empty failed plan, unchanged saved
+input, and available durable model provider. Cancellation, previously dispatched work, changed
+inputs, or competing recovery return an explicit conflict instead of creating a replacement run.
+A durable recovery marker lets startup finish a recovery interrupted between the database commit
+and workflow launch. SQLite keeps run and plan records in separate databases, so this atomic
+composed-recovery path explicitly refuses SQLite rather than partially reopening its records;
+ordinary retries are unchanged.
+
 Every newly generated or saved `check` node must declare an explicit canonical `gate_kind`
 (`rai`, `human-review`, or `rubberduck`). Historical persisted workflows whose check ids are `rai`,
 `review`, or `rubberduck` still load and execute through the grammar's documented

@@ -1944,8 +1944,8 @@ app.MapPost("/api/runs/{id}/request-changes", async (
 })
     .RequiresAiExecutionContext("orchestration or agent_turn");
 
-// POST /api/runs/{id}/retry — retrigger a FAILED run as a fresh run (new run_id), linked back via
-// retried_from. Never mutates the source run. Owner-scoped (401 unauth via middleware, 403 non-owner,
+// POST /api/runs/{id}/retry — resume eligible coordinators/composed workflows in place, otherwise
+// create a fresh run linked via retried_from. Owner-scoped (401 unauth via middleware, 403 non-owner,
 // 404 unknown). Eligible source states: Failed and MergeFailed. Child runs and every other state are
 // rejected 409. A soft cap blocks retries once the retried_from chain reaches depth 3.
 app.MapPost("/api/runs/{id}/retry", async (
@@ -1954,6 +1954,7 @@ app.MapPost("/api/runs/{id}/retry", async (
     IRunStore runStore,
     CoordinatorRunService coordinator,
     CoordinatorSteeringService steering,
+    WorkflowComposedRecoveryService composedRecovery,
     RunGitHubCapabilitySnapshotLifecycle capabilitySnapshots,
     IRunOptionsStore runOptions,
     RunOrchestrator orchestrator,
@@ -2016,9 +2017,10 @@ app.MapPost("/api/runs/{id}/retry", async (
     var isPinnedWorkflowRun = run.ParentRunId is null
         && run.GetExecutableWorkflowPin() is { } executablePin
         && RunWorkflowGraphBinder.ContainsStaticFanRegion(executablePin);
+    var isComposedRecovery = WorkflowComposedRecoveryService.IsDecompositionFailure(run);
     using var execution = await EndpointHelpers.BeginAiExecutionAsync(
         httpContext,
-        isCoordinatorRun || isPinnedWorkflowRun ? "orchestration" : "agent_turn",
+        isCoordinatorRun || isPinnedWorkflowRun || isComposedRecovery ? "orchestration" : "agent_turn",
         run.ProjectId,
         executionPlans,
         executionPlanAccessor,
@@ -2026,6 +2028,33 @@ app.MapPost("/api/runs/{id}/retry", async (
     execution.Activate();
     if (execution.Error is not null)
         return execution.Error;
+    if (isComposedRecovery)
+    {
+        try
+        {
+            await composedRecovery.ResumeFailedAsync(run, ct).ConfigureAwait(false);
+            return Results.Ok(new RetryRunResponse
+            {
+                RunId = id,
+                RetriedFrom = null,
+                Status = RunStatus.InProgress.ToApiString(),
+                Resumed = true,
+            });
+        }
+        catch (WorkflowComposedRecoveryException ex)
+        {
+            return Results.Conflict(new { error = ex.Code });
+        }
+        catch (ModelProviderConnectionRequiredException ex)
+        {
+            return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogError(ex, "Failed to recover composed workflow {RunId} in place", id);
+            return Results.Problem("Failed to recover the composed workflow in place.", statusCode: 500);
+        }
+    }
     // #332: a coordinator run that failed AFTER completing upstream planning/subtask work should
     // RESUME from its last failure point (re-run only the failed subtask, preserve completed work
     // and the confirmed outcome spec, keep the original run options like auto_approve_tools) rather
