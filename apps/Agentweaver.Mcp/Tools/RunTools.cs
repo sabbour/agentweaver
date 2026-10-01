@@ -602,8 +602,11 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         {
             plan = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(runId)}/work-plan", ct);
         }
-        catch (McpApiException ex) when (
-            ex.StatusCode == 404 && ex.ApiErrorCode is "work_plan_not_ready" or "work_plan_not_found")
+        catch (McpApiException ex) when (ex.StatusCode == 404 && ex.ApiErrorCode == "work_plan_not_ready")
+        {
+            return true;
+        }
+        catch (McpApiException ex) when (ex.StatusCode == 404 && ex.ApiErrorCode == "work_plan_not_found")
         {
             return false;
         }
