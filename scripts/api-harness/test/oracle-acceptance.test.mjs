@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { AcceptanceFailure, DEFAULT_BUDGETS, EventDeltas, cleanupOwnedPreviews, createAcceptanceTransport, runOracleAcceptance } from '../lib/oracle-acceptance.mjs';
@@ -12,6 +13,7 @@ test('CLI accepts named phase budgets, rejects invalid values and preserves targ
   assert.deepEqual(args.targetFiles, ['src/App.tsx', 'src/index.css']);
   assert.throws(() => parseOracleArgs(['--budget', 'unknown=3']), /Invalid --budget/);
   assert.throws(() => parseOracleArgs(['--budget', 'initialPreview=0']), /Invalid --budget/);
+  assert.throws(() => parseOracleArgs(['--port', '3000']), /Unknown option --port/);
 });
 
 test('event delta cursor drains pages and advances independently per run', async () => {
@@ -78,7 +80,7 @@ test('cleanup deletes only owned IDs and verifies they disappeared', async () =>
   assert.equal(stillThere[0].deleted, false);
 });
 
-test('pre-existing preview is never adopted or deleted', async () => {
+test('a listed preview with no current review evidence is never adopted or deleted', async () => {
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
     const deleted = [];
@@ -102,7 +104,7 @@ test('pre-existing preview is never adopted or deleted', async () => {
       },
     });
     assert.equal(result.verdict, 'fail');
-    assert.match(result.error.message, /pre-existing preview/);
+    assert.match(result.error.message, /no output revision event/);
     assert.deepEqual(deleted, []);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -147,12 +149,12 @@ test('timeout fails closed with phase, identifiers, last events, diagnostic and 
 
 async function driveReviewFixture({
   missingInitialId = false, staleCorrectedId = false, missingExecutionKey = false,
-  unchangedContent = false, advanceBrowserMs = 0, correctedBudget = 5,
-  rejectReviewHeader = false, staleDecision = false, advancePreviewRequestMs = 0,
+  unchangedContent = false, advanceBrowserMs = 0, correctedBudget = 5, initialBudget = 5,
+  rejectReviewHeader = false, staleDecision = false, advancePreviewReadMs = 0,
   transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
   advanceThrownRunMs = 0, planningBudget = 6,
   approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
-  previewReject = false, transientPreviewStatuses = [],
+  previewCase = null, previewReadTimeouts = 0, sourceCase = null,
 } = {}) {
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
@@ -165,10 +167,31 @@ async function driveReviewFixture({
     const approvalPosts = [];
     const previewPosts = [];
     let pendingReads = 0;
-    const active = new Set();
     let remainingTransientRunReads = transientRunReads;
     let remainingThrownRunReads = thrownRunReads;
-    const pendingPreviewStatuses = [...transientPreviewStatuses];
+    let previewReads = 0;
+    const tree = () => revised ? 'tree-revised' : 'tree-original';
+    const previewSession = () => ({
+      session_id: revised ? 'second-preview' : 'first-preview',
+      preview_url: `https://${revised ? 'revised' : 'initial'}.example.test`,
+      preview_runner_session_id: revised ? 'runner-second' : 'runner-first',
+      pod_name: 'parent-pod', target_port: 8235, local_port: 0,
+    });
+    const readyEvent = (second) => ({
+      sequence: second ? 5 : 2, type: previewCase === 'failed' ? 'sandbox.preview_failed' : 'sandbox.preview_ready',
+      payload: {
+        run_id: 'parent', work_plan_id: 42,
+        tree_hash: previewCase === 'stale' || (second && previewCase === 'correctedStale')
+          ? 'old-tree' : second ? 'tree-revised' : 'tree-original',
+        source: previewCase === 'manual' ? 'preview-api' : 'preview-step',
+        target_port: previewCase === 'port' ? 3000 : 8235,
+        pod_name: previewCase === 'pod' ? 'other-pod' : 'parent-pod',
+        session_id: second ? 'second-preview' : 'first-preview',
+        preview_runner_session_id: previewCase === 'runner' ? 'other-runner' : second ? 'runner-second' : 'runner-first',
+        preview_url: previewCase === 'url' ? 'https://other.example.test'
+          : `https://${second ? 'revised' : 'initial'}.example.test`,
+      },
+    });
     let runReadAttempts = 0;
     const browser = async (url, expected) => {
       opened.push([url, expected]);
@@ -181,7 +204,9 @@ async function driveReviewFixture({
       if (url === '/api/auth/session') return { status: 200, body: { authenticated: true } };
       if (url === '/api/ai/execution-context') return { status: 200, body: missingExecutionKey ? {} : { execution_key: `key-${decisions.length + 1}` } };
       if (url === '/api/projects/project') return { status: 200, body: {} };
-      if (url.endsWith('/work-plan')) return { status: 200, body: { status: approved ? 'complete' : 'in_review' } };
+      if (url.endsWith('/work-plan')) return { status: 200, body: {
+        workPlanId: 42, coordinatorRunId: 'parent', status: approved ? 'complete' : 'in_review',
+      } };
       if (url.endsWith('/children')) return { status: 200, body: [{ childRunId: 'first' }, ...(revised ? [{ childRunId: 'second' }] : [])] };
       if (url.endsWith('/pending-approvals')) {
         pendingReads++;
@@ -195,8 +220,20 @@ async function driveReviewFixture({
       if (url.includes('/events?')) {
         const after = Number(new URL(url, 'https://example.test').searchParams.get('after'));
         if (url.includes('/parent/')) return { status: 200, body: [
-          { sequence: 1, type: 'coordinator.assembly_review_requested', payload: missingInitialId ? {} : { outputRevisionId: 'revision-1' } },
-          ...(revised ? [{ sequence: 2, type: 'coordinator.assembly_review_requested', payload: { outputRevisionId: staleCorrectedId ? 'revision-1' : 'revision-2' } }] : []),
+          { sequence: 1, type: previewCase === 'unbound' ? 'sandbox.execution_pod.unbound'
+            : 'sandbox.execution_pod.bound', payload: { podName: 'parent-pod' } },
+          readyEvent(false),
+          { sequence: 3, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: 42, treeHash: 'tree-original' } },
+          { sequence: 4, type: 'coordinator.assembly_review_requested', payload: {
+            workPlanId: 42, treeHash: 'tree-original', outputRevisionId: missingInitialId ? undefined : 'revision-1',
+          } },
+          ...(revised ? [
+            readyEvent(true),
+            { sequence: 6, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: 42, treeHash: 'tree-revised' } },
+            { sequence: 7, type: 'coordinator.assembly_review_requested', payload: {
+              workPlanId: 42, treeHash: 'tree-revised', outputRevisionId: staleCorrectedId ? 'revision-1' : 'revision-2',
+            } },
+          ] : []),
         ].filter((event) => event.sequence > after) };
         const owner = url.includes('/first/') ? 'first' : url.includes('/second/') ? 'second' : null;
         return { status: 200, body: owner && after === 0
@@ -213,9 +250,24 @@ async function driveReviewFixture({
           : { status: 200, body: { approved: true } };
       }
       if (url.endsWith('/assembly/files')) return { status: 200, body: [{ path: 'index.html', status: 'modified' }] };
+      if (url.includes('/output-revisions/revision-') && url.includes('/files/')) {
+        const id = url.split('/')[5];
+        const bytes = Buffer.from(id === 'revision-1' ? 'original application' : 'fixed application');
+        return { status: 200, body: {
+          revision_id: id, path: 'index.html', sha256: createHash('sha256').update(bytes).digest('hex'),
+          content_base64: sourceCase === 'tampered' || (sourceCase === 'correctedTampered' && id === 'revision-2')
+            ? Buffer.from('tampered application').toString('base64') : bytes.toString('base64'),
+        } };
+      }
       if (url.includes('/output-revisions/revision-')) {
         const id = url.split('/').at(-1);
-        return { status: 200, body: { revision_id: id, manifest_incomplete: false, tree_content_sha256: id === 'revision-1' || unchangedContent ? 'content-original' : 'content-revised' } };
+        const bytes = Buffer.from(id === 'revision-1' ? 'original application' : 'fixed application');
+        return { status: 200, body: {
+          revision_id: id, manifest_incomplete: false, work_plan_id: 42,
+          tree_hash: id === 'revision-1' ? 'tree-original' : 'tree-revised',
+          tree_content_sha256: id === 'revision-1' || unchangedContent ? 'content-original' : 'content-revised',
+          files: [{ path: 'index.html', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }],
+        } };
       }
       if (url.endsWith('/assembly/review')) {
         decisions.push({ body, headers: options?.headers });
@@ -232,18 +284,17 @@ async function driveReviewFixture({
       }
       if (url.endsWith('/sandbox/port-forward') && method === 'POST') {
         previewPosts.push({ url, body });
-        if (!body || Object.keys(body).length !== 1 || !Number.isInteger(body.targetPort)
-          || body.targetPort < 1 || body.targetPort > 65535 || previewReject) {
-          return { status: 400, body: { error: 'target_port must be between 1 and 65535.' } };
-        }
-        if (pendingPreviewStatuses.length) return { status: pendingPreviewStatuses.shift(), body: { error: 'Not ready.' } };
-        const session_id = revised ? 'second-preview' : 'first-preview';
-        active.add(session_id);
-        if (revised) now += advancePreviewRequestMs;
-        return { status: 200, body: { session_id, preview_url: `https://${revised ? 'revised' : 'initial'}.example.test` } };
+        throw new Error('Oracle must not create a preview');
       }
-      if (method === 'DELETE') { deleted.push(url); active.delete(url.split('/').at(-1)); return { status: 200 }; }
-      if (url.endsWith('/sandbox/port-forward')) return { status: 200, body: [...active].map((session_id) => ({ session_id })) };
+      if (method === 'DELETE') { deleted.push(url); throw new Error('Oracle must not delete an automatic preview'); }
+      if (url.endsWith('/sandbox/port-forward')) {
+        previewReads++;
+        if (previewReadTimeouts-- > 0) throw new AcceptanceFailure('GET preview timed out', 'request_timeout');
+        if (revised) now += advancePreviewReadMs;
+        return { status: 200, body: previewCase === 'missing' ? [] : previewCase === 'ambiguous'
+          ? [previewSession(), { ...previewSession(), session_id: 'other-session' }]
+          : previewCase === 'foreign' ? [{ ...previewSession(), session_id: 'foreign' }] : [previewSession()] };
+      }
       if (url.endsWith('/output-revisions')) return { status: 200, body: [
         { revision_id: 'revision-1' }, ...(revised ? [{ revision_id: 'revision-2' }] : []),
       ] };
@@ -259,17 +310,21 @@ async function driveReviewFixture({
           return { status: 0, body: { error: 'transport_error', message: 'fetch failed' } };
         }
       }
-      return { status: 200, body: { status: approved ? 'completed' : 'in_progress', project_id: 'project' } };
+      return { status: 200, body: {
+        status: approved ? 'completed' : 'in_progress', project_id: 'project',
+        sandbox: { backend: 'kubernetes-sandbox-claim',
+          phase: previewCase === 'lost' ? 'Lost' : 'Bound', claim_name: 'agent-parent', pod_name: 'parent-pod' },
+      } };
     };
     const result = await runOracleAcceptance({
       request, runId: 'parent', expectedText: 'original', correctedText: 'fixed',
       feedback: 'The initial app is missing a visible feature.', targetFiles: ['index.html'],
       browser, transcriptPath: path.join(directory, 'trace.jsonl'), resultPath: path.join(directory, 'result.json'),
-      budgets: { ...DEFAULT_BUDGETS, planning: planningBudget, correctedPreview: correctedBudget },
+      budgets: { ...DEFAULT_BUDGETS, planning: planningBudget, initialPreview: initialBudget, correctedPreview: correctedBudget },
       clock: () => now, pause: async (ms) => { now += ms; },
       approveShell,
     });
-    return { result, opened, decisions, deleted, runReadAttempts, approvalPosts, pendingReads, previewPosts };
+    return { result, opened, decisions, deleted, runReadAttempts, approvalPosts, pendingReads, previewPosts, previewReads };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -391,43 +446,53 @@ test('409 resolution race reconciles with one read, but pending or unrelated con
 test('both preview gates pin fresh parent revisions and execution headers; metadata list can be identical', async () => {
   const { result, opened, decisions, deleted, previewPosts } = await driveReviewFixture();
   assert.equal(result.verdict, 'pass');
-  assert.deepEqual(previewPosts, [
-    { url: '/api/runs/parent/sandbox/port-forward', body: { targetPort: 3000 } },
-    { url: '/api/runs/parent/sandbox/port-forward', body: { targetPort: 3000 } },
-  ]);
+  assert.deepEqual(previewPosts, []);
   assert.equal(result.projectId, 'project');
   assert.deepEqual(opened.map((o) => o[1]), ['original', 'fixed']);
   assert.deepEqual(result.decisions.map((o) => o.decision), ['request_changes', 'approve']);
   assert.deepEqual(decisions.map((o) => o.body.output_revision_id), ['revision-1', 'revision-2']);
   assert.deepEqual(decisions.map((o) => o.headers['If-Model-Provider-Key']), ['key-1', 'key-2']);
   assert.deepEqual([result.initialRevision.contentIdentity, result.correctedRevision.contentIdentity], ['content-original', 'content-revised']);
-  assert.equal(result.cleanup.length, 2);
-  assert.equal(deleted.length, 2);
-});
-
-test('operator preview validation rejection reports HTTP 400 and diagnostic without faking timeout or owning a session', async () => {
-  const { result, previewPosts, opened, decisions, deleted } = await driveReviewFixture({ previewReject: true });
-  assert.equal(result.verdict, 'fail');
-  assert.equal(result.phase, 'initialPreview');
-  assert.notEqual(result.error.code, 'phase_timeout');
-  assert.match(result.error.message, /HTTP 400.*target_port must be between 1 and 65535/);
-  assert.equal(previewPosts.length, 1);
-  assert.deepEqual(opened, []);
-  assert.deepEqual(decisions, []);
-  assert.deepEqual(deleted, []);
+  assert.deepEqual(result.previews.map((entry) => entry.targetPort), [8235, 8235]);
   assert.deepEqual(result.cleanup, []);
+  assert.deepEqual(deleted, []);
 });
 
-test('transient preview publication responses still retry while preserving ownership and both gates', async () => {
-  const { result, previewPosts, opened, deleted } = await driveReviewFixture({
-    transientPreviewStatuses: [404, 409, 503],
-  });
-  assert.equal(result.verdict, 'pass');
-  assert.equal(previewPosts.length, 5);
-  assert.ok(previewPosts.every((post) => post.body.targetPort === 3000));
-  assert.deepEqual(opened.map((entry) => entry[1]), ['original', 'fixed']);
-  assert.equal(deleted.length, 2);
-  assert.ok(result.cleanup.every((entry) => entry.deleted));
+test('stale, manual, foreign, ambiguous, mismatched and failed previews are not adopted or deleted', async () => {
+  for (const previewCase of ['stale', 'manual', 'foreign', 'ambiguous', 'port', 'pod', 'runner', 'url', 'failed', 'lost', 'unbound']) {
+    const { result, previewPosts, opened, deleted, decisions } = await driveReviewFixture({ previewCase });
+    assert.equal(result.verdict, 'fail', previewCase);
+    assert.equal(result.phase, 'initialPreview', previewCase);
+    assert.match(result.error.message, /preview|claim-bound/i, previewCase);
+    assert.deepEqual([previewPosts, opened, deleted, decisions], [[], [], [], []], previewCase);
+  }
+});
+
+test('corrected tree freshness and both revisions source bytes are enforced', async () => {
+  const stale = await driveReviewFixture({ previewCase: 'correctedStale' });
+  assert.equal(stale.result.verdict, 'fail');
+  assert.equal(stale.result.phase, 'correctedPreview');
+  assert.deepEqual(stale.decisions.map((d) => d.body.request_changes), [true]);
+  assert.deepEqual(stale.deleted, []);
+  for (const sourceCase of ['tampered', 'correctedTampered']) {
+    const { result, decisions, opened, previewPosts } = await driveReviewFixture({ sourceCase });
+    assert.equal(result.verdict, 'fail');
+    assert.match(result.error.message, /source hash or size mismatch/);
+    assert.equal(decisions.length, sourceCase === 'tampered' ? 0 : 1);
+    assert.equal(opened.length, sourceCase === 'tampered' ? 0 : 1);
+    assert.deepEqual(previewPosts, []);
+  }
+});
+
+test('missing automatic preview times out without a POST; GET timeout retries only reads', async () => {
+  const missing = await driveReviewFixture({ previewCase: 'missing', initialBudget: 0.001 });
+  assert.equal(missing.result.verdict, 'fail');
+  assert.equal(missing.result.error.code, 'phase_timeout');
+  assert.deepEqual(missing.previewPosts, []);
+  const recovered = await driveReviewFixture({ previewReadTimeouts: 2 });
+  assert.equal(recovered.result.verdict, 'pass');
+  assert.ok(recovered.previewReads >= 4);
+  assert.deepEqual(recovered.previewPosts, []);
 });
 
 test('server rejection of missing review header or stale output revision fails closed', async () => {
@@ -467,16 +532,16 @@ test('corrected browser success after the shared deadline is rejected and preser
   assert.equal(decisions.length, 1);
 });
 
-test('late preview publication is failed and its returned session is still cleaned up', async () => {
+test('late preview read fails without claiming or deleting the automatic route', async () => {
   const { result, decisions, deleted } = await driveReviewFixture({
-    advancePreviewRequestMs: 61, correctedBudget: 0.001,
+    advancePreviewReadMs: 61, correctedBudget: 0.001,
   });
   assert.equal(result.verdict, 'fail');
   assert.equal(result.error.code, 'phase_timeout');
   assert.equal(result.phase, 'correctedPreview');
   assert.equal(decisions.length, 1);
-  assert.equal(deleted.length, 2);
-  assert.ok(result.cleanup.every((entry) => entry.deleted));
+  assert.deepEqual(deleted, []);
+  assert.deepEqual(result.cleanup, []);
 });
 
 test('idempotent polling retries bounded transient transport failures', async () => {
