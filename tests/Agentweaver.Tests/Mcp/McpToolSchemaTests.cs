@@ -342,6 +342,45 @@ public sealed class McpToolSchemaTests
             .Should().Be("null");
     }
 
+    [Fact]
+    public async Task OrchestrationTopology_ComposesMatchingPlanAndChildrenFromTwoReads()
+    {
+        var paths = new List<string>();
+        var tools = new CoordinatorTools(CreateApiClient((request, _) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = path switch
+                {
+                    "/api/runs/parent/work-plan" => JsonContent.Create(new
+                    {
+                        workPlanId = 42,
+                        parentWorkflowNodeId = "composed",
+                        subtasks = new[] { new { subtaskId = 7, childRunId = "child-b" } },
+                    }),
+                    "/api/runs/parent/children" => JsonContent.Create(new[]
+                    {
+                        new { subtaskId = 7, childRunId = "child-b", parentWorkflowNodeId = "composed" },
+                    }),
+                    _ => throw new InvalidOperationException($"Unexpected path {path}"),
+                },
+            });
+        }));
+
+        using var payload = JsonDocument.Parse(
+            await tools.OrchestrationTopologyAsync("parent", CancellationToken.None));
+        paths.Should().Equal("/api/runs/parent/work-plan", "/api/runs/parent/children");
+        var plan = payload.RootElement.GetProperty("workPlan");
+        var child = payload.RootElement.GetProperty("children")[0];
+        plan.GetProperty("workPlanId").GetInt32().Should().Be(42);
+        plan.GetProperty("subtasks")[0].GetProperty("subtaskId").GetInt32()
+            .Should().Be(child.GetProperty("subtaskId").GetInt32());
+        plan.GetProperty("parentWorkflowNodeId").GetString()
+            .Should().Be(child.GetProperty("parentWorkflowNodeId").GetString());
+    }
+
     [Theory]
     [InlineData("assembly_blocked")]
     [InlineData("assembly_failed")]

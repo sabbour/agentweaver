@@ -214,6 +214,65 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             && branch.ParentJoinNodeId == "join");
     }
 
+    [Theory]
+    [InlineData("delivered", "waiting", "dispatching", "composed")]
+    [InlineData("waiting", "delivered", "in_review", "human_review")]
+    public async Task WorkPlanAndChildren_ParentSelectsLatestPersistedNode(
+        string firstResume, string secondResume, string secondStatus, string secondNode)
+    {
+        var parentRunId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var firstCoordinatorId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var secondCoordinatorId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var firstChildId = await SeedAssembleReadyChildRunAsync("first");
+        var secondChildId = await SeedAssembleReadyChildRunAsync("second");
+        var firstId = await SeedParentNodePlanAsync(parentRunId, firstCoordinatorId, "fan",
+            WorkPlanStatus.Complete, firstResume, firstChildId);
+        var secondId = await SeedParentNodePlanAsync(parentRunId, secondCoordinatorId, secondNode,
+            secondStatus, secondResume, secondChildId);
+
+        var plan = await _owner.GetFromJsonAsync<WorkPlanResponse>($"/api/runs/{parentRunId}/work-plan");
+        var children = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
+            $"/api/runs/{parentRunId}/children");
+
+        plan!.WorkPlanId.Should().Be(secondId).And.BeGreaterThan(firstId);
+        plan.CoordinatorRunId.Should().Be(secondCoordinatorId);
+        plan.Status.Should().Be(secondStatus);
+        plan.ParentWorkflowNodeId.Should().Be(secondNode);
+        plan.ParentResumeState.Should().Be(secondResume);
+        plan.Subtasks.Select(s => s.ChildRunId).Should().Equal(secondChildId);
+        children!.Select(s => s.ChildRunId).Should().Equal(secondChildId);
+        children!.Select(s => s.SubtaskId).Should().Equal(plan.Subtasks.Select(s => s.SubtaskId));
+        children.Should().OnlyContain(s => s.ParentWorkflowNodeId == secondNode);
+
+        var exactChildPlan = await _owner.GetFromJsonAsync<WorkPlanResponse>(
+            $"/api/runs/{firstCoordinatorId}/work-plan");
+        exactChildPlan!.WorkPlanId.Should().Be(firstId);
+        var exactChildChildren = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
+            $"/api/runs/{firstCoordinatorId}/children");
+        exactChildChildren!.Select(s => s.ChildRunId).Should().Equal(firstChildId);
+    }
+
+    [Fact]
+    public async Task WorkPlanAndChildren_DirectCoordinatorWinsOverRelatedChildPlans()
+    {
+        var parentRunId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var directChildId = await SeedAssembleReadyChildRunAsync("direct");
+        await SeedWorkPlanWithChildAsync(parentRunId, directChildId, WorkPlanStatus.Dispatching);
+        var relatedCoordinatorId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var relatedChildId = await SeedAssembleReadyChildRunAsync("related");
+        await SeedParentNodePlanAsync(parentRunId, relatedCoordinatorId, "composed",
+            WorkPlanStatus.Dispatching, "waiting", relatedChildId);
+
+        var plan = await _owner.GetFromJsonAsync<WorkPlanResponse>($"/api/runs/{parentRunId}/work-plan");
+        var children = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
+            $"/api/runs/{parentRunId}/children");
+
+        plan!.CoordinatorRunId.Should().Be(parentRunId);
+        plan.ParentWorkflowNodeId.Should().BeNull();
+        plan.Subtasks.Select(s => s.ChildRunId).Should().Equal(directChildId);
+        children!.Select(s => s.ChildRunId).Should().Equal(directChildId);
+    }
+
     [Fact]
     public async Task EmbeddedStaticCoordinator_RunAndGraph_ProjectCoordinatorPlanWithoutAssemblyStages()
     {
@@ -1416,6 +1475,62 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             });
         }
         await db.SaveChangesAsync();
+    }
+
+    private async Task<int> SeedParentNodePlanAsync(
+        string parentRunId, string coordinatorRunId, string nodeId, string status,
+        string resumeState, string childRunId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "proj-fan",
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "run node",
+            DesiredOutcome = "complete node",
+            Scope = "workflow",
+            Assumptions = "none",
+            Status = "confirmed",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+        var plan = new WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = "proj-fan",
+            CoordinatorRunId = coordinatorRunId,
+            ParentRunId = parentRunId,
+            ParentWorkflowId = "workflow",
+            ParentWorkflowNodeId = nodeId,
+            ParentResumeState = resumeState,
+            Status = status,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+        db.Subtasks.Add(new Subtask
+        {
+            WorkPlanId = plan.Id,
+            Title = nodeId,
+            Scope = nodeId,
+            AssignedAgent = "morpheus",
+            SelectedModelId = "gpt",
+            Phase = "execution",
+            IsolationStrategy = "worktree",
+            Status = SubtaskStatus.Completed,
+            ChildRunId = childRunId,
+            WorkflowBranchNodeId = nodeId,
+            WorkflowBranchOrdinal = 0,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await db.SaveChangesAsync();
+        return plan.Id;
     }
 
     // =========================================================================

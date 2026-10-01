@@ -1670,6 +1670,15 @@ Confirming the outcome spec advances the coordinator run through Phase 2: **conf
 
 Returns the work plan for a coordinator run: the decomposed subtasks and the dependency edges between them. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise). Before asynchronous decomposition persists the plan, returns `404 Not Found` with `error: "work_plan_not_found"`; for an existing coordinator run, clients should treat this as a not-ready state and retry on their normal bounded refresh cadence.
 
+An exact coordinator run id selects its own plan, even when related child-work plans exist.
+Addressing a parent workflow run instead selects its latest persisted child-work node plan
+(highest work plan id with a parent workflow node), regardless of the older plan's status or
+the current plan's resume/review state. The response includes `parentRunId`,
+`parentWorkflowId`, `parentWorkflowNodeId`, `parentJoinNodeId`, `parentResumeRequestId`,
+`parentResumeState`, and, when available, `joinedOutput`. An active coordinator still
+creating its plan may return `404` with `error: "work_plan_not_ready"`; a terminal
+coordinator without a plan returns `200` with `null`.
+
 Response `200 OK`:
 
 ```json
@@ -1715,6 +1724,11 @@ Response `200 OK`:
 ### GET /api/runs/{coordinatorRunId}/children
 
 Lists the child runs dispatched by a coordinator run, one row per subtask that has a child run, each paired with its subtask status. Run-authorized (Viewer for inspection; Contributor for mutation; legacy ownership otherwise). Empty array when nothing has been dispatched.
+
+An exact coordinator run id selects its own plan; a parent workflow run selects the latest
+persisted child-work node plan by the same rule as `/work-plan`. Each child includes its
+parent workflow/node/join ids and branch node id/ordinal when applicable. The two
+independent endpoint reads are not an atomic snapshot.
 
 Response `200 OK`:
 

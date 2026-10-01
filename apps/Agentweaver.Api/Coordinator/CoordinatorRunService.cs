@@ -2952,10 +2952,7 @@ public sealed class CoordinatorRunService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
-        var plan = await db.WorkPlans.AsNoTracking()
-            .FirstOrDefaultAsync(
-                w => w.CoordinatorRunId == coordinatorRunId || w.ParentRunId == coordinatorRunId,
-                ct).ConfigureAwait(false);
+        var plan = await ResolveWorkPlanAsync(db, coordinatorRunId, ct).ConfigureAwait(false);
         if (plan is null) return null;
 
         var subtasks = await db.Subtasks.AsNoTracking()
@@ -3045,10 +3042,7 @@ public sealed class CoordinatorRunService
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
-        var plan = await db.WorkPlans.AsNoTracking()
-            .FirstOrDefaultAsync(
-                w => w.CoordinatorRunId == coordinatorRunId || w.ParentRunId == coordinatorRunId,
-                ct).ConfigureAwait(false);
+        var plan = await ResolveWorkPlanAsync(db, coordinatorRunId, ct).ConfigureAwait(false);
         if (plan is null) return [];
 
         var subtasks = await db.Subtasks.AsNoTracking()
@@ -3083,6 +3077,17 @@ public sealed class CoordinatorRunService
         }
 
         return children;
+    }
+
+    private static async Task<WorkPlan?> ResolveWorkPlanAsync(
+        MemoryDbContext db, string runId, CancellationToken ct)
+    {
+        var direct = await db.WorkPlans.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.CoordinatorRunId == runId, ct).ConfigureAwait(false);
+        return direct ?? await db.WorkPlans.AsNoTracking()
+            .Where(w => w.ParentRunId == runId && w.ParentWorkflowNodeId != null)
+            .OrderByDescending(w => w.Id)
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
     }
 
     private static string? ReadJoinedOutput(string? resultJson)
