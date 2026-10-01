@@ -186,12 +186,14 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
                 auto_approve_tools, autopilot, ct);
             var deadline = DateTimeOffset.UtcNow.AddSeconds(effectiveTimeout);
             JsonElement latestRun;
+            var waitingForChildren = false;
 
             while (true)
             {
                 latestRun = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(runId)}", ct);
+                waitingForChildren = await IsWaitingForWorkflowChildrenAsync(latestRun, runId, ct);
 
-                if (TryBuildGateResponse(latestRun, runId, out var gatedResponse))
+                if (!waitingForChildren && TryBuildGateResponse(latestRun, runId, out var gatedResponse))
                     return gatedResponse!;
 
                 var status = GetString(latestRun, "status");
@@ -228,7 +230,9 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
                         // The required-capabilities contract expects artifacts as an array on every
                         // one-call-run response; emit an empty array rather than omitting it on timeout.
                         Artifacts = Array.Empty<JsonElement>(),
-                        Hint = "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
+                        Hint = waitingForChildren
+                            ? $"Run {runId} is waiting for automated workflow children or parent continuation. Inspect coordinator_work_plan_get and coordinator_children_get for this existing run; call run_status to poll it, or run_watch to follow its stream. Do not start another run."
+                            : "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
                         Run = latestRun.Deserialize<RunEmbedded>()
                     };
                 }
@@ -554,13 +558,13 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         var pendingRequestKind = GetString(run, "pending_request_kind");
 
         if (string.Equals(status, "awaiting_review", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(pendingRequestKind, "workflow_child_work", StringComparison.Ordinal))
+            && pendingRequestKind is null or "workflow_review")
         {
             response = new RunTaskResult
             {
                 RunId = runId,
                 Status = "awaiting_review",
-                ReviewPrompt = "Run is awaiting human review. Call run_review, then rerun run_task or poll with run_status.",
+                ReviewPrompt = $"Run {runId} is awaiting human review. Inspect its artifacts, call run_review for this run if appropriate, then poll the same run with run_status.",
                 Run = run.Deserialize<RunEmbedded>()
             };
             return true;
@@ -580,6 +584,39 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
 
         response = null;
         return false;
+    }
+
+    private async Task<bool> IsWaitingForWorkflowChildrenAsync(JsonElement run, string runId, CancellationToken ct)
+    {
+        if (GetString(run, "status") != "awaiting_review")
+            return false;
+
+        var pendingKind = GetString(run, "pending_request_kind");
+        if (pendingKind == "workflow_child_work")
+            return true;
+        if (pendingKind is not null
+            || !run.TryGetProperty("is_coordinator_plan", out var isCoordinator)
+            || isCoordinator.ValueKind != JsonValueKind.True)
+            return false;
+
+        JsonElement plan;
+        try
+        {
+            plan = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(runId)}/work-plan", ct);
+        }
+        catch (McpApiException ex) when (
+            ex.StatusCode == 404 && ex.ApiErrorCode is "work_plan_not_ready" or "work_plan_not_found")
+        {
+            return false;
+        }
+
+        if (plan.ValueKind != JsonValueKind.Object
+            || GetString(plan, "parentRunId") != runId
+            || string.IsNullOrWhiteSpace(GetString(plan, "parentWorkflowNodeId"))
+            || GetString(plan, "status") == "in_review")
+            return false;
+
+        return GetString(plan, "parentResumeState") is "waiting" or "ready" or "delivering";
     }
 
     private static string? GetString(JsonElement element, string propertyName) =>
