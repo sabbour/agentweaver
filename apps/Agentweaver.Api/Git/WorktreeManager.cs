@@ -19,6 +19,7 @@ namespace Agentweaver.Api.Git;
 /// </summary>
 public sealed class WorktreeManager
 {
+    internal const long MaxContentBytes = 1 * 1024 * 1024;
     private readonly string _basePath;
     private readonly Signature _signature;
     private readonly ILogger<WorktreeManager> _logger;
@@ -753,6 +754,88 @@ public sealed class WorktreeManager
         using var verified = new Repository(parentWorktreePath);
         if (!string.Equals(verified.Head.Tip?.Tree.Sha, assembledTree, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Composed transfer did not install the verified tree.");
+    }
+
+    public (string CommitHash, string TreeHash) PrepareFanInputProjection(
+        string repositoryPath, string parentWorktreePath, RunId parentRunId,
+        string expectedBaseCommit, string expectedBaseTree,
+        IReadOnlyList<RunOutputTree.File> files)
+    {
+        using var repository = new Repository(repositoryPath);
+        using var worktree = new Repository(parentWorktreePath);
+        var baseCommit = worktree.Head.Tip;
+        if (worktree.Info.IsHeadDetached
+            || worktree.Head.FriendlyName != BranchNameFor(parentRunId)
+            || baseCommit?.Sha != expectedBaseCommit || baseCommit.Tree.Sha != expectedBaseTree
+            || worktree.RetrieveStatus(new StatusOptions
+            {
+                IncludeUntracked = true,
+                RecurseUntrackedDirs = true,
+            }).Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0))
+            throw new RunOutputRevisionUnavailableException("fan_projection_base_changed");
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in files)
+        {
+            if (!paths.Add(file.Path) || file.Mode is not (33188 or 33261)
+                || baseCommit.Tree[file.Path] is not null)
+                throw new RunOutputRevisionUnavailableException("fan_projection_path_collision");
+            var cursor = baseCommit.Tree;
+            var segments = file.Path.Split('/');
+            for (var i = 0; i < segments.Length; i++)
+            {
+                var match = cursor.FirstOrDefault(entry =>
+                    string.Equals(entry.Name, segments[i], StringComparison.OrdinalIgnoreCase));
+                if (match is null)
+                    break;
+                if (match.Name != segments[i] || i == segments.Length - 1 || match.Target is not Tree childTree)
+                    throw new RunOutputRevisionUnavailableException("fan_projection_path_collision");
+                cursor = childTree;
+            }
+            foreach (var other in paths)
+                if (other != file.Path
+                    && (other.StartsWith(file.Path + "/", StringComparison.OrdinalIgnoreCase)
+                        || file.Path.StartsWith(other + "/", StringComparison.OrdinalIgnoreCase)))
+                    throw new RunOutputRevisionUnavailableException("fan_projection_path_collision");
+        }
+        var definition = TreeDefinition.From(baseCommit.Tree);
+        foreach (var file in files)
+        {
+            var blob = repository.ObjectDatabase.CreateBlob(new MemoryStream(file.Bytes, writable: false));
+            definition.Add(file.Path, blob, (Mode)file.Mode);
+        }
+        var tree = repository.ObjectDatabase.CreateTree(definition);
+        var signature = new Signature("Agentweaver", "agentweaver@localhost", DateTimeOffset.UnixEpoch);
+        var commit = repository.ObjectDatabase.CreateCommit(
+            signature, signature, $"Fan inputs for {parentRunId}", tree, [baseCommit], prettifyMessage: false);
+        return (commit.Sha, tree.Sha);
+    }
+
+    public void ApplyFanInputProjection(
+        string parentWorktreePath, RunId parentRunId,
+        string expectedBaseCommit, string preparedCommit, string preparedTree)
+    {
+        using (var worktree = new Repository(parentWorktreePath))
+        {
+            if (worktree.Info.IsHeadDetached || worktree.Head.FriendlyName != BranchNameFor(parentRunId)
+                || worktree.RetrieveStatus(new StatusOptions
+                {
+                    IncludeUntracked = true,
+                    RecurseUntrackedDirs = true,
+                }).Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0))
+                throw new RunOutputRevisionUnavailableException("fan_projection_base_changed");
+            if (worktree.Head.Tip?.Sha == preparedCommit
+                && worktree.Head.Tip.Tree.Sha == preparedTree)
+                return;
+            var target = worktree.Lookup<Commit>(preparedCommit);
+            if (worktree.Head.Tip?.Sha != expectedBaseCommit
+                || target?.Tree.Sha != preparedTree
+                || target.Parents.SingleOrDefault()?.Sha != expectedBaseCommit)
+                throw new RunOutputRevisionUnavailableException("fan_projection_base_changed");
+        }
+        RunGit(parentWorktreePath, "merge", "--ff-only", preparedCommit);
+        using var verified = new Repository(parentWorktreePath);
+        if (verified.Head.Tip?.Sha != preparedCommit || verified.Head.Tip.Tree.Sha != preparedTree)
+            throw new RunOutputRevisionUnavailableException("fan_projection_writeback_mismatch");
     }
 
     public string CommitChanges(string worktreePath, RunId runId)
@@ -1752,7 +1835,7 @@ public sealed class WorktreeManager
             };
         }
 
-        const long maxContentBytes = 1 * 1024 * 1024; // 1 MB — mirrors the filesystem content endpoint.
+        const long maxContentBytes = MaxContentBytes; // 1 MB — mirrors the filesystem content endpoint.
         if (blob.Size > maxContentBytes)
         {
             return new WorkspaceFileContent

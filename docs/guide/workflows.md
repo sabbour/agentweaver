@@ -141,9 +141,7 @@ The parent workflow checkpoints before decomposition while the coordinator persi
 child run and work plan, executes the runtime-derived dependency graph, and assembles the result.
 The child planner and dispatched subtasks receive the node prompt together with the pinned parent
 turn's predecessor context (including ordered fan-in text when this stage follows a static join).
-The composed context must fit the 24,000-character intake limit; oversized context fails explicitly
-instead of being silently truncated. A retry reuses the original saved context rather than reading
-a changed workflow definition.
+A retry reuses the original saved context rather than reading a changed workflow definition.
 The typed completion includes the child run and work-plan identities, integration branch, verified
 tree hash, aggregate diff, and included child runs. Before the parent continues, Agentweaver stages
 and fast-forwards that verified tree into the parent's isolated run branch. Transfer rejects a
@@ -201,13 +199,23 @@ the same idempotent cancellation boundary without duplicating the event, so a br
 the launch race cannot continue detached from its cancelled parent.
 
 `fan_out` / `fan_in` is an execution primitive, not coordinator assembly. It does not create or
-update an integration Git branch, merge branch output, open or review a pull request, publish
-artifacts, or invoke Scribe. Each branch may still use its ordinary isolated child-run worktree.
-The join gives downstream prompts ordered branch text, not the branch files: declared output paths
-describe independent branch write scopes, not files guaranteed to exist in the parent worktree.
-If a downstream prompt or composed coordinator needs physical files, it must create them from
-the joined content in its own workspace; a read-only file check against the parent cannot verify
-files written only in child worktrees.
+update an integration Git branch, merge arbitrary child output, open or review a pull request, or
+invoke Scribe. Each branch still runs in its isolated child-run worktree. For a branch with exact
+declared output paths, Agentweaver captures those regular files in an immutable child revision
+before the child becomes `assemble_ready`. Once every branch succeeds, only those disjoint,
+retained files are projected as a checked, platform-owned commit on the isolated parent branch
+before the parent resumes. The unchanged downstream prompt reads them at their original paths;
+a later composed coordinator starts from that same parent branch. A missing file, changed base,
+collision, or unavailable revision fails closed rather than asking agents to repeat file contents.
+Text-only branches still pass their ordered results without a file projection. Joined context for
+declared-file branches contains compact run/revision references, not file bytes or full diffs.
+The retained child revision can be inspected through `run_output_history`,
+`run_output_revision`, and `run_output_file` (exact bytes); `run_get_file` remains a diff read
+and is not the input source for fan projection. The original branch can move or its worktree
+can disappear without changing the bytes in a retained revision. Only exact declared regular
+files are eligible; symlinks and attempts to overwrite existing parent paths fail closed.
+Declared files must also fit the existing 1 MB per-file content-preview limit; larger
+artifacts cannot be projected through this workflow path.
 While the parent is suspended for branch completion, REST, MCP, and the UI identify the pending
 request as `workflow_child_work`; this automated wait cannot be approved through `/review` or
 `run_review`. `GET /api/runs/{parentRunId}/work-plan` and `/children` resolve the embedded child

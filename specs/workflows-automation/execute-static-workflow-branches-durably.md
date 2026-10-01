@@ -25,6 +25,8 @@ cancellation, and restart reconciliation.
 - Fail-closed validation for one non-nested, wait-all static fan region
 - Runtime binding through the real MAF graph and request-port suspension
 - Concurrent child-run dispatch with ordered wait-all join
+- Immutable capture of exact declared regular-file output and fenced projection onto the
+  isolated parent branch before downstream continuation; no integration branch or general merge
 - Existing API, events, diagnostics, MCP, and web topology projections
 - Conservative direct and blueprint custom-workflow generation for prompt-only static fans
 - Explicit generated-branch independence and declared-output metadata
@@ -35,7 +37,7 @@ cancellation, and restart reconciliation.
 
 - Visual-editor authoring controls for fan metadata
 - Dynamic branches, nested fans, quorum or partial joins
-- Coordinator-composed work, integration merge, review, Scribe, or publication
+- Nested coordinator-composed work inside a branch, integration merge, review, Scribe, or publication
 - Generic code-writing parallelism before repository write-scope isolation is implemented
 
 ## Acceptance criteria
@@ -60,7 +62,8 @@ cancellation, and restart reconciliation.
   the parent continuation is delivered exactly once.
 - [x] Joined output follows persisted branch ordinal, never child completion or database id order.
 - [x] Failed, blocked, cancelled, or RAI-flagged branches cannot yield joined success.
-- [x] Static fan completion bypasses integration Git branches, collective merge/review/publication, and Scribe.
+- [x] Static fan completion bypasses integration Git branches, collective merge/review/publication,
+  and Scribe; declared files project only to the isolated parent run.
 - [x] Parent/branch/join state is visible through work-plan, child, event, diagnostics, MCP, and web projections.
 - [x] Embedded coordinators have durable streams and canonical `run:{childRunId}` graph references,
   and their graph omits collective assembly stages.

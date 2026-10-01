@@ -41,6 +41,7 @@ internal static class ClaimedPrerequisiteResolver
                 .ConfigureAwait(false);
             if (revision.RunId != upstreamRunId
                 || revision.RevisionId != claim.OutputRevisionId
+                || revision.SchemaVersion == RunOutputRevision.FanDeclaredFilesSchemaVersion
                 || revision.LifecycleGeneration != claim.LifecycleGeneration
                 || revision.TreeHash != claim.TreeHash
                 || revision.WorkflowDigest != claim.ExecutableWorkflowContentDigest

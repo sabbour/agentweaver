@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
@@ -907,6 +908,21 @@ public sealed class RunWatchLoopService
         // coordinator can collect/assemble it in Phase 3. No scribe, no merge, no cleanup.
         if (woe.Is<AssembleReadyOutput>(out var assembleReady))
         {
+            FanDeclaredFilesPublication? fanFiles;
+            try
+            {
+                fanFiles = await CaptureFanDeclaredFilesAsync(
+                    runId, parsedRunId, currentRun, assembleReady).ConfigureAwait(false);
+            }
+            catch (RunOutputRevisionUnavailableException ex)
+            {
+                _logger.LogError(ex, "Fan child {RunId} could not retain declared file output", runId);
+                return await FailRunSafeAsync(runId, entry, ex.Reason, watchLease)
+                    .ConfigureAwait(false);
+            }
+            if (fanFiles is not null && watchLease is null)
+                return await FailRunSafeAsync(
+                    runId, entry, "fan_capture_requires_execution_lease", watchLease).ConfigureAwait(false);
             var changed = watchLease is { } lease && currentRun is not null
                 ? await _runStore.TryMutateTerminalOutcomeAsync(
                     parsedRunId,
@@ -925,6 +941,12 @@ public sealed class RunWatchLoopService
                         TreeHash: assembleReady.TreeHash ?? string.Empty,
                         WorktreeBranch: assembleReady.WorktreeBranch ?? string.Empty,
                         Diff: assembleReady.Diff ?? string.Empty,
+                        FanDeclaredFiles: fanFiles,
+                        ExpectedParentLifecycleGeneration: fanFiles is not null
+                            && RunId.TryParse(currentRun.ParentRunId, out var fanCoordinatorId)
+                            ? (await _runStore.GetAsync(fanCoordinatorId, CancellationToken.None)
+                                .ConfigureAwait(false))?.LifecycleGeneration
+                            : null,
                         RequiredLease: new RunLeaseFence(
                             lease.OwnerId, lease.FencingToken, lease.LifecycleGeneration)),
                     CancellationToken.None).ConfigureAwait(false)
@@ -1043,6 +1065,46 @@ public sealed class RunWatchLoopService
             "Unrecognized WorkflowOutputEvent type for run {RunId}; transitioning to Failed", runId);
         return await FailRunSafeAsync(runId, entry, "unknown_workflow_output", watchLease)
             .ConfigureAwait(false);
+    }
+
+    private async Task<FanDeclaredFilesPublication?> CaptureFanDeclaredFilesAsync(
+        string runId, RunId parsedRunId, Agentweaver.Domain.Run? run, AssembleReadyOutput output)
+    {
+        if (run is null)
+            return null;
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtask = await db.Subtasks.AsNoTracking()
+            .SingleOrDefaultAsync(s => s.ChildRunId == runId
+                && s.WorkflowBranchNodeId != null, CancellationToken.None).ConfigureAwait(false);
+        if (subtask is null)
+            return null;
+        var plan = await db.WorkPlans.AsNoTracking()
+            .SingleAsync(p => p.Id == subtask.WorkPlanId, CancellationToken.None).ConfigureAwait(false);
+        var parent = RunId.TryParse(plan.ParentRunId, out var parentId)
+            ? await _runStore.GetAsync(parentId, CancellationToken.None).ConfigureAwait(false)
+            : null;
+        if (plan.ParentJoinNodeId is null || plan.ParentWorkflowId is null
+            || parent is null || parent.Status != RunStatus.AwaitingReview
+            || plan.CoordinatorRunId != run.ParentRunId
+            || subtask.ChildRunId != runId
+            || plan.ProjectId != run.ProjectId?.ToString()
+            || parent.ProjectId != run.ProjectId
+            || parent.RepositoryPath != run.RepositoryPath
+            || output.WorktreeBranch != run.WorktreeBranch
+            || output.WorktreeBranch != WorktreeManager.BranchNameFor(parsedRunId))
+            throw new RunOutputRevisionUnavailableException("fan_child_provenance_mismatch");
+        var declared = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(
+            subtask.DeclaredOutputPathsJson);
+        if (declared.State == CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid)
+            throw new RunOutputRevisionUnavailableException("invalid_declared_paths");
+        if (declared.Paths.Count == 0)
+            return null;
+        var captured = RunOutputTreeCapture.CaptureDeclaredFiles(
+            run.RepositoryPath, output.WorktreeBranch, output.TreeHash, declared.Paths);
+        return new FanDeclaredFilesPublication(
+            plan.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            captured.CommitHash, output.TreeHash, captured.Files);
     }
 
     private async Task FirePostRunScribeAsync(string runId)

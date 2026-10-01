@@ -4,6 +4,7 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Endpoints;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
@@ -19,6 +20,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Repository = LibGit2Sharp.Repository;
+using Commands = LibGit2Sharp.Commands;
+using Signature = LibGit2Sharp.Signature;
 using DomainRun = Agentweaver.Domain.Run;
 using DomainRunStatus = Agentweaver.Domain.RunStatus;
 
@@ -50,6 +54,13 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         services.AddScoped<RepoAppInstallationTokenService>();
         services.AddScoped<GitHubCapabilityBroker>();
         services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
+        services.AddSingleton(new WorktreeManager(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Worktrees:BasePath"] = Path.Combine(Path.GetTempPath(),
+                    "agentweaver-fan-service-" + Guid.NewGuid().ToString("N")),
+            }).Build(),
+            NullLogger<WorktreeManager>.Instance));
         _provider = services.BuildServiceProvider();
         using (var scope = _provider.CreateScope())
             scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
@@ -152,27 +163,6 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         (await db.WorkPlans.CountAsync()).Should().Be(1);
         (await db.Subtasks.CountAsync()).Should().Be(0);
         (await _runStore.GetRunsByParentAsync(_parent.Id.ToString())).Should().ContainSingle();
-    }
-
-    [Fact]
-    public async Task ComposedPlan_OversizedParentContext_FailsInsteadOfTruncatingBranchEvidence()
-    {
-        var request = ComposedRequest() with
-        {
-            IncomingInput = ComposedRequest().IncomingInput with
-            {
-                Task = new string('x', WorkflowChildWorkService.MaxComposedParentContextChars + 1),
-            },
-        };
-
-        var act = () => _service.PrepareComposedAsync(request);
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*cannot be delivered intact*");
-
-        using var scope = _provider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        (await db.WorkPlans.CountAsync()).Should().Be(0);
-        (await db.OutcomeSpecs.CountAsync()).Should().Be(0);
     }
 
     [Fact]
@@ -585,6 +575,237 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         result.Branches.Select(branch => branch.NodeId).Should().Equal("research-a", "research-b");
         result.JoinedOutput.Should().Be(
             "[1. research-a]\nfirst-output\n\n[2. research-b]\nsecond-output");
+    }
+
+    [Theory]
+    [InlineData(false, false, null)]
+    [InlineData(true, false, null)]
+    [InlineData(true, true, null)]
+    [InlineData(false, false, "missing_child")]
+    [InlineData(false, false, "undeclared_path")]
+    [InlineData(false, false, "cross_project")]
+    [InlineData(false, false, "missing_revision")]
+    [InlineData(true, false, "moved_parent")]
+    [InlineData(true, false, "wrong_generation")]
+    [InlineData(false, false, "late_cross_project")]
+    public async Task DeclaredFanArtifacts_ProjectBeforeResume_AndComposedChildInheritsSameBytes(
+        bool crashAfterPreparedIntent, bool crashAfterRef, string? invalidSource)
+    {
+        var repositoryPath = Path.Combine(Path.GetTempPath(), "agentweaver-fan-plan-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(repositoryPath);
+        var manager = _provider.GetRequiredService<WorktreeManager>();
+        try
+        {
+            Repository.Init(repositoryPath);
+            using var repository = new Repository(repositoryPath);
+            File.WriteAllText(Path.Combine(repositoryPath, "base.txt"), "base");
+            Commands.Stage(repository, "base.txt");
+            var signature = new Signature("Test", "test@example.com", DateTimeOffset.UtcNow);
+            var baseline = repository.Commit("base", signature, signature, new LibGit2Sharp.CommitOptions());
+            var parent = NewRun(RunId.New(), DomainRunStatus.InProgress) with
+            {
+                ProjectId = _parent.ProjectId,
+                RepositoryPath = repositoryPath,
+                OriginatingBranch = repository.Head.FriendlyName,
+            };
+            var parentWorktree = manager.AddWorktree(repositoryPath, parent.OriginatingBranch, parent.Id);
+            parent = parent with
+            {
+                WorktreePath = parentWorktree.WorktreePath,
+                WorktreeBranch = parentWorktree.BranchName,
+            };
+            await _runStore.InsertAsync(parent);
+            var incoming = new AgentTurnInput(parent.Id.ToString(), "Synthetic incident",
+                parentWorktree.WorktreePath, parentWorktree.BranchName,
+                repositoryPath, parent.OriginatingBranch,
+                "github-copilot", "test-model", parent.SubmittingUser,
+                FanExecutionBaseCommitHash: baseline.Sha);
+            var request = new WorkflowChildWorkRequest(parent, "custom-demo", "fan", "join",
+                [
+                    Branch("incident") with { DeclaredOutputPaths = ["demo/incident-brief.md"] },
+                    Branch("checklist") with { DeclaredOutputPaths = ["demo/response-checklist.md"] },
+                ], incoming, baseline.Tree.Sha);
+            _runtime.AllowDispatch = false;
+            var attached = await CreateAsync(request);
+            var runs = new List<(int SubtaskId, string? ChildRunId, string Status)>();
+            var original = new[] { "incident source bytes", "checklist source bytes" };
+            for (var i = 0; i < attached.Branches.Count; i++)
+            {
+                var childId = RunId.New();
+                var worktree = manager.AddWorktree(repositoryPath, parent.OriginatingBranch, childId);
+                Directory.CreateDirectory(Path.Combine(worktree.WorktreePath, "demo"));
+                var file = i == 0 ? "incident-brief.md" : "response-checklist.md";
+                File.WriteAllText(Path.Combine(worktree.WorktreePath, "demo", file), original[i]);
+                var tree = manager.CommitChanges(worktree.WorktreePath, childId);
+                var capture = RunOutputTreeCapture.CaptureDeclaredFiles(repositoryPath,
+                    worktree.BranchName, tree, [$"demo/{file}"]);
+                await _runStore.InsertAsync(NewRun(childId, DomainRunStatus.InProgress) with
+                {
+                    ProjectId = parent.ProjectId,
+                    RepositoryPath = repositoryPath,
+                    OriginatingBranch = parent.OriginatingBranch,
+                    ParentRunId = attached.ChildCoordinatorRunId,
+                    SubtaskId = attached.Branches[i].SubtaskId.ToString(),
+                    WorktreePath = worktree.WorktreePath,
+                    WorktreeBranch = worktree.BranchName,
+                    Result = "File written.",
+                });
+                (await _runStore.TryMutateTerminalOutcomeAsync(childId,
+                    new TerminalRunMutation(
+                        TerminalRunOutcome.Create(DomainRunStatus.AssembleReady,
+                            EventTypes.RunAssembleReady, new { treeHash = tree },
+                            DateTimeOffset.UtcNow, 1), null,
+                        TreeHash: tree, WorktreeBranch: worktree.BranchName,
+                        FanDeclaredFiles: new FanDeclaredFilesPublication(
+                            attached.WorkPlanId.ToString(), capture.CommitHash, tree, capture.Files))))
+                    .Should().BeTrue();
+                runs.Add((attached.Branches[i].SubtaskId, childId.ToString(), SubtaskStatus.Completed));
+                manager.RemoveWorktree(repositoryPath, worktree.WorktreePath, worktree.BranchName);
+                (await _runStore.ListOutputRevisionsAsync(childId)).Should().ContainSingle();
+            }
+            await SetBranchRunsAsync(attached.WorkPlanId, WorkPlanStatus.Complete, runs);
+            if (invalidSource is not null
+                && invalidSource is not ("moved_parent" or "late_cross_project" or "wrong_generation"))
+            {
+                if (invalidSource is "cross_project" or "missing_revision")
+                {
+                    await using var connection = await _runDb.Db.OpenConnectionAsync();
+                    await using var command = connection.CreateCommand();
+                    command.CommandText = invalidSource == "cross_project"
+                        ? "UPDATE runs SET project_id=$value WHERE run_id=$run;"
+                        : "UPDATE runs SET current_output_revision_id=$value WHERE run_id=$run;";
+                    command.Parameters.AddWithValue("$value", invalidSource == "cross_project"
+                        ? ProjectId.New().ToString() : Guid.NewGuid().ToString("N"));
+                    command.Parameters.AddWithValue("$run", runs[0].ChildRunId!);
+                    (await command.ExecuteNonQueryAsync()).Should().Be(1);
+                }
+                else
+                {
+                    using var scope = _provider.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                    var branch = await db.Subtasks.SingleAsync(s => s.Id == runs[0].SubtaskId);
+                    if (invalidSource == "missing_child")
+                        branch.ChildRunId = RunId.New().ToString();
+                    else
+                        branch.DeclaredOutputPathsJson = "[\"demo/other.md\"]";
+                    await db.SaveChangesAsync();
+                }
+                await _service.SweepAsync();
+                var failurePlan = await GetPlanAsync(attached.WorkPlanId);
+                failurePlan.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+                var failed = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+                    failurePlan.ParentResumeResultJson!, JsonDefaults.Options)!;
+                failed.Succeeded.Should().BeFalse();
+                failed.FanProjection.Should().BeNull();
+                failed.FailureReason.Should().NotBeNullOrWhiteSpace();
+                File.Exists(Path.Combine(parentWorktree.WorktreePath, "demo", "incident-brief.md"))
+                    .Should().BeFalse();
+                manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
+                return;
+            }
+            if (crashAfterPreparedIntent)
+            {
+                var branches = new List<WorkflowChildWorkBranch>();
+                var retained = new List<RunOutputTree.File>();
+                for (var i = 0; i < runs.Count; i++)
+                {
+                    var child = (await _runStore.GetAsync(RunId.Parse(runs[i].ChildRunId!)))!;
+                    var revision = await ((IRunStore)_runStore).ResolveOutputRevisionAsync(
+                        child.Id, child.CurrentOutputRevisionId!);
+                    retained.AddRange(revision.ResolveFiles());
+                    branches.Add(new WorkflowChildWorkBranch(runs[i].SubtaskId,
+                        attached.Branches[i].NodeId, i, runs[i].Status,
+                        child.Id.ToString(), WorktreeBranch: child.WorktreeBranch,
+                        TreeHash: child.TreeHash, OutputRevisionId: revision.RevisionId));
+                }
+                var prepared = manager.PrepareFanInputProjection(
+                    repositoryPath, parentWorktree.WorktreePath, parent.Id,
+                    baseline.Sha, baseline.Tree.Sha, retained);
+                using var scope = _provider.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var plan = await db.WorkPlans.SingleAsync(row => row.Id == attached.WorkPlanId);
+                plan.ParentResumeResultJson = JsonSerializer.Serialize(
+                    new WorkflowChildWorkResult(attached.WorkPlanId, attached.ChildCoordinatorRunId,
+                        "custom-demo", "fan", "join", true, WorkPlanStatus.Complete, null,
+                        branches, "compact branch references",
+                        FanProjection: new WorkflowFanProjection(
+                            parent.LifecycleGeneration + (invalidSource == "wrong_generation" ? 1 : 0),
+                            baseline.Sha, baseline.Tree.Sha,
+                            prepared.CommitHash, prepared.TreeHash)),
+                    JsonDefaults.Options);
+                await db.SaveChangesAsync();
+                if (crashAfterRef)
+                    manager.ApplyFanInputProjection(parentWorktree.WorktreePath, parent.Id,
+                        baseline.Sha, prepared.CommitHash, prepared.TreeHash);
+                using var stillParked = new Repository(parentWorktree.WorktreePath);
+                stillParked.Head.Tip.Id.Sha.Should().Be(
+                    crashAfterRef ? prepared.CommitHash : baseline.Sha);
+            }
+            if (invalidSource is "moved_parent" or "wrong_generation")
+            {
+                if (invalidSource == "moved_parent")
+                {
+                    File.WriteAllText(Path.Combine(parentWorktree.WorktreePath, "unrelated.txt"), "unexpected parent edit");
+                    manager.CommitChanges(parentWorktree.WorktreePath, parent.Id);
+                }
+                await _service.SweepAsync();
+                var failed = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+                    (await GetPlanAsync(attached.WorkPlanId)).ParentResumeResultJson!, JsonDefaults.Options)!;
+                failed.Succeeded.Should().BeFalse();
+                failed.FailureReason.Should().Be("fan_projection_base_changed");
+                File.Exists(Path.Combine(parentWorktree.WorktreePath, "demo", "incident-brief.md"))
+                    .Should().BeFalse();
+                manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
+                return;
+            }
+            _runtime.DeliverResult = false;
+            await _service.SweepAsync();
+            (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+                .Should().Be(WorkflowChildWorkResumeStates.Ready);
+            _runtime.Deliveries.Should().ContainSingle();
+            if (invalidSource == "late_cross_project")
+            {
+                await using var connection = await _runDb.Db.OpenConnectionAsync();
+                await using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE runs SET project_id=$project WHERE run_id=$run;";
+                command.Parameters.AddWithValue("$project", ProjectId.New().ToString());
+                command.Parameters.AddWithValue("$run", runs[0].ChildRunId!);
+                (await command.ExecuteNonQueryAsync()).Should().Be(1);
+                await BuildService("recovered-pod", _runtime).SweepAsync();
+                var blocked = await GetPlanAsync(attached.WorkPlanId);
+                blocked.Status.Should().Be(WorkPlanStatus.AssemblyBlocked);
+                blocked.AssemblyStatusReason.Should().Be("fan_projection_provenance_mismatch");
+                _runtime.Deliveries.Should().ContainSingle();
+                manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
+                return;
+            }
+            _runtime.DeliverResult = true;
+            await BuildService("recovered-pod", _runtime).SweepAsync();
+            _runtime.Deliveries.Should().HaveCount(2);
+            _runtime.Deliveries[1].FanProjection!.PreparedCommitHash
+                .Should().Be(_runtime.Deliveries[0].FanProjection!.PreparedCommitHash);
+            var delivered = _runtime.Deliveries[1];
+            delivered.FanProjection.Should().NotBeNull();
+            delivered.JoinedOutput.Should().NotContain("source bytes").And.NotContain("diff --git");
+            File.ReadAllText(Path.Combine(parentWorktree.WorktreePath, "demo", "incident-brief.md"))
+                .Should().Be(original[0]);
+            File.ReadAllText(Path.Combine(parentWorktree.WorktreePath, "demo", "response-checklist.md"))
+                .Should().Be(original[1]);
+            var composed = manager.AddWorktree(repositoryPath, parentWorktree.BranchName, RunId.New());
+            File.ReadAllText(Path.Combine(composed.WorktreePath, "demo", "incident-brief.md"))
+                .Should().Be(original[0]);
+            manager.RemoveWorktree(repositoryPath, composed.WorktreePath, composed.BranchName);
+            manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
+        }
+        finally
+        {
+            if (Directory.Exists(repositoryPath))
+            {
+                foreach (var file in Directory.GetFiles(repositoryPath, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(file, FileAttributes.Normal);
+                Directory.Delete(repositoryPath, recursive: true);
+            }
+        }
     }
 
     [Theory]

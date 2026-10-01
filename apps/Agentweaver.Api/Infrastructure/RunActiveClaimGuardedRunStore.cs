@@ -86,6 +86,16 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
         await inner.UpdateAssemblyArtifactsAsync(runId, treeHash, diff, ct).ConfigureAwait(false);
     }
 
+    public async Task<bool> TryRecordFanInputProjectionAsync(
+        RunId runId, int generation, string expectedBaseTree, string projectedTree,
+        string worktreeBranch, CancellationToken ct = default)
+    {
+        await using var claim = await guard.AcquireAsync(runId, ct).ConfigureAwait(false);
+        return await inner.TryRecordFanInputProjectionAsync(
+            runId, generation, expectedBaseTree, projectedTree, worktreeBranch, ct)
+            .ConfigureAwait(false);
+    }
+
     public async Task<bool> TryUpdateAssemblyArtifactsAsync(
         RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,
         CancellationToken ct = default)

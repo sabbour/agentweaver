@@ -38,6 +38,10 @@ public interface IRunStore
     Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default);
     Task UpdateAssemblyArtifactsAsync(RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Task.CompletedTask;
+    Task<bool> TryRecordFanInputProjectionAsync(
+        RunId runId, int generation, string expectedBaseTree, string projectedTree,
+        string worktreeBranch, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot record a fan input projection.");
     async Task<bool> TryUpdateAssemblyArtifactsAsync(
         RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,
         CancellationToken ct = default)

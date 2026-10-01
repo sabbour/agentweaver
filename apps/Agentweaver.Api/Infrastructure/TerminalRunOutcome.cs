@@ -59,7 +59,14 @@ public sealed record TerminalRunMutation(
     int? ExpectedParentLifecycleGeneration = null,
     CollectiveOutputPublication? CollectiveOutput = null,
     NoChangeOutputPublication? NoChangeOutput = null,
-    string? ApprovedCollectiveRevisionId = null);
+    string? ApprovedCollectiveRevisionId = null,
+    FanDeclaredFilesPublication? FanDeclaredFiles = null);
+
+public sealed record FanDeclaredFilesPublication(
+    string WorkPlanId,
+    string CommitHash,
+    string TreeHash,
+    byte[] TreeContent);
 
 public sealed record CollectiveOutputPublication(
     string WorkPlanId,

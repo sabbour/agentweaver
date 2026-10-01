@@ -10,6 +10,7 @@ public sealed class RunOutputRevision
     public const int CollectiveSchemaVersion = 2;
     public const int NoChangeSchemaVersion = 3;
     public const int CollectiveCandidateSchemaVersion = 4;
+    public const int FanDeclaredFilesSchemaVersion = 5;
 
     public string RevisionId { get; }
     public int SchemaVersion { get; }
@@ -40,7 +41,8 @@ public sealed class RunOutputRevision
         string? mergeEffectId = null, bool acceptedNoChange = false,
         byte[]? treeContent = null, string? treeContentSha256 = null)
     {
-        if (schemaVersion is not (CurrentSchemaVersion or CollectiveSchemaVersion or NoChangeSchemaVersion or CollectiveCandidateSchemaVersion))
+        if (schemaVersion is not (CurrentSchemaVersion or CollectiveSchemaVersion or NoChangeSchemaVersion
+            or CollectiveCandidateSchemaVersion or FanDeclaredFilesSchemaVersion))
             throw new RunOutputRevisionUnavailableException("unsupported_schema");
         if (diffBytes is null)
             throw new RunOutputRevisionUnavailableException("missing_content");
@@ -67,7 +69,16 @@ public sealed class RunOutputRevision
                 && (outputKind != "no_change" || !acceptedNoChange || diffBytes.Length != 0
                     || string.IsNullOrWhiteSpace(mergedCommitHash)
                     || workPlanId is not null || mergeEffectId is not null
-                    || treeContent is null || manifestIncomplete != (workflowDigest is null))))
+                    || treeContent is null || manifestIncomplete != (workflowDigest is null)))
+            || (schemaVersion == FanDeclaredFilesSchemaVersion
+                && (outputKind != "fan_declared_files" || manifestIncomplete || treeContent is null
+                    || treeHash.Length != 40 || !treeHash.All(Uri.IsHexDigit)
+                    || mergedCommitHash?.Length != 40 || !mergedCommitHash.All(Uri.IsHexDigit)
+                    || string.IsNullOrWhiteSpace(workPlanId)
+                    || mergeEffectId is not null || acceptedNoChange || diffBytes.Length != 0
+                    || RunOutputTree.Decode(treeContent).Count == 0
+                    || RunOutputTree.Decode(treeContent).Any(file =>
+                        file.Mode is not (33188 or 33261) || file.Path.Contains(':')))))
             throw new RunOutputRevisionUnavailableException("invalid_manifest");
 
         RevisionId = revisionId;

@@ -881,6 +881,21 @@ public sealed class EfRunStore : IRunStore
         WarnIfNoRows(rows, runId, "update tree hash after commit");
     }
 
+    public async Task<bool> TryRecordFanInputProjectionAsync(
+        RunId runId, int generation, string expectedBaseTree, string projectedTree,
+        string worktreeBranch, CancellationToken ct = default)
+    {
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        return await db.Runs
+            .Where(r => r.RunId == runId.ToString()
+                && r.LifecycleGeneration == generation
+                && r.Status == "awaiting_review"
+                && r.WorktreeBranch == worktreeBranch
+                && (r.TreeHash == null || r.TreeHash == expectedBaseTree))
+            .ExecuteUpdateAsync(updates => updates.SetProperty(r => r.TreeHash, projectedTree), ct)
+            .ConfigureAwait(false) == 1;
+    }
+
     public async Task<bool> SetAssembleReadyAsync(
         RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount,
         DateTimeOffset endedAt, CancellationToken ct = default)
@@ -1049,6 +1064,38 @@ public sealed class EfRunStore : IRunStore
                 TreeContent = output.TreeContent,
                 TreeContentSha256 = RunOutputRevision.Sha256(output.TreeContent),
                 CreatedAt = mutation.Outcome.OccurredAt
+            });
+            record.CurrentOutputRevisionId = revisionId;
+        }
+        if (mutation.FanDeclaredFiles is { } fan)
+        {
+            if (mutation.Outcome.Status != RunStatus.AssembleReady || record.ParentRunId is null
+                || record.CurrentOutputRevisionId is not null
+                || mutation.TreeHash != fan.TreeHash
+                || string.IsNullOrWhiteSpace(fan.CommitHash))
+                throw new RunOutputRevisionUnavailableException("invalid_fan_manifest");
+            var content = RunOutputTree.Decode(fan.TreeContent);
+            if (content.Count == 0 || content.Any(file => file.Mode is not (33188 or 33261)))
+                throw new RunOutputRevisionUnavailableException("invalid_fan_manifest");
+            byte[] diffBytes = [];
+            var revisionId = Guid.NewGuid().ToString("N");
+            db.RunOutputRevisions.Add(new RunOutputRevisionRecord
+            {
+                RevisionId = revisionId,
+                SchemaVersion = RunOutputRevision.FanDeclaredFilesSchemaVersion,
+                RunId = record.RunId,
+                LifecycleGeneration = record.LifecycleGeneration,
+                WorkflowDigest = record.ExecutableWorkflowContentDigest,
+                ManifestIncomplete = false,
+                TreeHash = fan.TreeHash,
+                DiffSha256 = RunOutputRevision.Sha256(diffBytes),
+                OutputKind = "fan_declared_files",
+                MergedCommitHash = fan.CommitHash,
+                WorkPlanId = fan.WorkPlanId,
+                DiffBytes = diffBytes,
+                TreeContent = fan.TreeContent,
+                TreeContentSha256 = RunOutputRevision.Sha256(fan.TreeContent),
+                CreatedAt = mutation.Outcome.OccurredAt,
             });
             record.CurrentOutputRevisionId = revisionId;
         }

@@ -16,6 +16,213 @@ namespace Agentweaver.Tests.Api;
 public sealed class RunOutputRevisionStoreTests
 {
     [Fact]
+    public async Task FanChildTerminal_AtomicallyRetainsOnlyDeclaredFiles_AndRejectsDuplicateWinner()
+    {
+        await using var db = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(db.Db);
+        var parentId = await InsertAsync(store);
+        var childId = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = childId,
+            ParentRunId = parentId.ToString(),
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "short reply",
+            SubmittingUser = "test",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var generation = (await store.GetAsync(childId))!.LifecycleGeneration;
+        var content = RunOutputTree.Encode([
+            new RunOutputTree.File("demo/incident-brief.md", 33188, "original artifact bytes"u8.ToArray()),
+        ]);
+        var publication = new FanDeclaredFilesPublication("42",
+            new string('a', 40), new string('b', 40), content);
+        var mutation = new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.AssembleReady, EventTypes.RunAssembleReady,
+                new { treeHash = publication.TreeHash }, DateTimeOffset.UtcNow, generation),
+            null, TreeHash: publication.TreeHash, WorktreeBranch: "agentweaver/child",
+            Diff: "diff --git a/demo/incident-brief.md b/demo/incident-brief.md",
+            FanDeclaredFiles: publication,
+            ExpectedParentLifecycleGeneration: (await store.GetAsync(parentId))!.LifecycleGeneration);
+
+        var lease = await new SqliteRunLeaseStore(db.Db).TryClaimAsync(
+            childId.ToString(), "current-fan-owner", TimeSpan.FromMinutes(1));
+        lease.Claimed.Should().BeTrue();
+        (await store.TryMutateTerminalOutcomeAsync(childId, mutation with
+        {
+            RequiredLease = new RunLeaseFence("stale-fan-owner", lease.FencingToken, generation),
+        })).Should().BeFalse();
+        (await store.GetLatestOutputRevisionAsync(childId)).Should().BeNull();
+        var owned = mutation with
+        {
+            RequiredLease = new RunLeaseFence("current-fan-owner", lease.FencingToken, generation),
+        };
+        (await store.TryMutateTerminalOutcomeAsync(childId, owned)).Should().BeTrue();
+        (await store.TryMutateTerminalOutcomeAsync(childId, mutation)).Should().BeFalse();
+        var child = (await store.GetAsync(childId))!;
+        child.CurrentOutputRevisionId.Should().NotBeNull();
+        var revision = await ((IRunStore)store).ResolveOutputRevisionAsync(
+            childId, child.CurrentOutputRevisionId!);
+        revision.SchemaVersion.Should().Be(RunOutputRevision.FanDeclaredFilesSchemaVersion);
+        revision.OutputKind.Should().Be("fan_declared_files");
+        revision.MergedCommitHash.Should().Be(publication.CommitHash);
+        revision.DiffBytes.Should().BeEmpty();
+        revision.ResolveFile("demo/incident-brief.md").Bytes.Should()
+            .Equal("original artifact bytes"u8.ToArray());
+        (await store.ListOutputRevisionsAsync(childId)).Should().ContainSingle();
+        var parentBranch = "agentweaver/" + parentId;
+        await store.UpdateWorktreeAsync(parentId, "parent-worktree", parentBranch);
+        await store.UpdateStatusAsync(parentId, RunStatus.AwaitingReview, null);
+        (await store.TryRecordFanInputProjectionAsync(parentId, 1,
+            "base-tree", "projected-tree", parentBranch)).Should().BeTrue();
+        (await store.TryRecordFanInputProjectionAsync(parentId, 1,
+            "base-tree", "different-tree", parentBranch)).Should().BeFalse();
+        (await store.GetAsync(parentId))!.TreeHash.Should().Be("projected-tree");
+    }
+
+    [Fact]
+    public void FanDeclaredFileRevision_ProjectsOriginalBytesAfterChildBranchIsRemoved()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "agentweaver-fan-input-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        try
+        {
+            Repository.Init(path);
+            using var repository = new Repository(path);
+            File.WriteAllText(Path.Combine(path, "base.txt"), "original base");
+            Commands.Stage(repository, "base.txt");
+            var signature = new Signature("Test", "test@example.com", DateTimeOffset.UtcNow);
+            var baseline = repository.Commit("base", signature, signature);
+            var manager = new WorktreeManager(
+                new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Worktrees:BasePath"] = Path.Combine(path, "worktrees"),
+                }).Build(), NullLogger<WorktreeManager>.Instance);
+            var parentId = RunId.New();
+            var childId = RunId.New();
+            var parent = manager.AddWorktree(path, repository.Head.FriendlyName, parentId);
+            var child = manager.AddWorktree(path, repository.Head.FriendlyName, childId);
+            Directory.CreateDirectory(Path.Combine(child.WorktreePath, "demo"));
+            var original = "p95 300ms to 2400ms; rollback at 09:12 UTC"u8.ToArray();
+            File.WriteAllBytes(Path.Combine(child.WorktreePath, "demo", "incident-brief.md"), original);
+            var childTree = manager.CommitChanges(child.WorktreePath, childId);
+            var captured = RunOutputTreeCapture.CaptureDeclaredFiles(
+                path, child.BranchName, childTree, ["demo/incident-brief.md"]);
+            FluentActions.Invoking(() => RunOutputTreeCapture.CaptureDeclaredFiles(
+                path, child.BranchName, childTree, ["../demo/incident-brief.md"]))
+                .Should().Throw<RunOutputRevisionUnavailableException>()
+                .WithMessage("*invalid_declared_path*");
+            FluentActions.Invoking(() => RunOutputTreeCapture.CaptureDeclaredFiles(
+                path, child.BranchName, childTree, ["demo/absent.md"]))
+                .Should().Throw<RunOutputRevisionUnavailableException>()
+                .WithMessage("*declared_file_missing*");
+            var revision = new RunOutputRevision("fan-revision",
+                RunOutputRevision.FanDeclaredFilesSchemaVersion, childId, 1, null, false,
+                childTree, RunOutputRevision.Sha256([]), null, [],
+                DateTimeOffset.UtcNow, "fan_declared_files", captured.CommitHash, "42",
+                treeContent: captured.Files, treeContentSha256: RunOutputRevision.Sha256(captured.Files));
+            FluentActions.Invoking(() => new RunOutputRevision("tampered",
+                RunOutputRevision.FanDeclaredFilesSchemaVersion, childId, 1, null, false,
+                childTree, RunOutputRevision.Sha256([]), null, [],
+                DateTimeOffset.UtcNow, "fan_declared_files", captured.CommitHash, "42",
+                treeContent: captured.Files, treeContentSha256: new string('0', 64)))
+                .Should().Throw<RunOutputRevisionUnavailableException>()
+                .WithMessage("*corrupt_content*");
+
+            File.WriteAllText(Path.Combine(child.WorktreePath, "demo", "incident-brief.md"), "moved child branch");
+            manager.CommitChanges(child.WorktreePath, childId).Should().NotBe(childTree);
+            manager.RemoveWorktree(path, child.WorktreePath, child.BranchName);
+            revision.ResolveFile("demo/incident-brief.md").Bytes.Should().Equal(original);
+            var prepared = manager.PrepareFanInputProjection(path, parent.WorktreePath,
+                parentId, baseline.Sha, baseline.Tree.Sha, revision.ResolveFiles());
+            FluentActions.Invoking(() => manager.PrepareFanInputProjection(
+                path, parent.WorktreePath, parentId, baseline.Sha, baseline.Tree.Sha,
+                [new RunOutputTree.File("base.txt", 33188, "overwrite"u8.ToArray())]))
+                .Should().Throw<RunOutputRevisionUnavailableException>()
+                .WithMessage("*fan_projection_path_collision*");
+            FluentActions.Invoking(() => manager.PrepareFanInputProjection(
+                path, parent.WorktreePath, parentId, baseline.Sha, baseline.Tree.Sha,
+                [.. revision.ResolveFiles(), .. revision.ResolveFiles()]))
+                .Should().Throw<RunOutputRevisionUnavailableException>()
+                .WithMessage("*fan_projection_path_collision*");
+            manager.ApplyFanInputProjection(parent.WorktreePath, parentId,
+                baseline.Sha, prepared.CommitHash, prepared.TreeHash);
+            manager.ApplyFanInputProjection(parent.WorktreePath, parentId,
+                baseline.Sha, prepared.CommitHash, prepared.TreeHash);
+            File.ReadAllBytes(Path.Combine(parent.WorktreePath, "demo", "incident-brief.md"))
+                .Should().Equal(original);
+            var composed = manager.AddWorktree(path, parent.BranchName, RunId.New());
+            File.ReadAllBytes(Path.Combine(composed.WorktreePath, "demo", "incident-brief.md"))
+                .Should().Equal(original);
+            manager.RemoveWorktree(path, composed.WorktreePath, composed.BranchName);
+            File.WriteAllText(Path.Combine(parent.WorktreePath, "unrelated.txt"), "new user edit");
+            manager.CommitChanges(parent.WorktreePath, parentId);
+            FluentActions.Invoking(() => manager.ApplyFanInputProjection(
+                parent.WorktreePath, parentId, baseline.Sha, prepared.CommitHash, prepared.TreeHash))
+                .Should().Throw<RunOutputRevisionUnavailableException>()
+                .WithMessage("*fan_projection_base_changed*");
+            manager.RemoveWorktree(path, parent.WorktreePath, parent.BranchName);
+        }
+        finally
+        {
+            if (Directory.Exists(path))
+            {
+                foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(file, FileAttributes.Normal);
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void FanDeclaredCapture_RejectsSymlinkEvenWhenGitTreeContainsPath()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "agentweaver-fan-symlink-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        try
+        {
+            Repository.Init(path);
+            using var repository = new Repository(path);
+            File.WriteAllText(Path.Combine(path, "base.txt"), "base");
+            Commands.Stage(repository, "base.txt");
+            var signature = new Signature("Test", "test@example.com", DateTimeOffset.UtcNow);
+            var baseline = repository.Commit("base", signature, signature);
+            var definition = TreeDefinition.From(baseline.Tree);
+            var link = repository.ObjectDatabase.CreateBlob(
+                new MemoryStream("base.txt"u8.ToArray()));
+            definition.Add("demo/link.md", link, Mode.SymbolicLink);
+            var oversized = repository.ObjectDatabase.CreateBlob(
+                new MemoryStream(new byte[WorktreeManager.MaxContentBytes + 1]));
+            definition.Add("demo/large.bin", oversized, Mode.NonExecutableFile);
+            var tree = repository.ObjectDatabase.CreateTree(definition);
+            var commit = repository.ObjectDatabase.CreateCommit(
+                signature, signature, "linked", tree, [baseline], prettifyMessage: false);
+            repository.Branches.Add("linked-source", commit);
+
+            FluentActions.Invoking(() => RunOutputTreeCapture.CaptureDeclaredFiles(
+                path, "linked-source", tree.Sha, ["demo/link.md"]))
+                .Should().Throw<RunOutputRevisionUnavailableException>()
+                .WithMessage("*declared_file_not_regular*");
+            FluentActions.Invoking(() => RunOutputTreeCapture.CaptureDeclaredFiles(
+                path, "linked-source", tree.Sha, ["demo/large.bin"]))
+                .Should().Throw<RunOutputRevisionUnavailableException>()
+                .WithMessage("*declared_file_too_large*");
+        }
+        finally
+        {
+            if (Directory.Exists(path))
+            {
+                foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+                    File.SetAttributes(file, FileAttributes.Normal);
+                Directory.Delete(path, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void MaterializedCompositeUsesRetainedBytesAfterSourceBranchMoves()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "materialize-" + Guid.NewGuid().ToString("N"));

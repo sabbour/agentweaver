@@ -813,6 +813,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                         AgentCharter: node.Charter)).ToArray();
 
                     await using var scope = _scopeFactory.CreateAsyncScope();
+                    using var fanBase = new LibGit2Sharp.Repository(input.WorktreePath);
+                    var capturedInput = input with
+                    {
+                        FanExecutionBaseCommitHash = fanBase.Head.Tip?.Sha
+                            ?? throw new InvalidOperationException("Static fan has no committed execution base."),
+                    };
                     var attachment = await scope.ServiceProvider
                         .GetRequiredService<WorkflowChildWorkService>()
                         .PrepareStaticAsync(
@@ -822,7 +828,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                                 fanOutNode.Id,
                                 fanInNode.Id,
                                 branches,
-                                input,
+                                capturedInput,
                                 _worktreeOps.GetTreeHash(input.WorktreePath)),
                             ct)
                         .ConfigureAwait(false);

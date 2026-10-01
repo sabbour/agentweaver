@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.Text.Json;
 using LibGit2Sharp;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.AspNetCore.Hosting;
@@ -9,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
@@ -187,6 +189,208 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
         descriptor.Nodes.Select(node => node.Id).Should().Contain(["fan", "join"]);
         descriptor.Nodes.Select(node => node.Id).Should().NotContain(["branch-a", "branch-b"]);
         descriptor.Edges.Should().Contain(edge => edge.From == "fan" && edge.To == "join");
+    }
+
+    [Fact]
+    public async Task StartAsync_FanFiles_VerifyAndComposedTerminal_UsesOriginalRetainedBytes()
+    {
+        using var baseFactory = new WorkflowWebApplicationFactory();
+        using var testFactory = baseFactory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IGitHubCopilotCapabilityCredentialProvider>();
+                services.AddSingleton<IGitHubCopilotCapabilityCredentialProvider>(
+                    new FixedGitHubCopilotCapabilityCredentialProvider());
+            }));
+        var services = testFactory.Services;
+        var repositoryPath = Path.Combine(Path.GetTempPath(), "fan-composed-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(repositoryPath, ".agentweaver", "workflows"));
+        await File.WriteAllTextAsync(Path.Combine(repositoryPath, ".agentweaver", "workflows",
+            "fan-composed.yaml"), FanComposedWorkflowYaml());
+        Repository.Init(repositoryPath);
+        using var repository = new Repository(repositoryPath);
+        Commands.Stage(repository, "*");
+        var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+        var baseline = repository.Commit("Initial commit", signature, signature);
+        if (repository.Head.FriendlyName != "main")
+            repository.Branches.Rename(repository.Head, "main");
+        var project = new Project
+        {
+            Id = ProjectId.New(),
+            Name = "Fan composed byte handoff",
+            Origin = ProjectOrigin.Blank(),
+            WorkingDirectory = repositoryPath,
+            DefaultBranch = "main",
+            Owner = CoordinatorWebApplicationFactory.OwnerUser,
+            ProviderSettings = new ProjectProviderSettings { DefaultProvider = ModelSource.GitHubCopilot },
+            State = ProjectState.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            DefaultWorkflowId = "fan-composed",
+        };
+        await services.GetRequiredService<IProjectStore>().InsertAsync(project);
+        var manager = services.GetRequiredService<WorktreeManager>();
+        var parentId = RunId.New();
+        var worktree = manager.AddWorktree(repositoryPath, "main", parentId);
+        var parent = new DomainRun
+        {
+            Id = parentId,
+            RepositoryPath = repositoryPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "Produce a synthetic incident summary",
+            SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = DomainRunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = project.Id,
+            WorktreePath = worktree.WorktreePath,
+            WorktreeBranch = worktree.BranchName,
+        };
+        var store = services.GetRequiredService<IRunStore>();
+        await store.InsertAsync(parent);
+        var sourceText = new[] { "p95 latency 2400 ms", "rollback at 09:12 UTC" };
+        baseFactory.TestAgentRunner.ExecuteOverride = (task, workingDirectory) =>
+        {
+            if (task.Contains("Verify both source files", StringComparison.Ordinal))
+            {
+                File.ReadAllText(Path.Combine(workingDirectory, "demo", "incident-brief.md"))
+                    .Should().Be(sourceText[0]);
+                File.ReadAllText(Path.Combine(workingDirectory, "demo", "response-checklist.md"))
+                    .Should().Be(sourceText[1]);
+                return "Verified both original files.";
+            }
+            var ordinal = task.Contains("Write only demo/incident-brief.md", StringComparison.Ordinal)
+                ? 0 : task.Contains("Write only demo/response-checklist.md", StringComparison.Ordinal)
+                    ? 1 : throw new InvalidOperationException("Unexpected producing turn in fan-composed test.");
+            Directory.CreateDirectory(Path.Combine(workingDirectory, "demo"));
+            File.WriteAllText(Path.Combine(workingDirectory, "demo",
+                ordinal == 0 ? "incident-brief.md" : "response-checklist.md"), sourceText[ordinal]);
+            return "File written.";
+        };
+        var input = new AgentTurnInput(parentId.ToString(), parent.Task,
+            worktree.WorktreePath, worktree.BranchName, repositoryPath, "main",
+            "github-copilot", null, parent.SubmittingUser,
+            ProjectId: project.Id.ToString());
+        var started = await services.GetRequiredService<RunWorkflowFactory>()
+            .StartAsync(input, parentId.ToString(), CancellationToken.None);
+        WorkflowComposedCompletedOutput? terminal = null;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        await foreach (var evt in started.WatchStreamAsync(timeout.Token))
+        {
+            if (evt is RequestInfoEvent request
+                && request.Request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out var pause)
+                && pause.ParentJoinNodeId == "join-documents")
+            {
+                using var scope = services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var branches = await db.Subtasks.Where(s => s.WorkPlanId == pause.WorkPlanId)
+                    .OrderBy(s => s.WorkflowBranchOrdinal).ToListAsync(timeout.Token);
+                await store.UpdateStatusAsync(parentId, DomainRunStatus.AwaitingReview, null, timeout.Token);
+                await store.UpdateStatusAsync(RunId.Parse(pause.ChildCoordinatorRunId),
+                    DomainRunStatus.InProgress, null, timeout.Token);
+                foreach (var (subtask, ordinal) in branches.Select((s, index) => (s, index)))
+                {
+                    var childId = RunId.New();
+                    var childWorktree = manager.AddWorktree(repositoryPath, "main", childId);
+                    subtask.ChildRunId = childId.ToString();
+                    subtask.Status = SubtaskStatus.Running;
+                    await db.SaveChangesAsync(timeout.Token);
+                    await store.InsertAsync(new DomainRun
+                    {
+                        Id = childId,
+                        RepositoryPath = repositoryPath,
+                        OriginatingBranch = "main",
+                        ModelSource = ModelSource.GitHubCopilot,
+                        Task = subtask.Scope,
+                        SubmittingUser = parent.SubmittingUser,
+                        Status = DomainRunStatus.InProgress,
+                        StartedAt = DateTimeOffset.UtcNow,
+                        ProjectId = project.Id,
+                        ParentRunId = pause.ChildCoordinatorRunId,
+                        SubtaskId = subtask.Id.ToString(),
+                        WorktreeBranch = childWorktree.BranchName,
+                        WorktreePath = childWorktree.WorktreePath,
+                    });
+                    var childInput = new AgentTurnInput(childId.ToString(), subtask.Scope,
+                        childWorktree.WorktreePath, childWorktree.BranchName,
+                        repositoryPath, "main", "github-copilot", null,
+                        parent.SubmittingUser, ProjectId: project.Id.ToString());
+                    var execution = await services.GetRequiredService<RunWorkflowFactory>()
+                        .StartAsync(childInput, childId.ToString(), timeout.Token, isChild: true);
+                    var childStream = services.GetRequiredService<RunStreamStore>()
+                        .Create(childId.ToString(), parent.SubmittingUser);
+                    var leases = services.GetRequiredService<IRunLeaseStore>();
+                    var claim = await leases.TryClaimAsync(childId.ToString(),
+                        "fan-test-owner", TimeSpan.FromMinutes(1), timeout.Token);
+                    claim.Claimed.Should().BeTrue();
+                    var terminalized = false;
+                    await foreach (var childEvent in execution.WatchStreamAsync(timeout.Token))
+                    {
+                        if (childEvent is WorkflowOutputEvent childOutput
+                            && childOutput.Is<AssembleReadyOutput>())
+                        {
+                            terminalized = await services.GetRequiredService<RunWatchLoopService>()
+                                .HandleTerminalOutputAsync(childId.ToString(), childOutput, childStream,
+                                    timeout.Token, new RunLeaseClaim("fan-test-owner",
+                                        claim.FencingToken, 1));
+                            break;
+                        }
+                    }
+                    terminalized.Should().BeTrue();
+                    (await store.GetAsync(childId, timeout.Token))!.CurrentOutputRevisionId
+                        .Should().NotBeNull();
+                    subtask.Status = SubtaskStatus.Completed;
+                    manager.RemoveWorktree(repositoryPath, childWorktree.WorktreePath,
+                        childWorktree.BranchName);
+                }
+                var plan = await db.WorkPlans.SingleAsync(row => row.Id == pause.WorkPlanId, timeout.Token);
+                plan.Status = WorkPlanStatus.Complete;
+                await db.SaveChangesAsync(timeout.Token);
+                var childWork = services.GetRequiredService<WorkflowChildWorkService>();
+                await childWork.ArmContinuationAsync(plan.Id, request.Request,
+                    parent.SubmittingUser, timeout.Token);
+                (await childWork
+                    .TryPrepareResumeAsync(plan.Id, timeout.Token)).Should().BeTrue();
+                var saved = await db.WorkPlans.AsNoTracking()
+                    .SingleAsync(row => row.Id == plan.Id, timeout.Token);
+                var result = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+                    saved.ParentResumeResultJson!, JsonDefaults.Options)!;
+                result.JoinedOutput.Should().NotContain(sourceText[0]).And.NotContain(sourceText[1]);
+                await store.TryResumeFromChildWorkAsync(parentId, parent.LifecycleGeneration, timeout.Token);
+                await started.SendResponseAsync(request.Request.CreateResponse(result));
+            }
+            else if (evt is RequestInfoEvent composedRequest
+                && composedRequest.Request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out var composed)
+                && composed.ParentWorkflowNodeId == "summary-coordinator")
+            {
+                var child = (await store.GetAsync(RunId.Parse(composed.ChildCoordinatorRunId), timeout.Token))!;
+                child.OriginatingBranch.Should().Be(worktree.BranchName);
+                var childWorktree = manager.AddWorktree(repositoryPath, child.OriginatingBranch, child.Id);
+                File.ReadAllText(Path.Combine(childWorktree.WorktreePath, "demo", "incident-brief.md"))
+                    .Should().Be(sourceText[0]);
+                File.ReadAllText(Path.Combine(childWorktree.WorktreePath, "demo", "response-checklist.md"))
+                    .Should().Be(sourceText[1]);
+                await File.WriteAllTextAsync(Path.Combine(childWorktree.WorktreePath, "demo", "summary.md"),
+                    "Synthetic summary", timeout.Token);
+                var tree = manager.CommitChanges(childWorktree.WorktreePath, child.Id);
+                await started.SendResponseAsync(composedRequest.Request.CreateResponse(
+                    new WorkflowChildWorkResult(composed.WorkPlanId,
+                        composed.ChildCoordinatorRunId, "fan-composed",
+                        "summary-coordinator", null, true, WorkPlanStatus.Complete, null,
+                        [], "", new WorkflowComposedAssembly(childWorktree.BranchName,
+                            tree, "summary diff", [child.Id.ToString()]))));
+            }
+            else if (evt is WorkflowOutputEvent output
+                     && output.Is<WorkflowComposedCompletedOutput>(out var completed))
+            {
+                terminal = completed;
+                break;
+            }
+        }
+        terminal.Should().NotBeNull();
+        terminal!.Assembly.TreeHash.Should().NotBeNullOrWhiteSpace();
+        baseFactory.TestAgentRunner.LastTask.Should().Contain("Verify both source files");
+        baseFactory.TestAgentRunner.LastTask.Should().NotContain(sourceText[0]);
     }
 
     [Fact]
@@ -903,6 +1107,65 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
           - from: branch-b
             to: join
           - from: join
+            to: done
+        """;
+
+    private static string FanComposedWorkflowYaml() =>
+        """
+        id: fan-composed
+        name: Retained fan composed
+        version: "1"
+        start: split-documents
+        nodes:
+          - id: split-documents
+            type: fan_out
+            label: Split documents
+          - id: incident-brief-writer
+            type: prompt
+            label: Incident brief
+            agent: Neo
+            prompt: Write only demo/incident-brief.md.
+            independent: true
+            declared_output_paths:
+              - demo/incident-brief.md
+          - id: response-checklist-writer
+            type: prompt
+            label: Response checklist
+            agent: Trinity
+            prompt: Write only demo/response-checklist.md.
+            independent: true
+            declared_output_paths:
+              - demo/response-checklist.md
+          - id: join-documents
+            type: fan_in
+            label: Join
+            target: split-documents
+          - id: verify-inputs
+            type: prompt
+            label: Verify inputs
+            agent: Morpheus
+            prompt: Verify both source files by reading demo/incident-brief.md and demo/response-checklist.md.
+          - id: summary-coordinator
+            type: coordinator_composed
+            label: Compose summary
+            prompt: Write only demo/summary.md using the source files.
+          - id: done
+            type: terminal
+            label: Done
+        edges:
+          - from: split-documents
+            to: incident-brief-writer
+          - from: split-documents
+            to: response-checklist-writer
+          - from: incident-brief-writer
+            to: join-documents
+          - from: response-checklist-writer
+            to: join-documents
+          - from: join-documents
+            to: verify-inputs
+          - from: verify-inputs
+            to: summary-coordinator
+          - from: summary-coordinator
             to: done
         """;
 
