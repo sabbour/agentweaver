@@ -147,15 +147,18 @@ test('timeout fails closed with phase, identifiers, last events, diagnostic and 
   }
 });
 
-async function driveReviewFixture({
-  missingInitialId = false, staleCorrectedId = false, missingExecutionKey = false,
-  unchangedContent = false, advanceBrowserMs = 0, correctedBudget = 5, initialBudget = 5,
-  rejectReviewHeader = false, staleDecision = false, advancePreviewReadMs = 0,
-  transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
-  advanceThrownRunMs = 0, planningBudget = 6,
-  approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
-  previewCase = null, previewReadTimeouts = 0, sourceCase = null, physicalBuildChildEnded = false,
-} = {}) {
+async function driveReviewFixture(fixtureOptions = {}) {
+  let {
+    missingInitialId = false, staleCorrectedId = false, missingExecutionKey = false,
+    unchangedContent = false, advanceBrowserMs = 0, correctedBudget = 5, initialBudget = 5,
+    rejectReviewHeader = false, staleDecision = false, advancePreviewReadMs = 0,
+    transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
+    advanceThrownRunMs = 0, planningBudget = 6,
+    approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
+    previewCase = null, previewReadTimeouts = 0, sourceCase = null, physicalBuildChildEnded = false,
+    initialDetailWorkPlanId, correctedDetailWorkPlanId,
+    reviewEventWorkPlanId = 42, buildEventWorkPlanId = 42, previewEventWorkPlanId = 42,
+  } = fixtureOptions;
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
     let revised = false;
@@ -181,7 +184,7 @@ async function driveReviewFixture({
     const readyEvent = (second) => ({
       sequence: second ? 5 : 2, type: previewCase === 'failed' ? 'sandbox.preview_failed' : 'sandbox.preview_ready',
       payload: {
-        run_id: 'parent', work_plan_id: 42,
+        run_id: 'parent', work_plan_id: previewEventWorkPlanId,
         tree_hash: previewCase === 'stale' || (second && previewCase === 'correctedStale')
           ? 'old-tree' : second ? 'tree-revised' : 'tree-original',
         source: previewCase === 'manual' ? 'preview-api' : 'preview-step',
@@ -224,9 +227,9 @@ async function driveReviewFixture({
           { sequence: 1, type: previewCase === 'unbound' ? 'sandbox.execution_pod.unbound'
             : 'sandbox.execution_pod.bound', payload: { podName: 'parent-pod' } },
           readyEvent(false),
-          { sequence: 3, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: 42, treeHash: 'tree-original' } },
+          { sequence: 3, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: buildEventWorkPlanId, treeHash: 'tree-original' } },
           { sequence: 4, type: 'coordinator.assembly_review_requested', payload: {
-            workPlanId: 42, treeHash: 'tree-original', outputRevisionId: missingInitialId ? undefined : 'revision-1',
+            workPlanId: reviewEventWorkPlanId, treeHash: 'tree-original', outputRevisionId: missingInitialId ? undefined : 'revision-1',
           } },
           ...(revised ? [
             readyEvent(true),
@@ -264,7 +267,10 @@ async function driveReviewFixture({
         const id = url.split('/').at(-1);
         const bytes = Buffer.from(id === 'revision-1' ? 'original application' : 'fixed application');
         return { status: 200, body: {
-          revision_id: id, manifest_incomplete: false, work_plan_id: 42,
+          revision_id: id, manifest_incomplete: false,
+          work_plan_id: id === 'revision-1'
+            ? Object.hasOwn(fixtureOptions, 'initialDetailWorkPlanId') ? initialDetailWorkPlanId : 42
+            : Object.hasOwn(fixtureOptions, 'correctedDetailWorkPlanId') ? correctedDetailWorkPlanId : 42,
           tree_hash: id === 'revision-1' ? 'tree-original' : 'tree-revised',
           tree_content_sha256: id === 'revision-1' || unchangedContent ? 'content-original' : 'content-revised',
           files: [{ path: 'index.html', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }],
@@ -479,6 +485,51 @@ test('both preview gates pin fresh parent revisions and execution headers; metad
   assert.deepEqual(deleted, []);
 });
 
+test('canonical revision-detail wire IDs pass independently at both review gates', async () => {
+  for (const ids of [
+    { initialDetailWorkPlanId: '42', correctedDetailWorkPlanId: '42' },
+    { initialDetailWorkPlanId: '42', correctedDetailWorkPlanId: 42 },
+    { initialDetailWorkPlanId: 42, correctedDetailWorkPlanId: '42' },
+  ]) {
+    const { result, opened, decisions, previewPosts } = await driveReviewFixture(ids);
+    assert.equal(result.verdict, 'pass', JSON.stringify(ids));
+    assert.deepEqual(opened.map((entry) => entry[1]), ['original', 'fixed']);
+    assert.deepEqual(decisions.map((entry) => [entry.body.request_changes === true, entry.body.output_revision_id]),
+      [[true, 'revision-1'], [false, 'revision-2']]);
+    assert.deepEqual(previewPosts, []);
+  }
+});
+
+test('invalid revision-detail IDs fail before initial review or corrected approval', async () => {
+  for (const id of [null, undefined, false, {}, '', '0', 0, -1, 1.5, '01',
+    ' 42', '42 ', '+42', '-42', '42.0', '4.2e1', Number.MAX_SAFE_INTEGER + 1,
+    String(Number.MAX_SAFE_INTEGER + 1), 43]) {
+    const initial = await driveReviewFixture({ initialDetailWorkPlanId: id });
+    assert.equal(initial.result.verdict, 'fail', `initial ${String(id)}`);
+    assert.match(initial.result.error.message, /Review revision tree does not match current work plan/);
+    assert.equal(initial.result.phase, 'buildTestReview');
+    assert.deepEqual([initial.decisions, initial.opened, initial.previewPosts], [[], [], []]);
+
+    const corrected = await driveReviewFixture({ correctedDetailWorkPlanId: id });
+    assert.equal(corrected.result.verdict, 'fail', `corrected ${String(id)}`);
+    assert.match(corrected.result.error.message, /Review revision tree does not match current work plan/);
+    assert.equal(corrected.result.phase, 'correctedPreview');
+    assert.deepEqual(corrected.decisions.map((entry) => entry.body.output_revision_id), ['revision-1']);
+    assert.deepEqual(corrected.opened.map((entry) => entry[1]), ['original']);
+    assert.deepEqual(corrected.previewPosts, []);
+  }
+});
+
+test('string IDs in review, build or preview events remain rejected', async () => {
+  for (const field of ['reviewEventWorkPlanId', 'buildEventWorkPlanId', 'previewEventWorkPlanId']) {
+    const { result, decisions, opened, previewPosts } = await driveReviewFixture({
+      initialDetailWorkPlanId: '42', [field]: '42',
+    });
+    assert.equal(result.verdict, 'fail', field);
+    assert.deepEqual([decisions, opened, previewPosts], [[], [], []], field);
+  }
+});
+
 test('stale, manual, foreign, ambiguous, mismatched and failed previews are not adopted or deleted', async () => {
   for (const previewCase of ['stale', 'manual', 'foreign', 'ambiguous', 'port', 'pod', 'runner', 'url', 'failed', 'lost', 'unbound']) {
     const { result, previewPosts, opened, deleted, decisions } = await driveReviewFixture({ previewCase });
@@ -502,7 +553,7 @@ test('same-tree recovery selects only the latest terminal event and its live ses
       target_port: 8235, preview_url: `https://${id}.example.test`,
     },
   });
-  const select = async (history, sessions) => {
+  const select = async (history, sessions, detail = { work_plan_id: 42 }, planWorkPlanId = 42) => {
     const events = [
       { sequence: 1, type: 'sandbox.execution_pod.bound', payload: { podName: 'parent-pod' } },
       ...history,
@@ -514,7 +565,7 @@ test('same-tree recovery selects only the latest terminal event and its live ses
     const deltas = new EventDeltas(async () => ({ status: 200, body: events }));
     await deltas.poll('parent');
     return () => selectCurrentAutomaticPreview({
-      runId: 'parent', plan: { workPlanId: 42, coordinatorRunId: 'parent', status: 'in_review' },
+      runId: 'parent', plan: { workPlanId: planWorkPlanId, coordinatorRunId: 'parent', status: 'in_review' },
       run: { lifecycle_generation: 1, sandbox: { backend: 'kata-exec-sidecar', pod_name: 'historic-pod', current_binding: {
         state: 'verified', run_id: 'parent', provisioner: 'kubernetes-sandbox-claim', claim_name: 'agent-parent',
         claim_uid: 'claim-uid', pod_name: 'parent-pod', pod_uid: 'pod-uid',
@@ -522,7 +573,7 @@ test('same-tree recovery selects only the latest terminal event and its live ses
         source_repository: '/repository', source_ref: 'branch', source_base_commit: 'commit',
         source_tree: 'tree-original', source_worktree: '/worktree',
       } } },
-      revision: { tree_hash: 'tree-original', work_plan_id: 42 }, deltas, sessions,
+      revision: { tree_hash: 'tree-original', ...detail }, deltas, sessions,
     });
   };
   for (const previous of ['sandbox.preview_ready', 'sandbox.preview_failed']) {
@@ -539,6 +590,20 @@ test('same-tree recovery selects only the latest terminal event and its live ses
   assert.throws(foreign, /does not match the current automatic preview event/);
   const unknown = await select([], [session('unknown')]);
   assert.throws(unknown, /no current automatic preview-ready event/);
+  for (const id of ['42', 42]) {
+    const valid = await select([ready('current', 2)], [session('current')], { work_plan_id: id });
+    assert.deepEqual(valid(), { sessionId: 'current', previewUrl: 'https://current.example.test', targetPort: 8235 });
+  }
+  for (const id of [null, undefined, false, {}, '', '0', 0, -1, 1.5, '01',
+    ' 42', '42 ', '+42', '-42', '42.0', '4.2e1', Number.MAX_SAFE_INTEGER + 1,
+    String(Number.MAX_SAFE_INTEGER + 1), 43]) {
+    const invalid = await select([ready('current', 2)], [session('current')], { work_plan_id: id });
+    assert.throws(invalid, /Current review, work plan and revision tree do not match/, String(id));
+  }
+  for (const planId of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '42']) {
+    const invalid = await select([ready('current', 2)], [session('current')], { work_plan_id: '42' }, planId);
+    assert.throws(invalid, /Current review, work plan and revision tree do not match/, String(planId));
+  }
 });
 
 test('current binding rejects historical pods and missing provenance without changing preview fences', async () => {
