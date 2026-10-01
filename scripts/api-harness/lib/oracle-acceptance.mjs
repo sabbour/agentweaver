@@ -139,19 +139,18 @@ export function selectCurrentAutomaticPreview({ runId, plan, run, revision, delt
       && event.payload?.tree_hash === review.treeHash
       && event.payload?.source === 'preview-step'
       && event.sequence < review.sequence);
-  if (events.some((event) => event.type !== 'sandbox.preview_ready')) {
+  const latest = events.at(-1);
+  if (latest && latest.type !== 'sandbox.preview_ready') {
     throw new AcceptanceFailure('Current automatic preview failed or was skipped.');
   }
-  const ready = events.filter((event) => event.type === 'sandbox.preview_ready');
-  if (ready.length > 1) throw new AcceptanceFailure('Ambiguous current automatic preview events.');
   if (sessions.length > 1) throw new AcceptanceFailure('Ambiguous preview sessions for current run.');
-  if (!ready.length && !sessions.length) return null;
-  if (!ready.length) throw new AcceptanceFailure('Preview session has no current automatic preview-ready event.');
-  const event = ready[0].payload;
+  if (!latest && !sessions.length) return null;
+  if (!latest) throw new AcceptanceFailure('Preview session has no current automatic preview-ready event.');
+  const event = latest.payload;
   if (!nonempty(event.session_id) || !nonempty(event.preview_runner_session_id)
     || !nonempty(event.preview_url) || !nonempty(event.pod_name)
     || !Number.isInteger(event.target_port) || event.target_port < 1 || event.target_port > 65535
-    || event.pod_name !== binding.podName || binding.sequence >= ready[0].sequence) {
+    || event.pod_name !== binding.podName || binding.sequence >= latest.sequence) {
     throw new AcceptanceFailure('Automatic preview event has no active matching pod, runner, port or URL.');
   }
   if (!sessions.length) return null;
