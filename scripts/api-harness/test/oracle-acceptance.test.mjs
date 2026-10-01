@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { AcceptanceFailure, DEFAULT_BUDGETS, EventDeltas, cleanupOwnedPreviews, createAcceptanceTransport, runOracleAcceptance } from '../lib/oracle-acceptance.mjs';
+import { AcceptanceFailure, DEFAULT_BUDGETS, EventDeltas, cleanupOwnedPreviews, createAcceptanceTransport, runOracleAcceptance, selectCurrentAutomaticPreview } from '../lib/oracle-acceptance.mjs';
 import { parseOracleArgs } from '../run-oracle-acceptance.mjs';
 import { verifyRenderedPreview } from '../../harness-shared/preview-browser.mjs';
 
@@ -466,6 +466,53 @@ test('stale, manual, foreign, ambiguous, mismatched and failed previews are not 
     assert.match(result.error.message, /preview|claim-bound/i, previewCase);
     assert.deepEqual([previewPosts, opened, deleted, decisions], [[], [], [], []], previewCase);
   }
+});
+
+test('same-tree recovery selects only the latest terminal event and its live session', async () => {
+  const session = (id) => ({
+    session_id: id, preview_runner_session_id: `runner-${id}`, pod_name: 'parent-pod',
+    target_port: 8235, preview_url: `https://${id}.example.test`,
+  });
+  const ready = (id, sequence, type = 'sandbox.preview_ready') => ({
+    sequence, type,
+    payload: {
+      run_id: 'parent', work_plan_id: 42, tree_hash: 'tree-original', source: 'preview-step',
+      session_id: id, preview_runner_session_id: `runner-${id}`, pod_name: 'parent-pod',
+      target_port: 8235, preview_url: `https://${id}.example.test`,
+    },
+  });
+  const select = async (history, sessions) => {
+    const events = [
+      { sequence: 1, type: 'sandbox.execution_pod.bound', payload: { podName: 'parent-pod' } },
+      ...history,
+      { sequence: 5, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: 42, treeHash: 'tree-original' } },
+      { sequence: 6, type: 'coordinator.assembly_review_requested', payload: {
+        workPlanId: 42, treeHash: 'tree-original', outputRevisionId: 'revision-1',
+      } },
+    ];
+    const deltas = new EventDeltas(async () => ({ status: 200, body: events }));
+    await deltas.poll('parent');
+    return () => selectCurrentAutomaticPreview({
+      runId: 'parent', plan: { workPlanId: 42, coordinatorRunId: 'parent', status: 'in_review' },
+      run: { sandbox: { backend: 'kubernetes-sandbox-claim', phase: 'Bound',
+        claim_name: 'agent-parent', pod_name: 'parent-pod' } },
+      revision: { tree_hash: 'tree-original', work_plan_id: 42 }, deltas, sessions,
+    });
+  };
+  for (const previous of ['sandbox.preview_ready', 'sandbox.preview_failed']) {
+    const current = await select([ready('old', 2, previous), ready('new', 3)], [session('new')]);
+    assert.deepEqual(current(), { sessionId: 'new', previewUrl: 'https://new.example.test', targetPort: 8235 });
+  }
+  for (const latest of ['sandbox.preview_failed', 'sandbox.preview_skipped_not_applicable']) {
+    const current = await select([ready('old', 2), ready('new', 3, latest)], [session('old')]);
+    assert.throws(current, /Current automatic preview failed or was skipped/);
+  }
+  const stale = await select([ready('old', 2), ready('new', 3)], [session('old')]);
+  assert.throws(stale, /does not match the current automatic preview event/);
+  const foreign = await select([ready('old', 2), ready('new', 3)], [session('foreign')]);
+  assert.throws(foreign, /does not match the current automatic preview event/);
+  const unknown = await select([], [session('unknown')]);
+  assert.throws(unknown, /no current automatic preview-ready event/);
 });
 
 test('corrected tree freshness and both revisions source bytes are enforced', async () => {
