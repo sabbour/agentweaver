@@ -251,6 +251,59 @@ test('separate CLI processes preserve page state, recover crashes, and isolate s
   }
 });
 
+test('mobile viewport CLI exits AUTH_EXPIRED when resize reveals sign-in, even with focus N/A', { timeout: 120_000 }, async () => {
+  const html = `<!doctype html><html><body>
+    <nav data-testid="app-navigation-menu">Workflows</nav>
+    <main aria-label="Main content"><article data-testid="workflow-card-fixture">Workflow</article></main>
+    <script>
+      window.addEventListener('resize', () => {
+        if (window.innerWidth <= 390) document.body.innerHTML = '<h1>Sign in to continue</h1>';
+      });
+    </script>
+  </body></html>`;
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { connection: 'close', 'content-type': 'text/html; charset=utf-8' });
+    response.end(html);
+  });
+  const port = await listen(server);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const authPath = path.join(HERE, `multi-process-${randomUUID()}.storageState.json`);
+  const seedPath = `${authPath}.sessionStorage.json`;
+  let sessionId;
+  await writeFile(authPath, JSON.stringify({
+    cookies: [], origins: [{ origin: baseUrl, localStorage: [] }],
+  }));
+  await writeFile(seedPath, JSON.stringify({ origin: baseUrl, entries: { 'fixture.token': 'test-only' } }));
+  try {
+    sessionId = parseJsonOutput((await runCli('init', '--persona', 'priya', '--base-url', baseUrl,
+      '--storage-state', authPath)).stdout).sessionId;
+    await runCli('goto', '--session', sessionId, '--path', '/projects/fixture/workflows');
+    const desktop = parseJsonOutput((await runCli('viewport', '--session', sessionId,
+      '--width', '1920', '--height', '1080', '--focus-mode', 'not-applicable',
+      '--content-test-id', 'workflow-card-fixture')).stdout);
+    assert.equal(desktop.readiness.state, 'ready');
+    assert.equal(desktop.responsive.focusMode.exists, false);
+    await assert.rejects(runCli('viewport', '--session', sessionId, '--mobile',
+      '--focus-mode', 'not-applicable', '--content-test-id', 'workflow-card-fixture'),
+    /exited 3: AUTH_EXPIRED/);
+    const stored = JSON.parse(await readFile(path.join(SESSIONS, `${sessionId}.json`), 'utf8'));
+    assert.equal(stored.commandFailures.at(-1).code, 'AUTH_EXPIRED');
+    assert.equal(stored.steps.filter((step) => step.action === 'viewport').length, 1);
+    const result = parseJsonOutput((await runCli('finish', '--session', sessionId)).stdout);
+    assert.equal(result.driver.pass, false);
+    assert(result.driver.failures.some((failure) => failure.kind === 'command-failed'));
+  } finally {
+    if (sessionId) {
+      await stopSessionRuntime({ sessionsDirectory: SESSIONS, sessionId });
+      await rm(path.join(SESSIONS, `${sessionId}.json`), { force: true });
+      await rm(path.join(TRANSCRIPTS, sessionId), { recursive: true, force: true });
+    }
+    await rm(authPath, { force: true });
+    await rm(seedPath, { force: true });
+    await close(server);
+  }
+});
+
 test('an abandoned lock owned by a dead process is recovered', async () => {
   const sessionsDirectory = path.join(HERE, `.sessions-${randomUUID()}`);
   const sessionId = randomUUID();

@@ -153,6 +153,9 @@ export async function executeUiAction({
       target = { mode: viewport.mode, viewport: viewport.size };
       responsiveTargets = viewport.responsiveTargets;
       await runtime.page.setViewportSize(viewport.size);
+      await runtime.page.evaluate(() => new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      readiness = await waitForAppReadiness(runtime.page, readinessOptions(args));
     } else if (command === 'resolve-approval') {
       assertApprovalAllowed({
         adapterText: session.persona.text,
@@ -189,7 +192,7 @@ export async function executeUiAction({
     throw failure;
   }
 
-  return captureTurn({
+  const step = await captureTurn({
     page: runtime.page,
     capture,
     directory: transcriptDirectory,
@@ -201,4 +204,12 @@ export async function executeUiAction({
     readiness,
     responsiveTargets,
   });
+  if (command === 'viewport') {
+    await waitForAppReadiness(runtime.page, {
+      ...readinessOptions(args),
+      timeout: 0,
+      snapshotPage: async () => step.domSnapshot,
+    });
+  }
+  return step;
 }
