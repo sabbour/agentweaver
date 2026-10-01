@@ -78,8 +78,11 @@ Treat these files as credentials: never print, commit, log, or attach them. The 
 never automates reauthentication. On `AUTH_EXPIRED`, run the login script again
 (or pass `--storage-state <local-path>` consistently).
 
-After a successful login, the API harness's `recorder-session` provider reuses these
-same cached artifacts for the matching Agentweaver origin. It returns the complete
+After a successful login, pass `--recorder-auth-root scripts/ui-harness/.auth` to an
+API harness command (or `--auth-root scripts/ui-harness/.auth` to
+`run-context-budget-pressure.mjs`). The `recorder-session` provider reuses the
+`staging.storageState.json` file and its matching sidecar **only within that selected
+directory** for the matching Agentweaver origin. It returns the complete
 `Authorization` value only in memory; API callers pass that value to the header unchanged.
 It does not start a second browser sign-in or export the value. If the
 artifacts are missing, expired, or for another origin, the API harness tells you to
@@ -144,7 +147,16 @@ overflow, reachable vertical scrolling, focus-mode availability/state, and conte
 visibility. Run-detail defaults use `app-navigation-menu`, `run-focus-toggle`, and
 `run-operator-console`; override those IDs with `--navigation-test-id`,
 `--focus-test-id`, and `--content-test-id`. Set `--focus-mode standard`, `focused`, or
-`available` (the default) to assert the expected focus-toggle state.
+`available` (the default) to assert the expected focus-toggle state. For a workflow
+list only (`/projects/<project-id>/workflows`), when its run-focus control does not
+exist, explicitly pass `--focus-mode not-applicable` and
+`--content-test-id workflow-card-custom-fan-coordinator-demo`. The focus fact still
+reports `exists: false` and `reachable: false`, with a not-applicable status and
+reason; only its focus assertion becomes non-required. The command rejects N/A on
+other routes or if a focus control exists. Navigation, horizontal/vertical overflow,
+and content reachability remain required. Content evidence includes its own
+`clientWidth`, `scrollWidth`, horizontal-overflow flag, direct-child bounds, and
+descendant button bounds/reachability (no form values).
 The vertical-scroll assertion performs and reverses a real root scroll, and only passes
 for scrollable root overflow modes (`auto`, `scroll`, or `overlay`), never `hidden` or
 `clip`. Per-target diagnostics serialize only changed scroll containers, blocking
@@ -169,7 +181,14 @@ harness context. Validate preview URLs from a separate credential-free browser c
 
 For `click` and `type-coordinator`, use `--test-id` where available. Otherwise provide
 both `--role <aria-role>` and `--name <exact-accessible-name>`. Do not use arbitrary CSS
-selectors. `click` also accepts `--timeout <milliseconds>`; action evidence can record
+selectors. For repeated accessible names, scope the target to a stable parent:
+
+```powershell
+node scripts/ui-harness/agent-driver-ui/tools.mjs click --session <sessionId> --within-test-id workflow-card-custom-fan-coordinator-demo --role button --name 'View graph'
+```
+
+`--within-test-id` works only on `click` and `type-coordinator`; missing parents or
+children fail as actions rather than falling back to a global match. `click` also accepts `--timeout <milliseconds>`; action evidence can record
 the intended action with `--thought "<intent>"`.
 
 Approval gates are deny-by-default:

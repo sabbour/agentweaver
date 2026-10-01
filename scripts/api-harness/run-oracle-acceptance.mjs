@@ -52,7 +52,7 @@ export function parseOracleArgs(argv) {
 export async function main(argv = process.argv.slice(2)) {
   const args = parseOracleArgs(argv);
   if (args.help) {
-    console.log('Usage: node scripts/api-harness/run-oracle-acceptance.mjs --target <url> --project-id <uuid> (--run-id <uuid> | --goal <text>) --expected-text <text> --corrected-text <text> --feedback <grounded feedback> --target-files <comma-separated paths> [--workflow-id <id>] [--budget phase=minutes] [--approve-shell] [--poll-ms 5000] [--port 3000] [--transcript path] [--result path]');
+    console.log('Usage: node scripts/api-harness/run-oracle-acceptance.mjs --target <url> --project-id <uuid> (--run-id <uuid> | --goal <text>) --expected-text <text> --corrected-text <text> --feedback <grounded feedback> --target-files <comma-separated paths> [--workflow-id <id>] [--recorder-auth-root scripts/ui-harness/.auth] [--budget phase=minutes] [--approve-shell] [--poll-ms 5000] [--port 3000] [--transcript path] [--result path]');
     return 0;
   }
   if (!args.target || (!args.runId && (!args.projectId || !args.goal)) || !args.expectedText || !args.correctedText || !args.feedback || !args.targetFiles?.length) {
