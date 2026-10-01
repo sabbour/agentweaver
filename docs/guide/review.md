@@ -73,6 +73,10 @@ for the current tree. A ready URL is shown only while its published session stil
 belongs to the current sandbox and its supervised app process is healthy. Preview
 failures remain visible and do not prevent a human decision; the platform discovers
 the application's actual port rather than assuming port 3000.
+Pending approvals and failures for the current tree appear while assembly is still
+running, before the human-review card opens. A manually started sandbox preview is a
+separate operator view: a still-active manual session can be reopened after a page
+reload, but its URL never counts as Build & Test readiness for the current candidate.
 
 For the full contract behind this stage, see [Decoupled live-preview provisioning](../experience/live-preview-provisioning.md).
 

@@ -95,6 +95,7 @@ export type EventType =
   | 'sandbox.warning'
   | 'sandbox.provisioning_pending'
   | 'sandbox.preview_pending'
+  | 'sandbox.preview_applicability'
   | 'sandbox.preview_ready'
   | 'sandbox.preview_failed'
   | 'coordinator.preview_ready'

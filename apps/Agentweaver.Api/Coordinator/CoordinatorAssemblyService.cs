@@ -3824,7 +3824,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     message = "Build & Test infrastructure failed before a preview could be verified.",
                 });
                 await PersistRunEventsSnapshotAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
-                throw;
+                return;
             }
             Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyBuildTestCompleted, new
             {

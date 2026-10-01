@@ -2444,6 +2444,7 @@ export interface PortForwardSessionDto {
   local_port: number;
   target_port: number;
   pod_name: string;
+  preview_runner_session_id?: string | null;
   started_at: string;
   preview_url?: string | null;
   previewUrl?: string | null;

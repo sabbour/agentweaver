@@ -502,6 +502,9 @@ public static class SandboxEndpoints
                     target_port = s.TargetPort,
                     pod_name    = s.PodName,
                     started_at  = s.StartedAt,
+                    preview_url = (string?)s.PreviewUrl,
+                    keepalive_url = (string?)$"/api/runs/{runId}/sandbox/preview/{s.Token}/keepalive",
+                    preview_runner_session_id = s.PreviewRunnerSessionId,
                 })
                 : portForwardService.ListForRun(runId).Select(s => new
                 {
@@ -510,6 +513,9 @@ public static class SandboxEndpoints
                     target_port = s.TargetPort,
                     pod_name    = s.PodName,
                     started_at  = s.StartedAt,
+                    preview_url = (string?)null,
+                    keepalive_url = (string?)null,
+                    preview_runner_session_id = (string?)null,
                 });
 
             return Results.Ok(sessions);

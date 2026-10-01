@@ -668,6 +668,57 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             "non-code deliverables have no app to run and no preview requirement");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Escalation_BuildTestInfrastructureFailure_RecordsUnavailableBeforeReview(bool recovery)
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        _streamStore.Create(coordinatorRunId, "alice");
+        var (workPlanId, subtaskIds) = await SeedPlanAsync(
+            coordinatorRunId, [SubtaskStatus.AssembleReady]);
+        await BindSoftwareWorkflowAsync(coordinatorRunId, workPlanId);
+        await SeedCollectiveCandidateAsync(coordinatorRunId, workPlanId, "failed-tree", "verified-diff");
+        _pipeline.OnBuildTest = _ => throw new CollectiveBuildTestInfrastructureException(
+            "agenthost_launch_failed", "The sandbox could not start.", retryable: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        if (recovery)
+        {
+            await SetPlanSteeringStateAsync(workPlanId, status: WorkPlanStatus.AssemblySteering,
+                steeringIterations: 6);
+            await SeedExecutingProceedDirectiveAsync(coordinatorRunId, subtaskIds, "failed-tree");
+            (await InvokeDriveOutstandingSteeringExecutionAsync(
+                Context(coordinatorRunId), workPlanId, cts.Token)).Should().BeTrue();
+        }
+        else
+        {
+            await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6);
+            var touched = subtaskIds.ToDictionary(
+                id => id, _ => (IReadOnlySet<string>)new HashSet<string>());
+            var route = InvokeRouteAssemblyGateThroughSteeringAsync(
+                Context(coordinatorRunId), workPlanId, SteeringSource.Rubberduck,
+                "Fix the preview.", touched, "failed-tree", cts.Token);
+            await WaitUntilArmedAsync(coordinatorRunId);
+            cts.Cancel();
+            try { await route; } catch (OperationCanceledException) { }
+        }
+
+        var events = _streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events;
+        var failure = events.Single(e => e.Type == EventTypes.SandboxPreviewFailed);
+        var payload = JsonSerializer.SerializeToNode(failure.Payload)!;
+        payload["tree_hash"]!.GetValue<string>().Should().Be("failed-tree");
+        payload["reason"]!.GetValue<string>().Should().Be("build_test_infra_agenthost_launch_failed");
+        events.Select(e => e.Type).Should().ContainInOrder(
+            EventTypes.SandboxPreviewFailed, EventTypes.CoordinatorAssemblyReviewRequested);
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.RunEvents.AsNoTracking().AnyAsync(e => e.RunId == coordinatorRunId
+            && e.EventType == EventTypes.SandboxPreviewFailed)).Should().BeTrue();
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.InReview);
+    }
+
     [Fact]
     public async Task DriveOutstanding_ProceedDirective_ReviewAlreadyOpen_SettlesWithoutReDriving()
     {

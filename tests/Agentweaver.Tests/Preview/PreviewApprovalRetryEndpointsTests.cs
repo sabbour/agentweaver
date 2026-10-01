@@ -30,6 +30,52 @@ public sealed class PreviewApprovalRetryEndpointsTests : IClassFixture<ProjectsW
         _client = factory.CreateAuthenticatedClient();
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public async Task GatewayGetPortForward_ProjectsSharedBrowserSessionContract(int fixtureIndex)
+    {
+        var fixturePath = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+            "apps", "web", "src", "__tests__", "fixtures", "gatewayPreviewList.json"));
+        using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(fixturePath));
+        var expected = fixture.RootElement[fixtureIndex];
+        var session = new PreviewSession(
+            expected.GetProperty("session_id").GetString()!,
+            "", expected.GetProperty("pod_name").GetString()!,
+            expected.GetProperty("target_port").GetInt32(),
+            expected.GetProperty("preview_url").GetString()!,
+            DateTimeOffset.Parse(expected.GetProperty("started_at").GetString()!),
+            expected.GetProperty("preview_runner_session_id").ValueKind == JsonValueKind.Null
+                ? null : expected.GetProperty("preview_runner_session_id").GetString());
+        var preview = new RetainedPreviewService(new RetainedRunnerClient(healthy: true, unreachable: false));
+        using var factory = _factory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+            services.AddSingleton<ISandboxPreviewService>(preview)));
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+        var (runId, _) = await CreateRunAsync(RunStatus.InProgress, services: factory.Services);
+        preview.SeedPublishedSession(session with { RunId = runId });
+
+        var response = await client.GetAsync($"/api/runs/{runId}/sandbox/port-forward");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var actual = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        actual.RootElement.GetArrayLength().Should().Be(1);
+        var projected = actual.RootElement[0];
+        projected.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(
+            expected.EnumerateObject().Select(p => p.Name));
+        foreach (var field in expected.EnumerateObject())
+        {
+            var value = projected.GetProperty(field.Name);
+            if (field.Name == "started_at")
+                DateTimeOffset.Parse(value.GetString()!).Should().Be(session.StartedAt);
+            else if (field.Name == "keepalive_url")
+                value.GetString().Should().Be(field.Value.GetString()!.Replace("{runId}", runId));
+            else
+                value.GetRawText().Should().Be(field.Value.GetRawText());
+        }
+    }
+
     [Fact]
     public async Task RetryExpiredApproval_CreatesFreshPendingAttempt()
     {
