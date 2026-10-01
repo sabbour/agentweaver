@@ -89,9 +89,9 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     // WorkflowChildWorkService already holds this run's claim through the Git ref update.
     public Task<bool> TryRecordFanInputProjectionAsync(
         RunId runId, int generation, string expectedBaseTree, string projectedTree,
-        string worktreeBranch, CancellationToken ct = default) =>
+        string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default) =>
         inner.TryRecordFanInputProjectionAsync(
-            runId, generation, expectedBaseTree, projectedTree, worktreeBranch, ct);
+            runId, generation, expectedBaseTree, projectedTree, worktreeBranch, recoveredWorktreePath, ct);
 
     public async Task<bool> TryUpdateAssemblyArtifactsAsync(
         RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,

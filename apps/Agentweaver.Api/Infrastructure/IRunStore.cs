@@ -41,7 +41,7 @@ public interface IRunStore
     /// <summary>Caller holds the parent-run claim and child-work plan fence across Git apply and this receipt.</summary>
     Task<bool> TryRecordFanInputProjectionAsync(
         RunId runId, int generation, string expectedBaseTree, string projectedTree,
-        string worktreeBranch, CancellationToken ct = default) =>
+        string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} cannot record a fan input projection.");
     async Task<bool> TryUpdateAssemblyArtifactsAsync(
         RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,

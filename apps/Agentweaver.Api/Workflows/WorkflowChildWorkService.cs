@@ -1164,7 +1164,8 @@ internal sealed class WorkflowChildWorkService
             {
                 if (result.FanProjection is null)
                     throw new RunOutputRevisionUnavailableException("fan_projection_missing");
-                await ApplyFanProjectionAsync(snapshot.Plan, parent, result, ct, delivery).ConfigureAwait(false);
+                await ApplyFanProjectionAsync(snapshot.Plan, parent, result, ct, delivery,
+                    staleAfter ?? DeliveryClaimStaleAfter).ConfigureAwait(false);
             }
             catch (RunOutputRevisionUnavailableException ex)
             {
@@ -2128,7 +2129,7 @@ internal sealed class WorkflowChildWorkService
 
     private async Task ApplyFanProjectionAsync(
         WorkPlan plan, DomainRun parent, WorkflowChildWorkResult result,
-        CancellationToken ct, PendingDelivery? delivery = null)
+        CancellationToken ct, PendingDelivery? delivery = null, TimeSpan? deliveryStaleAfter = null)
     {
         var projection = result.FanProjection
             ?? throw new RunOutputRevisionUnavailableException("fan_projection_missing");
@@ -2166,16 +2167,28 @@ internal sealed class WorkflowChildWorkService
             || currentPlan.ProjectId != parent.ProjectId?.ToString()
             || currentPlan.ExecutionBaseTreeHash != projection.BaseTreeHash)
             throw new RunOutputRevisionUnavailableException("fan_projection_fence_lost");
-        if (delivery is not null
-            && !await db.PendingRequests.AsNoTracking().AnyAsync(request =>
-                request.RunId == parent.Id.ToString()
-                && request.RequestId == currentPlan.ParentResumeRequestId
-                && request.DeliveryKind == PendingRequestDeliveryKinds.WorkflowChildWork
-                && request.DecisionIdentity == delivery.DecisionIdentity
-                && request.DeliveryState == PendingRequestDeliveryStates.Delivering
-                && request.DeliveryClaimOwner == delivery.ClaimOwner
-                && request.DeliveryClaimedAt == delivery.ClaimedAt, ct).ConfigureAwait(false))
-            throw new RunOutputRevisionUnavailableException("fan_projection_fence_lost");
+        if (delivery is not null)
+        {
+            var staleBefore = DateTimeOffset.UtcNow - (deliveryStaleAfter ?? DeliveryClaimStaleAfter);
+            var ownerLocked = await db.PendingRequests.Where(request =>
+                    request.RunId == parent.Id.ToString()
+                    && request.RequestId == currentPlan.ParentResumeRequestId
+                    && request.DeliveryKind == PendingRequestDeliveryKinds.WorkflowChildWork
+                    && request.DecisionIdentity == delivery.DecisionIdentity
+                    && request.DeliveryState == PendingRequestDeliveryStates.Delivering
+                    && request.DeliveryClaimOwner == delivery.ClaimOwner
+                    && request.DeliveryClaimedAt == delivery.ClaimedAt)
+                .ExecuteUpdateAsync(updates => updates.SetProperty(request => request.DeliveryClaimOwner,
+                    request => request.DeliveryClaimOwner), ct).ConfigureAwait(false);
+            if (ownerLocked != 1)
+                throw new RunOutputRevisionUnavailableException("fan_projection_fence_lost");
+            var claimedAt = await db.PendingRequests.AsNoTracking()
+                .Where(request => request.RunId == parent.Id.ToString())
+                .Select(request => request.DeliveryClaimedAt)
+                .SingleAsync(ct).ConfigureAwait(false);
+            if (claimedAt is null || claimedAt <= staleBefore)
+                throw new RunOutputRevisionUnavailableException("fan_projection_fence_lost");
+        }
         if (db.Database.IsNpgsql())
         {
             var runLocked = await db.Runs.Where(run => run.RunId == parent.Id.ToString())
@@ -2211,7 +2224,8 @@ internal sealed class WorkflowChildWorkService
                     projection.PreparedTreeHash), ct).ConfigureAwait(false) == 1
             : await _runStore.TryRecordFanInputProjectionAsync(
                 parent.Id, projection.ParentLifecycleGeneration, projection.BaseTreeHash,
-                projection.PreparedTreeHash, parent.WorktreeBranch, ct).ConfigureAwait(false);
+                projection.PreparedTreeHash, parent.WorktreeBranch,
+                worktreePath == currentParent.WorktreePath ? null : worktreePath, ct).ConfigureAwait(false);
         if (!recorded)
         {
             var receipt = await _runStore.GetAsync(parent.Id, ct).ConfigureAwait(false);
@@ -2234,14 +2248,15 @@ internal sealed class WorkflowChildWorkService
         if (recovered is null || recovered.Value.BranchName != parent.WorktreeBranch)
             throw new RunOutputRevisionUnavailableException("fan_projection_parent_unavailable");
         if (lockedDb is not null)
-            await lockedDb.Runs.Where(run => run.RunId == parent.Id.ToString()
+        {
+            var updated = await lockedDb.Runs.Where(run => run.RunId == parent.Id.ToString()
                     && run.LifecycleGeneration == parent.LifecycleGeneration
                     && run.Status == "awaiting_review")
                 .ExecuteUpdateAsync(updates => updates.SetProperty(run => run.WorktreePath,
                     recovered.Value.WorktreePath), ct).ConfigureAwait(false);
-        else
-            await _runStore.UpdateWorktreeAsync(parent.Id, recovered.Value.WorktreePath,
-                recovered.Value.BranchName, ct).ConfigureAwait(false);
+            if (updated != 1)
+                throw new RunOutputRevisionUnavailableException("fan_projection_fence_lost");
+        }
         return recovered.Value.WorktreePath;
     }
 

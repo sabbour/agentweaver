@@ -883,7 +883,7 @@ public sealed class EfRunStore : IRunStore
 
     public async Task<bool> TryRecordFanInputProjectionAsync(
         RunId runId, int generation, string expectedBaseTree, string projectedTree,
-        string worktreeBranch, CancellationToken ct = default)
+        string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         return await db.Runs
@@ -892,7 +892,9 @@ public sealed class EfRunStore : IRunStore
                 && r.Status == "awaiting_review"
                 && r.WorktreeBranch == worktreeBranch
                 && (r.TreeHash == null || r.TreeHash == expectedBaseTree))
-            .ExecuteUpdateAsync(updates => updates.SetProperty(r => r.TreeHash, projectedTree), ct)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(r => r.TreeHash, projectedTree)
+                .SetProperty(r => r.WorktreePath, r => recoveredWorktreePath ?? r.WorktreePath), ct)
             .ConfigureAwait(false) == 1;
     }
 

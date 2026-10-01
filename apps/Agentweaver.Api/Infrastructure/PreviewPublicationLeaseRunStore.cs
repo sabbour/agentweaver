@@ -46,9 +46,9 @@ public sealed class PreviewPublicationLeaseRunStore(
 
     public Task<bool> TryRecordFanInputProjectionAsync(
         RunId runId, int generation, string expectedBaseTree, string projectedTree,
-        string worktreeBranch, CancellationToken ct = default) =>
+        string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default) =>
         Inner.TryRecordFanInputProjectionAsync(
-            runId, generation, expectedBaseTree, projectedTree, worktreeBranch, ct);
+            runId, generation, expectedBaseTree, projectedTree, worktreeBranch, recoveredWorktreePath, ct);
 
     public Task<bool> TryBindExecutionInputAsync(
         RunId runId, int expectedLifecycleGeneration, string sourceCommitHash,

@@ -55,6 +55,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         services.AddScoped<GitHubCapabilityBroker>();
         services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
         services.AddSingleton<RunActiveClaimGuard>();
+        services.AddSingleton<RunStreamStore>();
         services.AddSingleton(new WorktreeManager(
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -62,6 +63,11 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
                     "agentweaver-fan-service-" + Guid.NewGuid().ToString("N")),
             }).Build(),
             NullLogger<WorktreeManager>.Instance));
+        services.AddSingleton<IWorktreeOperations>(provider => new WorktreeOperationsAdapter(
+            provider.GetRequiredService<WorktreeManager>(),
+            provider.GetRequiredService<RunStreamStore>(),
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            NullLogger<WorktreeOperationsAdapter>.Instance));
         _provider = services.BuildServiceProvider();
         using (var scope = _provider.CreateScope())
             scope.ServiceProvider.GetRequiredService<MemoryDbContext>().Database.EnsureCreated();
@@ -590,6 +596,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     [InlineData(true, false, "wrong_generation")]
     [InlineData(true, false, "cancel_before_apply")]
     [InlineData(true, false, "reopened_before_apply")]
+    [InlineData(true, false, "missing_worktree")]
     [InlineData(false, false, "late_cross_project")]
     [InlineData(false, false, "late_owner_takeover")]
     public async Task DeclaredFanArtifacts_ProjectBeforeResume_AndComposedChildInheritsSameBytes(
@@ -671,7 +678,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             if (invalidSource is not null
                 && invalidSource is not ("moved_parent" or "late_cross_project" or "late_owner_takeover"
                     or "wrong_generation"
-                    or "cancel_before_apply" or "reopened_before_apply"))
+                    or "cancel_before_apply" or "reopened_before_apply" or "missing_worktree"))
             {
                 if (invalidSource is "cross_project" or "missing_revision")
                 {
@@ -802,6 +809,35 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
                 using (var intact = new Repository(parentWorktree.WorktreePath))
                     intact.Head.Tip.Id.Sha.Should().Be(baseline.Sha);
                 (await _runStore.GetAsync(parent.Id))!.TreeHash.Should().BeNull();
+                manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
+                return;
+            }
+            if (invalidSource == "missing_worktree")
+            {
+                Directory.Delete(parentWorktree.WorktreePath, recursive: true);
+                var stalePath = Path.Combine(repositoryPath, "missing-parent-checkout");
+                await _runStore.UpdateWorktreeAsync(parent.Id, stalePath, parentWorktree.BranchName);
+                IRunStore guarded = new PreviewPublicationLeaseRunStore(
+                    new RunActiveClaimGuardedRunStore(
+                        _runStore, _provider.GetRequiredService<RunActiveClaimGuard>()));
+                var recoveredService = BuildService("recovered-pod", _runtime, runStore: guarded);
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                _runtime.DeliverResult = false;
+                await recoveredService.SweepAsync(deadline.Token);
+                (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+                    .Should().Be(WorkflowChildWorkResumeStates.Ready);
+                var storedParent = (await guarded.GetAsync(parent.Id))!;
+                storedParent.WorktreePath.Should().Be(parentWorktree.WorktreePath,
+                    "the recovered checkout path must be reflected atomically with the projection receipt");
+                storedParent.TreeHash.Should().NotBeNullOrWhiteSpace();
+                File.ReadAllText(Path.Combine(storedParent.WorktreePath!, "demo", "incident-brief.md"))
+                    .Should().Be(original[0]);
+                File.ReadAllText(Path.Combine(storedParent.WorktreePath!, "demo", "response-checklist.md"))
+                    .Should().Be(original[1]);
+                _runtime.DeliverResult = true;
+                await BuildService("receipt-pod", _runtime, runStore: guarded).SweepAsync(deadline.Token);
+                (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+                    .Should().Be(WorkflowChildWorkResumeStates.Delivered);
                 manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
                 return;
             }
@@ -1477,7 +1513,8 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     private WorkflowChildWorkService BuildService(
         string podId,
         IWorkflowChildWorkRuntime runtime,
-        int staleSeconds = 120)
+        int staleSeconds = 120,
+        IRunStore? runStore = null)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -1488,7 +1525,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             .Build();
         return new WorkflowChildWorkService(
             _scopeFactory,
-            _runStore,
+            runStore ?? _runStore,
             _pendingRequests,
             runtime,
             NullLogger<WorkflowChildWorkService>.Instance,
