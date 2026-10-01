@@ -182,6 +182,111 @@ public sealed partial class PostgresAppBootTests
     }
 
     [PostgresFact]
+    public async Task ComposedRecovery_PreservesUndispatchedPlan_AndReusesItsSubtasks()
+    {
+        var seeded = await SeedComposedFailureAsync();
+        var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+        var launches = 0;
+        try
+        {
+            int firstId, secondId, dependencyId;
+            string originalRequestId;
+            using (var scope = _fixture.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var plan = await db.WorkPlans.SingleAsync(p => p.Id == seeded.PlanId);
+                originalRequestId = plan.ParentResumeRequestId!;
+                var now = DateTimeOffset.UtcNow;
+                var first = new Subtask
+                {
+                    WorkPlanId = seeded.PlanId, Title = "Read retained input",
+                    Scope = "Read demo/source.md", AssignedAgent = "Neo", SelectedModelId = "test-model",
+                    Phase = "validation", IsolationStrategy = "worktree",
+                    DeclaredOutputPathsJson = "[]", Status = SubtaskStatus.Pending,
+                    CreatedAt = now, UpdatedAt = now,
+                };
+                var second = new Subtask
+                {
+                    WorkPlanId = seeded.PlanId, Title = "Write summary",
+                    Scope = "Write demo/summary.md from retained input", AssignedAgent = "Morpheus",
+                    SelectedModelId = "test-model", Phase = "execution", IsolationStrategy = "worktree",
+                    DeclaredOutputPathsJson = "[\"demo/summary.md\"]", Status = SubtaskStatus.Pending,
+                    CreatedAt = now, UpdatedAt = now,
+                };
+                db.Subtasks.AddRange(first, second);
+                await db.SaveChangesAsync();
+                firstId = first.Id;
+                secondId = second.Id;
+                var dependency = new SubtaskDependency { SubtaskId = secondId, DependsOnSubtaskId = firstId };
+                db.SubtaskDependencies.Add(dependency);
+                await db.SaveChangesAsync();
+                dependencyId = dependency.Id;
+            }
+            recovery.LaunchOverride = (parent, input, node, lease, _) =>
+            {
+                launches++;
+                parent.Id.Should().Be(seeded.Parent.Id);
+                input.Should().Be(seeded.Input);
+                node.Should().Be("compose");
+                lease.LifecycleGeneration.Should().Be(2);
+                return Task.CompletedTask;
+            };
+            await recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+            launches.Should().Be(1);
+            using var verifyScope = _fixture.Services.CreateScope();
+            var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var planAfter = await verify.WorkPlans.AsNoTracking().SingleAsync(p => p.Id == seeded.PlanId);
+            planAfter.CoordinatorRunId.Should().Be(seeded.Child.Id.ToString());
+            planAfter.ParentRunId.Should().Be(seeded.Parent.Id.ToString());
+            planAfter.ParentResumeRequestId.Should().BeNull("a fresh MAF continuation has a new request id");
+            planAfter.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Committed);
+            var gate = await verify.PendingRequests.AsNoTracking()
+                .SingleAsync(p => p.RunId == seeded.Parent.Id.ToString());
+            gate.RequestId.Should().Be(originalRequestId);
+            gate.DeliveryState.Should().Be(PendingRequestDeliveryStates.Waiting);
+            var rows = await verify.Subtasks.AsNoTracking()
+                .Where(s => s.WorkPlanId == seeded.PlanId).OrderBy(s => s.Id).ToArrayAsync();
+            rows.Select(s => s.Id).Should().Equal(firstId, secondId);
+            rows.Select(s => (s.Title, s.Scope, s.AssignedAgent, s.Phase, s.DeclaredOutputPathsJson))
+                .Should().Equal(
+                    ("Read retained input", "Read demo/source.md", "Neo", "validation", "[]"),
+                    ("Write summary", "Write demo/summary.md from retained input", "Morpheus", "execution", "[\"demo/summary.md\"]"));
+            rows.Should().OnlyContain(s => s.Status == SubtaskStatus.Pending && s.ChildRunId == null);
+            var edges = await verify.SubtaskDependencies.AsNoTracking()
+                .Where(d => d.SubtaskId == secondId).ToArrayAsync();
+            edges.Should().ContainSingle().Which.Id.Should().Be(dependencyId);
+            edges[0].DependsOnSubtaskId.Should().Be(firstId);
+
+            var runner = new TestFileEditAgentRunner
+            {
+                ExecuteOverride = (_, _) => throw new InvalidOperationException("persisted subtasks must not be replanned"),
+            };
+            var executor = new CoordinatorOrchestratorExecutor(
+                new FakeWorkflowAgentFactory(runner),
+                _fixture.Services.GetRequiredService<RunStreamStore>(),
+                _fixture.Services.GetRequiredService<IServiceScopeFactory>(),
+                _fixture.Services.GetRequiredService<ILoggerFactory>(),
+                _fixture.Services.GetRequiredService<IStoryIndependenceClassifier>(),
+                _fixture.Services.GetRequiredService<IAssemblyGateCodeClassifier>(),
+                "test-model", null, null);
+            var reused = await executor.OrchestrateAsync(new CoordinatorDraftInput(
+                seeded.Child.Id.ToString(), seeded.Parent.ProjectId!.Value.ToString(),
+                "Write summary", seeded.Parent.SubmittingUser, seeded.Directory, "test-model",
+                ModelSource: "byok", ByokProviderFingerprint: seeded.Input.ByokProviderFingerprint),
+                CancellationToken.None);
+            reused.WorkPlanId.Should().Be(seeded.PlanId);
+            reused.InlineSubtaskCount.Should().Be(2);
+            runner.InvocationCount.Should().Be(0);
+            (await verify.Subtasks.CountAsync(s => s.WorkPlanId == seeded.PlanId)).Should().Be(2);
+        }
+        finally
+        {
+            recovery.LaunchOverride = null;
+            await CleanupComposedFailureAsync(seeded);
+        }
+    }
+
+    [PostgresFact]
     public async Task ComposedRecovery_CrashAfterAtomicReset_StartupReentersOnlyComposedStage()
     {
         var seeded = await SeedComposedFailureAsync();
@@ -217,7 +322,7 @@ public sealed partial class PostgresAppBootTests
     [PostgresFact]
     public async Task ComposedRecovery_RejectsChangedOrPreviouslyDispatchedPlan_WithoutReopening()
     {
-        foreach (var change in new[] { "cancellation", "dispatched_work", "dirty_inputs" })
+        foreach (var change in new[] { "cancellation", "dispatched_work", "previous_child", "dirty_inputs" })
             await AssertComposedRecoveryRejectedAsync(change);
     }
 
@@ -232,16 +337,26 @@ public sealed partial class PostgresAppBootTests
                 await db.WorkPlans.Where(plan => plan.Id == seeded.PlanId)
                     .ExecuteUpdateAsync(updates => updates
                         .SetProperty(plan => plan.CoordinatorCancellationRequestedAt, DateTimeOffset.UtcNow));
-            else if (change == "dispatched_work")
+            else if (change is "dispatched_work" or "previous_child")
             {
                 db.Subtasks.Add(new Subtask
                 {
                     WorkPlanId = seeded.PlanId, Title = "Existing child", Scope = "Preserve it",
                     AssignedAgent = "Alpha", SelectedModelId = "test-model", Phase = "implementation",
-                    IsolationStrategy = "worktree", Status = SubtaskStatus.Pending,
+                    IsolationStrategy = "worktree",
+                    Status = change == "dispatched_work" ? SubtaskStatus.Running : SubtaskStatus.Pending,
                     CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
                 });
                 await db.SaveChangesAsync();
+                if (change == "previous_child")
+                {
+                    var subtask = await db.Subtasks.SingleAsync(s => s.WorkPlanId == seeded.PlanId);
+                    await _fixture.Services.GetRequiredService<IRunStore>().InsertAsync(seeded.Child with
+                    {
+                        Id = RunId.New(), ParentRunId = seeded.Child.Id.ToString(),
+                        SubtaskId = subtask.Id.ToString(), Status = RunStatus.Failed,
+                    });
+                }
             }
             else
                 await File.AppendAllTextAsync(Path.Combine(seeded.Directory, "demo", "source.md"), "changed");
@@ -347,8 +462,7 @@ public sealed partial class PostgresAppBootTests
         };
         db.WorkPlans.Add(plan);
         await db.SaveChangesAsync();
-        plan.ParentResumeRequestId = WorkflowChildWorkService.ResumeRequestId(
-            parent.Id.ToString(), "compose", plan.Id);
+        plan.ParentResumeRequestId = Guid.NewGuid().ToString("N");
         plan.ParentResumeResultJson = JsonSerializer.Serialize(new WorkflowChildWorkResult(
             plan.Id, child.Id.ToString(), definition.Id, "compose", null, false,
             WorkPlanStatus.AssemblyFailed, reason, [], string.Empty), JsonDefaults.Options);

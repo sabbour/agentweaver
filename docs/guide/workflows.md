@@ -162,14 +162,16 @@ fresh context and guarded parent/plan rows. It does not repeat the model turn in
 dispatch duplicate children.
 
 On PostgreSQL, if a root workflow failed with `composed_decomposition_failed` before any subtask
-was persisted or dispatched, **Retry** (REST `POST /api/runs/{id}/retry` or MCP `run_retry`) can
+was dispatched, **Retry** (REST `POST /api/runs/{id}/retry` or MCP `run_retry`) can
 resume the original run at its saved composed node. The response has the same `run_id` and
 `resumed: true`. The parent and composed coordinator retain their identities, input files, saved
 workflow and predecessor context; completed fan branches and preceding prompt steps are not replayed.
 The new lifecycle attempt retains the prior failure history.
 
-Recovery requires the original clean parent tree, correlated empty failed plan, unchanged saved
-input, and available durable model provider. Cancellation, previously dispatched work, changed
+Recovery requires the original clean parent tree, correlated failed plan with only unstarted pending
+subtasks, unchanged saved input, and available durable model provider. Already persisted pending
+subtasks retain their IDs, assignments, prompts, and dependencies; planning does not run again.
+Cancellation, previously dispatched work (including a prior child run whose subtask was reset), changed
 inputs, or competing recovery return an explicit conflict instead of creating a replacement run.
 A durable recovery marker lets startup finish a recovery interrupted between the database commit
 and workflow launch. SQLite keeps run and plan records in separate databases, so this atomic
