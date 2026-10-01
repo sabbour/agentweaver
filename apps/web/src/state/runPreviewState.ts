@@ -42,7 +42,10 @@ export function latestPreviewStateFromEvents(
       || evt.type === 'sandbox.preview_failed')
     && readStr(evt.payload, ['treeHash', 'tree_hash']),
   );
-  const currentTree = readStr(review?.payload ?? provisional?.payload ?? {}, ['treeHash', 'tree_hash']);
+  const currentTree = readStr(
+    review?.payload ?? applicability?.payload ?? provisional?.payload ?? {},
+    ['treeHash', 'tree_hash'],
+  );
   for (let i = events.length - 1; i > boundaryIndex; i -= 1) {
     const evt = events[i];
     if (evt.type === 'sandbox.preview_ready' || evt.type === 'coordinator.preview_ready') {

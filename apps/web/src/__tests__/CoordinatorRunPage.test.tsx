@@ -1137,6 +1137,27 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     });
   });
 
+  it.each(['sandbox.preview_pending', 'sandbox.preview_failed'] as const)(
+    'ignores a late %s from an older tree after current applicability is recorded',
+    (type) => {
+      const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
+        { sequence: 1, type: 'coordinator.assembly_started', payload: {} },
+        { sequence: 2, type: 'sandbox.preview_applicability', payload: {
+          tree_hash: 'current-tree', state: 'preview_required',
+        } },
+        { sequence: 3, type: 'sandbox.preview_pending', payload: {
+          tree_hash: 'current-tree', target_port: 8235,
+        } },
+        { sequence: 4, type, payload: {
+          tree_hash: 'old-tree', target_port: 3000, reason: 'old_runner_stopped',
+        } },
+      ];
+      expect(latestPreviewStateFromEvents(events, [])).toEqual({
+        status: 'pending', targetPort: '8235',
+      });
+    },
+  );
+
   it('shows in-flight current-tree pending and failure, then honors review and revision boundaries', () => {
     const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
       { sequence: 1, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'old-tree' } },
