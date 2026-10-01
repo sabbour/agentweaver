@@ -210,7 +210,9 @@ collision, or unavailable revision fails closed rather than asking agents to rep
 Cancellation or a changed run generation wins before the fenced projection cannot later install
 files into the parent worktree. The parent remains parked until the exact projection and its
 run-tree receipt are recorded under the same held plan/parent fence; a crash between the Git
-fast-forward and receipt is reconciled only against the persisted prepared commit.
+fast-forward and receipt is reconciled only against the persisted prepared commit. A missing
+parent checkout is recreated under that fence, with its recovered path recorded in the receipt;
+a pending delivery owner's claim is locked until the projection is recorded.
 Text-only branches still pass their ordered results without a file projection. Joined context for
 declared-file branches contains compact run/revision references, not file bytes or full diffs.
 The retained child revision can be inspected through `run_output_history`,

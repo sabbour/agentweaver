@@ -1018,12 +1018,13 @@ public sealed class SqliteRunStore : IRunStore
 
     public async Task<bool> TryRecordFanInputProjectionAsync(
         RunId runId, int generation, string expectedBaseTree, string projectedTree,
-        string worktreeBranch, CancellationToken ct = default)
+        string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var update = connection.CreateCommand();
         update.CommandText = """
-            UPDATE runs SET tree_hash=$projected
+            UPDATE runs SET tree_hash=$projected,
+                worktree_path=COALESCE($recovered, worktree_path)
             WHERE run_id=$run AND lifecycle_generation=$generation
               AND status='awaiting_review' AND worktree_branch=$branch
               AND (tree_hash IS NULL OR tree_hash=$base);
@@ -1033,6 +1034,7 @@ public sealed class SqliteRunStore : IRunStore
         update.Parameters.AddWithValue("$generation", generation);
         update.Parameters.AddWithValue("$branch", worktreeBranch);
         update.Parameters.AddWithValue("$base", expectedBaseTree);
+        update.Parameters.AddWithValue("$recovered", (object?)recoveredWorktreePath ?? DBNull.Value);
         return await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 1;
     }
 

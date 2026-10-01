@@ -62,6 +62,20 @@ public sealed class RunOutputRevisionPostgresTests(PostgresFixture pg)
             UpdatedAt = now,
         };
         db.WorkPlans.Add(plan);
+        var pending = new PendingRequestRecord
+        {
+            RunId = parentId.ToString(),
+            RequestJson = "{}",
+            RequestId = "fan-request",
+            OwnerUser = "test",
+            DeliveryKind = PendingRequestDeliveryKinds.WorkflowChildWork,
+            DecisionIdentity = "fan-decision",
+            DeliveryState = PendingRequestDeliveryStates.Delivering,
+            DeliveryClaimOwner = "fence-owner",
+            DeliveryClaimedAt = now,
+            CreatedAt = now,
+        };
+        db.PendingRequests.Add(pending);
         await db.SaveChangesAsync();
 
         await using var fence = await db.Database.BeginTransactionAsync();
@@ -71,9 +85,16 @@ public sealed class RunOutputRevisionPostgresTests(PostgresFixture pg)
         (await db.Runs.Where(row => row.RunId == parentId.ToString())
             .ExecuteUpdateAsync(updates => updates.SetProperty(row => row.TreeHash,
                 row => row.TreeHash))).Should().Be(1);
+        (await db.PendingRequests.Where(row => row.Id == pending.Id
+                && row.DeliveryState == PendingRequestDeliveryStates.Delivering
+                && row.DeliveryClaimOwner == "fence-owner"
+                && row.DeliveryClaimedAt == now)
+            .ExecuteUpdateAsync(updates => updates.SetProperty(row => row.DeliveryClaimOwner,
+                row => row.DeliveryClaimOwner))).Should().Be(1);
 
         var suppressionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var terminalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var takeoverStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var suppression = Task.Run(async () =>
         {
             await using var contender = await pg.Factory.CreateDbContextAsync();
@@ -91,14 +112,26 @@ public sealed class RunOutputRevisionPostgresTests(PostgresFixture pg)
                     new { reason = "cancelled" }, DateTimeOffset.UtcNow,
                     (await store.GetAsync(parentId))!.LifecycleGeneration), "cancelled");
         });
-        await Task.WhenAll(suppressionStarted.Task, terminalStarted.Task);
+        var takeover = Task.Run(async () =>
+        {
+            await using var contender = await pg.Factory.CreateDbContextAsync();
+            takeoverStarted.SetResult();
+            return await contender.PendingRequests.Where(row => row.Id == pending.Id
+                    && row.DeliveryState == PendingRequestDeliveryStates.Delivering)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(row => row.DeliveryClaimOwner, "takeover-owner")
+                    .SetProperty(row => row.DeliveryClaimedAt, DateTimeOffset.UtcNow));
+        });
+        await Task.WhenAll(suppressionStarted.Task, terminalStarted.Task, takeoverStarted.Task);
         await Task.Delay(150);
         suppression.IsCompleted.Should().BeFalse("the projection owns the plan row");
         terminal.IsCompleted.Should().BeFalse("the projection owns the parent run row");
+        takeover.IsCompleted.Should().BeFalse("the projection owns the pending delivery row through Git apply and receipt");
 
         await fence.CommitAsync();
         (await suppression).Should().Be(1);
         (await terminal).Should().BeTrue();
+        (await takeover).Should().Be(1);
         (await db.WorkPlans.AsNoTracking().SingleAsync(row => row.Id == plan.Id))
             .ParentResumeState.Should().Be("suppressed");
     }
