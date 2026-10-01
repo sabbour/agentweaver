@@ -166,11 +166,14 @@ was dispatched, **Retry** (REST `POST /api/runs/{id}/retry` or MCP `run_retry`) 
 resume the original run at its saved composed node. The response has the same `run_id` and
 `resumed: true`. The parent and composed coordinator retain their identities, input files, saved
 workflow and predecessor context; completed fan branches and preceding prompt steps are not replayed.
-The new lifecycle attempt retains the prior failure history.
+The new lifecycle attempt retains the prior failure history. Its composed pause arms a fresh
+request ID; the delivered failure gate cannot accept a response for the new attempt.
 
 Recovery requires the original clean parent tree, correlated failed plan with only unstarted pending
-subtasks, unchanged saved input, and available durable model provider. Already persisted pending
-subtasks retain their IDs, assignments, prompts, and dependencies; planning does not run again.
+subtasks, unchanged saved input, available durable model provider, and launch capabilities
+(including a redeemable Copilot capability when required). These are checked before reopening
+the original runs. Already persisted pending subtasks retain their IDs, assignments, prompts, and
+dependencies; planning does not run again.
 Cancellation, previously dispatched work (including a prior child run whose subtask was reset), changed
 inputs, or competing recovery return an explicit conflict instead of creating a replacement run.
 A durable recovery marker lets startup finish a recovery interrupted between the database commit

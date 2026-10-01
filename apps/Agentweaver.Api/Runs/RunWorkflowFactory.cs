@@ -1088,7 +1088,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 Wiring: wiringSupport),
             recoveryComposedNodeId);
 
-        var wf = fullBuilder.Build();
+        var wf = fullBuilder.Build(validateOrphans: recoveryComposedNodeId is null);
         var descriptor = fullBuilder.BuildDescriptor("agentweaver-workflow-full", "full");
 
         return (wf, descriptor, fullBuilder.BuildExecutorMetaMap());

@@ -190,12 +190,9 @@ public sealed partial class PostgresAppBootTests
         try
         {
             int firstId, secondId, dependencyId;
-            string originalRequestId;
             using (var scope = _fixture.Services.CreateScope())
             {
                 var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-                var plan = await db.WorkPlans.SingleAsync(p => p.Id == seeded.PlanId);
-                originalRequestId = plan.ParentResumeRequestId!;
                 var now = DateTimeOffset.UtcNow;
                 var first = new Subtask
                 {
@@ -240,10 +237,9 @@ public sealed partial class PostgresAppBootTests
             planAfter.ParentRunId.Should().Be(seeded.Parent.Id.ToString());
             planAfter.ParentResumeRequestId.Should().BeNull("a fresh MAF continuation has a new request id");
             planAfter.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Committed);
-            var gate = await verify.PendingRequests.AsNoTracking()
-                .SingleAsync(p => p.RunId == seeded.Parent.Id.ToString());
-            gate.RequestId.Should().Be(originalRequestId);
-            gate.DeliveryState.Should().Be(PendingRequestDeliveryStates.Waiting);
+            (await verify.PendingRequests.AsNoTracking()
+                .AnyAsync(p => p.RunId == seeded.Parent.Id.ToString()))
+                .Should().BeFalse("the delivered failure gate cannot be reused by the new MAF request");
             var rows = await verify.Subtasks.AsNoTracking()
                 .Where(s => s.WorkPlanId == seeded.PlanId).OrderBy(s => s.Id).ToArrayAsync();
             rows.Select(s => s.Id).Should().Equal(firstId, secondId);
@@ -282,6 +278,137 @@ public sealed partial class PostgresAppBootTests
         finally
         {
             recovery.LaunchOverride = null;
+            await CleanupComposedFailureAsync(seeded);
+        }
+    }
+
+    [PostgresFact]
+    public async Task ComposedRecovery_RealMafPort_ArmsFreshGate_WithoutReplayingPredecessors()
+    {
+        foreach (var source in new[] { ModelSource.Byok })
+        {
+            var seeded = await SeedComposedFailureAsync(source);
+            try
+            {
+                int subtaskId;
+                string oldRequestId;
+                using (var scope = _fixture.Services.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                    oldRequestId = (await db.WorkPlans.SingleAsync(p => p.Id == seeded.PlanId))
+                        .ParentResumeRequestId!;
+                    var now = DateTimeOffset.UtcNow;
+                    var subtask = new Subtask
+                    {
+                        WorkPlanId = seeded.PlanId, Title = "Retained pending work",
+                        Scope = "Use demo/source.md", AssignedAgent = "Neo",
+                        SelectedModelId = "test-model", Phase = "execution",
+                        IsolationStrategy = "worktree", Status = SubtaskStatus.Pending,
+                        CreatedAt = now, UpdatedAt = now,
+                    };
+                    db.Subtasks.Add(subtask);
+                    await db.SaveChangesAsync();
+                    subtaskId = subtask.Id;
+                }
+
+                var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+                await recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+                var pending = _fixture.Services.GetRequiredService<PendingRequestStore>();
+                PendingEntry? armed = null;
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                while (!timeout.IsCancellationRequested)
+                {
+                    armed = await pending.GetAsync(seeded.Parent.Id.ToString());
+                    if (armed is not null)
+                        break;
+                    await Task.Delay(25);
+                }
+                armed.Should().NotBeNull("the real MAF composed request must reach the normal watcher");
+                var newRequestId = armed!.Request.RequestId;
+                newRequestId.Should().NotBe(oldRequestId);
+                var requestState = await pending.GetRequestStateAsync(seeded.Parent.Id.ToString());
+                requestState.Should().NotBeNull();
+                requestState!.Value.RequestId.Should().Be(newRequestId);
+                requestState.Value.DeliveryState.Should().Be(PendingRequestDeliveryStates.Waiting);
+                var store = _fixture.Services.GetRequiredService<IRunStore>();
+                while (!timeout.IsCancellationRequested
+                    && (await store.GetAsync(seeded.Parent.Id))!.Status != RunStatus.AwaitingReview)
+                    await Task.Delay(25);
+                (await store.GetAsync(seeded.Parent.Id))!.Status.Should().Be(RunStatus.AwaitingReview);
+                (await store.GetAsync(seeded.Child.Id))!.Status.Should().Be(RunStatus.InProgress);
+                using var verifyScope = _fixture.Services.CreateScope();
+                var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var plan = await verify.WorkPlans.AsNoTracking().SingleAsync(p => p.Id == seeded.PlanId);
+                plan.CoordinatorRunId.Should().Be(seeded.Child.Id.ToString());
+                plan.ParentRunId.Should().Be(seeded.Parent.Id.ToString());
+                plan.ParentResumeRequestId.Should().Be(newRequestId);
+                plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Waiting);
+                plan.ParentResumeResultJson.Should().BeNull();
+                JsonSerializer.Deserialize<AgentTurnInput>(plan.ParentTurnInputJson!, JsonDefaults.Options)
+                    .Should().Be(seeded.Input);
+                var steps = _fixture.Services.GetRequiredService<RunStreamStore>()
+                    .Get(seeded.Parent.Id.ToString())!.GetSnapshotSince(0).Events
+                    .Where(evt => evt.Type == EventTypes.WorkflowStep)
+                    .Select(evt => JsonSerializer.Serialize(evt.Payload)).ToArray();
+                steps.Should().Contain(step => step.Contains("\"compose\"", StringComparison.Ordinal));
+                steps.Should().NotContain(step => step.Contains("\"verify\"", StringComparison.Ordinal)
+                    || step.Contains("\"fan\"", StringComparison.Ordinal));
+                (await verify.PendingRequests.AsNoTracking()
+                    .SingleAsync(p => p.RunId == seeded.Parent.Id.ToString()))
+                    .RequestId.Should().Be(newRequestId);
+                var rows = await verify.Subtasks.AsNoTracking()
+                    .Where(s => s.WorkPlanId == plan.Id).ToArrayAsync();
+                rows.Should().ContainSingle().Which.Id.Should().Be(subtaskId);
+                rows.Should().OnlyContain(s => s.Status == SubtaskStatus.Pending && s.ChildRunId == null);
+                (await verify.WorkPlans.CountAsync(p => p.ParentRunId == seeded.Parent.Id.ToString()))
+                    .Should().Be(1);
+                var staleResult = new WorkflowChildWorkResult(
+                    seeded.PlanId, seeded.Child.Id.ToString(), "retained-composed", "compose",
+                    null, false, WorkPlanStatus.AssemblyFailed, seeded.Parent.Result, [], string.Empty);
+                var oldIdentity = PendingRequestStore.CreateDecisionIdentity(oldRequestId, staleResult);
+                (await pending.TryQueueDeliveryAsync(seeded.Parent.Id.ToString(),
+                    PendingRequestDeliveryKinds.WorkflowChildWork, oldIdentity, staleResult,
+                    seeded.Parent.SubmittingUser)).Should().BeFalse();
+                (await _fixture.Services.GetRequiredService<WorkflowChildWorkService>()
+                    .TryDeliverResumeAsync(seeded.PlanId, "stale-delivery")).Should().BeFalse();
+                (await pending.GetAsync(seeded.Parent.Id.ToString()))!.Request.RequestId
+                    .Should().Be(newRequestId);
+            }
+            finally
+            {
+                await CleanupComposedFailureAsync(seeded);
+            }
+        }
+    }
+
+    [PostgresFact]
+    public async Task ComposedRecovery_UnavailableAcceptedCopilotCapability_RejectsBeforeReopen()
+    {
+        var seeded = await SeedComposedFailureAsync(ModelSource.GitHubCopilot);
+        try
+        {
+            var action = () => _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>()
+                .ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+            var boundary = await _fixture.Services.GetRequiredService<RunOrchestrator>()
+                .ResolveDurableProviderBoundaryAsync(seeded.Parent, CancellationToken.None);
+            boundary.Provider.ToModelSource().Should().Be(ModelSource.GitHubCopilot);
+            await action.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*unavailable launch capability requirements*");
+            var store = _fixture.Services.GetRequiredService<IRunStore>();
+            (await store.GetAsync(seeded.Parent.Id))!.Status.Should().Be(RunStatus.Failed);
+            (await store.GetAsync(seeded.Parent.Id))!.LifecycleGeneration.Should()
+                .Be(seeded.Parent.LifecycleGeneration);
+            (await store.GetAsync(seeded.Child.Id))!.Status.Should().Be(RunStatus.Failed);
+            using var scope = _fixture.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.AsNoTracking().SingleAsync(p => p.Id == seeded.PlanId);
+            plan.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Delivered);
+            (await db.PendingRequests.AsNoTracking()
+                .SingleAsync(p => p.RunId == seeded.Parent.Id.ToString()))
+                .RequestId.Should().Be(plan.ParentResumeRequestId);
+        }
+        finally
+        {
             await CleanupComposedFailureAsync(seeded);
         }
     }
@@ -373,7 +500,8 @@ public sealed partial class PostgresAppBootTests
         }
     }
 
-    private async Task<ComposedFailureFixture> SeedComposedFailureAsync()
+    private async Task<ComposedFailureFixture> SeedComposedFailureAsync(
+        ModelSource source = ModelSource.Byok)
     {
         var directory = Path.Combine(Path.GetTempPath(), $"aw-composed-recovery-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(directory, "demo"));
@@ -413,7 +541,7 @@ public sealed partial class PostgresAppBootTests
         {
             Id = RunId.New(), ProjectId = projectId, RepositoryPath = directory, WorktreePath = directory,
             OriginatingBranch = "main", WorktreeBranch = "retained-parent", TreeHash = tree,
-            ModelSource = ModelSource.Byok, ModelId = "test-model", SubmittingUser = "test-user",
+            ModelSource = source, ModelId = "test-model", SubmittingUser = "test-user",
             Task = "Retained workflow", Status = RunStatus.Failed, StartedAt = now, EndedAt = now, Result = reason,
         };
         var child = parent with
@@ -427,21 +555,26 @@ public sealed partial class PostgresAppBootTests
             parent.Id, ExecutableWorkflowSnapshots.Create(definition, "recovery-test"));
         parent = (await store.GetAsync(parent.Id))!;
         await store.InsertAsync(child);
-        var config = new ByokProviderConfiguration(
-            "test-recovery-provider", "Recovery provider", "azure", "https://example.test", "test-model", "test-only-key");
+        var config = source == ModelSource.Byok
+            ? new ByokProviderConfiguration(
+                "test-recovery-provider", "Recovery provider", "azure", "https://example.test", "test-model", "test-only-key")
+            : null;
+        var provider = source == ModelSource.Byok
+            ? (EffectiveModelProviderResult)new EffectiveModelProviderResult.Byok(
+                config!.Id, config.Type, config.ExecutionFingerprint())
+            : new EffectiveModelProviderResult.PlatformGitHubCopilot("test-copilot-binding", null, "v1");
         await _fixture.Services.GetRequiredService<RunModelProviderSnapshotStore>().CaptureAsync(
-            parent, new EffectiveModelProviderResult.Byok(config.Id, config.Type, config.ExecutionFingerprint()),
-            config, CancellationToken.None);
+            parent, provider, config, CancellationToken.None);
         var input = new AgentTurnInput(
             parent.Id.ToString(), "Original goal with verified branch findings", directory, "retained-parent",
-            directory, "main", "byok", "test-model", "test-user", ProjectId: projectId.ToString(),
-            ByokProviderFingerprint: config.ExecutionFingerprint());
+            directory, "main", source.ToApiString(), "test-model", "test-user", ProjectId: projectId.ToString(),
+            ByokProviderFingerprint: config?.ExecutionFingerprint());
         using var scope = _fixture.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         db.Projects.Add(new ProjectRecord
         {
             ProjectId = projectId.ToString(), Name = "Recovery test", OriginKind = "blank",
-            WorkingDirectory = directory, Owner = "test-user", DefaultProvider = "byok",
+            WorkingDirectory = directory, Owner = "test-user", DefaultProvider = source.ToApiString(),
             CreatedAt = now, UpdatedAt = now,
         });
         var spec = new OutcomeSpec
