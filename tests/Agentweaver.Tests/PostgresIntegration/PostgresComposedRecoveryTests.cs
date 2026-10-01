@@ -285,9 +285,9 @@ public sealed partial class PostgresAppBootTests
     [PostgresFact]
     public async Task ComposedRecovery_RealMafPort_ArmsFreshGate_WithoutReplayingPredecessors()
     {
-        foreach (var source in new[] { ModelSource.Byok })
+        foreach (var source in new[] { ModelSource.Byok, ModelSource.GitHubCopilot })
         {
-            var seeded = await SeedComposedFailureAsync(source);
+            var seeded = await SeedComposedFailureAsync(source, copilotCapability: source == ModelSource.GitHubCopilot);
             try
             {
                 int subtaskId;
@@ -312,6 +312,12 @@ public sealed partial class PostgresAppBootTests
                 }
 
                 var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+                var boundary = await _fixture.Services.GetRequiredService<RunOrchestrator>()
+                    .ResolveDurableProviderBoundaryAsync(seeded.Parent, CancellationToken.None);
+                boundary.Provider.ToModelSource().Should().Be(source);
+                if (source == ModelSource.GitHubCopilot)
+                    boundary.Provider.Should().BeOfType<EffectiveModelProviderResult.ProjectGitHubCopilot>()
+                        .Which.BindingId.Should().Be("test-copilot-binding-" + seeded.Parent.Id);
                 await recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
                 var pending = _fixture.Services.GetRequiredService<PendingRequestStore>();
                 PendingEntry? armed = null;
@@ -326,9 +332,13 @@ public sealed partial class PostgresAppBootTests
                 armed.Should().NotBeNull("the real MAF composed request must reach the normal watcher");
                 var newRequestId = armed!.Request.RequestId;
                 newRequestId.Should().NotBe(oldRequestId);
+                newRequestId.Should().NotBe(WorkflowChildWorkService.ResumeRequestId(
+                    seeded.Parent.Id.ToString(), "compose", seeded.PlanId),
+                    "the static-fan stable request ID helper is not the composed MAF port");
                 var requestState = await pending.GetRequestStateAsync(seeded.Parent.Id.ToString());
                 requestState.Should().NotBeNull();
                 requestState!.Value.RequestId.Should().Be(newRequestId);
+                requestState.Value.PortInfo.Should().Be(armed.Request.PortInfo);
                 requestState.Value.DeliveryState.Should().Be(PendingRequestDeliveryStates.Waiting);
                 var store = _fixture.Services.GetRequiredService<IRunStore>();
                 while (!timeout.IsCancellationRequested
@@ -501,7 +511,7 @@ public sealed partial class PostgresAppBootTests
     }
 
     private async Task<ComposedFailureFixture> SeedComposedFailureAsync(
-        ModelSource source = ModelSource.Byok)
+        ModelSource source = ModelSource.Byok, bool copilotCapability = false)
     {
         var directory = Path.Combine(Path.GetTempPath(), $"aw-composed-recovery-{Guid.NewGuid():N}");
         Directory.CreateDirectory(Path.Combine(directory, "demo"));
@@ -562,7 +572,10 @@ public sealed partial class PostgresAppBootTests
         var provider = source == ModelSource.Byok
             ? (EffectiveModelProviderResult)new EffectiveModelProviderResult.Byok(
                 config!.Id, config.Type, config.ExecutionFingerprint())
-            : new EffectiveModelProviderResult.PlatformGitHubCopilot("test-copilot-binding", null, "v1");
+            : copilotCapability
+                ? new EffectiveModelProviderResult.ProjectGitHubCopilot(
+                    "test-copilot-binding-" + parent.Id, "test-user", "v1")
+                : new EffectiveModelProviderResult.PlatformGitHubCopilot("test-copilot-binding", null, "v1");
         await _fixture.Services.GetRequiredService<RunModelProviderSnapshotStore>().CaptureAsync(
             parent, provider, config, CancellationToken.None);
         var input = new AgentTurnInput(
@@ -577,6 +590,29 @@ public sealed partial class PostgresAppBootTests
             WorkingDirectory = directory, Owner = "test-user", DefaultProvider = source.ToApiString(),
             CreatedAt = now, UpdatedAt = now,
         });
+        if (copilotCapability)
+        {
+            var reference = "copilot-app-project-" + parent.Id;
+            db.ProjectCopilotBindings.Add(new ProjectCopilotBindingRecord
+            {
+                Id = "test-copilot-binding-" + parent.Id,
+                ProjectId = projectId.ToString(),
+                EntraObjectId = "test-user",
+                CredentialReference = reference,
+                CredentialVersion = "v1",
+                GrantDigest = "test-copilot-grant",
+                Status = GitHubBindingStatus.Active,
+                BoundAt = now,
+            });
+            await _fixture.Services.GetRequiredService<ISecretStore>().SetSecretAsync(reference,
+                JsonSerializer.Serialize(new
+                {
+                    status = "signed-in",
+                    accessToken = "hermetic-test-token",
+                    expiresAt = now.AddHours(1),
+                    githubLogin = "test-user",
+                }));
+        }
         var spec = new OutcomeSpec
         {
             ProjectId = projectId.ToString(), CoordinatorRunId = child.Id.ToString(), Goal = "Write summary",
@@ -618,6 +654,13 @@ public sealed partial class PostgresAppBootTests
             .SetProperty(plan => plan.Status, WorkPlanStatus.Cancelled)
             .SetProperty(plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Suppressed)
             .SetProperty(plan => plan.AssemblyStatusReason, (string?)null));
+        if (fixture.Parent.ModelSource == ModelSource.GitHubCopilot)
+        {
+            await db.ProjectCopilotBindings.Where(binding =>
+                binding.ProjectId == fixture.Parent.ProjectId!.Value.ToString()).ExecuteDeleteAsync();
+            await _fixture.Services.GetRequiredService<ISecretStore>()
+                .DeleteSecretAsync("copilot-app-project-" + fixture.Parent.Id);
+        }
         var store = _fixture.Services.GetRequiredService<IRunStore>();
         var leases = _fixture.Services.GetRequiredService<IRunLeaseStore>();
         foreach (var id in new[] { fixture.Parent.Id, fixture.Child.Id })
