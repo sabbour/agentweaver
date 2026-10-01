@@ -2364,11 +2364,10 @@ export function CoordinatorRunPage() {
   // Sandbox preview port-forward state.
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [previewTargetPort, setPreviewTargetPort] = useState('3000');
-  const [previewSession,    setPreviewSession]    = useState<PortForwardSessionDto | undefined>(undefined);
-  const [manualPreviewSessionId, setManualPreviewSessionId] = useState<string | null>(null);
   const [previewSessions,   setPreviewSessions]   = useState<PortForwardSessionDto[]>([]);
   const [previewBusy,       setPreviewBusy]       = useState(false);
   const [previewError,      setPreviewError]      = useState<string | undefined>(undefined);
+  const [previewListError,  setPreviewListError]  = useState<string | undefined>(undefined);
 
   // True once the work-plan endpoint has confirmed a 404 (run has no plan yet / is stuck).
   // Used to render a graceful empty state and to back off the lifecycle poll so the page
@@ -2822,15 +2821,12 @@ export function CoordinatorRunPage() {
         .then((sessions) => {
           if (cancelled) return;
           setPreviewSessions(sessions);
-          setPreviewSession((current) => {
-            if (current && sessions.some((session) => session.session_id === current.session_id)) return current;
-            return sessions.find((session) => previewUrlFromSession(session)) ?? sessions[0];
-          });
+          setPreviewListError(undefined);
         })
-        .catch(() => {
+        .catch((err: unknown) => {
           if (!cancelled) {
             setPreviewSessions([]);
-            setPreviewSession(undefined);
+            setPreviewListError(formatApiErrorMessage(err, 'Could not check sandbox preview availability.'));
           }
         })
         .finally(() => { inFlight = false; });
@@ -2844,7 +2840,8 @@ export function CoordinatorRunPage() {
     () => latestPreviewStateFromEvents(events, previewSessions),
     [events, previewSessions],
   );
-  const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
+  const manualPreviewSession = previewSessions.find((session) =>
+    !session.preview_runner_session_id && previewUrlFromSession(session));
   const activePreviewUrl = runPreviewState.status === 'ready' ? runPreviewState.previewUrl : null;
   const previewDnsProbeKey = runPreviewState.status === 'ready'
     ? `${runPreviewState.eventSequence}:${runPreviewState.previewUrl}`
@@ -3676,7 +3673,7 @@ export function CoordinatorRunPage() {
     if (opts?.closeTopology) {
       setTopologyPanelOpen(false);
     }
-  }, []);
+  }, [setPanelNodeId, setSessionPanelOpen, setTopologyPanelOpen]);
 
   // Imperative handle to the full-topology viewport (registered by TopologyViewportController inside
   // the ReactFlowProvider) so a node click can cinematically pan+zoom onto the node.
@@ -3686,7 +3683,7 @@ export function CoordinatorRunPage() {
     setPanelNodeId('outcome-plan');
     setSessionPanelOpen(true);
     setComposerFocusSignal((value) => value + 1);
-  }, []);
+  }, [setPanelNodeId, setSessionPanelOpen, setComposerFocusSignal]);
 
   useEffect(() => {
     if (!latestOutcomePlanEvent || isChildRun) return;
@@ -3820,7 +3817,7 @@ export function CoordinatorRunPage() {
   const viewAssemblyExecution = useCallback((id: string) => {
     if (id.endsWith('-rai') || id.endsWith('-scribe')) openPanelForNode(id);
     else setArtifactsPanelOpen(true);
-  }, [openPanelForNode]);
+  }, [openPanelForNode, setArtifactsPanelOpen]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
@@ -3915,8 +3912,6 @@ export function CoordinatorRunPage() {
     setPreviewError(undefined);
     apiClient.startPortForward(runId, port)
       .then((session) => {
-        setManualPreviewSessionId(session.session_id);
-        setPreviewSession(session);
         setPreviewSessions((sessions) => [session, ...sessions.filter((s) => s.session_id !== session.session_id)]);
       })
       .catch((err) => setPreviewError(formatApiErrorMessage(err, 'Could not start the sandbox preview.')))
@@ -3924,13 +3919,11 @@ export function CoordinatorRunPage() {
   };
 
   const stopPreview = () => {
-    if (!runId || !activePreviewSession) return;
+    if (!runId || !manualPreviewSession) return;
     setPreviewBusy(true);
-    apiClient.stopPortForward(runId, activePreviewSession.session_id)
+    apiClient.stopPortForward(runId, manualPreviewSession.session_id)
       .then(() => {
-        setManualPreviewSessionId(null);
-        setPreviewSession(undefined);
-        setPreviewSessions((sessions) => sessions.filter((s) => s.session_id !== activePreviewSession.session_id));
+        setPreviewSessions((sessions) => sessions.filter((s) => s.session_id !== manualPreviewSession.session_id));
       })
       .catch((err) => setPreviewError(formatApiErrorMessage(err, 'Could not stop the sandbox preview.')))
       .finally(() => setPreviewBusy(false));
@@ -3938,11 +3931,12 @@ export function CoordinatorRunPage() {
 
   const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
   const showPreviewSandboxButton = isKubernetesSandbox
-    && (runPreviewState.status !== 'none' || Boolean(activePreviewSession));
-  const previewUrl = activePreviewUrl ?? (activePreviewSession?.session_id === manualPreviewSessionId
-    ? previewUrlFromSession(activePreviewSession)
-    : null);
-  const keepaliveUrl = activePreviewSession?.keepalive_url ?? activePreviewSession?.keepaliveUrl ?? null;
+    && (runPreviewState.status !== 'none' || Boolean(manualPreviewSession) || Boolean(previewListError));
+  const previewUrl = previewUrlFromSession(manualPreviewSession);
+  const keepaliveSession = manualPreviewSession
+    ?? previewSessions.find((session) => activePreviewUrl !== null
+      && previewUrlFromSession(session) === activePreviewUrl);
+  const keepaliveUrl = keepaliveSession?.keepalive_url ?? keepaliveSession?.keepaliveUrl ?? null;
 
   useEffect(() => {
     if (!keepaliveUrl) return;
@@ -4229,7 +4223,8 @@ export function CoordinatorRunPage() {
     }
 
     return chips.length > 0 ? <>{chips}</> : null;
-  }, [isChildRun, runChangesSummary, specConfirmed, styles]);
+  }, [isChildRun, runChangesSummary, specConfirmed, styles,
+    setPlanPanelOpen, setArtifactsPanelOpen, setFilesPanelOpen]);
 
   const primaryAction = reviewActionable
     ? {
@@ -4545,6 +4540,14 @@ export function CoordinatorRunPage() {
     }
   };
   const previewStatusContent = (compact = false) => {
+    if (previewListError) {
+      return (
+        <div className={styles.previewStatusStack} role="alert">
+          <Text weight="semibold">Preview availability could not be checked</Text>
+          <Text className={styles.previewStatusReason}>{previewListError}</Text>
+        </div>
+      );
+    }
     switch (runPreviewState.status) {
       case 'ready':
         return (
@@ -4611,7 +4614,7 @@ export function CoordinatorRunPage() {
         return null;
     }
   };
-  const previewStatusSlot = runPreviewState.status === 'none'
+  const previewStatusSlot = runPreviewState.status === 'none' && !previewListError
     ? undefined
     : (
       <div
@@ -5037,7 +5040,7 @@ export function CoordinatorRunPage() {
                 />
               </div>
             )}
-            {selectedBuildTestNode && runPreviewState.status !== 'none' && (
+            {selectedBuildTestNode && (runPreviewState.status !== 'none' || previewListError) && (
               <div
                 className={`${styles.selectedTaskPreviewCta} ${runPreviewState.status === 'pending' ? styles.selectedTaskPreviewPending : ''} ${runPreviewState.status === 'failed' ? styles.selectedTaskPreviewUnavailable : ''}`}
                 data-testid="selected-build-preview-cta"
@@ -5193,7 +5196,10 @@ export function CoordinatorRunPage() {
               Sandbox Preview
             </DialogTitle>
             <DialogContent style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM }}>
-              {!activePreviewSession ? (
+              {previewListError && (
+                <MessageBar intent="error"><MessageBarBody>{previewListError}</MessageBarBody></MessageBar>
+              )}
+              {!manualPreviewSession ? (
                 <>
                   <Text>
                     Preview traffic is proxied through the Agentweaver API server.
@@ -5211,7 +5217,7 @@ export function CoordinatorRunPage() {
               ) : (
                 <>
                   <Text>
-                    Preview active for port {activePreviewSession.target_port} on pod <code>{activePreviewSession.pod_name}</code>.
+                    Preview active for port {manualPreviewSession.target_port} on pod <code>{manualPreviewSession.pod_name}</code>.
                     {previewUrl ? ' The proxied preview is shown below.' : ' The API server did not return a proxied preview URL.'}
                   </Text>
                   {previewUrl && (
@@ -5223,13 +5229,13 @@ export function CoordinatorRunPage() {
                     />
                   )}
                   <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-                    Session ID: {activePreviewSession.session_id}
+                    Session ID: {manualPreviewSession.session_id}
                   </Text>
                 </>
               )}
             </DialogContent>
             <DialogActions>
-              {!activePreviewSession ? (
+              {!manualPreviewSession ? (
                 <>
                   {previewUrl && (
                     <Button appearance="primary" icon={<OpenRegular />} onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}>

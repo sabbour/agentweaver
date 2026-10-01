@@ -4,6 +4,7 @@ import { AzureFluentProvider } from '../copilot-fluent-system';
 import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
 import { latestPreviewStateFromEvents } from '../state/runPreviewState';
+import type { PortForwardSessionDto } from '../api/types';
 import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DESCRIPTOR_DELEGATED, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -30,6 +31,10 @@ const coordinatorRunPageSource = readFileSync(
   resolve(process.cwd(), 'src/pages/CoordinatorRunPage.tsx'),
   'utf8',
 );
+const gatewayPreviewList = JSON.parse(readFileSync(
+  resolve(process.cwd(), 'src/__tests__/fixtures/gatewayPreviewList.json'),
+  'utf8',
+)) as PortForwardSessionDto[];
 
 const mockRunStreamState = vi.hoisted(() => ({
   current: {
@@ -303,6 +308,7 @@ beforeEach(() => {
   });
   vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'coord-run-1', spans: [] });
   vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+  vi.mocked(apiClient.listPortForwards).mockResolvedValue([]);
   vi.mocked(apiClient.getPendingApprovals).mockResolvedValue({
     run_id: 'coord-run-1',
     count: 0,
@@ -1071,15 +1077,15 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     });
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
       { sequence: 2, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'build-test', treeHash: 'tree-current' } },
-      { sequence: 3, type: 'sandbox.preview_ready', payload: {
-        preview_url: 'https://preview.example.test', target_port: 8235,
-        tree_hash: 'tree-current', session_id: 'session-current', pod_name: 'pod-current',
+      { sequence: 3, type: 'sandbox.preview_applicability', payload: { tree_hash: 'tree-current', state: 'preview_required' } },
+      { sequence: 4, type: 'sandbox.preview_ready', payload: {
+        preview_url: gatewayPreviewList[0].preview_url, target_port: gatewayPreviewList[0].target_port,
+        tree_hash: 'tree-current', session_id: gatewayPreviewList[0].session_id,
+        pod_name: gatewayPreviewList[0].pod_name,
+        preview_runner_session_id: gatewayPreviewList[0].preview_runner_session_id,
       } },
     ]);
-    vi.mocked(apiClient.listPortForwards).mockResolvedValue([{
-      session_id: 'session-current', pod_name: 'pod-current', target_port: 8235,
-      local_port: 0, started_at: '2026-09-30T12:00:00Z', preview_url: 'https://preview.example.test',
-    }]);
+    vi.mocked(apiClient.listPortForwards).mockResolvedValue([gatewayPreviewList[0]]);
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
@@ -1100,19 +1106,69 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
   ])('does not offer a %s preview as current readiness', (_, previewTree, previewPod, listedPod) => {
     const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
       { sequence: 1, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'old-tree', gateKind: 'build-test' } },
-      { sequence: 2, type: 'sandbox.preview_ready', payload: {
-        tree_hash: previewTree, session_id: 'old-token', pod_name: previewPod,
-        target_port: 8235, preview_url: 'https://old.example.test',
+      { sequence: 2, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 3, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'current-tree', gateKind: 'build-test' } },
+      { sequence: 4, type: 'sandbox.preview_applicability', payload: { tree_hash: 'current-tree', state: 'preview_required' } },
+      { sequence: 5, type: 'sandbox.preview_ready', payload: {
+        tree_hash: previewTree, session_id: gatewayPreviewList[0].session_id, pod_name: previewPod,
+        target_port: 8235, preview_url: gatewayPreviewList[0].preview_url,
+        preview_runner_session_id: gatewayPreviewList[0].preview_runner_session_id,
       } },
-      { sequence: 3, type: 'coordinator.assembly_started', payload: {} },
-      { sequence: 4, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'current-tree', gateKind: 'build-test' } },
     ];
-    const sessions: Parameters<typeof latestPreviewStateFromEvents>[1] = [{
-      session_id: 'old-token', pod_name: listedPod, target_port: 8235,
-      local_port: 0, started_at: '2026-09-30T12:00:00Z', preview_url: 'https://old.example.test',
-    }];
+    const sessions = [{ ...gatewayPreviewList[0], pod_name: listedPod }];
 
     expect(latestPreviewStateFromEvents(events, sessions)).toEqual({ status: 'none' });
+  });
+
+  it('accepts the Gateway GET contract as current ready evidence', () => {
+    const session = gatewayPreviewList[0];
+    expect(latestPreviewStateFromEvents([
+      { sequence: 1, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 2, type: 'sandbox.preview_applicability', payload: { tree_hash: 'current-tree', state: 'preview_required' } },
+      { sequence: 3, type: 'sandbox.preview_ready', payload: {
+        tree_hash: 'current-tree', session_id: session.session_id,
+        pod_name: session.pod_name, target_port: session.target_port,
+        preview_runner_session_id: session.preview_runner_session_id,
+        preview_url: session.preview_url,
+      } },
+    ], [session])).toEqual({
+      status: 'ready', previewUrl: session.preview_url,
+      targetPort: '8235', eventSequence: 3,
+    });
+  });
+
+  it('shows in-flight current-tree pending and failure, then honors review and revision boundaries', () => {
+    const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
+      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'old-tree' } },
+      { sequence: 2, type: 'sandbox.preview_ready', payload: {
+        tree_hash: 'old-tree', session_id: gatewayPreviewList[0].session_id,
+        pod_name: gatewayPreviewList[0].pod_name, target_port: 8235,
+        preview_runner_session_id: gatewayPreviewList[0].preview_runner_session_id,
+        preview_url: gatewayPreviewList[0].preview_url,
+      } },
+      { sequence: 3, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 4, type: 'sandbox.preview_applicability', payload: { tree_hash: 'new-tree', state: 'preview_required' } },
+      { sequence: 5, type: 'sandbox.preview_pending', payload: { tree_hash: 'new-tree', target_port: 8235 } },
+    ];
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toEqual({
+      status: 'pending', targetPort: '8235',
+    });
+    events.push({ sequence: 6, type: 'sandbox.preview_failed', payload: {
+      tree_hash: 'new-tree', reason: 'port_not_found', message: 'No app server.',
+    } });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toMatchObject({
+      status: 'failed', reason: 'port_not_found',
+    });
+    events.push({ sequence: 7, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'other-tree' } });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toEqual({ status: 'none' });
+    events.push({ sequence: 8, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'new-tree' } });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toMatchObject({
+      status: 'failed', reason: 'port_not_found',
+    });
+    events.push({ sequence: 9, type: 'coordinator.assembly_changes_requested', payload: {} });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toEqual({ status: 'none' });
+    events.push({ sequence: 10, type: 'sandbox.preview_ready', payload: events[1].payload });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toEqual({ status: 'none' });
   });
 
   it('projects Build & Test running/completed from build-test gateKind events without arming human review', async () => {
@@ -1493,13 +1549,63 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       ...mockRunStreamState.current,
       events: [
         { sequence: 1, type: 'sandbox.selected', payload: { backend: 'kubernetes-sandbox-claim' } },
-        { sequence: 2, type: 'sandbox.preview_pending', payload: { target_port: 5173 } },
+        { sequence: 2, type: 'coordinator.assembly_started', payload: {} },
+        { sequence: 3, type: 'sandbox.preview_applicability', payload: { tree_hash: 'current-tree', state: 'preview_required' } },
+        { sequence: 4, type: 'sandbox.preview_pending', payload: { tree_hash: 'current-tree', target_port: 5173 } },
       ],
     };
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     expect(await screen.findByRole('button', { name: 'Preview Sandbox' }, { timeout: 4000 })).toBeTruthy();
+  });
+
+  it('reopens a server-listed manual preview after reload without asserting Build & Test readiness', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
+    const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
+      { sequence: 1, type: 'sandbox.selected', payload: { backend: 'kubernetes-sandbox-claim' } },
+      { sequence: 2, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 3, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'current-tree' } },
+    ];
+    mockRunStreamState.current = { ...mockRunStreamState.current, events };
+    vi.mocked(apiClient.listPortForwards).mockResolvedValue([gatewayPreviewList[1]]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Sandbox' }));
+    expect(await screen.findByText(/Preview active for port 7234/)).toBeTruthy();
+    expect(screen.getByTitle('Sandbox preview').getAttribute('src')).toBe(gatewayPreviewList[1].preview_url);
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[1]])).toEqual({ status: 'none' });
+    expect(screen.queryByText('Preview from Build & Test is active')).toBeNull();
+  });
+
+  it('shows a port-forward lookup error instead of claiming no preview', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'build-test', label: 'Build & Test', role: 'review', kind: 'live', node_type: 'gate', status: 'running' },
+      ],
+      edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
+    });
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [
+        { sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} },
+        { sequence: 2, type: 'sandbox.selected', payload: { backend: 'kubernetes-sandbox-claim' } },
+      ],
+    };
+    vi.mocked(apiClient.listPortForwards).mockRejectedValue(new Error('lookup failed'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Sandbox' }));
+    expect(await screen.findByText(/lookup failed/)).toBeTruthy();
+    const buildRow = await screen.findByRole('treeitem', { name: /Select Build & Test: Running/i });
+    fireEvent.click(buildRow);
+    expect((await screen.findByTestId('selected-build-preview-cta')).textContent)
+      .toContain('Preview availability could not be checked');
   });
 
   it('retries an expired preview approval from the Build & Test state', async () => {
