@@ -869,11 +869,34 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
                         await db.SaveChangesAsync();
                     };
                 await recoveredService.SweepAsync();
-                var blocked = await GetPlanAsync(attached.WorkPlanId);
-                blocked.Status.Should().Be(WorkPlanStatus.AssemblyBlocked);
-                blocked.AssemblyStatusReason.Should().Be(invalidSource == "late_cross_project"
-                    ? "fan_projection_provenance_mismatch" : "fan_projection_fence_lost");
-                _runtime.Deliveries.Should().ContainSingle();
+                var afterRejectedDelivery = await GetPlanAsync(attached.WorkPlanId);
+                if (invalidSource == "late_cross_project")
+                {
+                    afterRejectedDelivery.Status.Should().Be(WorkPlanStatus.AssemblyBlocked);
+                    afterRejectedDelivery.AssemblyStatusReason.Should()
+                        .Be("fan_projection_provenance_mismatch");
+                }
+                else
+                {
+                    afterRejectedDelivery.Status.Should().Be(WorkPlanStatus.Complete,
+                        "a stale delivery owner cannot block the current owner's valid continuation");
+                    afterRejectedDelivery.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Ready);
+                    recoveredService.BeforeFanProjectionFenceOverride = null;
+                    // A recovery invocation reclaims delivery after the takeover owner's in-flight lease expires.
+                    using (var takeoverScope = _provider.CreateScope())
+                    {
+                        var db = takeoverScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                        var pending = await db.PendingRequests.SingleAsync(r => r.RunId == parent.Id.ToString());
+                        pending.DeliveryClaimedAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+                        await db.SaveChangesAsync();
+                    }
+                    _runtime.DeliverResult = true;
+                    (await recoveredService.TryDeliverResumeAsync(
+                        attached.WorkPlanId, "takeover-owner")).Should().BeTrue();
+                    (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
+                        .Should().Be(WorkflowChildWorkResumeStates.Delivered);
+                }
+                _runtime.Deliveries.Should().HaveCount(invalidSource == "late_cross_project" ? 1 : 2);
                 manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
                 return;
             }
