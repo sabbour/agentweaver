@@ -76,6 +76,7 @@ The Agentweaver MCP server exposes **131 tools** across **15 categories**. Tool 
 
 ### Submit and supervise a run
 **Recommended common case:** call `run_task` and let it handle start → poll → artifacts. It returns terminal artifacts, `awaiting_review`, `awaiting_confirmation`, or `timed_out` with the next step.
+For an automated fan-out/child wait, `timed_out` can contain an embedded `awaiting_review` API run state without an actionable human gate. Inspect `coordinator_work_plan_get` and `coordinator_children_get`, then poll the returned `run_id` with `run_status` (or stream with `run_watch` only if requested). Do not call `run_review` for child work or call `run_task` again to resume: `run_task` starts a new run.
 
 **Manual control path:**
 1. `project_list` → pick project; confirm desired workflow is in `allowed_workflow_ids`.
