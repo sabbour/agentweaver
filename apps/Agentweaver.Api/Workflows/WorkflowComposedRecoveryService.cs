@@ -67,7 +67,17 @@ internal sealed class WorkflowComposedRecoveryService(
             var locked = await db.WorkPlans.Where(plan => plan.Id == planId
                     && plan.Status == WorkPlanStatus.AssemblyFailed
                     && plan.CoordinatorCancellationRequestedAt == null
-                    && !db.Subtasks.Any(subtask => subtask.WorkPlanId == plan.Id))
+                    && !db.Subtasks.Any(subtask => subtask.WorkPlanId == plan.Id
+                        && (subtask.Status != SubtaskStatus.Pending
+                            || subtask.ChildRunId != null || subtask.PriorChildRunId != null
+                            || subtask.CancellationRequestedAt != null
+                            || subtask.RecoveryAttempts != 0 || subtask.InfrastructureRetryCount != 0
+                            || subtask.LastResetDirectiveId != null || subtask.LastResetAttempt != null
+                            || subtask.RevisionInputRevisionId != null
+                            || subtask.RevisionInputCommitHash != null))
+                    && !db.Runs.Any(run => run.ParentRunId == plan.CoordinatorRunId)
+                    && !db.ExecutionIdentities.Any(identity =>
+                        identity.ParentRunId == plan.CoordinatorRunId))
                 .ExecuteUpdateAsync(updates => updates
                     .SetProperty(plan => plan.UpdatedAt, plan => plan.UpdatedAt), ct)
                 .ConfigureAwait(false);
@@ -108,8 +118,10 @@ internal sealed class WorkflowComposedRecoveryService(
                 || !await EfRunStore.TryReopenTerminalOnContextAsync(
                     db, child.Id, ct, child, clearResult: true).ConfigureAwait(false))
                 throw Rejected("composed_recovery_run_changed", parent.Id);
+            var failureRequestId = plan.ParentResumeRequestId;
             var resumedGeneration = parent.LifecycleGeneration + 1;
             plan.Status = WorkPlanStatus.Planned;
+            plan.ParentResumeRequestId = null;
             plan.ParentResumeState = WorkflowChildWorkResumeStates.Committed;
             plan.ParentResumeResultJson = null;
             plan.ParentResumeClaimOwner = null;
@@ -127,7 +139,7 @@ internal sealed class WorkflowComposedRecoveryService(
                 .ConfigureAwait(false);
             if (pending is not null)
             {
-                if (pending.RequestId != plan.ParentResumeRequestId
+                if (pending.RequestId != failureRequestId
                     || pending.DeliveryKind != PendingRequestDeliveryKinds.WorkflowChildWork)
                     throw Rejected("composed_recovery_gate_changed", parent.Id);
                 pending.DeliveryState = PendingRequestDeliveryStates.Waiting;
