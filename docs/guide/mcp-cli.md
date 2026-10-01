@@ -194,13 +194,18 @@ settings.
   observation → artifact inspection → review when gated.
 
 When a composed workflow is waiting for fan-out children or parent continuation,
-`run_task` may return `timed_out` with the existing run ID and a progress hint,
-even if the embedded run's API `status` is `awaiting_review`. Inspect
+`run_task` may return `timed_out` with the existing run ID, an empty artifacts
+array, and a progress hint, even if the embedded run's API `status` is
+`awaiting_review`. Inspect
 `coordinator_work_plan_get` / `coordinator_children_get` and poll that same ID
 with `run_status`; use `run_watch` only when a live stream is requested. This
 wait is not a human review gate; a workflow parent can have a fan work plan
 even when its run detail reports `is_coordinator_plan: false`. Call `run_review`
-only when the current run actually requests human review. Never repeat
+only when the current run reports `pending_request_kind: workflow_review`:
+this is an advisory signal for a current, undecided review request with pinned
+output; approval is always manual and the review endpoint rechecks the gate.
+An absent or unknown kind is not evidence of human review, even if the run
+reports `awaiting_review` or a previous work plan is complete. Never repeat
 `run_task` to resume a run: it starts a new execution.
 
 ## Poll vs. stream

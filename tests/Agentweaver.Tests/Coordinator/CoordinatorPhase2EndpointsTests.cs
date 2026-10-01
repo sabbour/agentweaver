@@ -345,7 +345,8 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             $"/api/runs/{runId}/review",
             new { approved = true });
 
-        detail.GetProperty("pending_request_kind").GetString().Should().Be("workflow_child_work");
+        detail.GetProperty("pending_request_kind").ValueKind.Should().Be(JsonValueKind.Null,
+            "a child pause without a bound current parent-node plan is not yet actionable");
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("pending_request_kind").GetString().Should().Be("workflow_child_work");

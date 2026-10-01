@@ -2,4 +2,4 @@
 "agentweaver": patch
 ---
 
-Guide MCP clients to inspect and poll the existing run when a composed workflow is waiting for fan-out children or parent continuation, rather than requesting human review or starting a duplicate run.
+Persist the original workflow request kind and pin current review output so run detail distinguishes an actionable manual review from automatic fan-out waits. MCP clients poll the existing run through child continuation instead of suggesting approval or starting a duplicate run.

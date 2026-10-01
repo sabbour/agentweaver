@@ -163,7 +163,8 @@ app.MapGet("/api/runs/{id}", async (
     var isCoordinatorRun = coordinatorCandidate
         && (run.ParentRunId is null || coordinatorStatus is not null);
     var pendingRequestKind = run.Status == RunStatus.AwaitingReview
-        ? await pendingStore.GetRequestKindAsync(id, ct).ConfigureAwait(false)
+        ? await pendingStore.GetActionableRequestKindAsync(
+            run, await runStore.GetLatestOutputRevisionAsync(run.Id, ct).ConfigureAwait(false), ct).ConfigureAwait(false)
         : null;
     var stepCount = run.StepCount;
     if (stepCount <= 0 && streamEvents is not null)
