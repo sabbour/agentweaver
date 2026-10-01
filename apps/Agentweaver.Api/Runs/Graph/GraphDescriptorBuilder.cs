@@ -70,7 +70,7 @@ public sealed class GraphDescriptorBuilder
     }
 
     /// <summary>Builds the underlying MAF workflow.</summary>
-    public Workflow Build() => _inner.Build()!;
+    public Workflow Build(bool validateOrphans = true) => _inner.Build(validateOrphans)!;
 
     /// <summary>
     /// Snapshot of every wired executor's render metadata keyed by its MAF executor id (the id MAF

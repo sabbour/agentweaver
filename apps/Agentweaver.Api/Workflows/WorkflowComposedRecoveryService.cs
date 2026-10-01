@@ -111,7 +111,7 @@ internal sealed class WorkflowComposedRecoveryService(
 
             // Validate the durable provider before reopening either identity.
             await scope.ServiceProvider.GetRequiredService<RunOrchestrator>()
-                .ResolveDurableProviderBoundaryAsync(parent, ct).ConfigureAwait(false);
+                .ValidateComposedRecoveryLaunchAsync(parent, ct).ConfigureAwait(false);
             var lease = new RunLeaseClaim(owner, acquired.FencingToken, parent.LifecycleGeneration);
             if (!await EfRunStore.TryReopenTerminalOnContextAsync(
                     db, parent.Id, ct, parent, lease, clearResult: true).ConfigureAwait(false)
@@ -142,13 +142,7 @@ internal sealed class WorkflowComposedRecoveryService(
                 if (pending.RequestId != failureRequestId
                     || pending.DeliveryKind != PendingRequestDeliveryKinds.WorkflowChildWork)
                     throw Rejected("composed_recovery_gate_changed", parent.Id);
-                pending.DeliveryState = PendingRequestDeliveryStates.Waiting;
-                pending.ResponseJson = null;
-                pending.DecisionIdentity = null;
-                pending.DeliveryKind = null;
-                pending.DeliveryClaimOwner = null;
-                pending.DeliveryClaimedAt = null;
-                pending.DeliveredAt = null;
+                db.PendingRequests.Remove(pending);
             }
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);

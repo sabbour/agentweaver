@@ -1075,6 +1075,15 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
     }
 
+    internal async Task ValidateComposedRecoveryLaunchAsync(Run run, CancellationToken ct)
+    {
+        var boundary = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            run, ct, boundary.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot ? boundary.Provider : null)
+            .ConfigureAwait(false);
+    }
+
     public async Task<ResolvedRunModelProviderBoundary>
         ResolveDurableProviderBoundaryAsync(Run run, CancellationToken ct)
     {
