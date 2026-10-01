@@ -446,6 +446,7 @@ public sealed class RunWatchLoopService
                     if (!await _pendingStore.ExistsForRequestAsync(runId, rie.Request.RequestId, ct).ConfigureAwait(false))
                     {
                         // Publish retained output before exposing a pending human review.
+                        string? reviewOutputRevisionId = null;
                         if (rie.Request.TryGetDataAs<WorkflowReviewRequest>(out var reviewReq))
                         {
                             ct.ThrowIfCancellationRequested();
@@ -479,8 +480,25 @@ public sealed class RunWatchLoopService
                                         RunId.Parse(runId), reviewReq.TreeHash, reviewReq.Diff,
                                         reviewReq.StepCount, ct, null, retainedTree).ConfigureAwait(false);
                             }
+                            var publishedRun = await _runStore.GetAsync(RunId.Parse(runId), ct).ConfigureAwait(false)
+                                ?? throw new RunOutputRevisionUnavailableException("run_missing");
+                            if (reviewReq.RunId != runId || publishedRun.TreeHash != reviewReq.TreeHash
+                                || reviewReq.LifecycleGeneration is { } expectedGeneration
+                                    && publishedRun.LifecycleGeneration != expectedGeneration)
+                                throw new RunOutputRevisionUnavailableException("review_request_identity_mismatch");
+                            if (!string.IsNullOrWhiteSpace(publishedRun.CurrentOutputRevisionId))
+                            {
+                                var latest = await _runStore.GetLatestOutputRevisionAsync(publishedRun.Id, ct).ConfigureAwait(false);
+                                if (latest?.RevisionId == publishedRun.CurrentOutputRevisionId
+                                    && latest.RunId == publishedRun.Id
+                                    && latest.LifecycleGeneration == publishedRun.LifecycleGeneration
+                                    && latest.TreeHash == reviewReq.TreeHash)
+                                    reviewOutputRevisionId = latest.RevisionId;
+                            }
                         }
-                        await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct).ConfigureAwait(false);
+                        await _pendingStore.SetAsync(runId, rie.Request, ownerUser, ct,
+                            lifecycleGeneration: reviewReq?.LifecycleGeneration,
+                            reviewOutputRevisionId: reviewOutputRevisionId).ConfigureAwait(false);
 
                         entry.MarkAwaitingReview();
 

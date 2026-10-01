@@ -265,7 +265,7 @@ public sealed class McpRunTaskTests
     [Theory]
     [InlineData("delivered", "complete")]
     [InlineData("waiting", "in_review")]
-    public async Task RunTask_FanPlanWithCurrentReview_PreservesHumanGate(string resumeState, string planStatus)
+    public async Task RunTask_FanPlanWithoutPositiveReview_PollsSameRun(string resumeState, string planStatus)
     {
         var tools = CreateRunTools((request, _) =>
         {
@@ -301,8 +301,9 @@ public sealed class McpRunTaskTests
         var result = await tools.RunTaskAsync("proj-1", "Review it",
             timeout_seconds: 1, poll_interval_seconds: 1, ct: CancellationToken.None);
 
-        result.Status.Should().Be("awaiting_review");
-        result.ReviewPrompt.Should().Contain("run_review").And.NotContain("run_task");
+        result.Status.Should().Be("timed_out");
+        result.ReviewPrompt.Should().BeNull();
+        result.Hint.Should().Contain("run_status").And.NotContain("run_review");
     }
 
     [Fact]
@@ -366,7 +367,7 @@ public sealed class McpRunTaskTests
                     Content = JsonContent.Create(new
                     {
                         run_id = "ordinary", status = "awaiting_review",
-                        is_coordinator_plan = false, pending_request_kind = (string?)null
+                        is_coordinator_plan = false, pending_request_kind = "workflow_review"
                     })
                 });
             if (request.Method == HttpMethod.Get && path == "/api/runs/ordinary/work-plan")
@@ -432,8 +433,10 @@ public sealed class McpRunTaskTests
             .And.NotContain("run_review").And.NotContain("run_task");
     }
 
-    [Fact]
-    public async Task RunTask_CoordinatorWithoutChildPlan_PreservesHumanReview()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("unknown")]
+    public async Task RunTask_CoordinatorWithoutChildPlan_IsNotProofOfHumanReview(string? requestKind)
     {
         var tools = CreateRunTools((request, _) =>
         {
@@ -449,7 +452,7 @@ public sealed class McpRunTaskTests
                     Content = JsonContent.Create(new
                     {
                         run_id = "ordinary-coordinator", status = "awaiting_review",
-                        is_coordinator_plan = true, pending_request_kind = (string?)null
+                        is_coordinator_plan = true, pending_request_kind = requestKind
                     })
                 });
             if (request.Method == HttpMethod.Get && path == "/api/runs/ordinary-coordinator/work-plan")
@@ -460,9 +463,11 @@ public sealed class McpRunTaskTests
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
         });
 
-        var result = await tools.RunTaskAsync("proj-1", "Review it", ct: CancellationToken.None);
-        result.Status.Should().Be("awaiting_review");
-        result.ReviewPrompt.Should().Contain("run_review").And.NotContain("run_task");
+        var result = await tools.RunTaskAsync("proj-1", "Review it",
+            timeout_seconds: 1, poll_interval_seconds: 1, ct: CancellationToken.None);
+        result.Status.Should().Be("timed_out");
+        result.ReviewPrompt.Should().BeNull();
+        result.Hint.Should().Contain("run_status").And.NotContain("run_review");
     }
 
     [Fact]

@@ -5,10 +5,16 @@ using System.Text.Json;
 using FluentAssertions;
 using LibGit2Sharp;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Agents.AI.Workflows;
+using Microsoft.Agents.AI.Workflows.Checkpointing;
+using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Run = Agentweaver.Domain.Run;
+using RunStatus = Agentweaver.Domain.RunStatus;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Api;
@@ -69,6 +75,32 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
             try { Directory.Delete(dir, recursive: true); }
             catch { /* best effort — git packs may still be locked */ }
         }
+    }
+
+    [Fact]
+    public async Task RunDetail_ProjectsOnlyProducerPinnedWaitingReview()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync();
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var current = (await store.GetAsync(run.Id))!;
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+        var pending = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var request = new ExternalRequest(
+            new RequestPortInfo(new TypeId("Test", "Review"), new TypeId("Test", "Decision"), "review"),
+            "review-1", new PortableValue(new WorkflowReviewRequest(
+                run.Id.ToString(), current.TreeHash!, current.Diff!, 0,
+                LifecycleGeneration: current.LifecycleGeneration)));
+        await pending.SetAsync(run.Id.ToString(), request, ReviewWebApplicationFactory.OwnerUser,
+            lifecycleGeneration: current.LifecycleGeneration, reviewOutputRevisionId: revision.RevisionId);
+
+        var detail = await _ownerClient.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}");
+        detail.GetProperty("pending_request_kind").GetString().Should().Be("workflow_review");
+
+        await pending.SetAsync(run.Id.ToString(), request, ReviewWebApplicationFactory.OwnerUser,
+            lifecycleGeneration: current.LifecycleGeneration);
+        detail = await _ownerClient.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}");
+        detail.GetProperty("pending_request_kind").ValueKind.Should().Be(JsonValueKind.Null,
+            "an unpinned review cannot advise human approval");
     }
 
     [Fact]

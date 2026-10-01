@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.Security.Cryptography;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.Data.Sqlite;
@@ -7,6 +8,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
+using Agentweaver.Domain;
+using Run = Agentweaver.Domain.Run;
+using RunStatus = Agentweaver.Domain.RunStatus;
 
 namespace Agentweaver.Tests.Runs;
 
@@ -60,6 +65,147 @@ public sealed class PendingRequestStoreTests : IDisposable
             new TypeId("Test.Asm", "Test.ResponseType"),
             "review-port");
         return new ExternalRequest(portInfo, requestId, new PortableValue(requestId));
+    }
+
+    [Fact]
+    public async Task TypedReview_RoundTripsAcrossReplicas_OnlyWhileCurrentAndUndecided()
+    {
+        var run = new Run
+        {
+            Id = RunId.New(), RepositoryPath = "unused", OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot, Task = "review",
+            SubmittingUser = "octocat", Status = RunStatus.AwaitingReview,
+            StartedAt = DateTimeOffset.UtcNow, TreeHash = "tree-1",
+            CurrentOutputRevisionId = "rev-1"
+        };
+        var id = run.Id.ToString();
+        var request = new ExternalRequest(
+            new RequestPortInfo(new TypeId("Test", "Review"),
+                new TypeId("Test", "Decision"), "review"),
+            "req-review",
+            new PortableValue(new WorkflowReviewRequest(id, "tree-1", "diff", 1,
+                LifecycleGeneration: run.LifecycleGeneration)));
+        var revision = new RunOutputRevision("rev-1", RunOutputRevision.CurrentSchemaVersion,
+            run.Id, run.LifecycleGeneration, null, true, "tree-1",
+            Convert.ToHexString(SHA256.HashData([])), null, [], DateTimeOffset.UtcNow);
+        await NewStoreOnSeparateReplica().SetAsync(id, request, "octocat",
+            lifecycleGeneration: run.LifecycleGeneration, reviewOutputRevisionId: "rev-1");
+        var reader = NewStoreOnSeparateReplica();
+        (await reader.GetActionableRequestKindAsync(run, revision)).Should().Be(PendingRequestDeliveryKinds.WorkflowReview);
+        (await reader.GetActionableRequestKindAsync(run, null)).Should().BeNull();
+        (await reader.GetActionableRequestKindAsync(run with { CurrentOutputRevisionId = "rev-2" }, revision)).Should().BeNull();
+        (await reader.GetActionableRequestKindAsync(run with { TreeHash = "other" }, revision)).Should().BeNull();
+        (await reader.GetActionableRequestKindAsync(run with { LifecycleGeneration = 2 }, revision)).Should().BeNull();
+        (await reader.GetActionableRequestKindAsync(run with { Id = RunId.New() }, revision)).Should().BeNull();
+        await reader.SetAsync(id, request, "octocat", lifecycleGeneration: run.LifecycleGeneration);
+        (await reader.GetActionableRequestKindAsync(run, revision)).Should().BeNull(
+            "a typed request without a producer-pinned review revision is not actionable");
+        await reader.SetAsync(id, request, "octocat",
+            lifecycleGeneration: run.LifecycleGeneration, reviewOutputRevisionId: "rev-1");
+        using (var scope = NewReplicaServiceProvider().CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.PendingRequests.SingleAsync(p => p.RunId == id);
+            row.RequestId = "other";
+            await db.SaveChangesAsync();
+        }
+        (await reader.GetActionableRequestKindAsync(run, revision)).Should().BeNull();
+        using (var scope = NewReplicaServiceProvider().CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var row = await db.PendingRequests.SingleAsync(p => p.RunId == id);
+            row.RequestId = request.RequestId;
+            await db.SaveChangesAsync();
+        }
+        var decision = new WorkflowReviewDecision(true, ReviewedBy: "octocat");
+        (await reader.TryQueueDeliveryAsync(id, PendingRequestDeliveryKinds.WorkflowReview,
+            PendingRequestStore.CreateDecisionIdentity(request.RequestId, decision), decision, "octocat"))
+            .Should().BeTrue();
+        (await reader.GetActionableRequestKindAsync(run, revision)).Should().BeNull();
+        (await reader.GetRequestKindAsync(id)).Should().Be(PendingRequestDeliveryKinds.WorkflowReview);
+        (await reader.TryClaimDeliveryAsync(id, "owner", TimeSpan.Zero)).Should().NotBeNull();
+        (await reader.GetActionableRequestKindAsync(run, revision)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LatestParentPlan_ControlsChildPauseAndDoesNotLetOlderWaitMaskFreshReview()
+    {
+        var run = new Run
+        {
+            Id = RunId.New(), RepositoryPath = "unused", OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot, Task = "fan out",
+            SubmittingUser = "octocat", Status = RunStatus.AwaitingReview,
+            StartedAt = DateTimeOffset.UtcNow, TreeHash = "tree",
+            CurrentOutputRevisionId = "rev"
+        };
+        var id = run.Id.ToString();
+        var review = new ExternalRequest(
+            new RequestPortInfo(new TypeId("Test", "Review"), new TypeId("Test", "Decision"), "review"),
+            "req-review", new PortableValue(new WorkflowReviewRequest(id, "tree", "diff", 1,
+                LifecycleGeneration: run.LifecycleGeneration)));
+        var revision = new RunOutputRevision("rev", RunOutputRevision.CurrentSchemaVersion,
+            run.Id, run.LifecycleGeneration, null, true, "tree",
+            Convert.ToHexString(SHA256.HashData([])), null, [], DateTimeOffset.UtcNow);
+        var store = NewStoreOnSeparateReplica();
+        await store.SetAsync(id, review, "octocat",
+            lifecycleGeneration: run.LifecycleGeneration, reviewOutputRevisionId: "rev");
+        (await store.GetActionableRequestKindAsync(run, revision)).Should().Be(PendingRequestDeliveryKinds.WorkflowReview);
+
+        async Task<WorkPlan> AddPlanAsync(string state, string node)
+        {
+            using var scope = NewReplicaServiceProvider().CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var now = DateTimeOffset.UtcNow;
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project", CoordinatorRunId = id, Goal = "fan",
+                DesiredOutcome = "done", Scope = "workflow", Assumptions = "none",
+                Status = "confirmed", CreatedAt = now, UpdatedAt = now
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id, ProjectId = "project", CoordinatorRunId = id,
+                ParentRunId = id, ParentWorkflowNodeId = node,
+                ParentResumeState = state, Status = "dispatching", CreatedAt = now, UpdatedAt = now
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            return plan;
+        }
+
+        await AddPlanAsync("waiting", "fan-old");
+        (await store.GetActionableRequestKindAsync(run, revision)).Should().BeNull();
+        var newPlan = await AddPlanAsync("delivered", "fan-new");
+        (await store.GetActionableRequestKindAsync(run, revision)).Should().Be(PendingRequestDeliveryKinds.WorkflowReview,
+            "only the latest parent-node plan can suppress a newer human review");
+        var child = new ExternalRequest(
+            new RequestPortInfo(new TypeId("Test", "Child"), new TypeId("Test", "Result"), "fan"),
+            "req-child",
+            new PortableValue(new WorkflowChildWorkPauseRequest(
+                newPlan.Id, id, "fan-new", "join", RunId.New().ToString())));
+        await store.SetAsync(id, child, "octocat", lifecycleGeneration: run.LifecycleGeneration);
+        (await store.GetActionableRequestKindAsync(run, revision)).Should().BeNull(
+            "the new plan has not yet bound its continuation request");
+        using (var scope = NewReplicaServiceProvider().CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(p => p.Id == newPlan.Id);
+            plan.ParentResumeState = "waiting";
+            plan.ParentResumeRequestId = child.RequestId;
+            await db.SaveChangesAsync();
+        }
+        (await NewStoreOnSeparateReplica().GetActionableRequestKindAsync(run, revision))
+            .Should().Be(PendingRequestDeliveryKinds.WorkflowChildWork);
+        (await store.GetRequestKindAsync(id)).Should().Be(PendingRequestDeliveryKinds.WorkflowChildWork,
+            "POST must reject a typed waiting child pause as well as a queued child delivery");
+        var decision = new WorkflowReviewDecision(true, ReviewedBy: "octocat");
+        (await store.TryQueueDeliveryAsync(id, PendingRequestDeliveryKinds.WorkflowChildWork,
+            PendingRequestStore.CreateDecisionIdentity(child.RequestId, decision), decision, "octocat"))
+            .Should().BeTrue();
+        (await store.GetActionableRequestKindAsync(run, revision)).Should().BeNull();
+        (await store.GetRequestKindAsync(id)).Should().Be(PendingRequestDeliveryKinds.WorkflowChildWork);
     }
 
     [Fact]
