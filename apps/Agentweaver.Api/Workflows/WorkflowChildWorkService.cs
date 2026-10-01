@@ -1172,15 +1172,27 @@ internal sealed class WorkflowChildWorkService
                 _logger.LogError(ex,
                     "Fan projection provenance changed before delivery for plan {WorkPlanId}; parent remains parked",
                     workPlanId);
-                using var blockedScope = _scopeFactory.CreateScope();
-                await blockedScope.ServiceProvider.GetRequiredService<MemoryDbContext>().WorkPlans
-                    .Where(plan => plan.Id == workPlanId
-                        && plan.ParentResumeState == WorkflowChildWorkResumeStates.Ready)
-                    .ExecuteUpdateAsync(updates => updates
-                        .SetProperty(plan => plan.Status, WorkPlanStatus.AssemblyBlocked)
-                        .SetProperty(plan => plan.AssemblyStatusReason, ex.Reason)
-                        .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), CancellationToken.None)
-                    .ConfigureAwait(false);
+                if (ex.Reason != "fan_projection_fence_lost")
+                {
+                    using var blockedScope = _scopeFactory.CreateScope();
+                    var blockedDb = blockedScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                    await blockedDb.WorkPlans
+                        .Where(plan => plan.Id == workPlanId
+                            && plan.ParentResumeState == WorkflowChildWorkResumeStates.Ready
+                            && blockedDb.PendingRequests.Any(request =>
+                                request.RunId == snapshot.Plan.ParentRunId
+                                && request.RequestId == snapshot.Plan.ParentResumeRequestId
+                                && request.DeliveryKind == PendingRequestDeliveryKinds.WorkflowChildWork
+                                && request.DecisionIdentity == delivery.DecisionIdentity
+                                && request.DeliveryState == PendingRequestDeliveryStates.Delivering
+                                && request.DeliveryClaimOwner == delivery.ClaimOwner
+                                && request.DeliveryClaimedAt == delivery.ClaimedAt))
+                        .ExecuteUpdateAsync(updates => updates
+                            .SetProperty(plan => plan.Status, WorkPlanStatus.AssemblyBlocked)
+                            .SetProperty(plan => plan.AssemblyStatusReason, ex.Reason)
+                            .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
                 await _pendingRequests.ReleaseDeliveryAsync(
                     snapshot.Plan.ParentRunId, delivery.DecisionIdentity,
                     delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
