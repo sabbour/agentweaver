@@ -61,6 +61,8 @@ public sealed partial class PostgresAppBootTests
         var store = _fixture.Services.GetRequiredService<IRunStore>();
         try
         {
+            (await store.TryReopenTerminalToInProgressAsync(seeded.Parent.Id)).Should().BeTrue();
+            (await store.TryReopenTerminalToInProgressAsync(seeded.Child.Id)).Should().BeTrue();
             await store.UpdateStatusAsync(seeded.Parent.Id, RunStatus.AwaitingReview, null);
             await store.UpdateStatusAsync(seeded.Child.Id, RunStatus.Pending, null);
             using var holderScope = _fixture.Services.CreateScope();
