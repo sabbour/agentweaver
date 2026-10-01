@@ -45,6 +45,7 @@ internal sealed class ImmutableExecutionInputPlan
         foreach (var (claim, revision) in inputs)
         {
             if (revision.RevisionId != claim.OutputRevisionId || revision.RunId.ToString() != claim.RunId
+                || revision.SchemaVersion == RunOutputRevision.FanDeclaredFilesSchemaVersion
                 || revision.LifecycleGeneration != claim.LifecycleGeneration
                 || revision.TreeHash != claim.TreeHash
                 || revision.WorkflowDigest != claim.ExecutableWorkflowContentDigest

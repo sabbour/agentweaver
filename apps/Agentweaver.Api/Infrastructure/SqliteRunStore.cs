@@ -1016,6 +1016,26 @@ public sealed class SqliteRunStore : IRunStore
         WarnIfNoRows(rows, runId, "update tree hash after commit");
     }
 
+    public async Task<bool> TryRecordFanInputProjectionAsync(
+        RunId runId, int generation, string expectedBaseTree, string projectedTree,
+        string worktreeBranch, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var update = connection.CreateCommand();
+        update.CommandText = """
+            UPDATE runs SET tree_hash=$projected
+            WHERE run_id=$run AND lifecycle_generation=$generation
+              AND status='awaiting_review' AND worktree_branch=$branch
+              AND (tree_hash IS NULL OR tree_hash=$base);
+            """;
+        update.Parameters.AddWithValue("$projected", projectedTree);
+        update.Parameters.AddWithValue("$run", runId.ToString());
+        update.Parameters.AddWithValue("$generation", generation);
+        update.Parameters.AddWithValue("$branch", worktreeBranch);
+        update.Parameters.AddWithValue("$base", expectedBaseTree);
+        return await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 1;
+    }
+
     public async Task<bool> SetAssembleReadyAsync(
         RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount,
         DateTimeOffset endedAt, CancellationToken ct = default)
@@ -1256,6 +1276,57 @@ public sealed class SqliteRunStore : IRunStore
             publish.Parameters.AddWithValue("$treeContent", output.TreeContent);
             publish.Parameters.AddWithValue("$treeContentDigest", RunOutputRevision.Sha256(output.TreeContent));
             publish.Parameters.AddWithValue("$approved", (object?)approvedId ?? DBNull.Value);
+            await publish.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        if (mutation.FanDeclaredFiles is { } fan)
+        {
+            var files = RunOutputTree.Decode(fan.TreeContent);
+            if (mutation.Outcome.Status != RunStatus.AssembleReady
+                || mutation.TreeHash != fan.TreeHash
+                || string.IsNullOrWhiteSpace(fan.CommitHash)
+                || files.Count == 0 || files.Any(file => file.Mode is not (33188 or 33261)))
+                throw new RunOutputRevisionUnavailableException("invalid_fan_manifest");
+            await using var publish = connection.CreateCommand();
+            publish.Transaction = tx;
+            publish.CommandText = """
+                SELECT parent_run_id, current_output_revision_id, diff,
+                       executable_workflow_content_digest
+                  FROM runs WHERE run_id=$runId AND lifecycle_generation=$generation;
+                """;
+            publish.Parameters.AddWithValue("$runId", runId.ToString());
+            publish.Parameters.AddWithValue("$generation", mutation.Outcome.ExpectedLifecycleGeneration);
+            string? workflowDigest;
+            byte[] diffBytes;
+            await using (var reader = await publish.ExecuteReaderAsync(ct).ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(ct).ConfigureAwait(false)
+                    || reader.IsDBNull(0) || !reader.IsDBNull(1))
+                    throw new RunOutputRevisionUnavailableException("invalid_fan_manifest");
+                diffBytes = [];
+                workflowDigest = reader.IsDBNull(3) ? null : reader.GetString(3);
+            }
+            var revisionId = Guid.NewGuid().ToString("N");
+            publish.CommandText = """
+                INSERT INTO run_output_revisions
+                    (revision_id, schema_version, run_id, lifecycle_generation, workflow_digest,
+                     manifest_incomplete, tree_hash, diff_sha256, diff_bytes, created_at,
+                     output_kind, merged_commit_hash, work_plan_id, tree_content, tree_content_sha256)
+                VALUES ($revision, 5, $runId, $generation, $workflow, 0, $tree, $digest, $bytes,
+                        $created, 'fan_declared_files', $commit, $plan, $content, $contentDigest);
+                UPDATE runs SET current_output_revision_id=$revision
+                WHERE run_id=$runId AND lifecycle_generation=$generation
+                  AND current_output_revision_id IS NULL;
+                """;
+            publish.Parameters.AddWithValue("$revision", revisionId);
+            publish.Parameters.AddWithValue("$workflow", (object?)workflowDigest ?? DBNull.Value);
+            publish.Parameters.AddWithValue("$tree", fan.TreeHash);
+            publish.Parameters.AddWithValue("$digest", RunOutputRevision.Sha256(diffBytes));
+            publish.Parameters.AddWithValue("$bytes", diffBytes);
+            publish.Parameters.AddWithValue("$created", Ts(mutation.Outcome.OccurredAt));
+            publish.Parameters.AddWithValue("$commit", fan.CommitHash);
+            publish.Parameters.AddWithValue("$plan", fan.WorkPlanId);
+            publish.Parameters.AddWithValue("$content", fan.TreeContent);
+            publish.Parameters.AddWithValue("$contentDigest", RunOutputRevision.Sha256(fan.TreeContent));
             await publish.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         if (mutation.NoChangeOutput is { } receipt)

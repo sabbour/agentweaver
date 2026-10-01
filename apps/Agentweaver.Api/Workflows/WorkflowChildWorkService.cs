@@ -75,7 +75,15 @@ internal sealed record WorkflowChildWorkBranch(
     string? Output = null,
     string? WorktreeBranch = null,
     string? TreeHash = null,
-    string? Diff = null);
+    string? Diff = null,
+    string? OutputRevisionId = null);
+
+internal sealed record WorkflowFanProjection(
+    int ParentLifecycleGeneration,
+    string BaseCommitHash,
+    string BaseTreeHash,
+    string PreparedCommitHash,
+    string PreparedTreeHash);
 
 internal sealed record WorkflowChildWorkResult(
     int WorkPlanId,
@@ -88,7 +96,8 @@ internal sealed record WorkflowChildWorkResult(
     string? FailureReason,
     IReadOnlyList<WorkflowChildWorkBranch> Branches,
     string JoinedOutput,
-    WorkflowComposedAssembly? Assembly = null);
+    WorkflowComposedAssembly? Assembly = null,
+    WorkflowFanProjection? FanProjection = null);
 
 internal sealed record WorkflowComposedAssembly(
     string IntegrationBranch,
@@ -262,7 +271,6 @@ internal sealed class WorkflowChildWorkRuntime(
 /// </summary>
 internal sealed class WorkflowChildWorkService
 {
-    internal const int MaxComposedParentContextChars = 24_000;
     private static readonly TimeSpan DeliveryClaimStaleAfter = TimeSpan.FromSeconds(15);
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunStore _runStore;
@@ -451,9 +459,6 @@ internal sealed class WorkflowChildWorkService
                 ? null
                 : request.IncomingInput?.Task
                     ?? throw new InvalidOperationException("Composed child work requires the parent turn context.");
-            if (composedContext?.Length > MaxComposedParentContextChars)
-                throw new InvalidOperationException(
-                    $"Composed parent context exceeds {MaxComposedParentContextChars} characters; it cannot be delivered intact.");
             var outcomeSpec = new OutcomeSpec
             {
                 ProjectId = request.ParentRun.ProjectId?.ToString() ?? string.Empty,
@@ -916,6 +921,23 @@ internal sealed class WorkflowChildWorkService
                     ? await GetComposedSubtasksAsync(workPlanId, ct).ConfigureAwait(false)
                     : snapshot.Branches, ct).ConfigureAwait(false);
             var joinedOutput = BuildJoinedOutput(branches);
+            WorkflowFanProjection? fanProjection = null;
+            string? fanFailure = null;
+            if (succeeded && snapshot.Plan.ParentJoinNodeId is not null)
+            {
+                try
+                {
+                    fanProjection = await PrepareFanProjectionAsync(snapshot.Plan, parent, branches, ct)
+                        .ConfigureAwait(false);
+                }
+                catch (RunOutputRevisionUnavailableException ex)
+                {
+                    _logger.LogError(ex, "Fan input projection preparation failed for plan {WorkPlanId}", workPlanId);
+                    fanFailure = ex.Reason;
+                    succeeded = false;
+                    joinedOutput = string.Empty;
+                }
+            }
             result = new WorkflowChildWorkResult(
                 snapshot.Plan.Id,
                 snapshot.Plan.CoordinatorRunId,
@@ -923,10 +945,10 @@ internal sealed class WorkflowChildWorkService
                 snapshot.Plan.ParentWorkflowNodeId,
                 snapshot.Plan.ParentJoinNodeId,
                 succeeded,
-                snapshot.Plan.Status,
-                succeeded ? null : snapshot.Plan.AssemblyStatusReason ?? snapshot.Plan.Status,
+                fanFailure is null ? snapshot.Plan.Status : WorkPlanStatus.AssemblyFailed,
+                succeeded ? null : fanFailure ?? snapshot.Plan.AssemblyStatusReason ?? snapshot.Plan.Status,
                 branches,
-                joinedOutput);
+                joinedOutput, FanProjection: fanProjection);
             var resultJson = JsonSerializer.Serialize(result, JsonDefaults.Options);
 
             using var scope = _scopeFactory.CreateScope();
@@ -937,7 +959,8 @@ internal sealed class WorkflowChildWorkService
                     && plan.ParentResumeResultJson == null)
                 .ExecuteUpdateAsync(updates => updates
                     .SetProperty(plan => plan.ParentResumeResultJson, resultJson)
-                    .SetProperty(plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Ready)
+                    .SetProperty(plan => plan.Status, result.WorkPlanStatus)
+                    .SetProperty(plan => plan.AssemblyStatusReason, result.FailureReason)
                     .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), ct)
                 .ConfigureAwait(false);
         }
@@ -947,6 +970,41 @@ internal sealed class WorkflowChildWorkService
             return false;
         if (snapshot.Plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting)
         {
+            var staged = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
+                snapshot.Plan.ParentResumeResultJson, JsonDefaults.Options)
+                ?? throw new InvalidOperationException($"Work plan {workPlanId} has an invalid fan result.");
+            if (staged.FanProjection is not null)
+            {
+                try
+                {
+                    await ApplyFanProjectionAsync(snapshot.Plan, parent, staged, ct).ConfigureAwait(false);
+                }
+                catch (RunOutputRevisionUnavailableException ex)
+                {
+                    _logger.LogError(ex, "Fan input projection install failed for plan {WorkPlanId}", workPlanId);
+                    var failed = staged with
+                    {
+                        Succeeded = false,
+                        WorkPlanStatus = WorkPlanStatus.AssemblyFailed,
+                        FailureReason = ex.Reason,
+                        JoinedOutput = string.Empty,
+                        FanProjection = null,
+                    };
+                    using var failureScope = _scopeFactory.CreateScope();
+                    var failureDb = failureScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                    await failureDb.WorkPlans
+                        .Where(plan => plan.Id == workPlanId
+                            && plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting
+                            && plan.ParentResumeResultJson == snapshot.Plan.ParentResumeResultJson)
+                        .ExecuteUpdateAsync(updates => updates
+                            .SetProperty(plan => plan.Status, WorkPlanStatus.AssemblyFailed)
+                            .SetProperty(plan => plan.AssemblyStatusReason, ex.Reason)
+                            .SetProperty(plan => plan.ParentResumeResultJson,
+                                JsonSerializer.Serialize(failed, JsonDefaults.Options))
+                            .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), ct)
+                        .ConfigureAwait(false);
+                }
+            }
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             await db.WorkPlans
@@ -957,10 +1015,20 @@ internal sealed class WorkflowChildWorkService
                     .SetProperty(plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Ready)
                     .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), ct).ConfigureAwait(false);
         }
+        snapshot = await LoadPlanSnapshotAsync(workPlanId, ct).ConfigureAwait(false);
+        if (snapshot?.Plan.ParentResumeResultJson is null)
+            return false;
         result = JsonSerializer.Deserialize<WorkflowChildWorkResult>(
             snapshot.Plan.ParentResumeResultJson,
             JsonDefaults.Options)
             ?? throw new InvalidOperationException($"Work plan {workPlanId} has an invalid parent resume result.");
+        if (snapshot.Plan.Status == WorkPlanStatus.AssemblyBlocked
+            && result.Succeeded && result.FanProjection is not null)
+            return false;
+        if (result.Succeeded && result.ParentJoinNodeId is not null
+            && result.Branches.Any(branch => branch.OutputRevisionId is not null)
+            && result.FanProjection is null)
+            throw new RunOutputRevisionUnavailableException("fan_projection_missing");
         if (snapshot.Plan.ParentJoinNodeId is null)
             await EnsureComposedTerminalRunAsync(result, ct).ConfigureAwait(false);
 
@@ -990,6 +1058,16 @@ internal sealed class WorkflowChildWorkService
                     branchCount = result.Branches.Count,
                     joinedOutput = result.JoinedOutput,
                     assembly = result.Assembly,
+                    fanProjection = result.FanProjection,
+                    sourceRevisions = result.Branches
+                        .Where(branch => branch.OutputRevisionId is not null)
+                        .Select(branch => new
+                        {
+                            branch.NodeId,
+                            branch.ChildRunId,
+                            branch.OutputRevisionId,
+                            branch.TreeHash,
+                        }),
                     timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
                 },
                     ct).ConfigureAwait(false))
@@ -1073,6 +1151,37 @@ internal sealed class WorkflowChildWorkService
                 StringComparison.Ordinal))
             return false;
 
+        var result = delivery.GetResponse<WorkflowChildWorkResult>();
+        if (result.Succeeded && result.ParentJoinNodeId is not null
+            && result.Branches.Any(branch => branch.OutputRevisionId is not null))
+        {
+            try
+            {
+                if (result.FanProjection is null)
+                    throw new RunOutputRevisionUnavailableException("fan_projection_missing");
+                await ApplyFanProjectionAsync(snapshot.Plan, parent, result, ct).ConfigureAwait(false);
+            }
+            catch (RunOutputRevisionUnavailableException ex)
+            {
+                _logger.LogError(ex,
+                    "Fan projection provenance changed before delivery for plan {WorkPlanId}; parent remains parked",
+                    workPlanId);
+                using var blockedScope = _scopeFactory.CreateScope();
+                await blockedScope.ServiceProvider.GetRequiredService<MemoryDbContext>().WorkPlans
+                    .Where(plan => plan.Id == workPlanId
+                        && plan.ParentResumeState == WorkflowChildWorkResumeStates.Ready)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(plan => plan.Status, WorkPlanStatus.AssemblyBlocked)
+                        .SetProperty(plan => plan.AssemblyStatusReason, ex.Reason)
+                        .SetProperty(plan => plan.UpdatedAt, DateTimeOffset.UtcNow), CancellationToken.None)
+                    .ConfigureAwait(false);
+                await _pendingRequests.ReleaseDeliveryAsync(
+                    snapshot.Plan.ParentRunId, delivery.DecisionIdentity,
+                    delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None)
+                    .ConfigureAwait(false);
+                return false;
+            }
+        }
         if (!_runtime.IsParentResumeActive(snapshot.Plan.ParentRunId))
         {
             await _pendingRequests.ReleaseDeliveryAsync(
@@ -1119,7 +1228,6 @@ internal sealed class WorkflowChildWorkService
             || cancellationSnapshot?.Plan.Status == WorkPlanStatus.Cancelled)
             return false;
 
-        var result = delivery.GetResponse<WorkflowChildWorkResult>();
         var delivered = false;
         try
         {
@@ -1904,10 +2012,11 @@ internal sealed class WorkflowChildWorkService
                 : null;
             enriched.Add(branch with
             {
-                Output = run?.Result,
+                Output = run?.CurrentOutputRevisionId is null ? run?.Result : null,
                 WorktreeBranch = run?.WorktreeBranch,
                 TreeHash = run?.TreeHash,
-                Diff = run?.Diff,
+                Diff = run?.CurrentOutputRevisionId is null ? run?.Diff : null,
+                OutputRevisionId = run?.CurrentOutputRevisionId,
             });
         }
         return enriched;
@@ -1920,13 +2029,147 @@ internal sealed class WorkflowChildWorkService
                 .OrderBy(branch => branch.Ordinal)
                 .Select(branch =>
                 {
-                    var output = !string.IsNullOrWhiteSpace(branch.Output)
+                    var output = branch.OutputRevisionId is not null
+                        ? $"Child run: {branch.ChildRunId}; retained revision: {branch.OutputRevisionId}; tree: {branch.TreeHash}"
+                        : !string.IsNullOrWhiteSpace(branch.Output)
                         ? branch.Output
-                        : !string.IsNullOrWhiteSpace(branch.Diff)
-                            ? branch.Diff
                             : branch.Status;
                     return $"[{branch.Ordinal + 1}. {branch.NodeId}]\n{output}";
                 }));
+
+    private async Task<IReadOnlyList<RunOutputTree.File>> ResolveFanFilesAsync(
+        WorkPlan plan, DomainRun parent, IReadOnlyList<WorkflowChildWorkBranch> branches,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var subtasks = await db.Subtasks.AsNoTracking()
+            .Where(s => s.WorkPlanId == plan.Id && s.WorkflowBranchOrdinal != null)
+            .OrderBy(s => s.WorkflowBranchOrdinal).ToListAsync(ct).ConfigureAwait(false);
+        if (subtasks.Count != branches.Count || plan.ProjectId != parent.ProjectId?.ToString()
+            || plan.ParentRunId != parent.Id.ToString()
+            || plan.ParentJoinNodeId is null || parent.Status != DomainRunStatus.AwaitingReview)
+            throw new RunOutputRevisionUnavailableException("fan_projection_provenance_mismatch");
+        var files = new List<RunOutputTree.File>();
+        foreach (var subtask in subtasks)
+        {
+            var branch = branches.SingleOrDefault(b => b.SubtaskId == subtask.Id
+                && b.Ordinal == subtask.WorkflowBranchOrdinal
+                && b.NodeId == subtask.WorkflowBranchNodeId
+                && b.ChildRunId == subtask.ChildRunId)
+                ?? throw new RunOutputRevisionUnavailableException("fan_projection_provenance_mismatch");
+            var declared = CoordinatorOrchestratorExecutor.ParseDeclaredOutputPaths(
+                subtask.DeclaredOutputPathsJson);
+            if (declared.State == CoordinatorOrchestratorExecutor.DeclaredOutputPathsParseState.Invalid)
+                throw new RunOutputRevisionUnavailableException("invalid_declared_paths");
+            if (declared.Paths.Count == 0)
+            {
+                if (branch.OutputRevisionId is not null)
+                    throw new RunOutputRevisionUnavailableException("fan_revision_unexpected");
+                continue;
+            }
+            if (!RunId.TryParse(subtask.ChildRunId, out var childId))
+                throw new RunOutputRevisionUnavailableException("fan_child_missing");
+            var child = await _runStore.GetAsync(childId, ct).ConfigureAwait(false);
+            if (child is null || child.ParentRunId != plan.CoordinatorRunId
+                || child.ProjectId != parent.ProjectId
+                || child.RepositoryPath != parent.RepositoryPath
+                || child.Status != DomainRunStatus.AssembleReady
+                || child.CurrentOutputRevisionId != branch.OutputRevisionId
+                || child.TreeHash != branch.TreeHash
+                || child.WorktreeBranch != branch.WorktreeBranch
+                || child.WorktreeBranch != Git.WorktreeManager.BranchNameFor(childId))
+                throw new RunOutputRevisionUnavailableException("fan_projection_provenance_mismatch");
+            var revision = await _runStore.ResolveOutputRevisionAsync(childId,
+                branch.OutputRevisionId ?? throw new RunOutputRevisionUnavailableException("fan_revision_missing"),
+                ct).ConfigureAwait(false);
+            if (revision.SchemaVersion != RunOutputRevision.FanDeclaredFilesSchemaVersion
+                || revision.RunId != childId || revision.LifecycleGeneration != child.LifecycleGeneration
+                || revision.WorkPlanId != plan.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                || revision.TreeHash != child.TreeHash)
+                throw new RunOutputRevisionUnavailableException("fan_revision_mismatch");
+            var retained = revision.ResolveFiles();
+            if (!retained.Select(file => file.Path).Order(StringComparer.Ordinal)
+                .SequenceEqual(declared.Paths.Order(StringComparer.Ordinal), StringComparer.Ordinal))
+                throw new RunOutputRevisionUnavailableException("fan_declared_files_mismatch");
+            files.AddRange(retained);
+        }
+        if (files.Select(file => file.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count() != files.Count)
+            throw new RunOutputRevisionUnavailableException("fan_projection_path_collision");
+        return files;
+    }
+
+    private async Task<WorkflowFanProjection?> PrepareFanProjectionAsync(
+        WorkPlan plan, DomainRun parent, IReadOnlyList<WorkflowChildWorkBranch> branches,
+        CancellationToken ct)
+    {
+        var files = await ResolveFanFilesAsync(plan, parent, branches, ct).ConfigureAwait(false);
+        if (files.Count == 0)
+            return null;
+        var input = DeserializeIncomingInput(plan)
+            ?? throw new RunOutputRevisionUnavailableException("fan_parent_input_missing");
+        if (string.IsNullOrWhiteSpace(input.FanExecutionBaseCommitHash)
+            || string.IsNullOrWhiteSpace(plan.ExecutionBaseTreeHash)
+            || parent.WorktreeBranch != Git.WorktreeManager.BranchNameFor(parent.Id))
+            throw new RunOutputRevisionUnavailableException("fan_parent_base_missing");
+        using var scope = _scopeFactory.CreateScope();
+        var manager = scope.ServiceProvider.GetRequiredService<Git.WorktreeManager>();
+        var worktreePath = await ResolveFanParentWorktreeAsync(parent, scope.ServiceProvider, ct)
+            .ConfigureAwait(false);
+        var staged = manager.PrepareFanInputProjection(
+            parent.RepositoryPath, worktreePath, parent.Id,
+            input.FanExecutionBaseCommitHash, plan.ExecutionBaseTreeHash, files);
+        return new WorkflowFanProjection(parent.LifecycleGeneration, input.FanExecutionBaseCommitHash,
+            plan.ExecutionBaseTreeHash, staged.CommitHash, staged.TreeHash);
+    }
+
+    private async Task ApplyFanProjectionAsync(
+        WorkPlan plan, DomainRun parent, WorkflowChildWorkResult result,
+        CancellationToken ct)
+    {
+        var projection = result.FanProjection
+            ?? throw new RunOutputRevisionUnavailableException("fan_projection_missing");
+        var input = DeserializeIncomingInput(plan)
+            ?? throw new RunOutputRevisionUnavailableException("fan_parent_input_missing");
+        if (projection.ParentLifecycleGeneration != parent.LifecycleGeneration
+            || projection.BaseCommitHash != input.FanExecutionBaseCommitHash
+            || projection.BaseTreeHash != plan.ExecutionBaseTreeHash
+            || parent.WorktreeBranch != Git.WorktreeManager.BranchNameFor(parent.Id))
+            throw new RunOutputRevisionUnavailableException("fan_projection_base_changed");
+        var files = await ResolveFanFilesAsync(plan, parent, result.Branches, ct).ConfigureAwait(false);
+        if (files.Count == 0)
+            throw new RunOutputRevisionUnavailableException("fan_projection_sources_missing");
+        using var scope = _scopeFactory.CreateScope();
+        var manager = scope.ServiceProvider.GetRequiredService<Git.WorktreeManager>();
+        var worktreePath = await ResolveFanParentWorktreeAsync(parent, scope.ServiceProvider, ct)
+            .ConfigureAwait(false);
+        manager.ApplyFanInputProjection(worktreePath, parent.Id,
+            projection.BaseCommitHash, projection.PreparedCommitHash, projection.PreparedTreeHash);
+        if (!await _runStore.TryRecordFanInputProjectionAsync(
+                parent.Id, parent.LifecycleGeneration, projection.BaseTreeHash,
+                projection.PreparedTreeHash, parent.WorktreeBranch, ct).ConfigureAwait(false))
+        {
+            var current = await _runStore.GetAsync(parent.Id, ct).ConfigureAwait(false);
+            if (current?.Status != DomainRunStatus.AwaitingReview
+                || current.LifecycleGeneration != parent.LifecycleGeneration
+                || current.TreeHash != projection.PreparedTreeHash)
+                throw new RunOutputRevisionUnavailableException("fan_projection_receipt_mismatch");
+        }
+    }
+
+    private async Task<string> ResolveFanParentWorktreeAsync(
+        DomainRun parent, IServiceProvider services, CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(parent.WorktreePath) && Directory.Exists(parent.WorktreePath))
+            return parent.WorktreePath;
+        var recovered = services.GetRequiredService<IWorktreeOperations>()
+            .TryReattachWorktree(parent.RepositoryPath, parent.OriginatingBranch, parent.Id.ToString());
+        if (recovered is null || recovered.Value.BranchName != parent.WorktreeBranch)
+            throw new RunOutputRevisionUnavailableException("fan_projection_parent_unavailable");
+        await _runStore.UpdateWorktreeAsync(parent.Id, recovered.Value.WorktreePath,
+            recovered.Value.BranchName, ct).ConfigureAwait(false);
+        return recovered.Value.WorktreePath;
+    }
 
     private static bool IsTerminalPlan(string status) => status is
         WorkPlanStatus.Complete

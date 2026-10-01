@@ -8,6 +8,40 @@ public static class RunOutputTreeCapture
 {
     internal sealed record Source(string CommitHash, string TreeHash, byte[] TreeContent);
 
+    internal static (string CommitHash, byte[] Files) CaptureDeclaredFiles(
+        string repositoryPath, string branchName, string expectedTreeHash,
+        IReadOnlyList<string> declaredPaths)
+    {
+        if (declaredPaths.Count == 0)
+            throw new RunOutputRevisionUnavailableException("missing_declared_paths");
+        using var repository = new Repository(repositoryPath);
+        var commit = repository.Branches[branchName]?.Tip
+            ?? throw new RunOutputRevisionUnavailableException("source_revision_unavailable");
+        if (!string.Equals(commit.Tree.Sha, expectedTreeHash, StringComparison.Ordinal))
+            throw new RunOutputRevisionUnavailableException("source_revision_mismatch");
+        var files = new List<RunOutputTree.File>(declaredPaths.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in declaredPaths)
+        {
+            if (string.IsNullOrWhiteSpace(path) || path.StartsWith('/')
+                || path.Contains('\\') || path.Contains(':') || Path.IsPathFullyQualified(path)
+                || !seen.Add(path)
+                || path.Split('/').Any(part => part is "" or "." or ".."))
+                throw new RunOutputRevisionUnavailableException("invalid_declared_path");
+            var entry = commit.Tree[path]
+                ?? throw new RunOutputRevisionUnavailableException("declared_file_missing");
+            if (entry.Target is not Blob blob || entry.Mode is not (Mode.NonExecutableFile or Mode.ExecutableFile))
+                throw new RunOutputRevisionUnavailableException("declared_file_not_regular");
+            if (blob.Size > WorktreeManager.MaxContentBytes)
+                throw new RunOutputRevisionUnavailableException("declared_file_too_large");
+            using var stream = blob.GetContentStream();
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            files.Add(new RunOutputTree.File(path, (int)entry.Mode, buffer.ToArray()));
+        }
+        return (commit.Sha, RunOutputTree.Encode(files));
+    }
+
     internal static Source CaptureSource(string repositoryPath, string branchName)
     {
         using var repository = new Repository(repositoryPath);

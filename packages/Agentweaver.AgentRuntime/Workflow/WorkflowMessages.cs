@@ -21,7 +21,8 @@ public sealed record AgentTurnInput(
     bool MaxIterationsReached = false,
     /// <summary>True when this turn continues an existing session (reviewer requested changes). Causes <see cref="CopilotAIAgent.ResumeSessionAsync"/> to be called instead of CreateSessionAsync.</summary>
     bool IsRevision = false,
-    string? ByokProviderFingerprint = null);
+    string? ByokProviderFingerprint = null,
+    string? FanExecutionBaseCommitHash = null);
 
 /// <summary>Output from the agent turn executor, consumed by conditional edges.</summary>
 public sealed record AgentTurnOutput(

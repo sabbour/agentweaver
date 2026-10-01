@@ -14,6 +14,69 @@ namespace Agentweaver.Tests.PostgresIntegration;
 public sealed class RunOutputRevisionPostgresTests(PostgresFixture pg)
 {
     [PostgresFact]
+    public async Task FanChildRevision_AndTerminalWinner_AreLeaseFencedAndAtomic()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var parentId = RunId.New();
+        var childId = RunId.New();
+        foreach (var (id, parent) in new[]
+        {
+            (parentId, (string?)null), (childId, parentId.ToString()),
+        })
+        {
+            await store.InsertAsync(new Run
+            {
+                Id = id,
+                ParentRunId = parent,
+                RepositoryPath = "repo",
+                OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot,
+                Task = "fan child",
+                SubmittingUser = "test",
+                Status = RunStatus.InProgress,
+                StartedAt = DateTimeOffset.UtcNow,
+            });
+        }
+        var generation = (await store.GetAsync(childId))!.LifecycleGeneration;
+        var leases = new PostgresRunLeaseStore(pg.Factory);
+        var claimed = await leases.TryClaimAsync(childId.ToString(), "fan-owner", TimeSpan.FromMinutes(1));
+        claimed.Claimed.Should().BeTrue();
+        var content = RunOutputTree.Encode([
+            new RunOutputTree.File("demo/checklist.md", 33188, "retained bytes"u8.ToArray()),
+        ]);
+        var publication = new FanDeclaredFilesPublication("42",
+            new string('a', 40), new string('b', 40), content);
+        var mutation = new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.AssembleReady, EventTypes.RunAssembleReady,
+                new { treeHash = publication.TreeHash }, DateTimeOffset.UtcNow, generation),
+            null, TreeHash: publication.TreeHash, WorktreeBranch: "agentweaver/child",
+            FanDeclaredFiles: publication,
+            ExpectedParentLifecycleGeneration: (await store.GetAsync(parentId))!.LifecycleGeneration,
+            RequiredLease: new RunLeaseFence("fan-owner", claimed.FencingToken, generation));
+
+        (await store.TryMutateTerminalOutcomeAsync(childId,
+            mutation with { RequiredLease = new RunLeaseFence("stale-owner", claimed.FencingToken, generation) }))
+            .Should().BeFalse();
+        (await store.GetLatestOutputRevisionAsync(childId)).Should().BeNull();
+        (await store.TryMutateTerminalOutcomeAsync(childId, mutation)).Should().BeTrue();
+        (await store.TryMutateTerminalOutcomeAsync(childId, mutation)).Should().BeFalse();
+        var revision = await ((IRunStore)store).ResolveOutputRevisionAsync(childId,
+            (await store.GetAsync(childId))!.CurrentOutputRevisionId!);
+        revision.SchemaVersion.Should().Be(RunOutputRevision.FanDeclaredFilesSchemaVersion);
+        revision.ResolveFile("demo/checklist.md").Bytes.Should().Equal("retained bytes"u8.ToArray());
+        revision.DiffBytes.Should().BeEmpty();
+        (await store.ListOutputRevisionsAsync(childId)).Should().ContainSingle();
+        var parentBranch = "agentweaver/" + parentId;
+        await store.UpdateWorktreeAsync(parentId, "parent-worktree", parentBranch);
+        await store.UpdateStatusAsync(parentId, RunStatus.AwaitingReview, null);
+        (await store.TryRecordFanInputProjectionAsync(parentId, 1,
+            "base-tree", "projected-tree", parentBranch)).Should().BeTrue();
+        (await store.TryRecordFanInputProjectionAsync(parentId, 1,
+            "base-tree", "different-tree", parentBranch)).Should().BeFalse();
+        (await store.GetAsync(parentId))!.TreeHash.Should().Be("projected-tree");
+    }
+
+    [PostgresFact]
     public async Task MigrationAndPublicationPreserveBytesAndPreventMutation()
     {
         var store = new EfRunStore(pg.Factory);
