@@ -254,7 +254,12 @@ request as `workflow_child_work`; this automated wait cannot be approved through
 plan from the parent workflow run as well as from its internal coordinator run. These projections
 include the parent workflow/node/join ids, each branch node id and declaration ordinal, and the
 ordered `joinedOutput` once the join is ready. The corresponding `workflow.step` events carry the
-same parent correlation and publish `joinedOutput` on `child_work_ready`. That ready event is
+same parent correlation and publish `joinedOutput` on `child_work_ready`. When a parent progresses
+through multiple child-work nodes, both reads select the latest persisted node plan (highest plan
+id), even if an older node is still marked waiting or the latest node is in human review. An exact
+internal coordinator run id still selects its own plan. The plan is persisted before its parent
+wait is armed; these reads do not determine the pending request or create an atomic snapshot.
+That ready event is
 durable and emitted exactly once even when a hosted worker prepares the continuation on a different
 replica from the parent run; retries and restarts reuse the continuation's stable event identity.
 Failed or cancelled fan work does not emit `child_work_ready`.

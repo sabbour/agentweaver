@@ -101,7 +101,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "coordinator_work_plan_get"), Description("Get a Coordinator work plan, including static workflow-fan parent/resume correlation, ordered joined output, each branch node id, persisted ordinal, status, child run id, and dependency edges. A static fan plan can be addressed by either its parent workflow run id or child coordinator run id. Returns null when no work plan has been drafted yet.")]
+    [McpServerTool(Name = "coordinator_work_plan_get"), Description("Get a Coordinator work plan, including workflow parent/resume correlation, ordered joined output, branch node ids, persisted ordinals, status, child run ids, and dependency edges. A parent workflow run selects its latest persisted child-work node plan; an exact coordinator run id selects its own plan. Returns null when no work plan has been drafted yet.")]
     public async Task<string> CoordinatorWorkPlanGetAsync(
         [Description("Coordinator run ID")] string run_id,
         CancellationToken ct)
@@ -120,7 +120,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "coordinator_children_get"), Description("List child runs dispatched by a Coordinator or static workflow parent run, including parent workflow correlation, branch node ids, and persisted ordinals alongside subtask, agent, model, and child-run status. Empty when nothing has been dispatched.")]
+    [McpServerTool(Name = "coordinator_children_get"), Description("List child runs from the same plan selected by coordinator_work_plan_get: an exact coordinator run plan or the latest persisted child-work node plan for a parent workflow run. Includes parent workflow correlation, branch node ids, persisted ordinals, subtask, agent, model, and child-run status. Empty when nothing has been dispatched.")]
     public async Task<string> CoordinatorChildrenGetAsync(
         [Description("Coordinator run ID")] string run_id,
         CancellationToken ct)
@@ -160,7 +160,7 @@ public sealed class CoordinatorTools(AgentweaverApiClient api)
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "orchestration_topology"), Description("Get a one-shot topology snapshot for a Coordinator run by combining the work plan and child runs into a current view of subtasks, dependency edges, and dispatched children. For the live graph, point run_watch at the coordinator run id and consume its coordinator.topology, subtask.*, and coordinator.steering events.")]
+    [McpServerTool(Name = "orchestration_topology"), Description("Combine two authenticated work-plan and children reads for an exact coordinator run or a parent workflow run's latest persisted child-work node plan. The reads are not an atomic snapshot. For the live graph, point run_watch at the coordinator run id and consume its coordinator.topology, subtask.*, and coordinator.steering events.")]
     public async Task<string> OrchestrationTopologyAsync(
         [Description("Coordinator run ID")] string run_id,
         CancellationToken ct)
