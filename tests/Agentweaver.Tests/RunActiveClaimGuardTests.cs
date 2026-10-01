@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests;
 
@@ -15,6 +18,39 @@ namespace Agentweaver.Tests;
 /// </summary>
 public sealed class RunActiveClaimGuardTests
 {
+    [Fact]
+    public async Task SqliteApiHost_ApprovalLookupSharesRunStoreLifecycleClaim()
+    {
+        await using var factory = new AgentweaverWebApplicationFactory();
+        using var client = factory.CreateClient();
+        var services = factory.Services;
+        RunStoreChain.Find<RunActiveClaimGuardedRunStore>(
+            services.GetRequiredService<IRunStore>()).Should().NotBeNull();
+
+        var guard = services.GetRequiredService<RunActiveClaimGuard>();
+        var gate = services.GetRequiredService<DurableToolApprovalGate>();
+        var runId = RunId.New();
+        var held = await guard.AcquireAsync(runId, CancellationToken.None);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lookup = Task.Run(() =>
+        {
+            started.SetResult();
+            return gate.IsAutoApproved(runId.ToString(), "web_fetch", "https://example.test");
+        });
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(TimeSpan.FromMilliseconds(150));
+            lookup.IsCompleted.Should().BeFalse("SQLite policy reads must share the run-store claim");
+        }
+        finally
+        {
+            await held.DisposeAsync();
+        }
+
+        (await lookup.WaitAsync(TimeSpan.FromSeconds(5))).Should().BeFalse();
+    }
+
     [Fact]
     public async Task AcquireAsync_SerializesConcurrentClaimsForTheSameRunId()
     {

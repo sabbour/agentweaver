@@ -577,7 +577,18 @@ builder.Services.AddAgentRuntime();
 builder.Services.AddSingleton<DurableRunControlState>();
 builder.Services.AddSingleton<DurableShellApprovalStore>();
 builder.Services.AddSingleton<IShellApprovalStore>(sp => sp.GetRequiredService<DurableShellApprovalStore>());
-builder.Services.AddSingleton<DurableToolApprovalGate>();
+builder.Services.AddSingleton<DurableToolApprovalGate>(sp =>
+{
+    var runStore = sp.GetRequiredService<IRunStore>();
+    return new DurableToolApprovalGate(
+        sp.GetRequiredService<DurableRunControlState>(),
+        sp.GetRequiredService<RunStreamStore>(),
+        sp.GetRequiredService<ILogger<DurableToolApprovalGate>>(),
+        runStore,
+        RunStoreChain.Find<RunActiveClaimGuardedRunStore>(runStore) is not null
+            ? sp.GetRequiredService<RunActiveClaimGuard>()
+            : null);
+});
 builder.Services.AddSingleton<IToolApprovalGate>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
 builder.Services.AddSingleton<IAgentHostToolApprovalPersistence>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
 builder.Services.AddSingleton<DurableQuestionGate>();
