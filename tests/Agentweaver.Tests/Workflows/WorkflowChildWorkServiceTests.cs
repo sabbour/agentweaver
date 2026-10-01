@@ -54,6 +54,7 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
         services.AddScoped<RepoAppInstallationTokenService>();
         services.AddScoped<GitHubCapabilityBroker>();
         services.AddScoped<RunGitHubCapabilitySnapshotLifecycle>();
+        services.AddSingleton<RunActiveClaimGuard>();
         services.AddSingleton(new WorktreeManager(
             new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -587,7 +588,10 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     [InlineData(false, false, "missing_revision")]
     [InlineData(true, false, "moved_parent")]
     [InlineData(true, false, "wrong_generation")]
+    [InlineData(true, false, "cancel_before_apply")]
+    [InlineData(true, false, "reopened_before_apply")]
     [InlineData(false, false, "late_cross_project")]
+    [InlineData(false, false, "late_owner_takeover")]
     public async Task DeclaredFanArtifacts_ProjectBeforeResume_AndComposedChildInheritsSameBytes(
         bool crashAfterPreparedIntent, bool crashAfterRef, string? invalidSource)
     {
@@ -665,7 +669,9 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
             }
             await SetBranchRunsAsync(attached.WorkPlanId, WorkPlanStatus.Complete, runs);
             if (invalidSource is not null
-                && invalidSource is not ("moved_parent" or "late_cross_project" or "wrong_generation"))
+                && invalidSource is not ("moved_parent" or "late_cross_project" or "late_owner_takeover"
+                    or "wrong_generation"
+                    or "cancel_before_apply" or "reopened_before_apply"))
             {
                 if (invalidSource is "cross_project" or "missing_revision")
                 {
@@ -758,23 +764,79 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
                 manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
                 return;
             }
+            if (invalidSource is "cancel_before_apply" or "reopened_before_apply")
+            {
+                _service.BeforeFanProjectionFenceOverride = async () =>
+                {
+                    _service.BeforeFanProjectionFenceOverride = null;
+                    if (invalidSource == "cancel_before_apply")
+                        await _service.CancelForParentAsync(parent.Id.ToString());
+                    else
+                    {
+                        await using var connection = await _runDb.Db.OpenConnectionAsync();
+                        await using var command = connection.CreateCommand();
+                        command.CommandText = """
+                            UPDATE runs SET lifecycle_generation=lifecycle_generation+1
+                             WHERE run_id=$run;
+                            """;
+                        command.Parameters.AddWithValue("$run", parent.Id.ToString());
+                        (await command.ExecuteNonQueryAsync()).Should().Be(1);
+                    }
+                };
+                await _service.SweepAsync();
+                var fenced = await GetPlanAsync(attached.WorkPlanId);
+                if (invalidSource == "cancel_before_apply")
+                {
+                    fenced.Status.Should().Be(WorkPlanStatus.Cancelled);
+                    fenced.ParentResumeState.Should().Be(WorkflowChildWorkResumeStates.Suppressed);
+                    (await _runStore.GetAsync(parent.Id))!.Status.Should().Be(DomainRunStatus.AwaitingReview,
+                        "suppression wins before the parent run's separate terminal transition");
+                }
+                else
+                {
+                    fenced.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+                    fenced.AssemblyStatusReason.Should().Be("fan_projection_fence_lost");
+                }
+                File.Exists(Path.Combine(parentWorktree.WorktreePath, "demo", "incident-brief.md"))
+                    .Should().BeFalse();
+                using (var intact = new Repository(parentWorktree.WorktreePath))
+                    intact.Head.Tip.Id.Sha.Should().Be(baseline.Sha);
+                (await _runStore.GetAsync(parent.Id))!.TreeHash.Should().BeNull();
+                manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
+                return;
+            }
             _runtime.DeliverResult = false;
             await _service.SweepAsync();
             (await GetPlanAsync(attached.WorkPlanId)).ParentResumeState
                 .Should().Be(WorkflowChildWorkResumeStates.Ready);
             _runtime.Deliveries.Should().ContainSingle();
-            if (invalidSource == "late_cross_project")
+            if (invalidSource is "late_cross_project" or "late_owner_takeover")
             {
-                await using var connection = await _runDb.Db.OpenConnectionAsync();
-                await using var command = connection.CreateCommand();
-                command.CommandText = "UPDATE runs SET project_id=$project WHERE run_id=$run;";
-                command.Parameters.AddWithValue("$project", ProjectId.New().ToString());
-                command.Parameters.AddWithValue("$run", runs[0].ChildRunId!);
-                (await command.ExecuteNonQueryAsync()).Should().Be(1);
-                await BuildService("recovered-pod", _runtime).SweepAsync();
+                var recoveredService = BuildService("recovered-pod", _runtime);
+                if (invalidSource == "late_cross_project")
+                {
+                    await using var connection = await _runDb.Db.OpenConnectionAsync();
+                    await using var command = connection.CreateCommand();
+                    command.CommandText = "UPDATE runs SET project_id=$project WHERE run_id=$run;";
+                    command.Parameters.AddWithValue("$project", ProjectId.New().ToString());
+                    command.Parameters.AddWithValue("$run", runs[0].ChildRunId!);
+                    (await command.ExecuteNonQueryAsync()).Should().Be(1);
+                }
+                else
+                    recoveredService.BeforeFanProjectionFenceOverride = async () =>
+                    {
+                        using var scope = _provider.CreateScope();
+                        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                        var pending = await db.PendingRequests.SingleAsync(r => r.RunId == parent.Id.ToString());
+                        pending.DeliveryClaimOwner = "takeover-owner";
+                        pending.DeliveryClaimedAt = DateTimeOffset.UtcNow;
+                        await db.SaveChangesAsync();
+                    };
+                await recoveredService.SweepAsync();
                 var blocked = await GetPlanAsync(attached.WorkPlanId);
                 blocked.Status.Should().Be(WorkPlanStatus.AssemblyBlocked);
-                blocked.AssemblyStatusReason.Should().Be("fan_projection_provenance_mismatch");
+                blocked.AssemblyStatusReason.Should().Be(invalidSource == "late_cross_project"
+                    ? "fan_projection_provenance_mismatch" : "fan_projection_fence_lost");
                 _runtime.Deliveries.Should().ContainSingle();
                 manager.RemoveWorktree(repositoryPath, parentWorktree.WorktreePath, parentWorktree.BranchName);
                 return;

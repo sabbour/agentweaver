@@ -207,6 +207,10 @@ retained files are projected as a checked, platform-owned commit on the isolated
 before the parent resumes. The unchanged downstream prompt reads them at their original paths;
 a later composed coordinator starts from that same parent branch. A missing file, changed base,
 collision, or unavailable revision fails closed rather than asking agents to repeat file contents.
+Cancellation or a changed run generation wins before the fenced projection cannot later install
+files into the parent worktree. The parent remains parked until the exact projection and its
+run-tree receipt are recorded under the same held plan/parent fence; a crash between the Git
+fast-forward and receipt is reconciled only against the persisted prepared commit.
 Text-only branches still pass their ordered results without a file projection. Joined context for
 declared-file branches contains compact run/revision references, not file bytes or full diffs.
 The retained child revision can be inspected through `run_output_history`,

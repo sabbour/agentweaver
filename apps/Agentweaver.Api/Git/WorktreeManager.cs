@@ -762,16 +762,19 @@ public sealed class WorktreeManager
         IReadOnlyList<RunOutputTree.File> files)
     {
         using var repository = new Repository(repositoryPath);
-        using var worktree = new Repository(parentWorktreePath);
-        var baseCommit = worktree.Head.Tip;
-        if (worktree.Info.IsHeadDetached
-            || worktree.Head.FriendlyName != BranchNameFor(parentRunId)
-            || baseCommit?.Sha != expectedBaseCommit || baseCommit.Tree.Sha != expectedBaseTree
-            || worktree.RetrieveStatus(new StatusOptions
+        using var worktree = !string.IsNullOrWhiteSpace(parentWorktreePath)
+            && Directory.Exists(parentWorktreePath) ? new Repository(parentWorktreePath) : null;
+        var baseCommit = worktree?.Head.Tip
+            ?? repository.Branches[BranchNameFor(parentRunId)]?.Tip;
+        if (baseCommit?.Sha != expectedBaseCommit || baseCommit.Tree.Sha != expectedBaseTree
+            || (worktree is not null
+                && (worktree.Info.IsHeadDetached
+                    || worktree.Head.FriendlyName != BranchNameFor(parentRunId)
+                    || worktree.RetrieveStatus(new StatusOptions
             {
                 IncludeUntracked = true,
                 RecurseUntrackedDirs = true,
-            }).Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0))
+            }).Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0))))
             throw new RunOutputRevisionUnavailableException("fan_projection_base_changed");
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)

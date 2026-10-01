@@ -1,11 +1,14 @@
 using System.Text;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
+using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Npgsql;
+using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Tests.PostgresIntegration;
 
@@ -13,6 +16,93 @@ namespace Agentweaver.Tests.PostgresIntegration;
 [Trait("Category", "PostgresIntegration")]
 public sealed class RunOutputRevisionPostgresTests(PostgresFixture pg)
 {
+    [PostgresFact]
+    public async Task FanProjectionRowLocks_SerializeSuppressionAndParentTerminal()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var parentId = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "parked fan parent",
+            SubmittingUser = "test",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await store.UpdateStatusAsync(parentId, RunStatus.AwaitingReview, null);
+        await using var db = await pg.Factory.CreateDbContextAsync();
+        var now = DateTimeOffset.UtcNow;
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "fan-guard-test",
+            CoordinatorRunId = RunId.New().ToString(),
+            Goal = "Hold fan projection",
+            DesiredOutcome = "Project exact artifacts",
+            Scope = "Isolated parent",
+            Assumptions = "Source verified",
+            Status = "confirmed",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+        var plan = new WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = spec.ProjectId,
+            CoordinatorRunId = spec.CoordinatorRunId,
+            ParentRunId = parentId.ToString(),
+            ParentWorkflowNodeId = "fan",
+            ParentResumeState = "waiting",
+            Status = WorkPlanStatus.Complete,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        await using var fence = await db.Database.BeginTransactionAsync();
+        (await db.WorkPlans.Where(row => row.Id == plan.Id)
+            .ExecuteUpdateAsync(updates => updates.SetProperty(row => row.UpdatedAt,
+                row => row.UpdatedAt))).Should().Be(1);
+        (await db.Runs.Where(row => row.RunId == parentId.ToString())
+            .ExecuteUpdateAsync(updates => updates.SetProperty(row => row.TreeHash,
+                row => row.TreeHash))).Should().Be(1);
+
+        var suppressionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var suppression = Task.Run(async () =>
+        {
+            await using var contender = await pg.Factory.CreateDbContextAsync();
+            suppressionStarted.SetResult();
+            return await contender.WorkPlans.Where(row => row.Id == plan.Id)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(row => row.Status, WorkPlanStatus.Cancelled)
+                    .SetProperty(row => row.ParentResumeState, "suppressed"));
+        });
+        var terminal = Task.Run(async () =>
+        {
+            terminalStarted.SetResult();
+            return await store.TrySetTerminalOutcomeAsync(parentId,
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+                    new { reason = "cancelled" }, DateTimeOffset.UtcNow,
+                    (await store.GetAsync(parentId))!.LifecycleGeneration), "cancelled");
+        });
+        await Task.WhenAll(suppressionStarted.Task, terminalStarted.Task);
+        await Task.Delay(150);
+        suppression.IsCompleted.Should().BeFalse("the projection owns the plan row");
+        terminal.IsCompleted.Should().BeFalse("the projection owns the parent run row");
+
+        await fence.CommitAsync();
+        (await suppression).Should().Be(1);
+        (await terminal).Should().BeTrue();
+        (await db.WorkPlans.AsNoTracking().SingleAsync(row => row.Id == plan.Id))
+            .ParentResumeState.Should().Be("suppressed");
+    }
+
     [PostgresFact]
     public async Task FanChildRevision_AndTerminalWinner_AreLeaseFencedAndAtomic()
     {
