@@ -21,6 +21,7 @@ public sealed class WorkPlan
     public DateTimeOffset? CoordinatorCancellationRequestedAt { get; set; }
     public string? CoordinatorCancellationRequestedByRunId { get; set; }
     public string? ParentTurnInputJson { get; set; }
+    public int? ParentRecoveryGeneration { get; set; }
     public string? ExecutionBaseTreeHash { get; set; }
     public string? IsolationSummary { get; set; }
     public string? IntegrationBranch { get; set; }

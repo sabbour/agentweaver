@@ -39,6 +39,52 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
     private readonly CoordinatorWebApplicationFactory _factory;
     private readonly HttpClient _owner;
 
+    [Fact]
+    public async Task ComposedPersistence_RetriesWrappedSerializationFailure_WithoutReplanning()
+    {
+        var attempts = 0;
+        var result = await CoordinatorOrchestratorExecutor.RetryComposedSerializationAsync(
+            _ => ++attempts < 3
+                ? Task.FromException<int>(new InvalidOperationException("transient",
+                    new DbUpdateException("save failed",
+                        new Npgsql.PostgresException("concurrent update", "ERROR", "ERROR", "40001"))))
+                : Task.FromResult(42),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, 1, CancellationToken.None);
+        result.Should().Be(42);
+        attempts.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task ComposedPersistence_DoesNotRetryUnrelatedFailures()
+    {
+        var attempts = 0;
+        Func<Task> action = async () => await CoordinatorOrchestratorExecutor.RetryComposedSerializationAsync(
+            _ =>
+            {
+                attempts++;
+                return Task.FromException<int>(new InvalidOperationException("invalid plan"));
+            },
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, 1, CancellationToken.None);
+        await action.Should().ThrowAsync<InvalidOperationException>().WithMessage("invalid plan");
+        attempts.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ComposedPersistence_ExhaustsBoundedRetries_AndPropagatesFailure()
+    {
+        var attempts = 0;
+        Func<Task> action = async () => await CoordinatorOrchestratorExecutor.RetryComposedSerializationAsync(
+            _ =>
+            {
+                attempts++;
+                return Task.FromException<int>(
+                    new Npgsql.PostgresException("concurrent update", "ERROR", "ERROR", "40001"));
+            },
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, 1, CancellationToken.None);
+        await action.Should().ThrowAsync<Npgsql.PostgresException>();
+        attempts.Should().Be(3);
+    }
+
     public CoordinatorOrchestratorTests()
     {
         _factory = new CoordinatorWebApplicationFactory();
@@ -669,7 +715,7 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         return [];
     }
 
-    private sealed class DependentDagWorkflowAgentFactory : IWorkflowAgentFactory
+    internal sealed class DependentDagWorkflowAgentFactory : IWorkflowAgentFactory
     {
         private readonly DependentDagWorkflowTurnAgent _agent = new();
 

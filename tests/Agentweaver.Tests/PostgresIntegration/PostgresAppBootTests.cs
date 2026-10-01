@@ -39,7 +39,7 @@ namespace Agentweaver.Tests.PostgresIntegration;
 /// <para>Requires a running Docker daemon for the Postgres Testcontainer.</para>
 /// </summary>
 [Trait("Category", "PostgresIntegration")]
-public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.AppFixture>
+public sealed partial class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.AppFixture>
 {
     private readonly AppFixture _fixture;
     public PostgresAppBootTests(AppFixture fixture) => _fixture = fixture;

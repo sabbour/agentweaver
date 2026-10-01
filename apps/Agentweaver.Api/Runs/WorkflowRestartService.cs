@@ -83,6 +83,8 @@ public sealed class WorkflowRestartService
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         foreach (var run in inProgress)
         {
+            if (await TryRestartComposedRecoveryAsync(run, ct).ConfigureAwait(false))
+                continue;
             var parentGeneration = RunId.TryParse(run.ParentRunId, out var parentIdAtScan)
                 ? (await _runStore.GetAsync(parentIdAtScan, ct).ConfigureAwait(false))?.LifecycleGeneration
                 : null;
@@ -373,6 +375,8 @@ public sealed class WorkflowRestartService
         var awaiting = await _runStore.GetByStatusAsync(RunStatus.AwaitingReview, ct).ConfigureAwait(false);
         foreach (var awaitingRun in awaiting)
         {
+            if (await TryRestartComposedRecoveryAsync(awaitingRun, ct).ConfigureAwait(false))
+                continue;
             // Mutable local shadow: reattach (P0-A, #246) may swap in a corrected WorktreePath/
             // WorktreeBranch mid-iteration; the foreach iteration variable itself can't be reassigned.
             var run = awaitingRun;
@@ -650,6 +654,38 @@ public sealed class WorkflowRestartService
 
         if (childWork is not null)
             await childWork.SweepAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> TryRestartComposedRecoveryAsync(DomainRun run, CancellationToken ct)
+    {
+        if (run.ParentRunId is not null)
+            return false;
+        using var scope = _scopeFactory.CreateScope();
+        var recovery = scope.ServiceProvider.GetService<WorkflowComposedRecoveryService>();
+        if (recovery is null || !await recovery.HasPendingRecoveryAsync(run, ct).ConfigureAwait(false))
+            return false;
+        await using var lease = await TryAcquireRecoveryLeaseAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+        if (lease is null)
+            return true;
+        try
+        {
+            if (await recovery.TryRestartPendingAsync(
+                    run, lease.Claim with { LifecycleGeneration = run.LifecycleGeneration }, ct).ConfigureAwait(false))
+                lease.MarkTransferred();
+            else
+                _logger.LogInformation("Composed recovery marker changed while claiming {RunId}", run.Id);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Unable to restart composed recovery for {RunId}; preserving its durable recovery intent",
+                run.Id);
+        }
+        return true;
     }
 
     private async Task RestartCheckpointlessPinnedWorkflowAsync(

@@ -173,6 +173,25 @@ public sealed class WorkflowChildWorkServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task DeliveredFan_DoesNotMaskLaterUndeliveredComposedContinuation()
+    {
+        var fan = await _service.PrepareStaticAsync(Request());
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        await db.WorkPlans.Where(plan => plan.Id == fan.WorkPlanId)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Delivered));
+        (await _service.HasDeliveredParentResumeAsync(_parent.Id.ToString())).Should().BeTrue();
+        var composed = await _service.PrepareComposedAsync(ComposedRequest());
+        (await _service.HasDeliveredParentResumeAsync(_parent.Id.ToString())).Should().BeFalse(
+            "only the current composed stage determines whether parent synthesis already resumed");
+        await db.WorkPlans.Where(plan => plan.Id == composed.WorkPlanId)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Delivered));
+        (await _service.HasDeliveredParentResumeAsync(_parent.Id.ToString())).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ComposedAssembly_CheckpointSurvivesRestart_AndDeliversTypedResultOnce()
     {
         _runtime.AllowDispatch = false;

@@ -55,6 +55,45 @@ public sealed class RunRetryTests : IDisposable
 
     private SqliteRunStore Runs => _factory.Services.GetRequiredService<SqliteRunStore>();
 
+    [Fact]
+    public async Task FailedComposedWorkflow_WithoutAtomicRecovery_ReturnsConflictNeverFreshRun()
+    {
+        var projectId = await CreateProjectAsync();
+        var definition = new WorkflowDefinition
+        {
+            Id = "composed-recovery",
+            Name = "Composed recovery",
+            Start = "verify",
+            Nodes =
+            [
+                new WorkflowNode { Id = "verify", Label = "Verify", Type = WorkflowNodeType.Prompt },
+                new WorkflowNode
+                {
+                    Id = "compose", Label = "Compose", Type = WorkflowNodeType.CoordinatorComposed,
+                    Prompt = "Summarize retained sources",
+                },
+                new WorkflowNode { Id = "done", Label = "Done", Type = WorkflowNodeType.Terminal },
+            ],
+            Edges =
+            [
+                new WorkflowEdge { From = "verify", To = "compose" },
+                new WorkflowEdge { From = "compose", To = "done" },
+            ],
+        };
+        var source = await SeedRunAsync(
+            RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
+            projectId: ProjectId.Parse(projectId),
+            executableWorkflowYaml: WorkflowDefinitionYamlSerializer.Serialize(definition),
+            executableWorkflowId: definition.Id,
+            result: "composed_decomposition_failed:database contention");
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
+        var response = await _owner.PostAsync($"/api/runs/{source.Id}/retry", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict, await response.Content.ReadAsStringAsync());
+        (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("composed_recovery_requires_atomic_run_store");
+        (await Runs.GetAsync(source.Id))!.Status.Should().Be(RunStatus.Failed);
+    }
+
     // =========================================================================
     // (a) Coordinator Failed -> retry -> fresh resolvable run; source stays Failed.
     // =========================================================================
@@ -927,7 +966,8 @@ public sealed class RunRetryTests : IDisposable
         RunApprovalPolicySnapshot? approvalSnapshot = null,
         string? executableWorkflowYaml = null,
         string executableWorkflowId = "retry-fan",
-        CoordinatorWebApplicationFactory? factory = null)
+        CoordinatorWebApplicationFactory? factory = null,
+        string? result = null)
     {
         factory ??= _factory;
         if (repoPath is null && projectId is not null)
@@ -946,6 +986,7 @@ public sealed class RunRetryTests : IDisposable
             Task = task,
             SubmittingUser = submittingUser,
             Status = status,
+            Result = result,
             StartedAt = DateTimeOffset.UtcNow,
             EndedAt = status is RunStatus.Failed or RunStatus.MergeFailed or RunStatus.Declined or RunStatus.Merged
                 ? DateTimeOffset.UtcNow : null,

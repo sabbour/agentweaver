@@ -134,7 +134,8 @@ internal static class RunWorkflowGraphBinder
     /// <paramref name="builder"/> using the real executors in <paramref name="bindings"/>.
     /// </summary>
     public static void WireFull(
-        GraphDescriptorBuilder builder, WorkflowDefinition definition, RunWorkflowBindings bindings)
+        GraphDescriptorBuilder builder, WorkflowDefinition definition, RunWorkflowBindings bindings,
+        string? recoveryComposedNodeId = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(definition);
@@ -146,10 +147,23 @@ internal static class RunWorkflowGraphBinder
         // Entry plumbing: the hidden input storer feeds the start node's executor (unconditional). The
         // start node is resolved by its declared id and its TYPE — not a hardcoded "agent". A start that
         // is a producing turn enters its per-node agent executor.
-        var startNode = GetNode(definition, definition.Start);
-        if (GetStartTopologyError(startNode) is { } startTopologyError)
-            throw new WorkflowBindException(startTopologyError, startNode.Id);
-        builder.AddEdge(bindings.AgentInputStorer, ResolveEntry(ctx, startNode));
+        if (recoveryComposedNodeId is null)
+        {
+            var startNode = GetNode(definition, definition.Start);
+            if (GetStartTopologyError(startNode) is { } startTopologyError)
+                throw new WorkflowBindException(startTopologyError, startNode.Id);
+            builder.AddEdge(bindings.AgentInputStorer, ResolveEntry(ctx, startNode));
+        }
+        else
+        {
+            var composed = definition.Nodes.SingleOrDefault(node =>
+                node.Type == WorkflowNodeType.CoordinatorComposed);
+            if (composed?.Id != recoveryComposedNodeId || bindings.ComposedBinding is null)
+                throw new WorkflowBindException(
+                    "The recovery entry must match the pinned workflow's composed node.",
+                    recoveryComposedNodeId);
+            builder.AddEdge(bindings.AgentInputStorer, bindings.ComposedBinding);
+        }
 
         // Every root/full-pipeline AgentTurnExecutor can return a structured terminal failure.
         // Route it directly to one typed graph output before any normal successor consumes it.

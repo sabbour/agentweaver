@@ -2602,14 +2602,14 @@ namespace Agentweaver.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<long>("AssemblyFencingToken")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("AssemblyStage")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset?>("AssemblyStartedAt")
                         .HasColumnType("TEXT");
-
-                    b.Property<long>("AssemblyFencingToken")
-                        .HasColumnType("INTEGER");
 
                     b.Property<string>("AssemblyStatusReason")
                         .HasColumnType("TEXT");
@@ -2677,6 +2677,9 @@ namespace Agentweaver.Api.Migrations
 
                     b.Property<string>("ParentJoinNodeId")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("ParentRecoveryGeneration")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("ParentResumeClaimOwner")
                         .HasColumnType("TEXT");

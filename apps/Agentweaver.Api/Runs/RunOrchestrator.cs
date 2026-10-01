@@ -645,8 +645,11 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false,
         int? steeringDirectiveId = null, int? steeringAttempt = null, RunLeaseClaim? existingLease = null,
         Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
-        int? expectedParentGeneration = null)
+        int? expectedParentGeneration = null,
+        AgentTurnInput? composedRecoveryInput = null, string? recoveryComposedNodeId = null)
     {
+        if ((composedRecoveryInput is null) != (recoveryComposedNodeId is null))
+            throw new InvalidOperationException("Composed recovery requires both its saved input and node.");
         async Task EnsureAuthorizedAsync()
         {
             ct.ThrowIfCancellationRequested();
@@ -684,8 +687,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         string? systemPromptContext;
         try
         {
-            (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
-                run with { Task = revisedTask }, ct);
+            (taskWithHarvest, systemPromptContext) = composedRecoveryInput is null
+                ? await BuildContextAsync(run with { Task = revisedTask }, ct)
+                : (composedRecoveryInput.Task, composedRecoveryInput.SystemPromptContext);
         }
         catch (MandatoryContextBudgetExceededException ex)
         {
@@ -695,7 +699,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             throw;
         }
 
-        var input = new AgentTurnInput(
+        var input = composedRecoveryInput ?? new AgentTurnInput(
             run.Id.ToString(),
             taskWithHarvest,
             run.WorktreePath,
@@ -711,6 +715,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             run.StartedAt,
             IsRevision: true,
             ByokProviderFingerprint: revisionProvider.ByokProviderFingerprint);
+        if (composedRecoveryInput is not null)
+            input = input with { ByokProviderFingerprint = revisionProvider.ByokProviderFingerprint };
 
         // Create the per-run CTS before starting the workflow so the same token reaches both
         // the agent execution and the registry's Abandon path.
@@ -724,7 +730,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 await EnsureAuthorizedAsync().ConfigureAwait(false);
                 streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token,
                     isChild, steeringDirectiveId, steeringAttempt, isAuthorizedAsync, existingLease,
-                    run.LifecycleGeneration, expectedParentGeneration).ConfigureAwait(false);
+                    run.LifecycleGeneration, expectedParentGeneration, recoveryComposedNodeId).ConfigureAwait(false);
                 await EnsureAuthorizedAsync().ConfigureAwait(false);
             }
             await EnsureAuthorizedAsync().ConfigureAwait(false);
@@ -1238,11 +1244,14 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
         RunLeaseClaim? existingLease = null,
         int? expectedGeneration = null,
-        int? expectedParentGeneration = null)
+        int? expectedParentGeneration = null,
+        string? recoveryComposedNodeId = null)
     {
         try
         {
-            return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
+            return await _workflowFactory.StartAsync(
+                input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt,
+                recoveryComposedNodeId).ConfigureAwait(false);
         }
 
         catch (Exception) when (ct.IsCancellationRequested)
