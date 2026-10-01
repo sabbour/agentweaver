@@ -170,5 +170,10 @@ node scripts/api-harness/issue-1603-live-retest.mjs `
   --expected-deployment-sha 0def5f6c0adf49117c3af6d37696ea14e9604f6c
 ```
 
-Use `--recorder-auth-root <path>` only when the target-matched recorder session is in
-an existing protected auth root other than the worktree default.
+Use `--recorder-auth-root scripts/ui-harness/.auth` to reuse a supported UI login's
+`staging.storageState.json` and matching sessionStorage sidecar, or
+`--recorder-auth-root <path>` for a selected protected recorder root. The default
+remains `scripts/demo-recording/.auth/recording.storageState.json`. When both layouts
+exist in an explicit root the recorder layout wins; an invalid selected cache never
+falls back to another directory. `run-context-budget-pressure.mjs` names this option
+`--auth-root`.

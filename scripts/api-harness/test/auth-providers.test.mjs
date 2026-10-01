@@ -61,6 +61,78 @@ test('recorder-session default auth root is worktree-relative, not cwd-relative'
   }
 });
 
+async function writeSyntheticCache(root, name, { origin = 'https://agentweaver.example.staging.example', token = 'test-only-memory-value', seed = true } = {}) {
+  const statePath = path.join(root, `${name}.storageState.json`);
+  await writeFile(statePath, JSON.stringify({
+    cookies: [],
+    origins: [{ origin, localStorage: [] }],
+  }));
+  if (seed) await writeFile(`${statePath}.sessionStorage.json`, JSON.stringify({
+    origin,
+    entries: { 'agentweaver.sessionToken': token },
+  }));
+}
+
+test('explicit UI cache is selected in its own root and used for a protected API call', async (t) => {
+  const authRoot = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-ui-auth-'));
+  t.after(() => rm(authRoot, { recursive: true, force: true }));
+  await writeSyntheticCache(authRoot, 'staging');
+  assert.equal(uiHarnessAuthPaths(authRoot).storageStatePath, path.join(authRoot, 'staging.storageState.json'));
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(init.headers.Authorization, ['Bearer ', 'test-only-memory-value'].join(''));
+    return new Response('{"authenticated":true}', { status: 200 });
+  };
+  const client = new AgentweaverClient({
+    baseUrl: 'https://agentweaver.example.staging.example',
+    authProvider: createRecorderSessionAuthProvider({ authRoot, baseUrl: 'https://agentweaver.example.staging.example' }),
+  });
+  assert.equal((await client.get('/api/auth/session')).responseBody.authenticated, true);
+  assert.doesNotMatch(JSON.stringify(client.calls), /test-only-memory-value/);
+});
+
+test('recorder layout wins when both caches exist in the selected root', async (t) => {
+  const authRoot = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-both-auth-'));
+  t.after(() => rm(authRoot, { recursive: true, force: true }));
+  await writeSyntheticCache(authRoot, 'recording', { seed: false });
+  await writeSyntheticCache(authRoot, 'staging');
+  assert.equal(uiHarnessAuthPaths(authRoot).storageStatePath, path.join(authRoot, 'recording.storageState.json'));
+  await assert.rejects(
+    createRecorderSessionAuthProvider({ authRoot, baseUrl: 'https://agentweaver.example.staging.example' }).getAuthorization(),
+    /missing its sessionStorage seed.*demo:record -- open/,
+  );
+});
+
+test('UI cache failures remain in the chosen root and give UI login guidance', async (t) => {
+  const authRoot = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-ui-failure-'));
+  t.after(() => rm(authRoot, { recursive: true, force: true }));
+  const provider = () => createRecorderSessionAuthProvider({
+    authRoot, baseUrl: 'https://agentweaver.example.staging.example',
+  }).getAuthorization();
+  await writeSyntheticCache(authRoot, 'staging', { seed: false });
+  await assert.rejects(provider(), /missing its sessionStorage seed.*login-chrome-default\.mjs --base-url/);
+  await writeSyntheticCache(authRoot, 'staging', { origin: 'https://other.example.staging.example' });
+  await assert.rejects(provider(), /different target origin.*login-chrome-default\.mjs --base-url/);
+  await writeSyntheticCache(authRoot, 'staging', {
+    token: syntheticJwt(Math.floor(Date.now() / 1000) - 60),
+  });
+  await assert.rejects(provider(), (error) => {
+    assert.match(error.message, /expired.*login-chrome-default\.mjs --base-url/);
+    assert.doesNotMatch(error.message, /demo:record -- signin/);
+    return true;
+  });
+});
+
+test('missing explicit auth root never falls back to the default recorder cache', async (t) => {
+  const authRoot = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-empty-auth-'));
+  t.after(() => rm(authRoot, { recursive: true, force: true }));
+  await assert.rejects(
+    createRecorderSessionAuthProvider({ authRoot, baseUrl: 'https://agentweaver.example.staging.example' }).getAuthorization(),
+    /unavailable or expired.*demo:record -- open/,
+  );
+});
+
 test('recorder-session provider hands cached UI authentication to API calls in memory', async () => {
   const provider = cachedUiProvider();
   const authorization = await provider.getAuthorization();

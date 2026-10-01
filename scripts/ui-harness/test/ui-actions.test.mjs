@@ -33,5 +33,6 @@ test('viewportOptions rejects ambiguous, invalid, and unsupported viewport reque
   assert.throws(() => viewportOptions({ width: 'narrow', height: '720' }), /--width/);
   assert.throws(() => viewportOptions({ mobile: true, width: '390' }), /cannot be combined/);
   assert.throws(() => viewportOptions({ preset: 'tablet' }), /supports only "mobile"/);
-  assert.throws(() => viewportOptions({ width: '390', height: '844', 'focus-mode': 'immersive' }), /available, standard, or focused/);
+  assert.throws(() => viewportOptions({ width: '390', height: '844', 'focus-mode': 'immersive' }), /available, standard, focused, or not-applicable/);
+  assert.equal(viewportOptions({ mobile: true, 'focus-mode': 'not-applicable' }).responsiveTargets.focusMode, 'not-applicable');
 });

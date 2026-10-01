@@ -62,6 +62,21 @@ test('drag targets and failures remain visible in normalized transcript evidence
     }],
   });
 
+  test('scoped semantic target survives evidence normalization', () => {
+    const adapted = adaptUiEvidence({
+      metadata: {},
+      steps: [{ action: 'click', target: {
+        withinTestId: 'workflow-card-custom-fan-coordinator-demo',
+        role: 'button', name: 'View graph',
+      } }],
+    });
+    assert.deepEqual(adapted.turns[0].objectiveFacts.target, {
+      withinTestId: 'workflow-card-custom-fan-coordinator-demo',
+      role: 'button',
+      name: 'View graph',
+    });
+  });
+
   assert.equal(adapted.turns[0].objectiveFacts.outcome, 'failed');
   assert.equal(adapted.turns[0].objectiveFacts.target.from.testId, 'workflow-node-a-handle-source');
   assert.match(

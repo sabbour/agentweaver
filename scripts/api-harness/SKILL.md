@@ -29,10 +29,22 @@ node scripts/api-harness/run-persona.mjs `
 
 The provider uses `scripts/demo-recording/.auth/recording.storageState.json` and
 its `.sessionStorage.json` sidecar by default; use `--recorder-auth-root` only
-for an existing protected recorder auth root.
+for an explicitly chosen protected auth root. To reuse a supported UI login:
+
+```powershell
+node scripts/api-harness/run-persona.mjs --scenario generated-artifacts-seam --target https://<host>.staging.<domain> --recorder-auth-root scripts/ui-harness/.auth
+```
+
+`run-oracle-acceptance.mjs` accepts the same `--recorder-auth-root`; the context
+budget CLI uses `--auth-root scripts/ui-harness/.auth`. In an explicit root,
+`recording.storageState.json` takes precedence if both layouts exist; otherwise
+`staging.storageState.json` and its matching seed are used. No search in another
+directory or fallback after an invalid selected cache occurs.
 `--auth-provider recorder-session` remains accepted for clarity but is the default.
 If the cached recorder session is absent, expired, or belongs to another origin, it fails
-with the exact `npm run demo:record -- open --base-url <origin>` remediation. Microsoft
+with `npm run demo:record -- open --base-url <origin>` for the recorder layout,
+or `node scripts/ui-harness/login-chrome-default.mjs --base-url <origin>` for the
+selected UI layout. Microsoft
 Entra account selection, credentials, MFA, and consent remain human-only.
 Do not fall back to generic Playwright, direct CDP/DevTools, ad-hoc profile
 launch/copy, or manual browser automation; surface the provider's recovery error and

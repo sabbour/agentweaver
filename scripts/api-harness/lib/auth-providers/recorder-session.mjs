@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   loadSessionStorageSeed,
 } from '../../../ui-harness/lib/auth.mjs';
-import { getSessionToken } from '../../../demo-recording/lib/auth.mjs';
+import { getSessionToken, SessionTokenExpiredError } from '../../../demo-recording/lib/auth.mjs';
 
 export const RECORDER_SESSION_AUTH_PROVIDER = 'recorder-session';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -19,12 +20,17 @@ async function loadRecorderStorageState(storageStatePath) {
 }
 
 export function uiHarnessAuthPaths(authRoot) {
-  const storageStatePath = authRoot
-    ? path.join(path.resolve(authRoot), 'recording.storageState.json')
-    : path.join(DEFAULT_RECORDER_AUTH_ROOT, 'recording.storageState.json');
+  const root = authRoot ? path.resolve(authRoot) : DEFAULT_RECORDER_AUTH_ROOT;
+  const recorderPath = path.join(root, 'recording.storageState.json');
+  const uiPath = path.join(root, 'staging.storageState.json');
+  const useUiCache = Boolean(authRoot) && !existsSync(recorderPath) && existsSync(uiPath);
+  const storageStatePath = useUiCache ? uiPath : recorderPath;
   return {
     storageStatePath,
     sessionStoragePath: `${storageStatePath}.sessionStorage.json`,
+    refreshCommand: useUiCache
+      ? 'node scripts/ui-harness/login-chrome-default.mjs'
+      : 'npm run demo:record -- open',
   };
 }
 
@@ -36,7 +42,7 @@ export function createRecorderSessionAuthProvider({
   loadSessionStorageSeedFn = loadSessionStorageSeed,
   getSessionTokenFn = getSessionToken,
 } = {}) {
-  const { storageStatePath, sessionStoragePath } = uiHarnessAuthPathsFn(authRoot);
+  const { storageStatePath, sessionStoragePath, refreshCommand } = uiHarnessAuthPathsFn(authRoot);
   let authorization;
 
   return {
@@ -56,6 +62,9 @@ export function createRecorderSessionAuthProvider({
       try {
         await loadStorageStateFn(storageStatePath);
         const seed = await loadSessionStorageSeedFn(storageStatePath);
+        if (!seed) {
+          throw new Error('the selected cached session is missing its sessionStorage seed');
+        }
         if (seed?.origin !== expectedOrigin) {
           throw new Error('the cached UI-harness session belongs to a different target origin');
         }
@@ -66,9 +75,12 @@ export function createRecorderSessionAuthProvider({
         authorization = `Bearer ${token}`;
         return authorization;
       } catch (error) {
+        const reason = error instanceof SessionTokenExpiredError
+          ? 'the selected cached session token has expired'
+          : error.message;
         throw new Error(
-          `Cached UI-harness authentication is unavailable or expired (${error.message}). `
-          +           `Refresh the recorder session with npm run demo:record -- open --base-url ${expectedOrigin}, then retry.`,
+          `Cached UI-harness authentication is unavailable or expired (${reason}). `
+          + `Refresh the selected session with ${refreshCommand ?? 'npm run demo:record -- open'} --base-url ${expectedOrigin}, then retry.`,
         );
       }
     },

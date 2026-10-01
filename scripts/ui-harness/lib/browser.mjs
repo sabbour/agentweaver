@@ -203,8 +203,12 @@ export async function openBrowserSession(opts, {
 }
 
 export function keyedLocator(page, target) {
-  if (target?.testId) return page.getByTestId(target.testId);
-  if (target?.role && target?.name) return page.getByRole(target.role, { name: target.name, exact: true });
+  if (target?.withinTestId !== undefined && (typeof target.withinTestId !== 'string' || !target.withinTestId.trim())) {
+    throw new Error('--within-test-id must be a non-empty data-testid');
+  }
+  const root = target?.withinTestId ? page.getByTestId(target.withinTestId) : page;
+  if (target?.testId) return root.getByTestId(target.testId);
+  if (target?.role && target?.name) return root.getByRole(target.role, { name: target.name, exact: true });
   throw new Error('a UI target must specify data-testid or an exact ARIA role and accessible name');
 }
 
