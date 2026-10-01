@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   loadSessionStorageSeed,
 } from '../../../ui-harness/lib/auth.mjs';
-import { getSessionToken, SessionTokenExpiredError } from '../../../demo-recording/lib/auth.mjs';
+import { decodeJwtExpiry, getSessionToken, SessionTokenExpiredError } from '../../../demo-recording/lib/auth.mjs';
 
 export const RECORDER_SESSION_AUTH_PROVIDER = 'recorder-session';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -41,14 +41,17 @@ export function createRecorderSessionAuthProvider({
   loadStorageStateFn = loadRecorderStorageState,
   loadSessionStorageSeedFn = loadSessionStorageSeed,
   getSessionTokenFn = getSessionToken,
+  now = Date.now,
 } = {}) {
   const { storageStatePath, sessionStoragePath, refreshCommand } = uiHarnessAuthPathsFn(authRoot);
   let authorization;
+  let expiresAt = null;
 
   return {
     name: RECORDER_SESSION_AUTH_PROVIDER,
     async getAuthorization() {
-      if (authorization) return authorization;
+      if (authorization && (expiresAt === null || now() < expiresAt)) return authorization;
+      authorization = undefined;
       if (typeof baseUrl !== 'string' || !baseUrl.trim()) {
         throw new Error('A target base URL is required to use cached UI-harness authentication.');
       }
@@ -71,6 +74,11 @@ export function createRecorderSessionAuthProvider({
         const token = await getSessionTokenFn(sessionStoragePath);
         if (typeof token !== 'string' || token.length === 0) {
           throw new Error('the cached UI-harness session does not contain an Agentweaver session token');
+        }
+        const expiry = decodeJwtExpiry(token);
+        expiresAt = expiry?.getTime() ?? null;
+        if (expiresAt !== null && now() >= expiresAt) {
+          throw new SessionTokenExpiredError('the selected cached session token has expired', { expiresAt: expiry });
         }
         authorization = `Bearer ${token}`;
         return authorization;

@@ -12,6 +12,7 @@ import {
   uiHarnessAuthPaths,
 } from '../lib/auth-providers/recorder-session.mjs';
 import { AgentweaverClient } from '../lib/client.mjs';
+import { loadSessionStorageSeed } from '../../ui-harness/lib/auth.mjs';
 
 const execFileAsync = promisify(execFile);
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -167,6 +168,54 @@ test('recorder-session provider reuses one cached UI session without launching a
   assert.equal(stateReads, 1);
   assert.equal(seedReads, 1);
 });
+
+test('cached JWT expiry revalidates only the selected UI cache and accepts its refreshed seed', async (t) => {
+    const authRoot = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-ui-rotation-'));
+    t.after(() => rm(authRoot, { recursive: true, force: true }));
+    let now = Date.now();
+    const first = syntheticJwt(Math.floor((now + 120_000) / 1000));
+    const second = syntheticJwt(Math.floor((now + 600_000) / 1000));
+    await writeSyntheticCache(authRoot, 'staging', { token: first });
+    let seedReads = 0;
+    const provider = createRecorderSessionAuthProvider({
+      baseUrl: 'https://agentweaver.example.staging.example',
+      authRoot,
+      now: () => now,
+      loadSessionStorageSeedFn: async (statePath) => {
+        seedReads += 1;
+        return loadSessionStorageSeed(statePath);
+      },
+    });
+    assert.equal(await provider.getAuthorization(), `Bearer ${first}`);
+    assert.equal(await provider.getAuthorization(), `Bearer ${first}`);
+    assert.equal(seedReads, 1);
+    now += 180_000;
+    await assert.rejects(provider.getAuthorization(), /expired.*login-chrome-default\.mjs --base-url/);
+    assert.equal(seedReads, 2);
+    await writeSyntheticCache(authRoot, 'staging', { token: second });
+    assert.equal(await provider.getAuthorization(), `Bearer ${second}`);
+    assert.equal(await provider.getAuthorization(), `Bearer ${second}`);
+    assert.equal(seedReads, 3);
+  });
+
+test('expired in-memory JWT cannot reuse a refreshed seed for another origin', async (t) => {
+    const authRoot = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-ui-rotation-origin-'));
+    t.after(() => rm(authRoot, { recursive: true, force: true }));
+    let now = Date.now();
+    await writeSyntheticCache(authRoot, 'staging', {
+      token: syntheticJwt(Math.floor((now + 120_000) / 1000)),
+    });
+    const provider = createRecorderSessionAuthProvider({
+      baseUrl: 'https://agentweaver.example.staging.example', authRoot, now: () => now,
+    });
+    await provider.getAuthorization();
+    now += 180_000;
+    await writeSyntheticCache(authRoot, 'staging', {
+      origin: 'https://other.example.staging.example',
+      token: syntheticJwt(Math.floor((now + 600_000) / 1000)),
+    });
+    await assert.rejects(provider.getAuthorization(), /different target origin.*login-chrome-default\.mjs --base-url/);
+  });
 
 test('recorder-session provider uses the recorder layout for a protected endpoint', async (t) => {
   const authRoot = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-recorder-auth-'));

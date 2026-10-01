@@ -46,6 +46,11 @@ with `npm run demo:record -- open --base-url <origin>` for the recorder layout,
 or `node scripts/ui-harness/login-chrome-default.mjs --base-url <origin>` for the
 selected UI layout. Microsoft
 Entra account selection, credentials, MFA, and consent remain human-only.
+For a decoded JWT with an `exp` claim, a provider reuses the in-memory
+Authorization value only while it remains unexpired. After expiry it revalidates
+the same selected cache path and origin; a refreshed session can be reused without
+creating a new provider, but an expired or wrong-origin replacement fails before
+an API call. Tokens without a decodable expiry retain the existing behavior.
 Do not fall back to generic Playwright, direct CDP/DevTools, ad-hoc profile
 launch/copy, or manual browser automation; surface the provider's recovery error and
 use the demo-recording login/cached-session flow. That flow requires the installed literal

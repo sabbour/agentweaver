@@ -23,7 +23,7 @@ const fixture = `<!doctype html>
   </head>
   <body>
     <nav data-testid="app-navigation-menu">Runs</nav>
-    <main>
+    <main aria-label="Main content">
       <button data-testid="run-focus-toggle" aria-label="Enter focus mode" aria-pressed="false">Focus</button>
       <section data-testid="run-operator-console">Run content</section>
     </main>
@@ -51,7 +51,7 @@ const reachabilityFixture = `<!doctype html>
   <body>
     <nav data-testid="app-navigation-menu">Runs</nav>
     <button data-testid="run-focus-toggle" aria-label="Enter focus mode" aria-pressed="false">Focus</button>
-    <main>
+    <main aria-label="Main content">
       <section data-testid="reachable-content">Reachable content</section>
       <div data-testid="clipped-container">
         <section data-testid="clipped-content">Clipped content</section>
@@ -70,7 +70,7 @@ const rootOverflowFixture = (overflowY) => `<!doctype html>
   <body>
     <nav data-testid="app-navigation-menu">Runs</nav>
     <button data-testid="run-focus-toggle" aria-label="Enter focus mode" aria-pressed="false">Focus</button>
-    <main data-testid="run-operator-console">Run content</main>
+    <main aria-label="Main content" data-testid="run-operator-console">Run content</main>
   </body>
 </html>`;
 const workflowListFixture = `<!doctype html>
@@ -87,7 +87,7 @@ const workflowListFixture = `<!doctype html>
   </head>
   <body>
     <nav data-testid="app-navigation-menu">Workflows</nav>
-    <main>
+    <main aria-label="Main content">
       <article data-testid="workflow-card-other"><button>View graph</button><input aria-label="Instructions"></article>
       <article data-testid="workflow-card-custom-fan-coordinator-demo">
         <div data-testid="workflow-summary">Summary</div>

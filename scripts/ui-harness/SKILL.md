@@ -157,6 +157,10 @@ other routes or if a focus control exists. Navigation, horizontal/vertical overf
 and content reachability remain required. Content evidence includes its own
 `clientWidth`, `scrollWidth`, horizontal-overflow flag, direct-child bounds, and
 descendant button bounds/reachability (no form values).
+Before recording any resized viewport as successful evidence, the command waits for
+the authenticated app using the same `--ready-test-id` or
+`--ready-role`/`--ready-name` and `--readiness-timeout` options as `capture`.
+An expired sign-in screen exits `3` (`AUTH_EXPIRED`), even with focus N/A.
 The vertical-scroll assertion performs and reverses a real root scroll, and only passes
 for scrollable root overflow modes (`auto`, `scroll`, or `overlay`), never `hidden` or
 `clip`. Per-target diagnostics serialize only changed scroll containers, blocking
