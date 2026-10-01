@@ -198,9 +198,10 @@ When a composed workflow is waiting for fan-out children or parent continuation,
 even if the embedded run's API `status` is `awaiting_review`. Inspect
 `coordinator_work_plan_get` / `coordinator_children_get` and poll that same ID
 with `run_status`; use `run_watch` only when a live stream is requested. This
-wait is not a human review gate. Call `run_review` only when the current run
-actually requests human review. Never repeat `run_task` to resume a run:
-it starts a new execution.
+wait is not a human review gate; a workflow parent can have a fan work plan
+even when its run detail reports `is_coordinator_plan: false`. Call `run_review`
+only when the current run actually requests human review. Never repeat
+`run_task` to resume a run: it starts a new execution.
 
 ## Poll vs. stream
 

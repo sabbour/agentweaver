@@ -594,9 +594,7 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         var pendingKind = GetString(run, "pending_request_kind");
         if (pendingKind == "workflow_child_work")
             return true;
-        if (pendingKind is not null
-            || !run.TryGetProperty("is_coordinator_plan", out var isCoordinator)
-            || isCoordinator.ValueKind != JsonValueKind.True)
+        if (pendingKind is not null)
             return false;
 
         JsonElement plan;

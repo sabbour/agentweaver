@@ -182,7 +182,7 @@ public sealed class McpRunTaskTests
                     Content = JsonContent.Create(new
                     {
                         run_id = "composed-parent", status = "awaiting_review",
-                        is_coordinator_plan = true, pending_request_kind = "workflow_child_work"
+                        is_coordinator_plan = false, pending_request_kind = "workflow_child_work"
                     })
                 });
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
@@ -199,11 +199,12 @@ public sealed class McpRunTaskTests
     }
 
     [Theory]
-    [InlineData("waiting", "dispatching", "delegated")]
-    [InlineData("ready", "awaiting_assembly", "complete")]
-    [InlineData("delivering", "awaiting_assembly", "complete")]
+    [InlineData("waiting", "dispatching", "running", "pending")]
+    [InlineData("waiting", "complete", "assemble_ready", "assemble_ready")]
+    [InlineData("ready", "complete", "assemble_ready", "assemble_ready")]
+    [InlineData("delivering", "complete", "assemble_ready", "assemble_ready")]
     public async Task RunTask_FanParentWait_ReturnsExistingRunProgressWithoutReview(
-        string resumeState, string coordinatorStatus, string planStatus)
+        string resumeState, string planStatus, string firstChildStatus, string secondChildStatus)
     {
         var planReads = 0;
         var tools = CreateRunTools((request, _) =>
@@ -220,7 +221,7 @@ public sealed class McpRunTaskTests
                     Content = JsonContent.Create(new
                     {
                         run_id = "fan-parent", status = "awaiting_review",
-                        coordinator_status = coordinatorStatus, is_coordinator_plan = true,
+                        coordinator_status = (string?)null, is_coordinator_plan = false,
                         step_count = 0, tree_hash = (string?)null,
                         pending_request_kind = (string?)null, sandbox = (object?)null
                     })
@@ -238,8 +239,8 @@ public sealed class McpRunTaskTests
                         status = planStatus,
                         subtasks = new[]
                         {
-                            new { status = planStatus == "complete" ? "completed" : "running", childRunId = "branch-a" },
-                            new { status = planStatus == "complete" ? "completed" : "pending", childRunId = "branch-b" }
+                            new { status = firstChildStatus, childRunId = "branch-a" },
+                            new { status = secondChildStatus, childRunId = "branch-b" }
                         }
                     })
                 });
@@ -280,7 +281,7 @@ public sealed class McpRunTaskTests
                     Content = JsonContent.Create(new
                     {
                         run_id = "fan-parent", status = "awaiting_review",
-                        is_coordinator_plan = true, pending_request_kind = (string?)null,
+                        is_coordinator_plan = false, pending_request_kind = (string?)null,
                         tree_hash = "current-review-tree"
                     })
                 });
@@ -322,7 +323,7 @@ public sealed class McpRunTaskTests
                     Content = JsonContent.Create(new
                     {
                         run_id = "fan-parent", status = "awaiting_review",
-                        is_coordinator_plan = true,
+                        is_coordinator_plan = false,
                         pending_request_kind = ++reads == 1 ? (string?)null : "workflow_review"
                     })
                 });
@@ -349,7 +350,7 @@ public sealed class McpRunTaskTests
     }
 
     [Fact]
-    public async Task RunTask_OrdinaryHumanReview_DoesNotFetchWorkPlan()
+    public async Task RunTask_OrdinaryHumanReview_WithoutChildPlanPreservesHumanGate()
     {
         var tools = CreateRunTools((request, _) =>
         {
@@ -367,6 +368,11 @@ public sealed class McpRunTaskTests
                         run_id = "ordinary", status = "awaiting_review",
                         is_coordinator_plan = false, pending_request_kind = (string?)null
                     })
+                });
+            if (request.Method == HttpMethod.Get && path == "/api/runs/ordinary/work-plan")
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = JsonContent.Create(new { error = "work_plan_not_found" })
                 });
             throw new InvalidOperationException($"Unexpected request: {request.Method} {path}");
         });
@@ -426,7 +432,7 @@ public sealed class McpRunTaskTests
                     Content = JsonContent.Create(new
                     {
                         run_id = "fan-parent", status = "awaiting_review",
-                        is_coordinator_plan = true, pending_request_kind = (string?)null
+                        is_coordinator_plan = false, pending_request_kind = (string?)null
                     })
                 });
             if (request.Method == HttpMethod.Get && path == "/api/runs/fan-parent/work-plan")
