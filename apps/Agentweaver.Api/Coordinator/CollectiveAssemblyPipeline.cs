@@ -254,7 +254,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
                                 Purpose: AgentHostPurpose.AssemblyBuildTest,
                                 ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot,
-                                HolderToken: request.AssemblyAttemptToken),
+                                HolderToken: request.AssemblyAttemptToken,
+                                LifecycleGeneration: request.LifecycleGeneration),
                             gateCt).ConfigureAwait(false);
                         break;
                     }

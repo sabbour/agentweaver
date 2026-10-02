@@ -105,6 +105,17 @@ preview. After eligible Build & Test outcomes, the coordinator invokes a determi
 platform **PreviewStep** before applying the gate decision. Preview unavailability is
 reported separately and does not itself block human review.
 
+`GET /api/runs/{id}` returns `sandbox.current_binding` alongside the existing
+historical `sandbox.backend`, `claim_name`, `pod_name`, and `namespace`. Only
+`current_binding.state: "verified"` attests the currently configured claim, Sandbox,
+Pod UID, lifecycle generation, assembly attempt, and source tree. `unavailable` means
+the proof is absent (including older claims with no post-configuration attestation);
+`conflict` means live identity differs from the attested binding. Check `reason`
+before trusting a preview. The executor backend can remain `kata-exec-sidecar` even
+when the provisioner is a Kubernetes SandboxClaim; a historical pod name is not
+evidence of the current preview pod. A terminal run can retain a live preview on a
+different physical child run, whose binding must be checked separately.
+
 For a custom workflow without that gate, ask the coordinator to have an agent build and start
 the app in its sandbox. The agent can call `start_preview(port=PORT)` and optionally include
 the observed session ID. If registration times out, check `run_status` and retry only after
