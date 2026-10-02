@@ -796,6 +796,31 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
 [Trait("Category", "PostgresIntegration")]
 public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
 {
+    [PostgresFact]
+    public async Task ReReady_FencesOldActorAndKeyAndPersistsBothTogether()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var task = MakeBacklogTask(project.Id, "ready-actor");
+        await store.InsertAsync(task);
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "ready-actor", DateTimeOffset.UtcNow,
+            providerKey: "first-key", readyByUserId: "first-human")).Should().BeTrue();
+        (await store.TryMoveToBacklogAsync(project.Id, task.Id, "ready-actor")).Should().BeTrue();
+        var cleared = (await store.GetAsync(project.Id, task.Id))!;
+        cleared.ReadyByUserId.Should().BeNull();
+        cleared.AiExecutionProviderKey.Should().BeNull();
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "ready-actor", DateTimeOffset.UtcNow,
+            providerKey: "second-key", readyByUserId: "second-human")).Should().BeTrue();
+        var staleRun = MakeCoordinatorRun(project.Id, RunId.New());
+        (await store.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            project.Id, task.Id, staleRun, DateTimeOffset.UtcNow,
+            expectedProviderKey: "first-key", expectedReadyByUserId: "first-human"))
+            .Result.Should().Be(ClaimReserveResult.Lost);
+        var current = (await store.GetAsync(project.Id, task.Id))!;
+        current.AiExecutionProviderKey.Should().Be("second-key");
+        current.ReadyByUserId.Should().Be("second-human");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 4. PARTIAL UNIQUE INDEX + CONCURRENT CLAIM
     // ─────────────────────────────────────────────────────────────────────────

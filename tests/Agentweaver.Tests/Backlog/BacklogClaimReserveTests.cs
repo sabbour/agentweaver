@@ -16,6 +16,33 @@ namespace Agentweaver.Tests.Backlog;
 /// </summary>
 public sealed class BacklogClaimReserveTests
 {
+    [Fact]
+    public async Task ReReadyBetweenValidationAndClaim_LosesWithoutReservingRun()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var project = MakeProject();
+        await new SqliteProjectStore(testDb.Db).InsertAsync(project);
+        var store = new SqliteBacklogTaskStore(testDb.Db);
+        var task = MakeReadyTask(project.Id, "n") with
+        {
+            AiExecutionProviderKey = "old-signed-key",
+            ReadyByUserId = "old-human",
+        };
+        await store.InsertAsync(task);
+        (await store.TryMoveToBacklogAsync(project.Id, task.Id, "n")).Should().BeTrue();
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "n", DateTimeOffset.UtcNow,
+            providerKey: "new-signed-key", readyByUserId: "new-human")).Should().BeTrue();
+
+        var staleRun = MakeCoordinatorRun(project.Id, RunId.New());
+        var stale = await store.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            project.Id, task.Id, staleRun, DateTimeOffset.UtcNow,
+            expectedProviderKey: task.AiExecutionProviderKey,
+            expectedReadyByUserId: task.ReadyByUserId);
+        stale.Result.Should().Be(ClaimReserveResult.Lost);
+        (await new SqliteRunStore(testDb.Db).GetAsync(staleRun.Id)).Should().BeNull();
+        (await store.GetAsync(project.Id, task.Id))!.State.Should().Be(BacklogTaskState.Ready);
+    }
+
     private static async Task<long> ScalarAsync(SqliteDb db, string sql, params (string, object)[] args)
     {
         await using var conn = await db.OpenConnectionAsync();

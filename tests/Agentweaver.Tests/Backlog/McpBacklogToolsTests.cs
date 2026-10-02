@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Mcp;
 using Agentweaver.Mcp.Tools;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Auth;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using static Agentweaver.Tests.Backlog.BacklogTestData;
@@ -14,11 +15,11 @@ namespace Agentweaver.Tests.Backlog;
 /// Integration tests for the MCP BacklogTools targeting the send_all_backlog_to_ready tool.
 /// Uses the same in-process API factory seam as sibling HTTP tests (no mocks — Principle VII).
 /// </summary>
-public sealed class McpBacklogToolsTests : IClassFixture<ProjectsWebApplicationFactory>
+public sealed class McpBacklogToolsTests : IClassFixture<EntraWebApplicationFactory>
 {
-    private readonly ProjectsWebApplicationFactory _factory;
+    private readonly EntraWebApplicationFactory _factory;
 
-    public McpBacklogToolsTests(ProjectsWebApplicationFactory factory)
+    public McpBacklogToolsTests(EntraWebApplicationFactory factory)
     {
         _factory = factory;
     }
@@ -28,14 +29,16 @@ public sealed class McpBacklogToolsTests : IClassFixture<ProjectsWebApplicationF
         // The factory client has BaseAddress=http://localhost/ — AgentweaverApiClient
         // will re-set it to the same value (http://localhost/) without conflict.
         var httpClient = _factory.CreateClient();
-        var config = new McpConfig("http://localhost", ProjectsWebApplicationFactory.TestApiKey);
+        var config = new McpConfig("http://localhost",
+            _factory.CreateBearerToken("mcp-backlog-owner", PlatformRoles.ProjectCreator, PlatformRoles.Contributor));
         var apiClient = new AgentweaverApiClient(httpClient, config);
         return new BacklogTools(apiClient);
     }
 
     private async Task<string> CreateProjectAsync()
     {
-        using var httpClient = _factory.CreateAuthenticatedClient();
+        using var httpClient = _factory.CreateAuthenticatedClientForObjectId(
+            "mcp-backlog-owner", PlatformRoles.ProjectCreator, PlatformRoles.Contributor);
         var dir = _factory.NewWorkingDirectory();
         var resp = await httpClient.PostAsJsonAsync("/api/projects", new
         {
@@ -44,13 +47,19 @@ public sealed class McpBacklogToolsTests : IClassFixture<ProjectsWebApplicationF
             working_directory = dir,
         });
         resp.EnsureSuccessStatusCode();
+        var providers = _factory.Services.GetRequiredService<ByokProviderConfigurationService>();
+        var provider = await providers.AddAsync(new ByokProviderConfiguration(
+            "unused", "MCP backlog test", "azure", "https://backlog.example.test",
+            "gpt-4.1", "test-mcp-backlog-key"), CancellationToken.None);
+        await providers.SetActiveAsync(provider.Id, CancellationToken.None);
         var body = await resp.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
         return body.GetProperty("project_id").GetString()!;
     }
 
     private async Task CaptureAsync(string projectId, string title)
     {
-        using var httpClient = _factory.CreateAuthenticatedClient();
+        using var httpClient = _factory.CreateAuthenticatedClientForObjectId(
+            "mcp-backlog-owner", PlatformRoles.ProjectCreator, PlatformRoles.Contributor);
         var resp = await httpClient.PostAsJsonAsync(
             $"/api/projects/{projectId}/backlog/tasks", new { title });
         resp.EnsureSuccessStatusCode();
@@ -137,15 +146,19 @@ public sealed class McpBacklogToolsTests : IClassFixture<ProjectsWebApplicationF
         var downstream = System.Text.Json.JsonDocument.Parse(
             await tools.BacklogCaptureTaskAsync(project, "downstream")).RootElement.GetProperty("task_id").GetString()!;
         await tools.BacklogEditDependenciesAsync(project, downstream, 0, add: [upstream]);
-        using var client = _factory.CreateAuthenticatedClient();
+        using var client = _factory.CreateAuthenticatedClientForObjectId(
+            "mcp-backlog-owner", PlatformRoles.ProjectCreator, PlatformRoles.Contributor);
         (await client.PostAsync($"/api/projects/{project}/backlog/tasks/{upstream}/ready", null))
             .EnsureSuccessStatusCode();
         var pid = ProjectId.Parse(project);
         var runs = _factory.Services.GetRequiredService<IRunStore>();
         var source = RunId.New();
         (await _factory.Services.GetRequiredService<IBacklogTaskStore>()
-            .TryClaimAndReserveCoordinatorRunAsync(pid, BacklogTaskId.Parse(upstream),
-                MakeCoordinatorRun(pid, source), DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Won);
+            .TryClaimAndReserveCoordinatorRunWithPolicyAsync(pid, BacklogTaskId.Parse(upstream),
+                MakeCoordinatorRun(pid, source), DateTimeOffset.UtcNow, expectedProviderKey:
+                    (await _factory.Services.GetRequiredService<IBacklogTaskStore>()
+                        .GetAsync(pid, BacklogTaskId.Parse(upstream)))!.AiExecutionProviderKey,
+                expectedReadyByUserId: "mcp-backlog-owner")).Result.Should().Be(ClaimReserveResult.Won);
         var run = (await runs.GetAsync(source))!;
         (await runs.TrySetTerminalOutcomeAsync(source,
             TerminalRunOutcome.Create(RunStatus.Completed, "run.completed",

@@ -189,6 +189,85 @@ public sealed class CoordinatorPickupModelProvenanceTests : IDisposable
         var run = await _factory.Services.GetRequiredService<IRunStore>().GetAsync(claimed!.RunId!.Value);
 
         run!.ModelSource.Should().Be(ModelSource.GitHubCopilot);
+        run.Result.Should().Be("queued_model_provider_confirmation_required");
+    }
+
+    [Fact]
+    public async Task UnkeyedHumanReadyWithByok_FailsBeforeDraftInsteadOfInferringProvider()
+    {
+        var projectId = await CreateProjectAsync();
+        var pid = ProjectId.Parse(projectId);
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            var provider = await byok.AddAsync(new ByokProviderConfiguration(
+                "unused", "Legacy BYOK", "azure", "https://legacy.example.test",
+                "gpt-4.1", "legacy-test-key"), CancellationToken.None);
+            await byok.SetActiveAsync(provider.Id, CancellationToken.None);
+        }
+        var task = new BacklogTask
+        {
+            Id = BacklogTaskId.New(), ProjectId = pid, Title = "Legacy Ready",
+            State = BacklogTaskState.Ready, OrderKey = "n",
+            CapturedBy = "capturer-login", CapturedByUserId = "capturer-subject",
+            CreatedAt = DateTimeOffset.UtcNow, CommittedAt = DateTimeOffset.UtcNow,
+        };
+        var backlog = _factory.Services.GetRequiredService<IBacklogTaskStore>();
+        await backlog.InsertAsync(task);
+        var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(pid);
+        await _factory.Services.GetRequiredService<CoordinatorPickupService>()
+            .TryPickupAsync(project!, task, CancellationToken.None);
+        var claimed = (await backlog.GetAsync(pid, task.Id))!;
+        var run = (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(claimed.RunId!.Value))!;
+        run.ModelSource.Should().Be(ModelSource.Byok);
+        run.Result.Should().Be("queued_model_provider_confirmation_required");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Pickup_UsesReadyHumanSignedByokPlan_AndRejectsWrongActor(bool wrongActor)
+    {
+        var projectId = await CreateProjectAsync();
+        var pid = ProjectId.Parse(projectId);
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            var provider = await byok.AddAsync(new ByokProviderConfiguration(
+                "unused", "Ready BYOK", "azure", "https://ready.example.test",
+                "gpt-4.1", "ready-test-key"), CancellationToken.None);
+            await byok.SetActiveAsync(provider.Id, CancellationToken.None);
+        }
+        AiOperationCatalog.TryGet("orchestration", out var operation).Should().BeTrue();
+        string key;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var plans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            var plan = await plans.PrepareAsync(operation, pid,
+                new CallerContext { User = "ready-human", EntraObjectId = "ready-human" },
+                CancellationToken.None);
+            key = plans.CreateQueuedProviderKey(plan);
+        }
+        var store = _factory.Services.GetRequiredService<IBacklogTaskStore>();
+        var task = new BacklogTask
+        {
+            Id = BacklogTaskId.New(), ProjectId = pid, Title = "Queue BYOK",
+            State = BacklogTaskState.Ready, OrderKey = "n",
+            CapturedBy = "capturer-login", CapturedByUserId = "capturer-subject",
+            ReadyByUserId = wrongActor ? "wrong-human" : "ready-human",
+            AiExecutionProviderKey = key, CreatedAt = DateTimeOffset.UtcNow,
+            CommittedAt = DateTimeOffset.UtcNow,
+        };
+        await store.InsertAsync(task);
+        var project = await _factory.Services.GetRequiredService<IProjectStore>().GetAsync(pid);
+        await _factory.Services.GetRequiredService<CoordinatorPickupService>()
+            .TryPickupAsync(project!, task, CancellationToken.None);
+        var claimed = (await store.GetAsync(pid, task.Id))!;
+        var run = (await _factory.Services.GetRequiredService<IRunStore>().GetAsync(claimed.RunId!.Value))!;
+        run.SubmittingUser.Should().Be(task.ReadyByUserId);
+        run.ModelSource.Should().Be(ModelSource.Byok);
+        run.Result.Should().Be(wrongActor ? "invalid_ai_execution_plan" : null);
+        run.ModelId.Should().Be("gpt-4.1");
     }
 
     [Theory]

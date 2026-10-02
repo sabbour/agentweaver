@@ -55,6 +55,19 @@ Missing or expired keys require new context.
 Coordinator outcome drafting, tool-less classification, and Preview analysis use the effective
 model provider, including a configured BYOK provider.
 Queued work retains its accepted provider fingerprint and stops if the provider changes before pickup.
+For backlog work, a human Contributor accepts that provider when moving the task to
+Ready. The server stores a signed, non-expiring queued plan bound to the project,
+orchestration operation, accepting Entra subject, and provider configuration; the key
+is never included in task responses. Pickup revalidates it and freezes the chosen
+provider and model for the run. Copilot-selected work still requires its Copilot
+capability; selecting BYOK does not grant optional GitHub repository authority.
+
+Older human Ready tasks with no signed acceptance fail before drafting with
+`queued_model_provider_confirmation_required`, even if a provider is now configured.
+To retry, capture a replacement task, or move an unclaimed Ready task back to Backlog
+and then Ready again. If the provider changed, reconnect or reconfigure it and
+re-Ready the unclaimed task; a malformed or mismatched signed plan fails closed
+with `invalid_ai_execution_plan` rather than choosing a different provider.
 
 Custom API clients prepare context through `POST /api/ai/execution-context`.
 The request contains `operation` and the applicable `project_id` or `run_id`.

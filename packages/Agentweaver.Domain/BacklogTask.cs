@@ -23,6 +23,8 @@ public sealed record BacklogTask
     /// legacy and automation behavior.
     /// </summary>
     public string? CapturedByUserId { get; init; }
+    /// <summary>The human Entra subject who accepted the provider when moving this task to Ready.</summary>
+    public string? ReadyByUserId { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
     /// <summary>Set when the task is first moved Backlog -> Ready. Null while in Backlog. Also a
     /// pickup tie-breaker.</summary>

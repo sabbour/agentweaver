@@ -388,7 +388,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
     }
 
     public Task<bool> TryMoveToReadyAsync(
-        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt, CancellationToken ct = default) =>
+        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt,
+        CancellationToken ct = default, string? providerKey = null, string? readyByUserId = null) =>
         RunWithOrderKeyRetryAsync(projectId, id, "ready", newOrderKey, async (db, key, c) =>
         {
             var pid = projectId.ToString();
@@ -399,7 +400,9 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(t => t.State, "ready")
                     .SetProperty(t => t.OrderKey, key)
-                    .SetProperty(t => t.CommittedAt, committedAt), c);
+                    .SetProperty(t => t.CommittedAt, committedAt)
+                    .SetProperty(t => t.AiExecutionProviderKey, t => providerKey ?? t.AiExecutionProviderKey)
+                    .SetProperty(t => t.ReadyByUserId, readyByUserId), c);
         }, ct);
 
     public Task<bool> TryPublishAutomationInvocationTaskAsync(
@@ -431,7 +434,9 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(t => t.State, "backlog")
                     .SetProperty(t => t.OrderKey, key)
-                    .SetProperty(t => t.CommittedAt, (DateTimeOffset?)null), c);
+                    .SetProperty(t => t.CommittedAt, (DateTimeOffset?)null)
+                    .SetProperty(t => t.AiExecutionProviderKey, (string?)null)
+                    .SetProperty(t => t.ReadyByUserId, (string?)null), c);
         }, ct);
 
     public Task<bool> TryReorderAsync(
@@ -451,7 +456,8 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
     }
 
     public async Task<int> MoveAllBacklogToReadyAsync(
-        ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default)
+        ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default,
+        string? providerKey = null, string? readyByUserId = null)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -491,7 +497,9 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(t => t.State, "ready")
                     .SetProperty(t => t.OrderKey, newKey)
-                    .SetProperty(t => t.CommittedAt, committedAt), ct);
+                    .SetProperty(t => t.CommittedAt, committedAt)
+                    .SetProperty(t => t.AiExecutionProviderKey, providerKey)
+                    .SetProperty(t => t.ReadyByUserId, readyByUserId), ct);
             moved += rows;
             lastKey = newKey;
         }
@@ -514,7 +522,9 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         BacklogTaskId id,
         Run coordinatorRun,
         DateTimeOffset claimedAt,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? expectedProviderKey = null,
+        string? expectedReadyByUserId = null)
     {
         await using var db = await _factory.CreateDbContextAsync(ct);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -630,7 +640,9 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         // (a) exactly-once, project-scoped claim gate.
         var claimedRows = await db.BacklogTasks
             .Where(t => t.TaskId == tid && t.ProjectId == pid
-                && t.State == "ready" && t.RunId == null && t.ArchivedAt == null)
+                && t.State == "ready" && t.RunId == null && t.ArchivedAt == null
+                && t.AiExecutionProviderKey == expectedProviderKey
+                && t.ReadyByUserId == expectedReadyByUserId)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(t => t.State, "claimed")
                 .SetProperty(t => t.RunId, coordinatorRun.Id.ToString())
@@ -801,6 +813,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         OrderKey = t.OrderKey,
         CapturedBy = t.CapturedBy,
         CapturedByUserId = t.CapturedByUserId,
+        ReadyByUserId = t.ReadyByUserId,
         CreatedAt = t.CreatedAt,
         CommittedAt = t.CommittedAt,
         ClaimedAt = t.ClaimedAt,
@@ -828,6 +841,7 @@ public sealed class EfBacklogTaskStore : IBacklogTaskStore
         OrderKey = r.OrderKey,
         CapturedBy = r.CapturedBy,
         CapturedByUserId = r.CapturedByUserId,
+        ReadyByUserId = r.ReadyByUserId,
         CreatedAt = r.CreatedAt,
         CommittedAt = r.CommittedAt,
         ClaimedAt = r.ClaimedAt,

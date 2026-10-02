@@ -1697,6 +1697,9 @@ public sealed class SqliteToPostgresMigrator
         var claimInputs = await HasColumnAsync(conn, "backlog_tasks", "claimed_prerequisites_json", ct)
             ? "claimed_prerequisites_json"
             : "NULL AS claimed_prerequisites_json";
+        var readyByUserId = await HasColumnAsync(conn, "backlog_tasks", "ready_by_user_id", ct)
+            ? "ready_by_user_id"
+            : "NULL AS ready_by_user_id";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             $"""
@@ -1704,7 +1707,7 @@ public sealed class SqliteToPostgresMigrator
                    captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                    workflow_override_id, archived_at, source_file_path,
                    parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending,
-                   ai_execution_provider_key, {claimRevision}, {claimInputs}
+                   ai_execution_provider_key, {claimRevision}, {claimInputs}, {readyByUserId}
               FROM backlog_tasks;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1734,6 +1737,7 @@ public sealed class SqliteToPostgresMigrator
                 AiExecutionProviderKey = reader.IsDBNull(19) ? null : reader.GetString(19),
                 ClaimedGraphRevision = reader.IsDBNull(20) ? null : reader.GetInt64(20),
                 ClaimedPrerequisitesJson = reader.IsDBNull(21) ? null : reader.GetString(21),
+                ReadyByUserId = reader.IsDBNull(22) ? null : reader.GetString(22),
             });
         }
         return results;
