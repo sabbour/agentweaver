@@ -4,7 +4,8 @@ import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { addIssue, createMilestone, listMilestones, normalizeVersion, readStatus, updateAgent, updateReview, updateStatus } from "./state.mjs";
+import { addIssue, createMilestone, listMilestones, normalizeVersion, readStatus, updateReview, updateStatus } from "./state.mjs";
+import { buildLiveStatus } from "./live.mjs";
 
 const source = fileURLToPath(new URL("./milestones/0.34.1.json", import.meta.url));
 
@@ -29,7 +30,6 @@ test("seeded release gates stay not run and include all tracked issues", async (
     assert.equal(state.liveGate.status, "not run");
     assert.equal(state.issues.find(({ number }) => number === 1719).prNumber, 1722);
     assert.equal(state.issues.find(({ number }) => number === 1719).checks.rubberDuck.status, "not run");
-    assert.equal(state.agents.find(({ issueNumber }) => issueNumber === 1707).status, "unknown");
 });
 
 test("updates persist for fresh reads without replacing other gates", async () => fixture(async (dir) => {
@@ -71,7 +71,6 @@ test("a second milestone is isolated, selectable, and can track issues", async (
     const next = await readStatus("0.35.0", dir);
     assert.equal(next.issues[0].prNumber, 1801);
     assert.equal(next.issues[0].checks.codeReview.status, "not run");
-    assert.deepEqual(next.agents, []);
     assert.equal(next.directApi.status, "not run");
     assert.equal((await readStatus("0.34.1", dir)).issues.length, 10);
 }));
@@ -103,18 +102,29 @@ test("reviews require evidence on the tracked head and reset when the head or PR
     await assert.rejects(updateReview({ version: "0.34.1", number: 1709, kind: "codeReview", status: "passed", head: first, evidence: "Old pass" }, dir), /tracked PR head/);
 }));
 
-test("agent reports persist in a checked hierarchy and do not invent subagents", async () => fixture(async (dir) => {
-    const initialCount = (await readStatus("0.34.1", dir)).agents.length;
-    await updateAgent({ version: "0.34.1", id: "lead", name: "Lead", issueNumber: 1707, status: "active" }, dir);
-    await updateAgent({ version: "0.34.1", id: "worker", name: "Worker", parentId: "lead", status: "blocked", note: "Waiting on PR" }, dir);
-    await assert.rejects(updateAgent({ version: "0.34.1", id: "lead", name: "Lead", parentId: "worker", status: "idle" }, dir), /cycle/);
-    await assert.rejects(updateAgent({ version: "0.34.1", id: "unknown", name: "Unknown", parentId: "missing", status: "active" }, dir), /not tracked/);
-    await assert.rejects(updateAgent({ version: "0.34.1", id: "other", name: "Other", issueNumber: 9999, status: "active" }, dir), /not tracked/);
-    const { agents } = await readStatus("0.34.1", dir);
-    assert.equal(agents.find(({ id }) => id === "worker").parentId, "lead");
-    assert.equal(agents.find(({ id }) => id === "lead").status, "active");
-    assert.equal(agents.length, initialCount + 2);
-}));
+test("live activity selects milestone agents and coordinator, nesting local subagents", () => {
+    const sessions = [
+        { id: "coordinator", session_type: "general_chat", name: "Release coordinator", activity: { status: "busy" } },
+        { id: "self", project_id: "project-a", creator_session_id: "coordinator", name: "v0.34.1 tracker", activity: { status: "busy" } },
+        { id: "repair", project_id: "project-a", creator_session_id: "coordinator", name: "V0.34.1 #1707 repair", activity: { status: "idle" } },
+        { id: "pr", project_id: "project-a", creator_session_id: "coordinator", name: "Blueprint fix", source_pr_number: 1722, activity: { status: "busy", busy_for_seconds: 12 } },
+        { id: "other", project_id: "project-a", name: "v0.35.0 #1900", activity: { status: "busy" } },
+        { id: "nearby", project_id: "project-a", name: "v0.34.10 unrelated", activity: { status: "busy" } },
+        { id: "foreign", project_id: "project-b", name: "v0.34.1 #1707", activity: { status: "busy" } },
+    ];
+    const issues = [{ number: 1707, prNumber: null }, { number: 1719, prNumber: 1722 }];
+    const tasks = [
+        { type: "agent", id: "child", agentType: "code-review", status: "running" },
+        { type: "shell", id: "shell", status: "running" },
+    ];
+    const live = buildLiveStatus({ sessions, tasks }, "self", "0.34.1", issues);
+    assert.deepEqual(live.nodes.map(({ id }) => id), ["coordinator", "self", "repair", "pr", "task:child"]);
+    assert.equal(live.nodes.find(({ id }) => id === "repair").issueNumber, 1707);
+    assert.equal(live.nodes.find(({ id }) => id === "pr").issueNumber, 1719);
+    assert.equal(live.nodes.find(({ id }) => id === "task:child").parentId, "self");
+    assert.deepEqual(buildLiveStatus({ sessions, tasks }, "self", "0.36.0", []).nodes, []);
+    assert.throws(() => buildLiveStatus({ sessions: [], tasks }, "self", "0.34.1", issues), /missing from live activity/);
+});
 
 test("live behavior proof requires matching RC and both direct test gates", async () => fixture(async (dir) => {
     const proof = { status: "passed", evidence: "Observed full behavior", revision: "abc123", digest: "sha256:abcd" };

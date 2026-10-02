@@ -72,7 +72,7 @@
   </section>
   <section class="panel" aria-labelledby="agents-title">
     <h2 id="agents-title">Agents and subagents</h2>
-    <p class="muted">Timestamped agent reports, not a live process monitor. Reports older than 5 minutes are marked stale; refreshes check the shared project file every 15 seconds.</p>
+    <p class="muted"><span id="live-updated">Loading live activity…</span> · Project sessions and their coordinator come from the app's live activity. CLI task subagents are visible for this canvas session; other sessions' internal task lists are not exposed.</p>
     <ul class="agent-tree" id="agents"></ul>
   </section>
 </main>
@@ -121,21 +121,15 @@
     name.textContent = agent.name;
     detail.append(name, badge(agent.status));
     if (agent.issueNumber) detail.append(link("issues", agent.issueNumber));
-    const reportedAt = Date.parse(agent.updatedAt);
-    const age = document.createElement("small");
-    age.textContent = Number.isFinite(reportedAt)
-      ? `Reported ${new Date(reportedAt).toLocaleString()}${Date.now() - reportedAt > 300000 ? " · stale" : ""}`
-      : "No report yet";
-    detail.append(age);
+    const kind = document.createElement("small");
+    kind.textContent = agent.busyForSeconds ? `${agent.kind} · busy for ${agent.busyForSeconds}s` : agent.kind;
+    detail.append(kind);
     item.append(detail);
-    if (agent.note) item.append(paragraph(agent.note, true));
     const descendants = children.filter((child) => child.parentId === agent.id);
     if (descendants.length) {
       const nested = document.createElement("ul");
       nested.append(...descendants.map((child) => agentNode(child, children)));
       item.append(nested);
-    } else {
-      item.append(paragraph("No subagents reported", true));
     }
     return item;
   }
@@ -170,9 +164,12 @@
       row.insertCell().textContent = issue.priority;
       return row;
     }));
-    const roots = data.agents.filter((agent) => !agent.parentId);
-    $("agents").replaceChildren(...roots.map((agent) => agentNode(agent, data.agents)));
-    if (!roots.length) $("agents").append(paragraph("No agent reports recorded for this milestone.", true));
+  }
+  function renderLive(data) {
+    $("live-updated").textContent = `Live as of ${new Date(data.observedAt).toLocaleTimeString()}`;
+    const roots = data.nodes.filter((agent) => !agent.parentId);
+    $("agents").replaceChildren(...roots.map((agent) => agentNode(agent, data.nodes)));
+    if (!roots.length) $("agents").append(paragraph("No active project sessions for this milestone.", true));
   }
   async function refresh() {
     $("refresh").disabled = true;
@@ -192,8 +189,13 @@
       const response = await fetch(`/status?version=${encodeURIComponent(selectedVersion)}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`Status request failed (${response.status})`);
       render(await response.json());
+      const liveResponse = await fetch(`/live?version=${encodeURIComponent(selectedVersion)}`, { cache: "no-store" });
+      if (!liveResponse.ok) throw new Error(`Live activity request failed (${liveResponse.status})`);
+      renderLive(await liveResponse.json());
       $("error").hidden = true;
     } catch (error) {
+      $("agents").replaceChildren(paragraph("Live agent activity unavailable.", true));
+      $("live-updated").textContent = "Live activity unavailable";
       $("error").textContent = `Could not refresh release status: ${error.message}`;
       $("error").hidden = false;
     } finally {
@@ -206,7 +208,7 @@
     refresh();
   });
   $("refresh").addEventListener("click", refresh);
-  setInterval(() => { if (!document.hidden) refresh(); }, 15000);
+  setInterval(() => { if (!document.hidden && !$("refresh").disabled) refresh(); }, 15000);
   refresh();
 </script>
 </body>

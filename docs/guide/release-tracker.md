@@ -45,17 +45,15 @@ Changing the linked PR or head resets all five checks to **not run**; an older
 head cannot be used to pass them.
 Unreviewed work is displayed as **not run**, not implicitly approved.
 
-The **Agents and subagents** panel shows timestamped project-owned reports
-and rereads the artifact every 15 seconds while visible. Agents invoke
-`update_agent` with `version`, stable `id`, `name`, `status` (`active`, `idle`,
-`blocked`, `done`, or `unknown`), and optional `parentId`, tracked
-`issueNumber`, and `note`. Register the parent before its subagent; reports
-are nested under that parent and assigned issues are linked. The seeded
-v0.34.1 agent rows are observed project sessions with **unknown** status,
-not claims of live activity; no subagents are invented. Reports older than
-five minutes show **stale**. The extension has no direct live session or
-subagent feed, so agents must republish their reports and commit their
-milestone file for updates to propagate to other worktrees.
+The **Agents and subagents** panel fetches the app's current session
+activity every 15 seconds while visible. It shows milestone-related project
+sessions beneath their coordinator, links matched issue assignments, and
+nests the canvas session's live CLI subagent tasks under that session. The
+canvas `live_activity` action reads the same feed on demand. Other sessions'
+internal CLI task lists are not exposed to this extension; the panel does
+not invent subagents for them. If the live feed fails, the panel shows an
+error rather than displaying stored reports as live activity. Unlike
+recorded release gates, activity is not committed to a milestone artifact.
 
 For gates, use `section` values `priority`, `integrationRc`, `directApi`,
 `directUi`, `liveGate`, `release`, or `aksDeployment` without `number`. Changes

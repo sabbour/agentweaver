@@ -22,7 +22,6 @@ const gateStatuses = {
     aksDeployment: new Set(["pending", "blocked", "in progress", "failed", "deployed"]),
 };
 const reviewStatuses = new Set(["not run", "in progress", "passed", "failed"]);
-const agentStatuses = new Set(["active", "idle", "blocked", "done", "unknown"]);
 const emptyReview = () => ({ status: "not run", evidence: "", head: "", updatedAt: "" });
 const issueChecks = ["rubberDuck", "codeReview", "api", "ui", "github"];
 const commitHead = /^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$/;
@@ -44,7 +43,7 @@ export async function listMilestones(directory = artifacts) {
 export async function readStatus(version = defaultVersion, directory = artifacts) {
     const normalized = normalizeVersion(version);
     const state = JSON.parse(await readFile(join(directory, `${normalized}.json`), "utf8"));
-    if (state.version !== normalized || !Array.isArray(state.issues) || !Array.isArray(state.agents) || !Object.keys(allowed).every((key) => key === "issue" || state[key] && typeof state[key] === "object")) {
+    if (state.version !== normalized || !Array.isArray(state.issues) || !Object.keys(allowed).every((key) => key === "issue" || state[key] && typeof state[key] === "object")) {
         throw new TypeError(`Invalid ${normalized} release tracker artifact`);
     }
     return state;
@@ -110,7 +109,6 @@ export async function createMilestone(version, directory = artifacts) {
         updatedAt: new Date().toISOString(),
         priority: { status: "pending", priority: "Set current priority", note: "Each current-head milestone PR needs local rubber-duck + code-review and issue-specific API/UI and GitHub gates before serialized rebase auto-merge." },
         issues: [],
-        agents: [],
         integrationRc: { status: "pending", note: "Assemble and deploy the combined RC after serialized merges.", evidence: "", revision: "", digest: "" },
         directApi: { status: "not run", note: "Run direct API behavior tests against the pinned RC.", evidence: "", revision: "", digest: "" },
         directUi: { status: "not run", note: "Run direct UI behavior tests against the pinned RC.", evidence: "", revision: "", digest: "" },
@@ -206,26 +204,5 @@ export async function updateReview({ version, number, kind, status, head, eviden
         if (!issue || !issue.prNumber) throw new RangeError("Review requires a tracked issue with a linked PR");
         if (issue.head !== head) throw new TypeError("Issue check head must match the tracked PR head");
         issue.checks[kind] = { status, head, evidence, updatedAt: new Date().toISOString() };
-    });
-}
-
-export async function updateAgent({ version, id, name, parentId = null, issueNumber = null, status, note = "" }, directory = artifacts) {
-    if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(id)) throw new TypeError("Agent ID must be 1-100 letters, numbers, hyphens or underscores");
-    if (typeof name !== "string" || !name.trim() || name.length > 150) throw new TypeError("Agent name is required");
-    if (parentId !== null && (typeof parentId !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(parentId) || parentId === id)) throw new TypeError("Invalid parent agent ID");
-    if (issueNumber !== null && (!Number.isSafeInteger(issueNumber) || issueNumber <= 0)) throw new TypeError("Invalid assigned issue number");
-    if (!agentStatuses.has(status)) throw new TypeError("Unknown agent status");
-    if (typeof note !== "string" || note.length > 2000) throw new TypeError("Agent note must be at most 2000 characters");
-    return mutate(version, directory, (state) => {
-        if (issueNumber !== null && !state.issues.some((issue) => issue.number === issueNumber)) throw new RangeError("Assigned issue is not tracked");
-        const parent = parentId && state.agents.find((agent) => agent.id === parentId);
-        if (parentId && !parent) throw new RangeError("Parent agent is not tracked");
-        for (let ancestor = parent; ancestor; ancestor = state.agents.find((agent) => agent.id === ancestor.parentId)) {
-            if (ancestor.id === id) throw new RangeError("Agent hierarchy cannot contain a cycle");
-        }
-        const agent = { id, name, parentId, issueNumber, status, note, updatedAt: new Date().toISOString() };
-        const index = state.agents.findIndex((item) => item.id === id);
-        if (index === -1) state.agents.push(agent);
-        else state.agents[index] = agent;
     });
 }

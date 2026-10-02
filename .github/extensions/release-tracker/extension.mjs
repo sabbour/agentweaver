@@ -2,10 +2,26 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createCanvas, CanvasError, joinSession } from "@github/copilot-sdk/extension";
-import { addIssue, createMilestone, defaultVersion, listMilestones, normalizeVersion, readStatus, updateAgent, updateReview, updateStatus } from "./state.mjs";
+import { addIssue, createMilestone, defaultVersion, listMilestones, normalizeVersion, readStatus, updateReview, updateStatus } from "./state.mjs";
+import { buildLiveStatus } from "./live.mjs";
 
 const servers = new Map();
 const page = fileURLToPath(new URL("./index.html", import.meta.url));
+let session;
+
+async function readLiveStatus(version) {
+    const status = await readStatus(version);
+    const [response, background, metadata] = await Promise.all([
+        session.rpc.tools.execute({ name: "get_sessions_status", arguments: {} }),
+        session.rpc.tasks.list(),
+        session.rpc.metadata.snapshot(),
+    ]);
+    if (typeof response === "string" || response.resultType !== "success") {
+        throw new Error(`Live session activity unavailable: ${response.error || response.textResultForLlm || response}`);
+    }
+    const { sessions } = JSON.parse(response.sessionLog || response.textResultForLlm);
+    return buildLiveStatus({ sessions, tasks: background.tasks }, metadata.sessionId, status.version, status.issues);
+}
 
 async function startServer() {
     const server = createServer(async (req, res) => {
@@ -23,6 +39,10 @@ async function startServer() {
                 const state = await readStatus(request.searchParams.get("version") || defaultVersion);
                 res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
                 res.end(JSON.stringify(state));
+            } else if (req.method === "GET" && request.pathname === "/live") {
+                const live = await readLiveStatus(request.searchParams.get("version") || defaultVersion);
+                res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+                res.end(JSON.stringify(live));
             } else {
                 res.writeHead(404);
                 res.end("Not found");
@@ -41,7 +61,7 @@ async function startServer() {
     return { server, url: `http://127.0.0.1:${address.port}/` };
 }
 
-await joinSession({
+session = await joinSession({
     canvases: [
         createCanvas({
             id: "agentweaver-release-tracker",
@@ -58,6 +78,12 @@ await joinSession({
                     description: "Read the current project-owned release status artifact for a milestone version (defaults to 0.34.1).",
                     inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" } } },
                     handler: async ({ input }) => readStatus(input?.version || defaultVersion),
+                },
+                {
+                    name: "live_activity",
+                    description: "Read the current app session hierarchy and this session's background subagent tasks for a milestone version.",
+                    inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" } } },
+                    handler: async ({ input }) => readLiveStatus(input?.version || defaultVersion),
                 },
                 {
                     name: "create_milestone",
@@ -151,26 +177,6 @@ await joinSession({
                             return await updateReview(input);
                         } catch (error) {
                             if (error instanceof TypeError || error instanceof RangeError) throw new CanvasError("invalid_review", error.message);
-                            throw error;
-                        }
-                    },
-                },
-                {
-                    name: "update_agent",
-                    description: "Publish a timestamped agent or subagent report for this milestone. Parent ID and tracked issue assignment are optional.",
-                    inputSchema: {
-                        type: "object", additionalProperties: false, required: ["version", "id", "name", "status"],
-                        properties: {
-                            version: { type: "string" }, id: { type: "string" }, name: { type: "string" },
-                            parentId: { type: ["string", "null"] }, issueNumber: { type: ["integer", "null"] },
-                            status: { type: "string", enum: ["active", "idle", "blocked", "done", "unknown"] }, note: { type: "string" },
-                        },
-                    },
-                    handler: async ({ input }) => {
-                        try {
-                            return await updateAgent(input);
-                        } catch (error) {
-                            if (error instanceof TypeError || error instanceof RangeError) throw new CanvasError("invalid_agent", error.message);
                             throw error;
                         }
                     },
