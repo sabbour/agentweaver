@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using k8s;
@@ -178,15 +179,19 @@ public static class RunCurrentBindingReader
     public static bool AttestationFollowsCurrentBinding(int boundSequence, int attestationSequence) =>
         boundSequence > 0 && attestationSequence > boundSequence;
 
-    private static bool SourceStillCurrent(CurrentSandboxAttestation attestation, string tree)
+    internal static bool SourceStillCurrent(CurrentSandboxAttestation attestation, string tree)
     {
         using var repository = new Repository(attestation.SourceRepository);
-        return repository.Lookup<Commit>(attestation.SourceBaseCommit) is { } commit
+        return !string.IsNullOrWhiteSpace(attestation.SourceWorktreeIdentity)
+            && repository.Lookup<Commit>(attestation.SourceBaseCommit) is { } commit
             && commit.Tree.Sha == tree
             && repository.Branches[attestation.SourceRef]?.Tip?.Sha == commit.Sha
             && Path.GetFileName(attestation.SourceWorktree.TrimEnd(
                 Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
-                == $"assembly-build-test-{attestation.RunId}-attempt-{attestation.AssemblyAttempt}";
+                == $"assembly-build-test-{attestation.RunId}-attempt-{attestation.AssemblyAttempt}"
+            && WorktreeManager.ReadDetachedWorktreeIdentity(
+                attestation.SourceRepository, attestation.SourceWorktree, commit.Sha, tree)
+                == attestation.SourceWorktreeIdentity;
     }
 
     private static async Task<(int BoundSequence, string? BoundType, string? BoundJson,

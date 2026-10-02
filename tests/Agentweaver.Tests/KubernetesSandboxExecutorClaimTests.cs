@@ -10,6 +10,7 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
+using Agentweaver.Api.Git;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -18,6 +19,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Repository = LibGit2Sharp.Repository;
+using Commands = LibGit2Sharp.Commands;
+using Signature = LibGit2Sharp.Signature;
 using AgentHostRuntimeState = agenthost::Agentweaver.AgentHost.AgentHostRuntimeState;
 using AgentHostCredentialProvider = agenthost::Agentweaver.AgentHost.AgentHostGitHubCapabilityCredentialProvider;
 using ConfigureRequest = agenthost::ConfigureRequest;
@@ -1195,6 +1199,55 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task LaunchAgentHostPod_unattested_reused_assembly_claim_cannot_succeed()
+    {
+        const string runId = "run-claim-unattested-assembly";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            JsonSerializer.Serialize(new
+            {
+                metadata = new { uid = "existing-uid", resourceVersion = "42",
+                    annotations = new Dictionary<string, string>
+                {
+                    ["agentweaver.io/run-id"] = runId,
+                    ["agentweaver.io/working-directory"] = Path.GetFullPath("/workspace/reviewer"),
+                    ["agentweaver.io/agent-host-holder-token"] = "4",
+                } },
+                status = new { conditions = new[] { new { type = "Ready", status = "True" } },
+                    sandbox = new { name = "agent-pod-3" } },
+            }));
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-3$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-3"},"status":{"podIP":"10.0.0.9"}}""");
+        var conflicts = new AlwaysConflictClaimHandler();
+        var turnTokens = new RecordingTurnTokenRegistry();
+        turnTokens.RegisterTurnToken(runId, "prior-turn-token");
+        var configure = new RecordingConfigureHandler();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflicts, fake), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            turnTokenRegistry: turnTokens,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configure),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        var launch = () => executor.LaunchAgentHostPodAsync(runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: "/workspace/reviewer",
+                SourceRepositoryPath: "/workspace/repository",
+                SourceRef: "integration",
+                BaseCommitSha: new string('1', 40),
+                ExpectedTreeHash: new string('2', 40),
+                WorkspaceMode: ExecutionWorkspaceMode.Shared,
+                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                HolderToken: "4",
+                LifecycleGeneration: 1));
+        var failure = await launch.Should().ThrowAsync<AgentHostConfigureException>();
+        failure.Which.Reason.Should().Be("assembly_binding_unverifiable");
+        configure.Body.Should().BeNull();
+    }
+
+    [Fact]
     public async Task LaunchAgentHostPod_recreates_existing_shared_claim_without_working_directory_when_claim_belongs_to_synthetic_run()
     {
         const string runId = "e14667fe-25cf-4476-8da4-e3b44d9ed289";
@@ -1296,16 +1349,42 @@ public sealed class KubernetesSandboxExecutorClaimTests
         turnTokens.TryGetTurnToken(runId).Should().Be("exact-run-turn-token");
     }
 
-    [Fact]
-    public async Task LaunchAgentHostPod_configure_body_carries_assembly_purpose_and_immutable_source_refs()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LaunchAgentHostPod_configure_body_carries_assembly_purpose_and_immutable_source_refs(bool failAttestation)
     {
         const string runId = "run-claim-assembly";
-        const string commitSha = "1111111111111111111111111111111111111111";
-        const string treeHash = "2222222222222222222222222222222222222222";
+        const string sourceRef = "agentweaver/integration/run-claim-assembly";
+        var repoPath = Path.Combine(Path.GetTempPath(), $"assembly-proof-repo-{Guid.NewGuid():N}");
+        var basePath = Path.Combine(Path.GetTempPath(), $"assembly-proof-wt-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoPath);
+        Repository.Init(repoPath);
+        string commitSha;
+        string treeHash;
+        using (var repository = new Repository(repoPath))
+        {
+            File.WriteAllText(Path.Combine(repoPath, "source.txt"), "assembled");
+            Commands.Stage(repository, "source.txt");
+            var signature = new Signature("Test", "test@example.org", DateTimeOffset.UtcNow);
+            var commit = repository.Commit("assembly", signature, signature, new LibGit2Sharp.CommitOptions());
+            repository.Branches.Add(sourceRef, commit);
+            commitSha = commit.Sha;
+            treeHash = commit.Tree.Sha;
+        }
+        var manager = new WorktreeManager(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Worktrees:BasePath"] = basePath,
+            }).Build(), NullLogger<WorktreeManager>.Instance);
+        var worktree = manager.AddDetachedWorktree(
+            repoPath, sourceRef, $"assembly-build-test-{runId}-attempt-4").WorktreePath;
+        try
+        {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
-        var events = new RecordingBindingEvents();
+        var events = new RecordingBindingEvents { FailAttestation = failAttestation };
         handler.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
             JsonSerializer.Serialize(new
@@ -1318,9 +1397,9 @@ public sealed class KubernetesSandboxExecutorClaimTests
                         [SandboxClaimConventions.RunIdAnnotation] = runId,
                         ["agentweaver.io/run-lifecycle-generation"] = "1",
                         ["agentweaver.io/agent-host-holder-token"] = "4",
-                        ["agentweaver.io/working-directory"] = Path.GetFullPath("/workspace/reviewer"),
-                        [CurrentSandboxBindingVerifier.SourceRepositoryAnnotation] = "/workspace/repository",
-                        [CurrentSandboxBindingVerifier.SourceRefAnnotation] = "agentweaver/integration/run-claim-assembly",
+                        ["agentweaver.io/working-directory"] = worktree,
+                        [CurrentSandboxBindingVerifier.SourceRepositoryAnnotation] = repoPath,
+                        [CurrentSandboxBindingVerifier.SourceRefAnnotation] = sourceRef,
                         [CurrentSandboxBindingVerifier.SourceBaseCommitAnnotation] = commitSha,
                         [CurrentSandboxBindingVerifier.SourceTreeAnnotation] = treeHash,
                     },
@@ -1353,12 +1432,12 @@ public sealed class KubernetesSandboxExecutorClaimTests
             copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider(),
             runEventStream: events);
 
-        await executor.LaunchAgentHostPodAsync(
+        var launch = () => executor.LaunchAgentHostPodAsync(
             runId,
             new AgentHostLaunchContext(
-                SharedWorkingDirectory: "/workspace/reviewer",
-                SourceRepositoryPath: "/workspace/repository",
-                SourceRef: "agentweaver/integration/run-claim-assembly",
+                SharedWorkingDirectory: worktree,
+                SourceRepositoryPath: repoPath,
+                SourceRef: sourceRef,
                 BaseCommitSha: commitSha,
                 ExpectedTreeHash: treeHash,
                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
@@ -1367,14 +1446,24 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 HolderToken: "4",
                 LifecycleGeneration: 1));
 
+        if (failAttestation)
+        {
+            var failure = await launch.Should().ThrowAsync<AgentHostConfigureException>();
+            failure.Which.Reason.Should().Be("assembly_binding_unverifiable");
+            failure.Which.Retryable.Should().BeTrue();
+            events.Events.Should().NotContain(e => e.Type == CurrentSandboxBindingVerifier.EventType);
+            return;
+        }
+        await launch();
+
         var created = handler.Requests.Should().ContainSingle(r =>
             r.Method == "POST" && r.Path.EndsWith("/sandboxclaims", StringComparison.Ordinal)).Which;
         using var claim = JsonDocument.Parse(created.Body!);
         var annotations = claim.RootElement.GetProperty("metadata").GetProperty("annotations");
         annotations.GetProperty(CurrentSandboxBindingVerifier.SourceRepositoryAnnotation).GetString()
-            .Should().Be("/workspace/repository");
+            .Should().Be(repoPath);
         annotations.GetProperty(CurrentSandboxBindingVerifier.SourceRefAnnotation).GetString()
-            .Should().Be("agentweaver/integration/run-claim-assembly");
+            .Should().Be(sourceRef);
         annotations.GetProperty(CurrentSandboxBindingVerifier.SourceBaseCommitAnnotation).GetString()
             .Should().Be(commitSha);
         annotations.GetProperty(CurrentSandboxBindingVerifier.SourceTreeAnnotation).GetString()
@@ -1382,7 +1471,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
         annotations.GetProperty("agentweaver.io/run-lifecycle-generation").GetString().Should().Be("1");
         annotations.GetProperty("agentweaver.io/agent-host-holder-token").GetString().Should().Be("4");
         annotations.GetProperty("agentweaver.io/working-directory").GetString()
-            .Should().Be(Path.GetFullPath("/workspace/reviewer"));
+            .Should().Be(worktree);
         var attestation = events.Events.Should().ContainSingle(e =>
             e.Type == CurrentSandboxBindingVerifier.EventType).Which;
         var proof = JsonSerializer.Deserialize<CurrentSandboxAttestation>(
@@ -1391,26 +1480,37 @@ public sealed class KubernetesSandboxExecutorClaimTests
         proof.SandboxUid.Should().Be("sandbox-uid");
         proof.PodUid.Should().Be("pod-uid");
         proof.AssemblyAttempt.Should().Be("4");
+        proof.SourceWorktreeIdentity.Should().NotBeNullOrWhiteSpace();
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         var body = doc.RootElement;
         body.GetProperty("purpose").GetString().Should().Be("AssemblyBuildTest");
         body.GetProperty("workspaceMode").GetString().Should().Be("LocalReadOnly");
         body.GetProperty("sharedWorkingDirectory").GetString().Should()
-            .Be(Path.GetFullPath("/workspace/reviewer"));
-        body.GetProperty("sourceRepositoryPath").GetString().Should().Be("/workspace/repository");
-        body.GetProperty("sourceRef").GetString().Should().Be("agentweaver/integration/run-claim-assembly");
+            .Be(worktree);
+        body.GetProperty("sourceRepositoryPath").GetString().Should().Be(repoPath);
+        body.GetProperty("sourceRef").GetString().Should().Be(sourceRef);
         body.GetProperty("baseCommitSha").GetString().Should().Be(commitSha);
         body.GetProperty("expectedTreeHash").GetString().Should().Be(treeHash);
         body.GetProperty("scratchRoot").GetString().Should()
             .Be(PodLocalExecutionWorkspace.DefaultScratchRoot);
+        }
+        finally
+        {
+            manager.RemoveDetachedWorktree(repoPath, worktree);
+            CurrentSandboxBindingTests.DeleteGitFixture(repoPath);
+            CurrentSandboxBindingTests.DeleteGitFixture(basePath);
+        }
     }
 
     private sealed class RecordingBindingEvents : Agentweaver.Api.Infrastructure.IRunEventStream
     {
+        public bool FailAttestation { get; init; }
         public List<RunEvent> Events { get; } = [];
         public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
         {
+            if (FailAttestation && evt.Type == CurrentSandboxBindingVerifier.EventType)
+                throw new IOException("durable event store unavailable");
             Events.Add(evt);
             return ValueTask.FromResult(Events.Count);
         }
@@ -1511,7 +1611,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 BaseCommitSha: new string('1', 40),
                 ExpectedTreeHash: new string('2', 40),
                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
-                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                Purpose: AgentHostPurpose.Default,
                 ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot));
 
         podRegistry.TryGetEffectiveWorkingDirectory(runId).Should().Be(effectiveWorkingDirectory);

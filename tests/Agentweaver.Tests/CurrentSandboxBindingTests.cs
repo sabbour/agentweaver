@@ -1,7 +1,11 @@
 using System.Text.Json;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Git;
 using FluentAssertions;
+using LibGit2Sharp;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests;
 
@@ -158,5 +162,97 @@ public sealed class CurrentSandboxBindingTests
             .Should().BeFalse();
         RunCurrentBindingReader.FenceUnchanged(5, 6, 5, 6, 4, 4, "uid", "42", "uid", "42", "sandbox", "sandbox", "pod", "replacement")
             .Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("unregistered")]
+    [InlineData("wrong-head")]
+    [InlineData("dirty")]
+    [InlineData("foreign")]
+    [InlineData("replaced-same-head")]
+    [InlineData("missing-identity")]
+    public void Attested_source_requires_same_registered_clean_detached_worktree(string mutation)
+    {
+        var originPath = Path.Combine(Path.GetTempPath(), $"binding-origin-{Guid.NewGuid():N}");
+        var basePath = Path.Combine(Path.GetTempPath(), $"binding-worktrees-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(originPath);
+        Repository.Init(originPath);
+        const string branch = "integration";
+        string commitSha;
+        string tree;
+        using (var origin = new Repository(originPath))
+        {
+            File.WriteAllText(Path.Combine(originPath, "source.txt"), "assembled");
+            Commands.Stage(origin, "source.txt");
+            var signature = new Signature("Test", "test@example.org", DateTimeOffset.UtcNow);
+            var commit = origin.Commit("assembly", signature, signature);
+            origin.CreateBranch(branch, commit);
+            commitSha = commit.Sha;
+            tree = commit.Tree.Sha;
+        }
+        var manager = new WorktreeManager(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Worktrees:BasePath"] = basePath })
+            .Build(), NullLogger<WorktreeManager>.Instance);
+        var name = $"assembly-build-test-{Run}-attempt-4";
+        var path = manager.AddDetachedWorktree(originPath, branch, name).WorktreePath;
+        try
+        {
+            var identity = WorktreeManager.ReadDetachedWorktreeIdentity(originPath, path, commitSha, tree);
+            identity.Should().NotBeNullOrWhiteSpace();
+            var attestation = new CurrentSandboxAttestation(
+                Run, "claim", "claim-uid", "42", "sandbox-uid", "pod", "pod-uid",
+                "agentweaver", 1, "4", originPath, branch, commitSha, tree, path, identity);
+            RunCurrentBindingReader.SourceStillCurrent(attestation, tree).Should().BeTrue();
+
+            switch (mutation)
+            {
+                case "missing":
+                    Directory.Delete(path, recursive: true);
+                    break;
+                case "unregistered":
+                    File.Delete(Path.Combine(path, ".git"));
+                    break;
+                case "wrong-head":
+                    using (var worktree = new Repository(path))
+                    {
+                        File.WriteAllText(Path.Combine(path, "source.txt"), "different");
+                        Commands.Stage(worktree, "source.txt");
+                        var signature = new Signature("Test", "test@example.org", DateTimeOffset.UtcNow);
+                        worktree.Commit("changed", signature, signature);
+                    }
+                    break;
+                case "dirty":
+                    File.WriteAllText(Path.Combine(path, "untracked.txt"), "dirty");
+                    break;
+                case "foreign":
+                    manager.RemoveDetachedWorktree(originPath, path);
+                    Directory.CreateDirectory(path);
+                    Repository.Init(path);
+                    break;
+                case "replaced-same-head":
+                    manager.AddDetachedWorktree(originPath, branch, name);
+                    break;
+                case "missing-identity":
+                    attestation = attestation with { SourceWorktreeIdentity = null };
+                    break;
+            }
+            RunCurrentBindingReader.SourceStillCurrent(attestation, tree).Should().BeFalse();
+        }
+        finally
+        {
+            manager.RemoveDetachedWorktree(originPath, path);
+            DeleteGitFixture(originPath);
+            DeleteGitFixture(basePath);
+        }
+    }
+
+    internal static void DeleteGitFixture(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+            File.SetAttributes(file, FileAttributes.Normal);
+        Directory.Delete(path, recursive: true);
     }
 }

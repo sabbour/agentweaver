@@ -825,23 +825,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                         ? EffectiveModelProviderProvenance.ScopePlatform
                         : EffectiveModelProviderProvenance.ScopeProject,
                     ct).ConfigureAwait(false);
-                if (launchContext.Purpose == AgentHostPurpose.AssemblyBuildTest && _httpClientFactory is not null)
+                if (launchContext.Purpose == AgentHostPurpose.AssemblyBuildTest)
                 {
-                    try
-                    {
-                        await AttestConfiguredAssemblyPodAsync(runId, claimName, podName, launchContext, ct)
-                            .ConfigureAwait(false);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger.LogWarning(ex,
-                            "Configured assembly pod for run {RunId} could not be attested; current binding stays unavailable",
-                            runId);
-                    }
+                    await AttestConfiguredAssemblyPodAsync(runId, claimName, podName, launchContext, ct)
+                        .ConfigureAwait(false);
                 }
             }
             else
             {
+                if (launchContext.Purpose == AgentHostPurpose.AssemblyBuildTest)
+                    throw new AgentHostConfigureException(
+                        "assembly_binding_unverifiable",
+                        "Already-configured assembly claim has no new post-configuration source attestation.",
+                        StatusCodes.Status409Conflict,
+                        retryable: true);
                 _logger.LogInformation(
                     "KubernetesSandboxExecutor: reusing already-configured AgentHost claim {Claim} for run {RunId}",
                     claimName, runId);
@@ -2011,6 +2008,23 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 $"Configured assembly pod ownership cannot be attested ({proof.Reason}).",
                 StatusCodes.Status409Conflict);
 
+        string? sourceIdentity;
+        try
+        {
+            sourceIdentity = Git.WorktreeManager.ReadDetachedWorktreeIdentity(
+                context.SourceRepositoryPath!, context.SharedWorkingDirectory!,
+                context.BaseCommitSha!, context.ExpectedTreeHash!);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Configured assembly source worktree cannot be verified for run {RunId}", runId);
+            sourceIdentity = null;
+        }
+        if (string.IsNullOrWhiteSpace(sourceIdentity))
+            throw new AgentHostConfigureException(
+                "assembly_binding_unverifiable", "Configured assembly source worktree is not registered and clean.",
+                StatusCodes.Status409Conflict, retryable: true);
+
         using var reread = JsonDocument.Parse(JsonSerializer.Serialize(
             await _client.CustomObjects.GetNamespacedCustomObjectAsync(
                 ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
@@ -2022,12 +2036,22 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                 "assembly_binding_changed", "Assembly claim changed after configuration.",
                 StatusCodes.Status409Conflict);
 
-        await _runEventStream.AppendAsync(runId, new RunEvent(0, CurrentSandboxBindingVerifier.EventType,
-            new CurrentSandboxAttestation(
-                runId, claimName, claimUid, claimVersion, sandboxUid, podName, podUid,
-                _options.Namespace, context.LifecycleGeneration.Value, context.HolderToken!,
-                context.SourceRepositoryPath!, context.SourceRef!, context.BaseCommitSha!,
-                context.ExpectedTreeHash!, context.SharedWorkingDirectory!)), ct).ConfigureAwait(false);
+        try
+        {
+            await _runEventStream.AppendAsync(runId, new RunEvent(0, CurrentSandboxBindingVerifier.EventType,
+                new CurrentSandboxAttestation(
+                    runId, claimName, claimUid, claimVersion, sandboxUid, podName, podUid,
+                    _options.Namespace, context.LifecycleGeneration.Value, context.HolderToken!,
+                    context.SourceRepositoryPath!, context.SourceRef!, context.BaseCommitSha!,
+                    context.ExpectedTreeHash!, context.SharedWorkingDirectory!, sourceIdentity)), ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Configured assembly attestation could not be persisted for run {RunId}", runId);
+            throw new AgentHostConfigureException(
+                "assembly_binding_unverifiable", "Configured assembly attestation could not be persisted.",
+                StatusCodes.Status409Conflict, retryable: true);
+        }
     }
 
     /// <summary>
