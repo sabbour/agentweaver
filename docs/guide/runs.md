@@ -117,6 +117,11 @@ evidence of the current preview pod. A child run can retain its own live preview
 after its execution ends; that child's claim and session are separate from the
 coordinator's claim and automatic preview. Never substitute a child binding for
 the coordinator's exact run and preview identity.
+Build/Test launch requires a durable post-configuration attestation; if the event cannot be
+recorded, the launch fails rather than reporting a successful unverified binding. The
+attested detached source worktree remains registered, clean, and unchanged through review.
+Removing, replacing, or modifying it makes the current binding unavailable or conflicting;
+recreating a checkout at the same path and commit does not restore the old proof.
 
 For a custom workflow without that gate, ask the coordinator to have an agent build and start
 the app in its sandbox. The agent can call `start_preview(port=PORT)` and optionally include

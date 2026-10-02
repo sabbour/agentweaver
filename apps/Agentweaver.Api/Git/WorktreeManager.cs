@@ -244,6 +244,10 @@ public sealed class WorktreeManager
             worktreePath,
             sourceBranch);
 
+        using (var created = new Repository(worktreePath))
+            File.WriteAllText(Path.Combine(created.Info.Path, "agentweaver-source-id"),
+                Guid.NewGuid().ToString("N"));
+
         return new WorktreeInfo
         {
             WorktreePath = worktreePath,
@@ -253,6 +257,33 @@ public sealed class WorktreeManager
 
     public string DetachedWorktreePath(string worktreeName) =>
         Path.Combine(_basePath, SanitizeWorktreeName(worktreeName));
+
+    internal static string? ReadDetachedWorktreeIdentity(
+        string repositoryPath, string worktreePath, string commitSha, string treeHash)
+    {
+        if (!Directory.Exists(worktreePath) || !Repository.IsValid(worktreePath))
+            return null;
+
+        using var origin = new Repository(repositoryPath);
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(worktreePath));
+        var registered = origin.Worktrees[name];
+        if (registered is null)
+            return null;
+        using var expected = registered.WorktreeRepository;
+        using var actual = new Repository(worktreePath);
+        static string Canonical(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (!string.Equals(Canonical(expected.Info.WorkingDirectory), Canonical(worktreePath),
+                StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(Canonical(actual.Info.Path), Canonical(expected.Info.Path),
+                StringComparison.OrdinalIgnoreCase)
+            || !actual.Info.IsHeadDetached
+            || actual.Head.Tip?.Sha != commitSha
+            || actual.Head.Tip.Tree.Sha != treeHash
+            || actual.RetrieveStatus().IsDirty)
+            return null;
+        var marker = Path.Combine(actual.Info.Path, "agentweaver-source-id");
+        return File.Exists(marker) ? File.ReadAllText(marker) : null;
+    }
 
     private static bool IsPathUnder(string path, string root)
     {
