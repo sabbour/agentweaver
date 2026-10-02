@@ -32,6 +32,7 @@ internal sealed class WorkflowComposedRecoveryService(
     internal const string RecoveryMarkerPrefix = "composed_recovery_pending:";
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromMinutes(5);
     internal Func<Run, AgentTurnInput, string, RunLeaseClaim, CancellationToken, Task>? LaunchOverride { get; set; }
+    internal Func<CancellationToken, Task>? AfterCommitOverride { get; set; }
 
     internal static bool IsDecompositionFailure(Run run) =>
         run.ParentRunId is null && run.GetExecutableWorkflowPin() is not null
@@ -39,7 +40,9 @@ internal sealed class WorkflowComposedRecoveryService(
 
     public async Task ResumeFailedAsync(Run expectedParent, CancellationToken ct)
     {
-        if (expectedParent.Status != RunStatus.Failed || !IsDecompositionFailure(expectedParent))
+        var pending = expectedParent.Status == RunStatus.InProgress
+            && await CanRetryPendingAsync(expectedParent, ct).ConfigureAwait(false);
+        if (!pending && (expectedParent.Status != RunStatus.Failed || !IsDecompositionFailure(expectedParent)))
             throw Rejected("composed_recovery_not_eligible", expectedParent.Id);
         var owner = $"{Environment.MachineName}/composed-recovery/{Guid.NewGuid():N}";
         var acquired = await leases.TryClaimAsync(
@@ -51,6 +54,21 @@ internal sealed class WorkflowComposedRecoveryService(
         {
             if (registry.Get(expectedParent.Id.ToString()) is not null)
                 throw Rejected("composed_recovery_busy", expectedParent.Id);
+            if (pending)
+            {
+                var current = await runStore.GetAsync(expectedParent.Id, ct).ConfigureAwait(false);
+                if (current is null || current.Status != RunStatus.InProgress
+                    || current.LifecycleGeneration != expectedParent.LifecycleGeneration
+                    || current.TreeHash != expectedParent.TreeHash
+                    || current.WorktreePath != expectedParent.WorktreePath
+                    || current.WorktreeBranch != expectedParent.WorktreeBranch
+                    || !await TryRestartPendingAsync(current,
+                        new RunLeaseClaim(owner, acquired.FencingToken, current.LifecycleGeneration),
+                        ct, unlaunchedOnly: true).ConfigureAwait(false))
+                    throw Rejected("composed_recovery_run_changed", expectedParent.Id);
+                transferred = true;
+                return;
+            }
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             if (!db.Database.IsNpgsql())
@@ -170,9 +188,29 @@ internal sealed class WorkflowComposedRecoveryService(
             db.PendingRequests.Remove(pendingGate);
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
+            if (AfterCommitOverride is { } afterCommit)
+                await afterCommit(ct).ConfigureAwait(false);
             parent = await runStore.GetAsync(parent.Id, ct).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Recovered composed workflow disappeared.");
-            ValidatePhysicalTree(parent, plan.ExecutionBaseTreeHash!);
+            var committedPlan = await db.WorkPlans.AsNoTracking()
+                .SingleAsync(saved => saved.Id == plan.Id, ct).ConfigureAwait(false);
+            if (parent.Status != RunStatus.InProgress || parent.LifecycleGeneration != resumedGeneration
+                || committedPlan.ParentRunId != parent.Id.ToString()
+                || committedPlan.CoordinatorRunId != child.Id.ToString()
+                || committedPlan.AssemblyStatusReason != RecoveryMarkerPrefix
+                    + resumedGeneration.ToString(CultureInfo.InvariantCulture)
+                || committedPlan.ParentRecoveryGeneration != resumedGeneration
+                || committedPlan.CoordinatorCancellationRequestedAt is not null
+                || !await IsUnlaunchedAsync(db, parent, committedPlan, ct).ConfigureAwait(false))
+                throw Rejected("composed_recovery_run_changed", parent.Id);
+            var postCommitProvider = await scope.ServiceProvider.GetRequiredService<RunModelProviderSnapshotStore>()
+                .TryGetAsync(parent, ct).ConfigureAwait(false);
+            ValidateInput(parent, committedPlan, postCommitProvider);
+            await scope.ServiceProvider.GetRequiredService<RunOrchestrator>()
+                .ValidateComposedRecoveryLaunchAsync(parent, ct).ConfigureAwait(false);
+            if (!await leases.IsLeaseOwnerAsync(parent.Id.ToString(), owner, acquired.FencingToken, ct)
+                    .ConfigureAwait(false))
+                throw Rejected("composed_recovery_busy", parent.Id);
             lease = new RunLeaseClaim(owner, acquired.FencingToken, resumedGeneration);
             await LaunchAsync(parent, input, plan.ParentWorkflowNodeId!, lease, ct).ConfigureAwait(false);
             transferred = true;
@@ -189,8 +227,12 @@ internal sealed class WorkflowComposedRecoveryService(
         }
     }
 
-    public async Task<bool> TryRestartPendingAsync(Run parent, RunLeaseClaim lease, CancellationToken ct)
+    public async Task<bool> TryRestartPendingAsync(
+        Run parent, RunLeaseClaim lease, CancellationToken ct, bool unlaunchedOnly = false)
     {
+        if (!await leases.IsLeaseOwnerAsync(parent.Id.ToString(), lease.OwnerId, lease.FencingToken, ct)
+                .ConfigureAwait(false))
+            throw Rejected("composed_recovery_busy", parent.Id);
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var marker = RecoveryMarkerPrefix + parent.LifecycleGeneration.ToString(CultureInfo.InvariantCulture);
@@ -205,12 +247,16 @@ internal sealed class WorkflowComposedRecoveryService(
             .ConfigureAwait(false);
         if (plan is null)
             return false;
+        if (unlaunchedOnly && !await IsUnlaunchedAsync(db, parent, plan, ct).ConfigureAwait(false))
+            throw Rejected("composed_recovery_run_changed", parent.Id);
         if (parent.Status is not (RunStatus.InProgress or RunStatus.AwaitingReview)
             || lease.LifecycleGeneration != parent.LifecycleGeneration)
             throw Rejected("composed_recovery_run_changed", parent.Id);
         var provider = await scope.ServiceProvider.GetRequiredService<RunModelProviderSnapshotStore>()
             .TryGetAsync(parent, ct).ConfigureAwait(false);
         var input = ValidateInput(parent, plan, provider);
+        await scope.ServiceProvider.GetRequiredService<RunOrchestrator>()
+            .ValidateComposedRecoveryLaunchAsync(parent, ct).ConfigureAwait(false);
         if (parent.Status == RunStatus.AwaitingReview)
         {
             if (!await runStore.TryResumeFromChildWorkAsync(
@@ -218,9 +264,50 @@ internal sealed class WorkflowComposedRecoveryService(
                 throw Rejected("composed_recovery_run_changed", parent.Id);
             parent = parent with { Status = RunStatus.InProgress };
         }
+        if (!await leases.IsLeaseOwnerAsync(parent.Id.ToString(), lease.OwnerId, lease.FencingToken, ct)
+                .ConfigureAwait(false))
+            throw Rejected("composed_recovery_busy", parent.Id);
         await LaunchAsync(parent, input, plan.ParentWorkflowNodeId!, lease, ct).ConfigureAwait(false);
         return true;
     }
+
+    public async Task<bool> CanRetryPendingAsync(Run parent, CancellationToken ct)
+    {
+        if (parent.Status != RunStatus.InProgress || parent.ParentRunId is not null)
+            return false;
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var marker = RecoveryMarkerPrefix + parent.LifecycleGeneration.ToString(CultureInfo.InvariantCulture);
+        var plan = await db.WorkPlans.AsNoTracking().SingleOrDefaultAsync(plan =>
+            plan.ParentRunId == parent.Id.ToString()
+            && plan.ParentRecoveryGeneration == parent.LifecycleGeneration
+            && plan.AssemblyStatusReason == marker
+            && plan.ParentWorkflowNodeId != null && plan.ParentJoinNodeId == null
+            && plan.CoordinatorCancellationRequestedAt == null, ct).ConfigureAwait(false);
+        return plan is not null && await IsUnlaunchedAsync(db, parent, plan, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> IsUnlaunchedAsync(
+        MemoryDbContext db, Run parent, WorkPlan plan, CancellationToken ct) =>
+        plan.Status == WorkPlanStatus.Planned
+        && plan.ParentResumeState == WorkflowChildWorkResumeStates.Committed
+        && plan.ParentResumeRequestId is null && plan.ParentResumeResultJson is null
+        && plan.CoordinatorCancellationRequestedAt is null
+        && !await db.PendingRequests.AsNoTracking()
+            .AnyAsync(request => request.RunId == parent.Id.ToString(), ct).ConfigureAwait(false)
+        && !await db.Subtasks.AsNoTracking().AnyAsync(subtask => subtask.WorkPlanId == plan.Id
+            && (subtask.Status != SubtaskStatus.Pending || subtask.ChildRunId != null
+                || subtask.PriorChildRunId != null || subtask.CancellationRequestedAt != null
+                || subtask.RecoveryAttempts != 0 || subtask.InfrastructureRetryCount != 0
+                || subtask.LastResetDirectiveId != null || subtask.LastResetAttempt != null
+                || subtask.RevisionInputRevisionId != null
+                || subtask.RevisionInputCommitHash != null), ct).ConfigureAwait(false)
+        && !await db.Runs.AsNoTracking().AnyAsync(run =>
+            run.ParentRunId == plan.CoordinatorRunId, ct).ConfigureAwait(false)
+        && await db.Runs.AsNoTracking().AnyAsync(child =>
+            child.RunId == plan.CoordinatorRunId && child.ParentRunId == parent.Id.ToString()
+            && child.Status == RunStatus.InProgress.ToApiString()
+            && child.LifecycleGeneration == parent.LifecycleGeneration, ct).ConfigureAwait(false);
 
     public async Task<bool> HasPendingRecoveryAsync(Run parent, CancellationToken ct)
     {
