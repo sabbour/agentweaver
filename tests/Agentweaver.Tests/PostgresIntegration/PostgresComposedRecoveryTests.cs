@@ -457,6 +457,189 @@ public sealed partial class PostgresAppBootTests
         }
     }
 
+    [PostgresRequiredFact]
+    public async Task ComposedRecovery_PostCommitPhysicalChange_RemainsRetryableWithoutReplaying()
+    {
+        var seeded = await SeedComposedFailureAsync(agentCommit: true);
+        var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+        var store = _fixture.Services.GetRequiredService<IRunStore>();
+        var leases = _fixture.Services.GetRequiredService<IRunLeaseStore>();
+        var source = Path.Combine(seeded.Directory, "demo", "source.md");
+        var originalBytes = await File.ReadAllBytesAsync(source);
+        var launches = 0;
+        try
+        {
+            recovery.AfterCommitOverride = async _ =>
+                await File.AppendAllTextAsync(source, "post-commit change");
+            recovery.LaunchOverride = (_, _, _, _, _) =>
+            {
+                launches++;
+                return Task.CompletedTask;
+            };
+            var failed = () => recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+            await failed.Should().ThrowAsync<WorkflowComposedRecoveryException>();
+            launches.Should().Be(0);
+            var parent = (await store.GetAsync(seeded.Parent.Id))!;
+            parent.Status.Should().Be(RunStatus.InProgress);
+            parent.LifecycleGeneration.Should().Be(seeded.Parent.LifecycleGeneration + 1);
+            (await store.GetAsync(seeded.Child.Id))!.Status.Should().Be(RunStatus.InProgress);
+            (await recovery.HasPendingRecoveryAsync(parent, CancellationToken.None)).Should().BeTrue();
+            (await leases.GetActiveClaimAsync(parent.Id.ToString())).Should().BeNull();
+
+            recovery.AfterCommitOverride = null;
+            var blocked = () => recovery.ResumeFailedAsync(parent, CancellationToken.None);
+            await blocked.Should().ThrowAsync<WorkflowComposedRecoveryException>();
+            await _fixture.Services.GetRequiredService<WorkflowRestartService>()
+                .RecoverAsync(CancellationToken.None);
+            launches.Should().Be(0);
+            (await recovery.HasPendingRecoveryAsync(parent, CancellationToken.None)).Should().BeTrue();
+
+            await File.WriteAllBytesAsync(source, originalBytes);
+            var competing = await leases.TryClaimAsync(
+                parent.Id.ToString(), "competing-actor", TimeSpan.FromMinutes(5));
+            competing.Claimed.Should().BeTrue();
+            var busy = () => recovery.ResumeFailedAsync(parent, CancellationToken.None);
+            await busy.Should().ThrowAsync<WorkflowComposedRecoveryException>()
+                .WithMessage("composed_recovery_busy");
+            (await store.GetAsync(parent.Id))!.LifecycleGeneration.Should().Be(parent.LifecycleGeneration);
+            await leases.ReleaseAsync(parent.Id.ToString(), "competing-actor", competing.FencingToken);
+
+            using (var scope = _fixture.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                await db.WorkPlans.Where(plan => plan.Id == seeded.PlanId)
+                    .ExecuteUpdateAsync(update => update.SetProperty(
+                        plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Waiting));
+            }
+            (await recovery.CanRetryPendingAsync(parent, CancellationToken.None)).Should().BeFalse();
+            var alreadyLaunched = () => recovery.ResumeFailedAsync(parent, CancellationToken.None);
+            await alreadyLaunched.Should().ThrowAsync<WorkflowComposedRecoveryException>();
+            using (var scope = _fixture.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                await db.WorkPlans.Where(plan => plan.Id == seeded.PlanId)
+                    .ExecuteUpdateAsync(update => update.SetProperty(
+                        plan => plan.ParentResumeState, WorkflowChildWorkResumeStates.Committed));
+            }
+            await recovery.ResumeFailedAsync(parent, CancellationToken.None);
+            launches.Should().Be(1);
+            (await store.GetAsync(parent.Id))!.LifecycleGeneration.Should().Be(parent.LifecycleGeneration);
+            (await store.GetAsync(seeded.Child.Id))!.Id.Should().Be(seeded.Child.Id);
+            using var verifyScope = _fixture.Services.CreateScope();
+            var verifyDb = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await verifyDb.WorkPlans.AsNoTracking().SingleAsync(p => p.Id == seeded.PlanId);
+            plan.CoordinatorRunId.Should().Be(seeded.Child.Id.ToString());
+            plan.ParentRunId.Should().Be(parent.Id.ToString());
+            (await verifyDb.Subtasks.CountAsync(s => s.WorkPlanId == seeded.PlanId)).Should().Be(0);
+        }
+        finally
+        {
+            recovery.AfterCommitOverride = null;
+            recovery.LaunchOverride = null;
+            await CleanupComposedFailureAsync(seeded);
+        }
+    }
+
+    [PostgresRequiredFact]
+    public async Task ComposedRecovery_PostCommitBranchChange_StartupRetriesSameOriginalIds()
+    {
+        foreach (var changeTree in new[] { false, true })
+        {
+            var seeded = await SeedComposedFailureAsync(agentCommit: true);
+            var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+            var launches = 0;
+            try
+            {
+                recovery.AfterCommitOverride = _ =>
+                {
+                    RunGit(seeded.Directory, "checkout", "-b", "changed-branch");
+                    if (changeTree)
+                    {
+                        File.AppendAllText(Path.Combine(seeded.Directory, "demo", "source.md"), "new tree");
+                        CommitFixture(seeded.Directory, "Changed recovery input");
+                    }
+                    return Task.CompletedTask;
+                };
+                recovery.LaunchOverride = (_, _, _, _, _) =>
+                {
+                    launches++;
+                    return Task.CompletedTask;
+                };
+                var failed = () => recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+                await failed.Should().ThrowAsync<WorkflowComposedRecoveryException>();
+                recovery.AfterCommitOverride = null;
+                var store = _fixture.Services.GetRequiredService<IRunStore>();
+                var parent = (await store.GetAsync(seeded.Parent.Id))!;
+                (await recovery.CanRetryPendingAsync(parent, CancellationToken.None)).Should().BeTrue();
+                await _fixture.Services.GetRequiredService<WorkflowRestartService>()
+                    .RecoverAsync(CancellationToken.None);
+                launches.Should().Be(0);
+                RunGit(seeded.Directory, "checkout", seeded.Parent.WorktreeBranch!);
+                await _fixture.Services.GetRequiredService<WorkflowRestartService>()
+                    .RecoverAsync(CancellationToken.None);
+                launches.Should().Be(1);
+                (await store.GetAsync(parent.Id))!.LifecycleGeneration.Should().Be(parent.LifecycleGeneration);
+                (await store.GetAsync(seeded.Child.Id))!.Id.Should().Be(seeded.Child.Id);
+            }
+            finally
+            {
+                recovery.AfterCommitOverride = null;
+                recovery.LaunchOverride = null;
+                await CleanupComposedFailureAsync(seeded);
+            }
+        }
+    }
+
+    [PostgresRequiredFact]
+    public async Task ComposedRecovery_PostCommitProviderChange_RefusesLaunchUntilRestored()
+    {
+        var seeded = await SeedComposedFailureAsync(agentCommit: true);
+        var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+        var launches = 0;
+        try
+        {
+            recovery.AfterCommitOverride = async _ =>
+            {
+                using var scope = _fixture.Services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                await db.WorkPlans.Where(plan => plan.Id == seeded.PlanId)
+                    .ExecuteUpdateAsync(update => update.SetProperty(
+                        plan => plan.ParentTurnInputJson,
+                        JsonSerializer.Serialize(seeded.Input with { ByokProviderFingerprint = "changed" },
+                            JsonDefaults.Options)));
+            };
+            recovery.LaunchOverride = (_, _, _, _, _) =>
+            {
+                launches++;
+                return Task.CompletedTask;
+            };
+            var failed = () => recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+            await failed.Should().ThrowAsync<WorkflowComposedRecoveryException>();
+            recovery.AfterCommitOverride = null;
+            var store = _fixture.Services.GetRequiredService<IRunStore>();
+            var parent = (await store.GetAsync(seeded.Parent.Id))!;
+            var blocked = () => recovery.ResumeFailedAsync(parent, CancellationToken.None);
+            await blocked.Should().ThrowAsync<WorkflowComposedRecoveryException>();
+            launches.Should().Be(0);
+            using (var scope = _fixture.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                await db.WorkPlans.Where(plan => plan.Id == seeded.PlanId)
+                    .ExecuteUpdateAsync(update => update.SetProperty(plan => plan.ParentTurnInputJson,
+                        JsonSerializer.Serialize(seeded.Input, JsonDefaults.Options)));
+            }
+            await recovery.ResumeFailedAsync(parent, CancellationToken.None);
+            launches.Should().Be(1);
+            (await store.GetAsync(parent.Id))!.LifecycleGeneration.Should().Be(parent.LifecycleGeneration);
+        }
+        finally
+        {
+            recovery.AfterCommitOverride = null;
+            recovery.LaunchOverride = null;
+            await CleanupComposedFailureAsync(seeded);
+        }
+    }
+
     [PostgresFact]
     public async Task ComposedRecovery_RejectsChangedOrPreviouslyDispatchedPlan_WithoutReopening()
     {
