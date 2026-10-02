@@ -39,7 +39,7 @@ internal interface IRunWorkflowWiringSupport
 
     /// <summary><c>AgentTurnOutput → AgentTurnInput</c>: feed one agent turn's result forward as the
     /// next agent turn's task (continuing the same worktree). For sequential <c>Agent → Agent</c>.</summary>
-    ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge);
+    ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge, bool publishComposedTree = false);
 
     /// <summary><c>WorkflowReviewDecision → AgentTurnInput</c>: continue forward into the next agent turn
     /// after a gate verdict (e.g. approved → postmortem, or a pass-through review → next step).</summary>

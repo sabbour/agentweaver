@@ -1,4 +1,5 @@
 using System.Data;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Agentweaver.AgentRuntime.Workflow;
@@ -463,6 +464,235 @@ public sealed partial class PostgresAppBootTests
             await AssertComposedRecoveryRejectedAsync(change);
     }
 
+    [PostgresRequiredFact]
+    public async Task ComposedProducer_PublishesAcceptedAgentCommitBeforePlanCapture()
+    {
+        var seeded = await SeedComposedFailureAsync(agentCommit: true);
+        var store = _fixture.Services.GetRequiredService<IRunStore>();
+        var leases = _fixture.Services.GetRequiredService<IRunLeaseStore>();
+        try
+        {
+            (await store.TryReopenTerminalToInProgressAsync(seeded.Parent.Id)).Should().BeTrue();
+            var claimed = await leases.TryClaimAsync(
+                seeded.Parent.Id.ToString(), "composed-producer-test", TimeSpan.FromMinutes(5));
+            claimed.Claimed.Should().BeTrue();
+            var output = new AgentTurnOutput(
+                seeded.Parent.Id.ToString(), seeded.CapturedTree, "Committed metadata", 1,
+                seeded.Directory, seeded.Parent.WorktreeBranch!,
+                seeded.Parent.RepositoryPath, seeded.Parent.OriginatingBranch, false,
+                SubmittingUser: seeded.Parent.SubmittingUser,
+                ProjectId: seeded.Parent.ProjectId!.Value.ToString(),
+                ModelSource: seeded.Input.ModelSource, ModelId: seeded.Parent.ModelId,
+                ByokProviderFingerprint: seeded.Input.ByokProviderFingerprint);
+            var factory = _fixture.Services.GetRequiredService<RunWorkflowFactory>();
+            foreach (var invalid in new[]
+            {
+                output with { RunId = seeded.Child.Id.ToString() },
+                output with { RepositoryPath = seeded.Directory },
+                output with { WorktreeBranch = "agentweaver/unrelated" },
+                output with { ModelSource = "github-copilot" },
+                output with { ModelId = "other" },
+                output with { ByokProviderFingerprint = "other" },
+                output with { ProjectId = ProjectId.New().ToString() },
+            })
+            {
+                var reject = () => factory.PublishComposedAgentTreeAsync(seeded.Input, invalid, CancellationToken.None);
+                await reject.Should().ThrowAsync<InvalidOperationException>();
+            }
+            (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.Parent.TreeHash);
+            await factory.PublishComposedAgentTreeAsync(seeded.Input, output, CancellationToken.None);
+            (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.CapturedTree);
+
+            var changed = () => factory.PublishComposedAgentTreeAsync(
+                seeded.Input, output with { TreeHash = seeded.Parent.TreeHash! }, CancellationToken.None);
+            await changed.Should().ThrowAsync<InvalidOperationException>();
+            (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.CapturedTree);
+            using var scope = _fixture.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.Runs.Where(run => run.RunId == seeded.Parent.Id.ToString())
+                .ExecuteUpdateAsync(update => update.SetProperty(run => run.Status, RunStatus.Failed.ToApiString()));
+            var terminal = () => factory.PublishComposedAgentTreeAsync(
+                seeded.Input, output, CancellationToken.None);
+            await terminal.Should().ThrowAsync<InvalidOperationException>();
+        }
+        finally
+        {
+            await CleanupComposedFailureAsync(seeded);
+        }
+    }
+
+    [PostgresRequiredFact]
+    public async Task ComposedRecovery_CapturedAgentCommit_ReopensOriginalPlanAndPendingChild()
+    {
+        var seeded = await SeedComposedFailureAsync(agentCommit: true);
+        var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+        var launches = 0;
+        recovery.LaunchOverride = (parent, input, node, _, _) =>
+        {
+            launches++;
+            parent.Id.Should().Be(seeded.Parent.Id);
+            parent.TreeHash.Should().Be(seeded.CapturedTree);
+            input.Should().Be(seeded.Input);
+            node.Should().Be("compose");
+            return Task.CompletedTask;
+        };
+        try
+        {
+            int subtaskId;
+            using (var scope = _fixture.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var subtask = new Subtask
+                {
+                    WorkPlanId = seeded.PlanId, Title = "Retained work", Scope = "Use committed input",
+                    AssignedAgent = "Neo", SelectedModelId = "test-model", Phase = "execution",
+                    IsolationStrategy = "worktree", Status = SubtaskStatus.Pending,
+                    CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+                };
+                db.Subtasks.Add(subtask);
+                await db.SaveChangesAsync();
+                subtaskId = subtask.Id;
+            }
+            (await _fixture.Services.GetRequiredService<IRunStore>()
+                .GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.Parent.TreeHash);
+            await recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+            launches.Should().Be(1);
+            var store = _fixture.Services.GetRequiredService<IRunStore>();
+            (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.CapturedTree);
+            (await store.GetAsync(seeded.Child.Id))!.Status.Should().Be(RunStatus.InProgress);
+            using var verifyScope = _fixture.Services.CreateScope();
+            var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await verify.WorkPlans.SingleAsync(p => p.Id == seeded.PlanId)).CoordinatorRunId
+                .Should().Be(seeded.Child.Id.ToString());
+            (await verify.Subtasks.SingleAsync(s => s.WorkPlanId == seeded.PlanId)).Id
+                .Should().Be(subtaskId);
+        }
+        finally
+        {
+            recovery.LaunchOverride = null;
+            await CleanupComposedFailureAsync(seeded);
+        }
+    }
+
+    [PostgresRequiredFact]
+    public async Task ComposedRecovery_CompetingClaims_OnlyOneReopensOriginalIds()
+    {
+        var seeded = await SeedComposedFailureAsync(agentCommit: true);
+        var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+        var launches = 0;
+        recovery.LaunchOverride = (_, _, _, _, _) =>
+        {
+            Interlocked.Increment(ref launches);
+            return Task.CompletedTask;
+        };
+        try
+        {
+            async Task<bool> TryResumeAsync()
+            {
+                try
+                {
+                    await recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+                    return true;
+                }
+                catch (WorkflowComposedRecoveryException)
+                {
+                    return false;
+                }
+            }
+            var results = await Task.WhenAll(TryResumeAsync(), TryResumeAsync());
+            results.Should().ContainSingle(success => success);
+            launches.Should().Be(1);
+            (await _fixture.Services.GetRequiredService<IRunStore>()
+                .GetAsync(seeded.Parent.Id))!.LifecycleGeneration.Should().Be(2);
+        }
+        finally
+        {
+            recovery.LaunchOverride = null;
+            await CleanupComposedFailureAsync(seeded);
+        }
+    }
+
+    [PostgresRequiredFact]
+    public async Task ComposedRecovery_CapturedAgentCommit_RejectsChangedIdentityOrTree()
+    {
+        foreach (var change in new[] { "tree_c", "dirty", "untracked", "branch",
+                     "root", "repository", "origin", "model", "provider", "pending_delivery",
+                     "generation", "child_generation", "captured_base", "subtask_dispatched",
+                     "approved_revision" })
+        {
+            var seeded = await SeedComposedFailureAsync(agentCommit: true);
+            try
+            {
+                using var scope = _fixture.Services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                if (change is "tree_c" or "dirty" or "untracked")
+                {
+                    var path = Path.Combine(seeded.Directory, "demo",
+                        change == "untracked" ? "unexpected.md" : "source.md");
+                    await File.AppendAllTextAsync(path, "external change");
+                    if (change == "tree_c")
+                        CommitFixture(seeded.Directory, "External commit");
+                }
+                else if (change == "branch")
+                    RunGit(seeded.Directory, "switch", "-c", "unexpected");
+                else if (change == "pending_delivery")
+                    await db.PendingRequests.Where(p => p.RunId == seeded.Parent.Id.ToString())
+                        .ExecuteUpdateAsync(update => update
+                            .SetProperty(p => p.DeliveryState, PendingRequestDeliveryStates.Delivering));
+                else if (change == "generation")
+                    await db.Runs.Where(r => r.RunId == seeded.Parent.Id.ToString())
+                        .ExecuteUpdateAsync(update => update
+                            .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1));
+                else if (change == "child_generation")
+                    await db.Runs.Where(r => r.RunId == seeded.Child.Id.ToString())
+                        .ExecuteUpdateAsync(update => update
+                            .SetProperty(r => r.LifecycleGeneration, r => r.LifecycleGeneration + 1));
+                else if (change == "approved_revision")
+                    await db.Runs.Where(r => r.RunId == seeded.Parent.Id.ToString())
+                        .ExecuteUpdateAsync(update => update
+                            .SetProperty(r => r.ApprovedOutputRevisionId, "approved-output"));
+                else if (change == "captured_base")
+                    await db.WorkPlans.Where(p => p.Id == seeded.PlanId)
+                        .ExecuteUpdateAsync(update => update
+                            .SetProperty(p => p.ExecutionBaseTreeHash, seeded.Parent.TreeHash));
+                else if (change == "subtask_dispatched")
+                {
+                    db.Subtasks.Add(new Subtask
+                    {
+                        WorkPlanId = seeded.PlanId, Title = "Prior work", Scope = "Prior work",
+                        AssignedAgent = "Neo", SelectedModelId = "test-model", Phase = "execution",
+                        IsolationStrategy = "worktree", Status = SubtaskStatus.Running,
+                        CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+                    });
+                    await db.SaveChangesAsync();
+                }
+                else
+                {
+                    var plan = await db.WorkPlans.SingleAsync(p => p.Id == seeded.PlanId);
+                    var input = seeded.Input with
+                    {
+                        RunId = change == "root" ? RunId.New().ToString() : seeded.Input.RunId,
+                        RepositoryPath = change == "repository" ? seeded.Directory : seeded.Input.RepositoryPath,
+                        OriginatingBranch = change == "origin" ? "other" : seeded.Input.OriginatingBranch,
+                        ModelId = change == "model" ? "other" : seeded.Input.ModelId,
+                        ByokProviderFingerprint = change == "provider" ? "other" : seeded.Input.ByokProviderFingerprint,
+                    };
+                    plan.ParentTurnInputJson = JsonSerializer.Serialize(input, JsonDefaults.Options);
+                    await db.SaveChangesAsync();
+                }
+                var action = () => _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>()
+                    .ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+                await action.Should().ThrowAsync<WorkflowComposedRecoveryException>(change);
+                (await _fixture.Services.GetRequiredService<IRunStore>().GetAsync(seeded.Parent.Id))!
+                    .Status.Should().Be(RunStatus.Failed);
+            }
+            finally
+            {
+                await CleanupComposedFailureAsync(seeded);
+            }
+        }
+    }
+
     private async Task AssertComposedRecoveryRejectedAsync(string change)
     {
         var seeded = await SeedComposedFailureAsync();
@@ -511,20 +741,23 @@ public sealed partial class PostgresAppBootTests
     }
 
     private async Task<ComposedFailureFixture> SeedComposedFailureAsync(
-        ModelSource source = ModelSource.Byok, bool copilotCapability = false)
+        ModelSource source = ModelSource.Byok, bool copilotCapability = false, bool agentCommit = false)
     {
-        var directory = Path.Combine(Path.GetTempPath(), $"aw-composed-recovery-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(Path.Combine(directory, "demo"));
-        SquadTestFixtureHelper.CreateMinimalSquad(directory, "Composed recovery");
-        await File.WriteAllTextAsync(Path.Combine(directory, "demo", "source.md"), "Original retained source.\n");
-        Repository.Init(directory);
+        var root = Path.Combine(Path.GetTempPath(), $"aw-composed-recovery-{Guid.NewGuid():N}");
+        var baseRepository = Path.Combine(root, "base");
+        var directory = Path.Combine(root, "parent");
+        Directory.CreateDirectory(Path.Combine(baseRepository, "demo"));
+        SquadTestFixtureHelper.CreateMinimalSquad(baseRepository, "Composed recovery");
+        await File.WriteAllTextAsync(Path.Combine(baseRepository, "demo", "source.md"), "Original retained source.\n");
+        Repository.Init(baseRepository);
         string tree;
-        using (var repository = new Repository(directory))
+        using (var repository = new Repository(baseRepository))
         {
             Commands.Stage(repository, "*");
             var signature = new Signature("Test", "test@example.test", DateTimeOffset.UtcNow);
             tree = repository.Commit("Original inputs", signature, signature).Tree.Sha;
         }
+        RunGit(baseRepository, "branch", "-M", "main");
         var definition = new WorkflowDefinition
         {
             Id = "retained-composed", Name = "Retained composed", Start = "verify",
@@ -549,11 +782,19 @@ public sealed partial class PostgresAppBootTests
         const string reason = "composed_decomposition_failed:database serialization conflict";
         var parent = new Run
         {
-            Id = RunId.New(), ProjectId = projectId, RepositoryPath = directory, WorktreePath = directory,
-            OriginatingBranch = "main", WorktreeBranch = "retained-parent", TreeHash = tree,
+            Id = RunId.New(), ProjectId = projectId, RepositoryPath = baseRepository, WorktreePath = directory,
+            OriginatingBranch = "main", WorktreeBranch = "", TreeHash = tree,
             ModelSource = source, ModelId = "test-model", SubmittingUser = "test-user",
             Task = "Retained workflow", Status = RunStatus.Failed, StartedAt = now, EndedAt = now, Result = reason,
         };
+        parent = parent with { WorktreeBranch = $"agentweaver/{parent.Id}" };
+        RunGit(baseRepository, "worktree", "add", "-b", parent.WorktreeBranch, directory, "main");
+        var capturedTree = tree;
+        if (agentCommit)
+        {
+            await File.AppendAllTextAsync(Path.Combine(directory, ".squad", "decisions.md"), "\nAgent turn committed.\n");
+            capturedTree = CommitFixture(directory, "Agent turn committed");
+        }
         var child = parent with
         {
             Id = RunId.New(), ParentRunId = parent.Id.ToString(), SubtaskId = "workflow-node:compose",
@@ -579,15 +820,15 @@ public sealed partial class PostgresAppBootTests
         await _fixture.Services.GetRequiredService<RunModelProviderSnapshotStore>().CaptureAsync(
             parent, provider, config, CancellationToken.None);
         var input = new AgentTurnInput(
-            parent.Id.ToString(), "Original goal with verified branch findings", directory, "retained-parent",
-            directory, "main", source.ToApiString(), "test-model", "test-user", ProjectId: projectId.ToString(),
+            parent.Id.ToString(), "Original goal with verified branch findings", directory, parent.WorktreeBranch!,
+            baseRepository, "main", source.ToApiString(), "test-model", "test-user", ProjectId: projectId.ToString(),
             ByokProviderFingerprint: config?.ExecutionFingerprint());
         using var scope = _fixture.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         db.Projects.Add(new ProjectRecord
         {
             ProjectId = projectId.ToString(), Name = "Recovery test", OriginKind = "blank",
-            WorkingDirectory = directory, Owner = "test-user", DefaultProvider = source.ToApiString(),
+            WorkingDirectory = baseRepository, Owner = "test-user", DefaultProvider = source.ToApiString(),
             CreatedAt = now, UpdatedAt = now,
         });
         if (copilotCapability)
@@ -625,7 +866,7 @@ public sealed partial class PostgresAppBootTests
         {
             OutcomeSpecId = spec.Id, ProjectId = projectId.ToString(), CoordinatorRunId = child.Id.ToString(),
             ParentRunId = parent.Id.ToString(), ParentWorkflowId = definition.Id, ParentWorkflowNodeId = "compose",
-            ParentResumeState = WorkflowChildWorkResumeStates.Delivered, ExecutionBaseTreeHash = tree,
+            ParentResumeState = WorkflowChildWorkResumeStates.Delivered, ExecutionBaseTreeHash = capturedTree,
             ParentTurnInputJson = JsonSerializer.Serialize(input, JsonDefaults.Options),
             Status = WorkPlanStatus.AssemblyFailed, AssemblyStatusReason = reason, CreatedAt = now, UpdatedAt = now,
         };
@@ -643,7 +884,7 @@ public sealed partial class PostgresAppBootTests
             CreatedAt = now,
         });
         await db.SaveChangesAsync();
-        return new ComposedFailureFixture(parent, child, plan.Id, input, directory);
+        return new ComposedFailureFixture(parent, child, plan.Id, input, directory, root, capturedTree);
     }
 
     private async Task CleanupComposedFailureAsync(ComposedFailureFixture fixture)
@@ -669,10 +910,36 @@ public sealed partial class PostgresAppBootTests
                 await leases.ReleaseAsync(id.ToString(), claim.OwnerId, claim.FencingToken);
             await store.TerminalizeForTestAsync(id, RunStatus.Failed, "test_cleanup");
         }
-        foreach (var file in Directory.EnumerateFiles(fixture.Directory, "*", SearchOption.AllDirectories))
+        foreach (var file in Directory.EnumerateFiles(fixture.Root, "*", SearchOption.AllDirectories))
             File.SetAttributes(file, FileAttributes.Normal);
-        Directory.Delete(fixture.Directory, recursive: true);
+        Directory.Delete(fixture.Root, recursive: true);
     }
 
-    private sealed record ComposedFailureFixture(Run Parent, Run Child, int PlanId, AgentTurnInput Input, string Directory);
+    private static void RunGit(string directory, params string[] arguments)
+    {
+        var start = new ProcessStartInfo("git")
+        {
+            UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true,
+        };
+        start.ArgumentList.Add("-C");
+        start.ArgumentList.Add(directory);
+        foreach (var argument in arguments)
+            start.ArgumentList.Add(argument);
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Git could not start.");
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"Git worktree fixture failed: {error}");
+    }
+
+    private static string CommitFixture(string directory, string message)
+    {
+        using var repository = new Repository(directory);
+        Commands.Stage(repository, "*");
+        var signature = new Signature("Test", "test@example.test", DateTimeOffset.UtcNow);
+        return repository.Commit(message, signature, signature).Tree.Sha;
+    }
+
+    private sealed record ComposedFailureFixture(
+        Run Parent, Run Child, int PlanId, AgentTurnInput Input, string Directory, string Root, string CapturedTree);
 }

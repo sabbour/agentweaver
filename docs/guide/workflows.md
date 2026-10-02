@@ -169,10 +169,15 @@ workflow and predecessor context; completed fan branches and preceding prompt st
 The new lifecycle attempt retains the prior failure history. Its composed pause arms a fresh
 request ID; the delivered failure gate cannot accept a response for the new attempt.
 
-Recovery requires the original clean parent tree, correlated failed plan with only unstarted pending
-subtasks, unchanged saved input, available durable model provider, and launch capabilities
-(including a redeemable Copilot capability when required). These are checked before reopening
-the original runs. Already persisted pending subtasks retain their IDs, assignments, prompts, and
+Recovery requires the clean canonical parent worktree and its captured composed-plan base tree,
+correlated failed plan with only unstarted pending subtasks, unchanged saved root routing input,
+available durable model provider, and launch capabilities (including a redeemable Copilot capability
+when required). A successful agent turn publishes its committed tree to the root run before the
+composed plan captures its base. For a previously failed run whose stored tree predates that commit,
+recovery accepts only the saved plan base on the canonical branch with a proven direct commit from
+the original root tree; it atomically aligns the original run and reopens the original parent,
+coordinator, and plan. It never adopts a changed HEAD by itself. The worktree is checked again
+before launch. Already persisted pending subtasks retain their IDs, assignments, prompts, and
 dependencies; planning does not run again.
 Cancellation, previously dispatched work (including a prior child run whose subtask was reset), changed
 inputs, or competing recovery return an explicit conflict instead of creating a replacement run.
