@@ -122,11 +122,21 @@ export function selectCurrentAutomaticPreview({ runId, plan, run, revision, delt
     throw new AcceptanceFailure('Current review, work plan and revision tree do not match.');
   }
   const binding = deltas.podBindings.get(runId);
+  const current = run?.sandbox?.current_binding;
   if (binding?.type !== 'sandbox.execution_pod.bound' || !nonempty(binding.podName)
-    || run?.sandbox?.backend !== 'kubernetes-sandbox-claim'
-    || run.sandbox.phase !== 'Bound' || !nonempty(run.sandbox.claim_name)
-    || run.sandbox.pod_name !== binding.podName) {
-    throw new AcceptanceFailure('Current run has no active claim-bound execution pod matching the preview.');
+    || current?.state !== 'verified'
+    || current.run_id !== runId
+    || current.provisioner !== 'kubernetes-sandbox-claim'
+    || !nonempty(current.claim_name) || !nonempty(current.claim_uid)
+    || !nonempty(current.pod_uid) || !nonempty(current.namespace)
+    || !Number.isInteger(run.lifecycle_generation) || run.lifecycle_generation < 1
+    || current.lifecycle_generation !== run.lifecycle_generation
+    || !nonempty(current.assembly_attempt)
+    || !nonempty(current.source_repository) || !nonempty(current.source_ref)
+    || !nonempty(current.source_base_commit) || !nonempty(current.source_worktree)
+    || current.source_tree !== review.treeHash
+    || current.pod_name !== binding.podName) {
+    throw new AcceptanceFailure('Current run has no verified claim and source binding matching the preview.');
   }
   const build = deltas.buildTests.get(runId);
   if (!build || build.workPlanId !== plan.workPlanId || build.treeHash !== review.treeHash

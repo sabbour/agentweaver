@@ -132,6 +132,28 @@ app.MapGet("/api/runs/{id}", async (
         }
     }
 
+    if (sandboxStatus is not null)
+    {
+        CurrentSandboxBindingResult binding;
+        try
+        {
+            await using var bindingScope = httpContext.RequestServices.CreateAsyncScope();
+            binding = await RunCurrentBindingReader.ReadAsync(
+                run, runStore, httpContext.RequestServices.GetService<IRunLeaseStore>(),
+                bindingScope.ServiceProvider.GetRequiredService<MemoryDbContext>(),
+                k8sClient, k8sOptions?.Namespace, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Current sandbox binding unavailable for run {RunId}", id);
+            binding = CurrentSandboxBindingResult.Unavailable("binding_read_failed");
+        }
+        if (binding.State != "verified")
+            logger.LogDebug("Current sandbox binding for run {RunId}: {State} ({Reason})",
+                id, binding.State, binding.Reason);
+        sandboxStatus = sandboxStatus with { CurrentBinding = binding };
+    }
+
     // Read outcome from the in-memory stream (same pattern as sandbox status).
     bool? outcomeAchieved = null;
     string? outcomeReason = null;
@@ -210,6 +232,7 @@ app.MapGet("/api/runs/{id}", async (
     return Results.Json(new RunResponse
     {
         RunId = run.Id.ToString(),
+        LifecycleGeneration = run.LifecycleGeneration,
         ProjectId = run.ProjectId?.ToString(),
         Status = run.Status.ToApiString(),
         ModelSource = run.ModelSource.ToApiString(),
