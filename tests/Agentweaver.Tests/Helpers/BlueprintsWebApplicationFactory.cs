@@ -97,10 +97,11 @@ public sealed class StubBlueprintGenerator : IBlueprintGenerator
 {
     public string Response { get; set; } = "{}";
     public Exception? ExceptionToThrow { get; set; }
+    public Func<CancellationToken, Task>? BeforeGenerateAsync { get; set; }
     public string? LastTargetRepository { get; private set; }
     public string? LastModelId { get; private set; }
 
-    public Task<string> GenerateRawAsync(
+    public async Task<string> GenerateRawAsync(
         string description,
         CancellationToken ct,
         string? userId = null,
@@ -113,6 +114,8 @@ public sealed class StubBlueprintGenerator : IBlueprintGenerator
         ExceptionToThrow = null;
         if (exception is not null)
             throw exception;
-        return Task.FromResult(Response);
+        if (BeforeGenerateAsync is { } beforeGenerate)
+            await beforeGenerate(ct);
+        return Response;
     }
 }
