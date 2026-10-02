@@ -89,6 +89,12 @@ When you create a project from GitHub, authorize the Repo App. Then select a rep
 The list is the intersection of repositories you can access and repositories granted to the
 Agentweaver GitHub App installation. Installation settings can grant all repositories or only
 selected repositories.
+If the saved Repo App access token expires or GitHub rejects it, repository browsing renews it
+through the stored Repo App refresh token and retries once. A temporary GitHub or refresh
+failure returns `503 github_capability_transient`; retry later rather than reconnecting.
+If the refresh token is rejected, repository selection returns `409 github_binding_unavailable`;
+authorize repository access again. The connected GitHub login in Account settings reports the
+saved authorization, not proof that an installation still grants a particular repository.
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
 

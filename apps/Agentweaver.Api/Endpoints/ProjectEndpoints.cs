@@ -939,6 +939,8 @@ app.MapPost("/api/projects/{id}/github/repository", async (
         }),
         GitHubRepositorySelectionOutcome.GitHubBindingUnavailable =>
             Results.Conflict(new { error = "github_binding_unavailable" }),
+        GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError =>
+            Results.Json(new { error = "github_capability_transient" }, statusCode: StatusCodes.Status503ServiceUnavailable),
         _ => Results.Conflict(new { error = "github_repository_creation_unavailable" }),
     };
 })
