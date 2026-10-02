@@ -56,8 +56,12 @@ the latest durable lifecycle event, with its timestamp shown in the graph;
 an unreadable journal is marked unavailable rather than shown as empty. The
 canvas `live_activity` action reads the same sources on demand. If the live
 feed fails, the graph shows an error rather than displaying stored reports
-as live activity. Unlike recorded release gates, activity is not committed
-to a milestone artifact.
+as live activity. Active branches appear first with blue outlines while all
+recorded subagents remain visible. Solid edges represent observed session and
+subagent relationships; dotted edges lead from active, issue-linked sessions
+to planned PR/check/merge steps derived from the recorded issue status, not
+from a future agent or a live GitHub check. Unlike recorded release gates,
+activity is not committed to a milestone artifact.
 
 For gates, use `section` values `priority`, `integrationRc`, `directApi`,
 `directUi`, `liveGate`, `release`, or `aksDeployment` without `number`. Changes

@@ -43,7 +43,10 @@
     .chain span { padding: 6px 10px; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 6px; }
     .graph-wrap { max-height: 700px; overflow: auto; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 6px; }
     .graph-link { fill: none; stroke: var(--border-color-default, #d1d9e0); stroke-width: 2; }
+    .graph-link-next { stroke: var(--true-color-blue, #0969da); stroke-dasharray: 5 5; }
     .graph-node rect { fill: var(--background-color-default, #fff); stroke: var(--border-color-default, #d1d9e0); stroke-width: 1.5; }
+    .graph-node[data-status="busy"] rect, .graph-node[data-status="running"] rect { fill: color-mix(in srgb, var(--true-color-blue, #0969da) 12%, var(--background-color-default, #fff)); stroke: var(--true-color-blue, #0969da); stroke-width: 2.5; }
+    .graph-next rect { stroke-dasharray: 5 4; }
     .graph-node text { fill: var(--text-color-default, #1f2328); font: 13px var(--font-sans, system-ui, sans-serif); }
     .graph-node .graph-detail { fill: var(--text-color-muted, #59636e); font-size: 11px; }
     .graph-node circle { fill: var(--text-color-muted, #59636e); }
@@ -77,13 +80,14 @@
   </section>
   <section class="panel" aria-labelledby="agents-title">
     <h2 id="agents-title">Agents and subagents</h2>
-    <p class="muted"><span id="live-updated">Loading live activity…</span> · Project sessions come from the app's live activity; subagents come from each local session's lifecycle journal. Blue dots are active; red dots need attention. Select an issue-linked node to open its issue.</p>
+    <p class="muted"><span id="live-updated">Loading live activity…</span> · Active branches appear first with blue outlines. Solid lines show observed agent relationships; dotted lines point to planned issue steps from the recorded tracker. Select an issue-linked node to open its issue.</p>
     <div class="graph-wrap" id="graph-wrap"><svg id="agents" role="img" aria-label="Live milestone agent and subagent graph"></svg></div>
   </section>
 </main>
 <script>
   const $ = (id) => document.getElementById(id);
   let selectedVersion = new URLSearchParams(location.search).get("version") || "0.34.1";
+  let milestone;
   const labels = {
     integrationRc: "Combined integration RC", directApi: "Direct API behavior",
     directUi: "Direct UI behavior", liveGate: "Live behavior gate",
@@ -124,6 +128,7 @@
     return el;
   };
   function render(data) {
+    milestone = data;
     $("heading").textContent = `v${data.version} delivery tracker`;
     $("updated").textContent = `Updated ${new Date(data.updatedAt).toLocaleString()}`;
     $("priority-status").replaceChildren(badge(data.priority.status));
@@ -156,27 +161,56 @@
     }));
   }
   function renderLive(data) {
-    $("live-updated").textContent = `Live as of ${new Date(data.observedAt).toLocaleTimeString()}`;
+    const active = (node) => node.status === "busy" || node.status === "running";
+    const activeCount = data.nodes.filter((node) => node.kind !== "subagent" && active(node)).length;
+    $("live-updated").textContent = `${activeCount} active sessions · Live as of ${new Date(data.observedAt).toLocaleTimeString()}`;
     const svg = $("agents");
     const children = new Map();
     for (const node of data.nodes) {
       if (!children.has(node.parentId)) children.set(node.parentId, []);
       children.get(node.parentId).push(node);
     }
-    const byIssue = (a, b) => (a.issueNumber || Infinity) - (b.issueNumber || Infinity) || a.name.localeCompare(b.name);
-    for (const group of children.values()) group.sort(byIssue);
+    const focus = new Map();
+    const checking = new Set();
+    function branchActive(node) {
+      if (focus.has(node.id)) return focus.get(node.id);
+      if (checking.has(node.id)) throw new Error("Cycle in live agent hierarchy");
+      checking.add(node.id);
+      const value = active(node) || (children.get(node.id) || []).some(branchActive);
+      checking.delete(node.id);
+      focus.set(node.id, value);
+      return value;
+    }
+    const byFocus = (a, b) => Number(branchActive(b)) - Number(branchActive(a)) ||
+      (a.issueNumber || Infinity) - (b.issueNumber || Infinity) || a.name.localeCompare(b.name);
+    for (const group of children.values()) group.sort(byFocus);
     const positions = new Map();
     const visiting = new Set();
     let row = 0;
-    function position(node, depth) {
+    function position(node, depth, focusOnly) {
+      if (focusOnly && !branchActive(node)) return;
       if (visiting.has(node.id)) throw new Error("Cycle in live agent hierarchy");
       visiting.add(node.id);
-      positions.set(node.id, { x: 20 + depth * 350, y: 20 + row++ * 76 });
-      for (const child of children.get(node.id) || []) position(child, depth + 1);
+      if (!positions.has(node.id)) positions.set(node.id, { x: 20 + depth * 350, y: 20 + row++ * 76 });
+      for (const child of children.get(node.id) || []) position(child, depth + 1, focusOnly);
       visiting.delete(node.id);
     }
-    for (const root of children.get(null) || []) position(root, 0);
-    const width = Math.max(340, ...[...positions.values()].map(({ x }) => x + 320));
+    for (const root of children.get(null) || []) position(root, 0, true);
+    for (const root of children.get(null) || []) position(root, 0, false);
+    const planned = [];
+    const seenIssues = new Set();
+    for (const node of data.nodes) {
+      if (node.kind !== "project agent" || !active(node) || !node.issueNumber || seenIssues.has(node.issueNumber)) continue;
+      const issue = milestone.issues.find((entry) => entry.number === node.issueNumber);
+      if (!issue || issue.status === "closed") continue;
+      seenIssues.add(node.issueNumber);
+      const step = !issue.prNumber ? "Link issue PR" : !issue.head ? "Record current PR head" :
+        Object.values(issue.checks).some((check) => check.status !== "passed") ? "Complete current-head checks" :
+        issue.prStatus !== "merged" ? "Merge issue PR" : "Complete issue";
+      planned.push({ node, step, at: positions.get(node.id) });
+    }
+    const nextX = Math.max(720, ...planned.map(({ at }) => at.x + 350));
+    const width = Math.max(planned.length ? nextX + 320 : 340, ...[...positions.values()].map(({ x }) => x + 320));
     svg.setAttribute("viewBox", `0 0 ${width} ${Math.max(90, row * 76 + 20)}`);
     svg.setAttribute("width", width);
     svg.setAttribute("height", Math.max(90, row * 76 + 20));
@@ -194,6 +228,9 @@
         class: "graph-link", d: `M ${spine} ${child.y + 29} H ${child.x}`
       }));
     }
+    for (const { at } of planned) elements.push(svgElement("path", {
+      class: "graph-link graph-link-next", d: `M ${at.x + 300} ${at.y + 14} H ${nextX}`
+    }));
     for (const node of data.nodes) {
       const at = positions.get(node.id);
       if (!at) continue;
@@ -211,6 +248,19 @@
         anchor.append(group);
         elements.push(anchor);
       } else elements.push(group);
+    }
+    for (const { node, step, at } of planned) {
+      const anchor = svgElement("a", { href: `https://github.com/sabbour/agentweaver/issues/${node.issueNumber}`, target: "_blank", rel: "noopener noreferrer" });
+      const group = svgElement("g", { class: "graph-node graph-next", transform: `translate(${nextX},${at.y})` });
+      const title = svgElement("title");
+      title.textContent = `Planned for issue #${node.issueNumber} · ${step} · recorded tracker state`;
+      const name = svgElement("text", { x: 16, y: 25 });
+      name.textContent = step;
+      const detail = svgElement("text", { x: 16, y: 45, class: "graph-detail" });
+      detail.textContent = `Next for #${node.issueNumber} · planned`;
+      group.append(title, svgElement("rect", { width: 300, height: 58, rx: 7 }), name, detail);
+      anchor.append(group);
+      elements.push(anchor);
     }
     svg.replaceChildren(...elements);
   }
