@@ -1,8 +1,10 @@
 using System.Text;
 using System.Text.Json;
+using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Security;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Backlog;
 using Agentweaver.Tests.Helpers;
@@ -217,7 +219,21 @@ public sealed class ClaimedPrerequisiteResolverTests
         var backlog = factory.Services.GetRequiredService<IBacklogTaskStore>();
         var runs = factory.Services.GetRequiredService<IRunStore>();
         var upstream = BacklogTestData.MakeReadyTask(projectId, "upstream");
-        var downstream = BacklogTestData.MakeReadyTask(projectId, "downstream");
+        AiOperationCatalog.TryGet("orchestration", out var operation).Should().BeTrue();
+        string providerKey;
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var plans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            var plan = await plans.PrepareAsync(operation, projectId,
+                new CallerContext { User = CoordinatorWebApplicationFactory.OwnerUser },
+                CancellationToken.None);
+            providerKey = plans.CreateQueuedProviderKey(plan);
+        }
+        var downstream = BacklogTestData.MakeReadyTask(projectId, "downstream") with
+        {
+            ReadyByUserId = CoordinatorWebApplicationFactory.OwnerUser,
+            AiExecutionProviderKey = providerKey,
+        };
         await backlog.InsertAsync(upstream);
         await backlog.InsertAsync(downstream);
         await backlog.EditDependenciesAsync(projectId, 0,

@@ -10,6 +10,7 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Security;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
@@ -59,6 +60,16 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         var projectId = await CreateProjectAsync();
         var pid = ProjectId.Parse(projectId);
         await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
+        AiOperationCatalog.TryGet("orchestration", out var operation).Should().BeTrue();
+        string providerKey;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var plans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            var acceptedPlan = await plans.PrepareAsync(operation, pid,
+                new CallerContext { User = CoordinatorWebApplicationFactory.OwnerUser },
+                CancellationToken.None);
+            providerKey = plans.CreateQueuedProviderKey(acceptedPlan);
+        }
 
         // Preserve the display GitHub login separately from the durable auth subject used by the
         // resulting background run.
@@ -73,6 +84,8 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             OrderKey    = "n",
             CapturedBy  = "owner-github-login",
             CapturedByUserId = CoordinatorWebApplicationFactory.OwnerUser,
+            ReadyByUserId = CoordinatorWebApplicationFactory.OwnerUser,
+            AiExecutionProviderKey = providerKey,
             CreatedAt   = DateTimeOffset.UtcNow,
             CommittedAt = DateTimeOffset.UtcNow,
             ClaimedAt   = null,
