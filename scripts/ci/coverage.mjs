@@ -18,7 +18,7 @@ import { TEST_SHARDS } from './dotnet-test-shards.mjs';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DOTNET_PROJECT = 'tests/Agentweaver.Tests/Agentweaver.Tests.csproj';
 const PROPERTY = '-p:CopilotSkipCliDownload=true';
-const DOTNET_ASSEMBLIES = [
+export const DOTNET_ASSEMBLIES = [
   'Agentweaver.Api', 'Agentweaver.Api.Data', 'Agentweaver.AgentHost', 'Agentweaver.Mcp',
   'Agentweaver.Web', 'Agentweaver.Api.Migrations.Postgres',
   'Agentweaver.AgentRuntime', 'Agentweaver.AgentTools', 'Agentweaver.AspNetCore',
@@ -26,19 +26,19 @@ const DOTNET_ASSEMBLIES = [
   'Agentweaver.Squad',
 ];
 const DOTNET_INCLUDE = DOTNET_ASSEMBLIES.map((name) => `[${name}]*`).join(',');
-const NODE_TEST_GLOBS = [
+export const NODE_TEST_GLOBS = [
   'scripts/azure/tests/*.test.mjs',
   'scripts/changesets/tests/*.test.mjs',
   'scripts/ci/tests/*.test.mjs',
   'scripts/demo-recording/test/*.test.mjs',
 ];
-const NODE_SOURCE_GLOBS = [
+export const NODE_SOURCE_GLOBS = [
   'scripts/azure/**/*.mjs',
   'scripts/changesets/**/*.mjs',
   'scripts/ci/**/*.mjs',
   'scripts/demo-recording/**/*.mjs',
 ];
-const NODE_EXCLUDES = [
+export const NODE_EXCLUDES = [
   '**/tests/**', '**/test/**', '**/fixtures/**', '**/__fixtures__/**',
   '**/generated/**', '**/*.generated.mjs', '**/vendor/**',
   '**/node_modules/**', '**/dist/**', '**/.scratch/**',
@@ -147,7 +147,7 @@ export function run(command, args, cwd = REPO_ROOT, env = process.env, timeoutMs
   }
 }
 
-function removeOutputDirectory(outputDirectory) {
+export function removeOutputDirectory(outputDirectory) {
   const resolved = path.resolve(REPO_ROOT, outputDirectory);
   if (!isWithin(REPO_ROOT, resolved)) {
     throw new Error(`Refusing to remove an out-of-root coverage directory: ${outputDirectory}`);
@@ -168,12 +168,12 @@ function removeOutputDirectory(outputDirectory) {
   return resolved;
 }
 
-function supportsBubblewrap() {
+export function supportsBubblewrap() {
   return process.platform === 'linux'
     && spawnSync('bwrap', ['--version'], { stdio: 'ignore' }).status === 0;
 }
 
-function status(scope, details) {
+export function status(scope, details) {
   const revision = execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
@@ -181,39 +181,71 @@ function status(scope, details) {
   console.log(`[coverage] revision=${revision} scope=${scope} ${details}`);
 }
 
-function findSingleCoberturaReport(shardDirectory) {
-  const reports = globSync('**/coverage.cobertura.xml', { cwd: shardDirectory, nodir: true });
+// Coverlet writes its Cobertura report one directory level below the results
+// directory, under a GUID-named attachment directory it controls (e.g.
+// `TestResults/<shard>/<guid>/coverage.cobertura.xml`). `dotnet test`'s own
+// MSTest deployment mechanism separately copies the *entire* results tree
+// (including that same just-written report) into a deployment-item
+// directory such as `_<runner>_<timestamp>/In/<runner>/coverage.cobertura.xml`,
+// which is always nested two levels deeper. Globbing `**/coverage.cobertura.xml`
+// matches both and misreports a true duplicate. Restricting the glob to one
+// path component, and requiring that component to look like the GUID
+// Coverlet actually uses, structurally excludes the deployment copy without
+// special-casing its path shape.
+const COVERLET_ATTACHMENT_DIRECTORY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+export function findSingleCoberturaReport(shardDirectory) {
+  // `globSync` returns OS-native separators (backslashes on Windows), so the
+  // attachment directory is extracted with `path.dirname` rather than
+  // splitting on a literal '/' which would silently filter out every match
+  // on a Windows contributor machine running `npm run coverage:dotnet` or
+  // the local test suite.
+  const reports = globSync('*/coverage.cobertura.xml', { cwd: shardDirectory, nodir: true })
+    .filter((relativePath) => COVERLET_ATTACHMENT_DIRECTORY.test(path.dirname(relativePath)));
   if (reports.length !== 1) {
     throw new Error(
-      `Expected exactly one Coverlet Cobertura report in ${shardDirectory}; found ${reports.length}`,
+      `Expected exactly one Coverlet Cobertura report under a GUID-named attachment `
+      + `directory in ${shardDirectory}; found ${reports.length}`,
     );
   }
   return path.join(shardDirectory, reports[0]);
 }
 
-export function dotnetShardArguments(shard, shardDirectory) {
+export function dotnetShardArguments(shard, shardDirectory, { collectCoverage = true } = {}) {
   const args = [
     'test', DOTNET_PROJECT, '--no-build', '--no-restore', PROPERTY,
     '--filter', shard.filter,
     '--logger', `trx;LogFileName=${shard.id}.trx`,
     '--results-directory', shardDirectory,
-    '--collect', 'XPlat Code Coverage;Format=cobertura',
-    '--',
-    `DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Include=${DOTNET_INCLUDE}`,
-    'DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeByFile=**/obj/**,**/*Designer.cs',
   ];
+  if (collectCoverage) {
+    args.push(
+      '--collect', 'XPlat Code Coverage;Format=cobertura',
+      '--',
+      `DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Include=${DOTNET_INCLUDE}`,
+      'DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.ExcludeByFile=**/obj/**,**/*Designer.cs',
+    );
+  }
   if (shard.settings) {
-    args.splice(5, 0, '--settings', shard.settings);
+    // Inserted right after --filter's value (index 7, before --logger) to
+    // match the exact `--filter <value> --settings <value> --logger ...`
+    // order the ordinary CI shard command used before it was delegated to
+    // this shared function — not required by `dotnet test`, which accepts
+    // any argument order, but kept byte-identical regardless.
+    args.splice(7, 0, '--settings', shard.settings);
   }
   return args;
 }
 
-function runDotnetShard(shard, coverageRoot, startedAt) {
+export function runDotnetShard(shard, coverageRoot, startedAt, { collectCoverage = true } = {}) {
   const shardDirectory = path.join(coverageRoot, shard.id);
   mkdirSync(shardDirectory, { recursive: true });
-  const args = dotnetShardArguments(shard, shardDirectory);
+  const args = dotnetShardArguments(shard, shardDirectory, { collectCoverage });
   run('dotnet', args, REPO_ROOT, process.env, (shard.timeoutMinutes ?? 15) * 60_000);
   const tests = assertTrxContainsTests(shardDirectory, shardDirectory, startedAt);
+  if (!collectCoverage) {
+    return tests;
+  }
   const sourceReport = assertCoberturaReport(
     shardDirectory,
     findSingleCoberturaReport(shardDirectory),
@@ -225,7 +257,7 @@ function runDotnetShard(shard, coverageRoot, startedAt) {
   return tests;
 }
 
-function combineDotnetReports(coverageRoot, shardIds, startedAt) {
+export function combineDotnetReports(coverageRoot, shardIds, startedAt) {
   const reportPaths = shardIds.map((id) => (
     path.join(coverageRoot, id, 'coverage.cobertura.xml')
   ));
@@ -319,13 +351,13 @@ export function runDotnetCoverage() {
   console.log(`[coverage] dotnet complete; reports=${path.relative(REPO_ROOT, coverageRoot)}/combined/{Cobertura.xml,Summary.json,Summary.txt,index.html} status=${path.relative(REPO_ROOT, coverageRoot)}/status.json`);
 }
 
-function assertReports(reportDirectory, reports, startedAt, scope) {
+export function assertReports(reportDirectory, reports, startedAt, scope) {
   for (const report of reports) {
     assertRegularFile(REPO_ROOT, path.join(reportDirectory, report), startedAt, `${scope} report`);
   }
 }
 
-function printJavascriptSummary(reportDirectory, scope) {
+export function printJavascriptSummary(reportDirectory, scope) {
   const report = JSON.parse(readFileSync(path.join(reportDirectory, 'coverage-summary.json'), 'utf8'));
   const totals = ['lines', 'branches', 'functions'].map((metric) => {
     const { total, covered } = report.total?.[metric] ?? {};

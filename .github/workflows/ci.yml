@@ -27,19 +27,50 @@ name: CI
 # .NET checks run for draft PRs too: stacked draft layers need a real validation
 # signal before they can safely be made ready. The other expensive test/build jobs
 # (web/node-toolchain/docs) remain skipped for drafts.
+#
+# Coverage is collected by instrumenting these SAME jobs' SINGLE test
+# invocation, never by a second test pass: a weekly schedule run and an
+# opt-in `collect_coverage` workflow_dispatch input both set
+# `needs.changes.outputs.collect_coverage` to `true`, which (a) forces the
+# .NET/web/node-toolchain jobs to run regardless of path filters or draft
+# state, (b) adds coverage flags to the one `dotnet test`/`vitest`/`node
+# --test` command each job already runs, and (c) uploads the resulting
+# reports as bounded-retention artifacts combined/summarized by the
+# `dotnet-coverage-combine` and `coverage-summary` jobs at the end of this
+# file. Ordinary pull_request/push runs never set collect_coverage, so their
+# command lines are byte-identical to the pre-coverage behavior.
 
 on:
   pull_request:
   push:
     branches: [dev, main]
+  schedule:
+    # Every Monday at 05:00 UTC — a full cross-surface coverage baseline,
+    # off the back of any busy PR-hours window. This is a single ci.yml
+    # invocation with coverage instrumentation on, not a second workflow
+    # re-running the same suites.
+    - cron: "0 5 * * 1"
   workflow_dispatch:
+    inputs:
+      collect_coverage:
+        description: 'Collect and summarize cross-surface coverage reports'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# Reports are a periodic diagnostic baseline, not a compliance archive: bound
+# retention instead of relying on the repository-wide default.
+env:
+  COVERAGE_ARTIFACT_RETENTION_DAYS: 14
+
 # Cancel superseded runs for the same ref (e.g. a new push to an open PR).
+# Scheduled/manual coverage runs get their own concurrency group suffix so an
+# ordinary push to the same ref (e.g. dev) during a long coverage run can
+# never cancel it out from under the weekly baseline.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'coverage' || 'default' }}
   cancel-in-progress: true
 
 jobs:
@@ -55,8 +86,22 @@ jobs:
       node-toolchain: ${{ steps.filter.outputs.node-toolchain }}
       docs: ${{ steps.filter.outputs.docs }}
       diagrams: ${{ steps.filter.outputs.diagrams }}
+      collect_coverage: ${{ steps.coverage-mode.outputs.collect_coverage }}
     steps:
       - uses: actions/checkout@v4
+      # Coverage is opt-in only: the weekly schedule always collects it, and
+      # workflow_dispatch collects it only when the caller explicitly asks.
+      # Ordinary pull_request/push events never set this, so their job `if:`
+      # conditions and command lines stay exactly as they were before
+      # coverage existed.
+      - id: coverage-mode
+        name: Determine coverage collection mode
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event_name == 'workflow_dispatch' && inputs.collect_coverage }}" = "true" ]; then
+            echo "collect_coverage=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "collect_coverage=false" >> "$GITHUB_OUTPUT"
+          fi
       # dorny/paths-filter classifies the PR/push diff into named groups below.
       # Every group includes this workflow's own path (.github/workflows/ci.yml)
       # so a change to this pipeline always trips every downstream job, never
@@ -139,7 +184,7 @@ jobs:
   dotnet-test-plan:
     name: Plan .NET test shards
     needs: changes
-    if: (github.event_name == 'pull_request' && github.base_ref == 'dev') || needs.changes.outputs.dotnet == 'true'
+    if: (github.event_name == 'pull_request' && github.base_ref == 'dev') || needs.changes.outputs.dotnet == 'true' || needs.changes.outputs.collect_coverage == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.shards.outputs.matrix }}
@@ -153,13 +198,15 @@ jobs:
 
   dotnet-test-shards:
     name: .NET test shard (${{ matrix.name }})
-    needs: dotnet-test-plan
+    needs: [changes, dotnet-test-plan]
     if: needs.dotnet-test-plan.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeoutMinutes }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.dotnet-test-plan.outputs.matrix) }}
+    env:
+      COLLECT_COVERAGE: ${{ needs.changes.outputs.collect_coverage }}
     steps:
       - uses: actions/checkout@v4
 
@@ -213,26 +260,11 @@ jobs:
           timeout_minutes: 3
           max_attempts: 2
           command: |
-            set -euo pipefail
-            dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
-              --no-build --no-restore -p:CopilotSkipCliDownload=true \
-              --filter "${{ matrix.filter }}" \
-              --logger "trx;LogFileName=${{ matrix.id }}.trx" \
-              --results-directory "TestResults/${{ matrix.id }}"
+            node scripts/ci/run-dotnet-test-shard.mjs --shard "${{ matrix.id }}" ${{ env.COLLECT_COVERAGE == 'true' && '--collect-coverage' || '' }}
 
       - name: Run .NET test shard
         if: ${{ !matrix.requiresBubblewrap }}
-        run: |
-          set -euo pipefail
-          settings=()
-          if [ -n "${{ matrix.settings }}" ]; then
-            settings=(--settings "${{ matrix.settings }}")
-          fi
-          dotnet test tests/Agentweaver.Tests/Agentweaver.Tests.csproj \
-            --no-build --no-restore -p:CopilotSkipCliDownload=true \
-            --filter "${{ matrix.filter }}" "${settings[@]}" \
-            --logger "trx;LogFileName=${{ matrix.id }}.trx" \
-            --results-directory "TestResults/${{ matrix.id }}"
+        run: node scripts/ci/run-dotnet-test-shard.mjs --shard "${{ matrix.id }}" ${{ env.COLLECT_COVERAGE == 'true' && '--collect-coverage' || '' }}
 
       - name: Upload test results and timings
         if: always()
@@ -241,6 +273,17 @@ jobs:
           name: dotnet-test-results-${{ matrix.id }}
           path: TestResults/${{ matrix.id }}
           if-no-files-found: error
+
+      # Only present (and only required) when this run is actually collecting
+      # coverage; an ordinary PR/push run never reaches this step's condition.
+      - name: Upload .NET shard coverage report
+        if: always() && env.COLLECT_COVERAGE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-coverage-${{ matrix.id }}
+          path: TestResults/${{ matrix.id }}/coverage.cobertura.xml
+          if-no-files-found: error
+          retention-days: ${{ fromJSON(env.COVERAGE_ARTIFACT_RETENTION_DAYS) }}
 
   dotnet-tests:
     name: .NET tests
@@ -256,8 +299,17 @@ jobs:
   node-toolchain-tests:
     name: Node toolchain tests
     needs: changes
-    if: needs.changes.outputs.node-toolchain == 'true' && github.event.pull_request.draft == false
+    # The draft-PR skip only ever meant to defer this job on an *open draft
+    # pull_request*, never on a push/schedule/dispatch run (where
+    # `github.event.pull_request` doesn't exist and the comparison is simply
+    # false). It is bypassed here only when collect_coverage forces this job
+    # to run — never generally for every non-pull_request event, which would
+    # have changed ordinary push-to-dev/main behavior beyond this redesign's
+    # scope.
+    if: (needs.changes.outputs.node-toolchain == 'true' || needs.changes.outputs.collect_coverage == 'true') && (needs.changes.outputs.collect_coverage == 'true' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
+    env:
+      COLLECT_COVERAGE: ${{ needs.changes.outputs.collect_coverage }}
     steps:
       - uses: actions/checkout@v4
 
@@ -291,14 +343,28 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: npx --prefix scripts/ui-harness playwright install-deps chromium
 
+      # Coverage instrumentation applies only to the `node` area's single
+      # `node --test` invocation (wrapped in c8); the harness suite is a
+      # separate, non-coverage surface and is never wrapped.
       - name: Run Node toolchain and UI harness tests
-        run: node scripts/ci/validate.mjs --profile ci --area node,harness
+        run: node scripts/ci/validate.mjs --profile ci --area node,harness ${{ env.COLLECT_COVERAGE == 'true' && '--collect-coverage' || '' }}
+
+      - name: Upload Node coverage report
+        if: always() && env.COLLECT_COVERAGE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-coverage
+          path: coverage/node
+          if-no-files-found: error
+          retention-days: ${{ fromJSON(env.COVERAGE_ARTIFACT_RETENTION_DAYS) }}
 
   web-tests:
     name: Web tests
     needs: changes
-    if: needs.changes.outputs.web == 'true' && github.event.pull_request.draft == false
+    if: (needs.changes.outputs.web == 'true' || needs.changes.outputs.collect_coverage == 'true') && (needs.changes.outputs.collect_coverage == 'true' || github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
+    env:
+      COLLECT_COVERAGE: ${{ needs.changes.outputs.collect_coverage }}
     steps:
       - uses: actions/checkout@v4
 
@@ -310,8 +376,20 @@ jobs:
           cache-dependency-path: apps/web/package-lock.json
 
       # Typecheck, tests, and lint share one job so npm ci runs only once.
+      # In coverage mode, the test step runs the dedicated `coverage` vitest
+      # script (with --coverage) INSTEAD OF the plain `test` script — still
+      # one vitest invocation, never both.
       - name: Run web typecheck, tests, and lint
-        run: node scripts/ci/validate.mjs --profile ci --area web
+        run: node scripts/ci/validate.mjs --profile ci --area web ${{ env.COLLECT_COVERAGE == 'true' && '--collect-coverage' || '' }}
+
+      - name: Upload web coverage report
+        if: always() && env.COLLECT_COVERAGE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage
+          path: apps/web/coverage
+          if-no-files-found: error
+          retention-days: ${{ fromJSON(env.COVERAGE_ARTIFACT_RETENTION_DAYS) }}
 
   docs-build:
     name: Docs build
@@ -369,3 +447,95 @@ jobs:
       - run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
       - run: npm run version:check
       - run: npm run changeset:check -- --base origin/${{ github.base_ref }}
+
+  dotnet-coverage-combine:
+    name: .NET coverage combine
+    needs: [changes, dotnet-test-shards]
+    if: always() && needs.changes.outputs.collect_coverage == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      # Downloads every per-shard artifact uploaded above in THIS SAME run
+      # (never a second test execution) into one directory per shard name,
+      # then re-lays them into the layout `combineDotnetReports` expects
+      # before merging with pinned ReportGenerator.
+      - name: Download .NET shard coverage reports
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: dotnet-coverage-*
+          path: downloaded/dotnet-shards
+
+      - name: Combine .NET shard coverage reports
+        run: node scripts/ci/coverage-combine.mjs --downloaded-dir downloaded/dotnet-shards --out TestResults/coverage
+
+      - name: Upload combined .NET coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-coverage-combined
+          path: TestResults/coverage
+          if-no-files-found: error
+          retention-days: ${{ fromJSON(env.COVERAGE_ARTIFACT_RETENTION_DAYS) }}
+
+  coverage-summary:
+    name: Coverage summary
+    needs: [changes, dotnet-coverage-combine, web-tests, node-toolchain-tests]
+    if: always() && needs.changes.outputs.collect_coverage == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Download .NET coverage report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: dotnet-coverage-combined
+          path: downloaded/dotnet
+
+      - name: Download web coverage report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: web-coverage
+          path: downloaded/web
+
+      - name: Download Node coverage report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: node-coverage
+          path: downloaded/node
+
+      # This job only reports; it intentionally never fails the workflow run
+      # on behalf of a partial/failed coverage area above — each area job
+      # already reports its own true status, and this step renders exactly
+      # that (no invented pass/fail threshold, no masking of partial results).
+      - name: Write coverage summary
+        if: always()
+        run: |
+          node scripts/ci/coverage-summary.mjs \
+            --sha "${{ github.sha }}" \
+            --dotnet-status "${{ needs.dotnet-coverage-combine.result }}" \
+            --dotnet-dir downloaded/dotnet \
+            --web-status "${{ needs.web-tests.result }}" \
+            --web-dir downloaded/web \
+            --node-status "${{ needs.node-toolchain-tests.result }}" \
+            --node-dir downloaded/node \
+            --out "$GITHUB_STEP_SUMMARY"

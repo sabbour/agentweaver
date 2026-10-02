@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   closeSync,
+  existsSync,
   globSync,
   openSync,
   readFileSync,
@@ -16,6 +17,7 @@ import {
   ensureProject,
   npmInvocation,
 } from './shared-deps.mjs';
+import { NODE_EXCLUDES, NODE_SOURCE_GLOBS, assertReports } from './coverage.mjs';
 
 const ALL_AREAS = ['node', 'harness', 'web', 'docs', 'diagrams', 'dotnet'];
 const VALIDATION_PROFILE_VERSION = 2;
@@ -52,6 +54,7 @@ function parseArgs(argv) {
     base: 'origin/dev',
     dotnetFilter: null,
     isolatedDeps: process.env.CI === 'true',
+    collectCoverage: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -65,6 +68,8 @@ function parseArgs(argv) {
       options.dotnetFilter = argv[++index];
     } else if (argument === '--isolated-deps') {
       options.isolatedDeps = true;
+    } else if (argument === '--collect-coverage') {
+      options.collectCoverage = true;
     } else {
       throw new Error(`unknown argument: ${argument}`);
     }
@@ -265,23 +270,64 @@ function ensureDependencies(repoRoot, project, isolated) {
   });
 }
 
-function runNodeTests(repoRoot) {
+function runNodeTests(repoRoot, collectCoverage) {
   const files = [
     ...globSync('scripts/azure/tests/*.test.mjs', { cwd: repoRoot }),
     ...globSync('scripts/changesets/tests/*.test.mjs', { cwd: repoRoot }),
     ...globSync('scripts/ci/tests/*.test.mjs', { cwd: repoRoot }),
     ...globSync('scripts/demo-recording/test/*.test.mjs', { cwd: repoRoot }),
   ];
-  run(process.execPath, ['--test', ...files], repoRoot);
+  if (!collectCoverage) {
+    run(process.execPath, ['--test', ...files], repoRoot);
+    return;
+  }
+  // Coverage mode wraps the SAME single `node --test` invocation with c8
+  // instead of running the tests a second time, reusing the identical
+  // source/exclude scope `coverage.mjs`'s standalone `coverage:node` uses.
+  const c8 = path.join(repoRoot, 'node_modules', 'c8', 'bin', 'c8.js');
+  if (!existsSync(c8)) {
+    throw new Error('Pinned c8 is unavailable; run npm run deps:ensure before --collect-coverage');
+  }
+  const reportDirectory = path.join(repoRoot, 'coverage', 'node');
+  rmSync(reportDirectory, { recursive: true, force: true });
+  const startedAt = Date.now();
+  run(process.execPath, [
+    c8, '--all', '--extension=.mjs',
+    ...NODE_SOURCE_GLOBS.map((pattern) => `--include=${pattern}`),
+    ...NODE_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
+    `--temp-directory=${path.join(reportDirectory, '.tmp')}`,
+    `--reports-dir=${reportDirectory}`,
+    '--reporter=json', '--reporter=json-summary', '--reporter=lcov', '--reporter=text', '--reporter=html',
+    process.execPath, '--test', ...files,
+  ], repoRoot);
+  // A zero-exit c8/node run does not guarantee every expected report file
+  // was actually written (e.g. an interrupted process or disk issue); catch
+  // a partial report here rather than uploading it and discovering the gap
+  // only in the downstream coverage-summary job.
+  assertReports(reportDirectory, [
+    'coverage-final.json', 'coverage-summary.json', 'lcov.info', 'index.html',
+  ], startedAt, 'Node coverage');
 }
 
-function runWeb(repoRoot, isolated, selection) {
+function runWeb(repoRoot, isolated, selection, collectCoverage) {
   ensureDependencies(repoRoot, 'apps/web', isolated);
   if (selection !== 'test' && selection !== 'lint') {
     runNpm(['--prefix', 'apps/web', 'run', 'typecheck'], repoRoot);
   }
   if (selection !== 'lint') {
-    runNpm(['--prefix', 'apps/web', 'run', 'test'], repoRoot);
+    // Coverage mode runs the dedicated `coverage` script (vitest with
+    // `--coverage`) INSTEAD OF the plain `test` script — one vitest process
+    // either way, never both.
+    const startedAt = Date.now();
+    runNpm(['--prefix', 'apps/web', 'run', collectCoverage ? 'coverage' : 'test'], repoRoot);
+    if (collectCoverage) {
+      // A zero-exit vitest run does not guarantee every expected report
+      // file was actually written; catch a partial report here rather than
+      // uploading it and discovering the gap only in coverage-summary.
+      assertReports(path.join(repoRoot, 'apps', 'web', 'coverage'), [
+        'coverage-final.json', 'coverage-summary.json', 'lcov.info', 'index.html',
+      ], startedAt, 'Web coverage');
+    }
   }
   if (selection !== 'test') {
     runNpm(['--prefix', 'apps/web', 'run', 'lint'], repoRoot);
@@ -392,15 +438,20 @@ function main() {
   try {
     const startedAt = performance.now();
     if (areas.includes('node')) {
-      runNodeTests(repoRoot);
+      runNodeTests(repoRoot, options.collectCoverage);
     }
     if (areas.includes('harness')) {
       runHarness(repoRoot, options.isolatedDeps);
     }
     if (areas.includes('web') || areas.includes('web-test')) {
-      runWeb(repoRoot, options.isolatedDeps, areas.includes('web-test') ? 'test' : 'both');
+      runWeb(
+        repoRoot,
+        options.isolatedDeps,
+        areas.includes('web-test') ? 'test' : 'both',
+        options.collectCoverage,
+      );
     } else if (areas.includes('web-lint')) {
-      runWeb(repoRoot, options.isolatedDeps, 'lint');
+      runWeb(repoRoot, options.isolatedDeps, 'lint', false);
     }
     if (areas.includes('docs')) {
       runDocs(repoRoot, options.isolatedDeps);

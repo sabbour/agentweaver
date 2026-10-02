@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const WORKFLOW = (await readFile(path.join(HERE, "..", "..", "..", ".github", "workflows", "coverage.yml"), "utf8"))
+const REPO_ROOT = path.join(HERE, "..", "..", "..");
+const WORKFLOW = (await readFile(path.join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf8"))
   .replaceAll("\r\n", "\n");
 
 function workflowSection(startMarker, endMarker) {
@@ -16,81 +18,126 @@ function workflowSection(startMarker, endMarker) {
   return WORKFLOW.slice(start, end);
 }
 
-test("coverage only runs on schedule, manual dispatch, and its own scoped pull_request paths", () => {
+test("coverage no longer lives in a separate workflow file", () => {
+  assert.equal(
+    existsSync(path.join(REPO_ROOT, ".github", "workflows", "coverage.yml")),
+    false,
+    "coverage.yml must be removed now that ci.yml collects coverage from its own test jobs",
+  );
+});
+
+test("ci.yml gained a schedule and an opt-in collect_coverage dispatch input, with no new push/pull_request trigger", () => {
   const trigger = workflowSection("on:\n", "\npermissions:\n");
-  assert.doesNotMatch(trigger, /^\s+push:/m);
   assert.match(trigger, /schedule:/);
-  assert.match(trigger, /workflow_dispatch: \{\}/);
-  // The pull_request trigger must stay narrowly scoped to this workflow's own
-  // files, never to ordinary product paths that would double instrumented
-  // coverage onto every PR.
-  const prTrigger = workflowSection("  pull_request:\n", "\n\npermissions:\n");
-  assert.match(prTrigger, /- '\.github\/workflows\/coverage\.yml'/);
-  assert.match(prTrigger, /- 'scripts\/ci\/coverage\.mjs'/);
-  assert.match(prTrigger, /- 'scripts\/ci\/coverage-summary\.mjs'/);
-  assert.doesNotMatch(prTrigger, /apps\/web/);
-  assert.doesNotMatch(prTrigger, /\*\*\/\*\.cs/);
+  assert.match(trigger, /- cron: "0 5 \* \* 1"/);
+  assert.match(trigger, /workflow_dispatch:\n\s+inputs:\n\s+collect_coverage:/);
+  assert.match(trigger, /type: boolean/);
+  assert.match(trigger, /default: false/);
+  // No duplicate trigger was added: pull_request/push stay exactly as they
+  // already were before coverage was threaded into this workflow.
+  assert.match(trigger, /pull_request:\n/);
+  assert.match(trigger, /push:\n\s+branches: \[dev, main\]/);
 });
 
-test("every area job runs its real coverage command without continue-on-error", () => {
-  const dotnetJob = workflowSection("  dotnet-coverage:\n", "\n  web-coverage:\n");
-  const webJob = workflowSection("  web-coverage:\n", "\n  node-coverage:\n");
-  const nodeJob = workflowSection("  node-coverage:\n", "\n  coverage-summary:\n");
-
-  for (const job of [dotnetJob, webJob, nodeJob]) {
-    assert.doesNotMatch(job, /continue-on-error: true/, "a partial/failed coverage run must fail its job");
-  }
-  assert.match(dotnetJob, /run: npm run coverage:dotnet/);
-  assert.match(webJob, /run: npm run coverage:web/);
-  assert.match(nodeJob, /run: npm run coverage:node/);
+test("scheduled/dispatch coverage runs get their own concurrency group so an ordinary push can't cancel a coverage run", () => {
+  assert.match(
+    WORKFLOW,
+    /group: ci-\$\{\{ github\.workflow \}\}-\$\{\{ github\.ref \}\}-\$\{\{ \(github\.event_name == 'schedule' \|\| github\.event_name == 'workflow_dispatch'\) && 'coverage' \|\| 'default' \}\}/,
+  );
+  assert.match(WORKFLOW, /cancel-in-progress: true/);
 });
 
-test("every area uploads its report unconditionally with bounded retention", () => {
-  const dotnetJob = workflowSection("  dotnet-coverage:\n", "\n  web-coverage:\n");
-  const webJob = workflowSection("  web-coverage:\n", "\n  node-coverage:\n");
-  const nodeJob = workflowSection("  node-coverage:\n", "\n  coverage-summary:\n");
+test("the changes job computes a collect_coverage output from schedule/dispatch only", () => {
+  const changesJob = workflowSection("  changes:\n", "\n  release-main-ancestry:\n");
+  assert.match(changesJob, /collect_coverage: \$\{\{ steps\.coverage-mode\.outputs\.collect_coverage \}\}/);
+  assert.match(changesJob, /id: coverage-mode/);
+  assert.match(changesJob, /github\.event_name \}\}" = "schedule"/);
+  assert.match(changesJob, /workflow_dispatch' && inputs\.collect_coverage/);
+});
 
-  for (const job of [dotnetJob, webJob, nodeJob]) {
-    assert.match(job, /uses: actions\/upload-artifact@v4/);
-    assert.match(job, /if: always\(\)\n\s+uses: actions\/upload-artifact@v4/, "upload must run even if the coverage step failed");
-    assert.match(job, /retention-days: \$\{\{ fromJSON\(env\.COVERAGE_ARTIFACT_RETENTION_DAYS\) \}\}/);
-    // A coverage command that exits zero but drops/moves its output path must
-    // still fail the job — "warn" would let a missing report pass silently.
-    assert.match(job, /if-no-files-found: error/, "a missing coverage report must fail the upload step, not just warn");
+test("collect_coverage forces the dotnet/web/node jobs to run without changing their path-filter behavior otherwise", () => {
+  assert.match(
+    WORKFLOW,
+    /if: \(github\.event_name == 'pull_request' && github\.base_ref == 'dev'\) \|\| needs\.changes\.outputs\.dotnet == 'true' \|\| needs\.changes\.outputs\.collect_coverage == 'true'/,
+    "dotnet-test-plan must also run when collect_coverage is true",
+  );
+  const nodeJob = workflowSection("  node-toolchain-tests:\n", "\n  web-tests:\n");
+  assert.match(nodeJob, /needs\.changes\.outputs\.node-toolchain == 'true' \|\| needs\.changes\.outputs\.collect_coverage == 'true'/);
+  const webJob = workflowSection("  web-tests:\n", "\n  docs-build:\n");
+  assert.match(webJob, /needs\.changes\.outputs\.web == 'true' \|\| needs\.changes\.outputs\.collect_coverage == 'true'/);
+
+  // The draft-PR skip must be bypassed ONLY when collect_coverage forces the
+  // job to run, never for every non-pull_request event in general — the
+  // latter would also newly run these jobs on an ordinary push to dev/main
+  // regardless of collect_coverage, which is outside this redesign's scope.
+  for (const job of [nodeJob, webJob]) {
+    assert.match(job, /\(needs\.changes\.outputs\.collect_coverage == 'true' \|\| github\.event\.pull_request\.draft == false\)/);
+    assert.doesNotMatch(job, /github\.event_name != 'pull_request'/);
   }
-  assert.match(dotnetJob, /path: TestResults\/coverage/);
-  assert.match(webJob, /path: apps\/web\/coverage/);
-  assert.match(nodeJob, /path: coverage\/node/);
+});
+
+test("each coverage-collecting job runs exactly one test command, with coverage flags appended rather than a second invocation", () => {
+  const dotnetShardsJob = workflowSection("  dotnet-test-shards:\n", "\n  dotnet-tests:\n");
+  // Both the retry-wrapped Kata step and the plain step must call the SAME
+  // CLI with the SAME conditional flag — never two different commands.
+  const dotnetRunLines = [...dotnetShardsJob.matchAll(/run-dotnet-test-shard\.mjs[^\n]*/g)].map((m) => m[0]);
+  assert.equal(dotnetRunLines.length, 2, "exactly the Kata retry step and the plain step should invoke the shard runner");
+  for (const line of dotnetRunLines) {
+    assert.match(line, /--shard "\$\{\{ matrix\.id \}\}"/);
+    assert.match(line, /\$\{\{ env\.COLLECT_COVERAGE == 'true' && '--collect-coverage' \|\| '' \}\}/);
+  }
+  assert.doesNotMatch(dotnetShardsJob, /run: dotnet test/, "the shard job must delegate to the Node CLI, not inline dotnet test");
+
+  const nodeJob = workflowSection("  node-toolchain-tests:\n", "\n  web-tests:\n");
+  const nodeRunLines = [...nodeJob.matchAll(/validate\.mjs[^\n]*/g)].map((m) => m[0]);
+  assert.equal(nodeRunLines.length, 1, "exactly one validate.mjs invocation for node/harness");
+  assert.match(nodeRunLines[0], /--area node,harness/);
+  assert.match(nodeRunLines[0], /\$\{\{ env\.COLLECT_COVERAGE == 'true' && '--collect-coverage' \|\| '' \}\}/);
+
+  const webJob = workflowSection("  web-tests:\n", "\n  docs-build:\n");
+  const webRunLines = [...webJob.matchAll(/validate\.mjs[^\n]*/g)].map((m) => m[0]);
+  assert.equal(webRunLines.length, 1, "exactly one validate.mjs invocation for web");
+  assert.match(webRunLines[0], /--area web/);
+  assert.match(webRunLines[0], /\$\{\{ env\.COLLECT_COVERAGE == 'true' && '--collect-coverage' \|\| '' \}\}/);
+});
+
+test("coverage artifacts are only uploaded when collect_coverage is true, with bounded retention", () => {
+  const dotnetShardsJob = workflowSection("  dotnet-test-shards:\n", "\n  dotnet-tests:\n");
+  assert.match(dotnetShardsJob, /name: Upload \.NET shard coverage report\n\s+if: always\(\) && env\.COLLECT_COVERAGE == 'true'/);
+  assert.match(dotnetShardsJob, /name: dotnet-coverage-\$\{\{ matrix\.id \}\}/);
+
+  const nodeJob = workflowSection("  node-toolchain-tests:\n", "\n  web-tests:\n");
+  assert.match(nodeJob, /name: Upload Node coverage report\n\s+if: always\(\) && env\.COLLECT_COVERAGE == 'true'/);
+
+  const webJob = workflowSection("  web-tests:\n", "\n  docs-build:\n");
+  assert.match(webJob, /name: Upload web coverage report\n\s+if: always\(\) && env\.COLLECT_COVERAGE == 'true'/);
+
   assert.match(WORKFLOW, /COVERAGE_ARTIFACT_RETENTION_DAYS: 14/);
+  const retentionLines = [...WORKFLOW.matchAll(/retention-days: \$\{\{ fromJSON\(env\.COVERAGE_ARTIFACT_RETENTION_DAYS\) \}\}/g)];
+  assert.ok(retentionLines.length >= 4, "every coverage artifact upload should use the bounded retention");
 });
 
-test("bubblewrap is installed and required for the Kata runtime shard inside coverage:dotnet", () => {
-  const dotnetJob = workflowSection("  dotnet-coverage:\n", "\n  web-coverage:\n");
-  assert.match(dotnetJob, /Install bubblewrap/);
-  assert.match(dotnetJob, /bwrap --unshare-user --unshare-pid/);
-  assert.match(dotnetJob, /AGENTWEAVER_REQUIRE_BWRAP: "1"/);
-});
+test("dotnet-coverage-combine and coverage-summary jobs exist, are gated on collect_coverage, and never re-run tests", () => {
+  const combineJob = workflowSection("  dotnet-coverage-combine:\n", "\n  coverage-summary:\n");
+  assert.match(combineJob, /needs: \[changes, dotnet-test-shards\]/);
+  assert.match(combineJob, /if: always\(\) && needs\.changes\.outputs\.collect_coverage == 'true'/);
+  assert.match(combineJob, /pattern: dotnet-coverage-\*/);
+  assert.match(combineJob, /run: node scripts\/ci\/coverage-combine\.mjs --downloaded-dir downloaded\/dotnet-shards --out TestResults\/coverage/);
+  assert.doesNotMatch(combineJob, /dotnet test/, "combine job must only merge already-produced reports, never re-run tests");
 
-test("step-level timeouts leave headroom below each job's timeout so a hung run still uploads", () => {
-  const dotnetJob = workflowSection("  dotnet-coverage:\n", "\n  web-coverage:\n");
-  const webJob = workflowSection("  web-coverage:\n", "\n  node-coverage:\n");
-  const nodeJob = workflowSection("  node-coverage:\n", "\n  coverage-summary:\n");
-
-  assert.match(dotnetJob, /timeout-minutes: 140/);
-  assert.match(dotnetJob, /Run instrumented \.NET coverage\n\s+timeout-minutes: 130/);
-  assert.match(webJob, /timeout-minutes: 30/);
-  assert.match(webJob, /Run instrumented web coverage\n\s+timeout-minutes: 20/);
-  assert.match(nodeJob, /timeout-minutes: 30/);
-  assert.match(nodeJob, /Run instrumented Node coverage\n\s+timeout-minutes: 20/);
-});
-
-test("the summary job reports every area's real job result without gating the workflow", () => {
   const summaryJob = workflowSection("  coverage-summary:\n", null);
-  assert.match(summaryJob, /needs: \[dotnet-coverage, web-coverage, node-coverage\]/);
-  assert.match(summaryJob, /if: always\(\)/);
-  assert.match(summaryJob, /--dotnet-status "\$\{\{ needs\.dotnet-coverage\.result \}\}"/);
-  assert.match(summaryJob, /--web-status "\$\{\{ needs\.web-coverage\.result \}\}"/);
-  assert.match(summaryJob, /--node-status "\$\{\{ needs\.node-coverage\.result \}\}"/);
+  assert.match(summaryJob, /needs: \[changes, dotnet-coverage-combine, web-tests, node-toolchain-tests\]/);
+  assert.match(summaryJob, /if: always\(\) && needs\.changes\.outputs\.collect_coverage == 'true'/);
+  assert.match(summaryJob, /node scripts\/ci\/coverage-summary\.mjs/);
+  assert.match(summaryJob, /--dotnet-status "\$\{\{ needs\.dotnet-coverage-combine\.result \}\}"/);
+  assert.match(summaryJob, /--web-status "\$\{\{ needs\.web-tests\.result \}\}"/);
+  assert.match(summaryJob, /--node-status "\$\{\{ needs\.node-toolchain-tests\.result \}\}"/);
   assert.match(summaryJob, /--out "\$GITHUB_STEP_SUMMARY"/);
-  assert.match(summaryJob, /continue-on-error: true\n\s+with:\n\s+name: dotnet-coverage/);
+});
+
+test("bubblewrap setup for the Kata runtime shard is untouched by the coverage changes", () => {
+  const dotnetShardsJob = workflowSection("  dotnet-test-shards:\n", "\n  dotnet-tests:\n");
+  assert.match(dotnetShardsJob, /Install bubblewrap/);
+  assert.match(dotnetShardsJob, /bwrap --unshare-user --unshare-pid/);
+  assert.match(dotnetShardsJob, /AGENTWEAVER_REQUIRE_BWRAP: "1"/);
 });

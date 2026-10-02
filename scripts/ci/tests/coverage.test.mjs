@@ -17,6 +17,7 @@ import {
   assertTrxContainsTests,
   dotnetShardArguments,
   expectedDotnetShardIds,
+  findSingleCoberturaReport,
   run,
 } from '../coverage.mjs';
 
@@ -43,8 +44,63 @@ test('coverage keeps the authoritative .NET shard matrix intact', () => {
     assert.ok(args.some((arg) => arg.includes('Configuration.ExcludeByFile=**/obj/**')));
     if (shard.settings) {
       assert.equal(args[args.indexOf('--settings') + 1], shard.settings);
+      // The `dotnet test` CLI is order-insensitive, but the ordinary CI
+      // shard command must stay byte-identical to its pre-redesign bash
+      // form, which put `--settings` after `--filter <value>`, not before.
+      assert.ok(
+        args.indexOf('--settings') > args.indexOf('--filter'),
+        '--settings must come after --filter, matching the original shard command order',
+      );
     }
   }
+});
+
+test('coverage omits coverage flags entirely when collectCoverage is false, leaving an otherwise identical command', () => {
+  for (const shard of TEST_SHARDS) {
+    const shardDirectory = path.join('TestResults', shard.id);
+    const withCoverage = dotnetShardArguments(shard, shardDirectory);
+    const withoutCoverage = dotnetShardArguments(shard, shardDirectory, { collectCoverage: false });
+    assert.ok(!withoutCoverage.includes('--collect'));
+    assert.ok(!withoutCoverage.some((arg) => arg.includes('XPlat Code Coverage')));
+    assert.ok(!withoutCoverage.some((arg) => arg.includes('DataCollectionRunSettings')));
+    // Every other argument (project, filter, logger, settings, results
+    // directory) must be byte-identical, proving an ordinary PR run's test
+    // command line is unchanged by the coverage feature existing at all.
+    const withoutCoverageFlags = new Set(['--collect', 'XPlat Code Coverage;Format=cobertura', '--']);
+    const dataCollectionArgs = withCoverage.filter((arg) => (
+      typeof arg === 'string' && arg.startsWith('DataCollectionRunSettings')
+    ));
+    const strippedWithCoverage = withCoverage.filter((arg) => (
+      !withoutCoverageFlags.has(arg) && !dataCollectionArgs.includes(arg)
+    ));
+    assert.deepEqual(strippedWithCoverage, withoutCoverage);
+  }
+});
+
+test('findSingleCoberturaReport resolves the Coverlet report under its GUID attachment directory, ignoring an MSTest deployment copy of the same file', (t) => {
+  const root = fixtureDirectory(t);
+  const guid = '11111111-2222-3333-4444-555555555555';
+  mkdirSync(path.join(root, guid), { recursive: true });
+  writeFileSync(path.join(root, guid, 'coverage.cobertura.xml'), cobertura());
+  // MSTest's deployment mechanism copies the entire results tree (including
+  // the report Coverlet just wrote) into a deployment-item directory nested
+  // two levels deeper than the GUID attachment directory.
+  mkdirSync(path.join(root, '_runner_20240101', 'In', 'runner'), { recursive: true });
+  writeFileSync(path.join(root, '_runner_20240101', 'In', 'runner', 'coverage.cobertura.xml'), cobertura());
+
+  const resolved = findSingleCoberturaReport(root);
+  assert.equal(resolved, path.join(root, guid, 'coverage.cobertura.xml'));
+});
+
+test('findSingleCoberturaReport rejects a true duplicate across two distinct GUID attachment directories', (t) => {
+  const root = fixtureDirectory(t);
+  const guidA = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const guidB = 'ffffffff-0000-1111-2222-333333333333';
+  for (const guid of [guidA, guidB]) {
+    mkdirSync(path.join(root, guid), { recursive: true });
+    writeFileSync(path.join(root, guid, 'coverage.cobertura.xml'), cobertura());
+  }
+  assert.throws(() => findSingleCoberturaReport(root), /Expected exactly one/);
 });
 
 test('coverage rejects missing, stale, malformed, and out-of-root Cobertura reports', (t) => {
