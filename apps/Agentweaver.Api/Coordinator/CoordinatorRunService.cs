@@ -1757,6 +1757,16 @@ public sealed class CoordinatorRunService
                     requiredLease: new RunLeaseClaim(leaseOwnerId, fencingToken),
                     expectedStreamingRun: streamingRun).ConfigureAwait(false);
             }
+            catch (Exception ex) when (ContainsDecompositionFailure(ex))
+            {
+                _logger.LogError(ex, "Coordinator decomposition unverified for run {RunId}; failing before work-plan persistence", runId);
+                await FailRunSafeAsync(
+                    runId, entry, "coordinator_decomposition_unverified",
+                    failure: ex, failurePhase: "coordinator_decomposition",
+                    expectedLifecycleGeneration: expectedLifecycleGeneration,
+                    requiredLease: new RunLeaseClaim(leaseOwnerId, fencingToken),
+                    expectedStreamingRun: streamingRun).ConfigureAwait(false);
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Coordinator watch loop failed for run {RunId}; transitioning to Failed", runId);
@@ -1879,6 +1889,8 @@ public sealed class CoordinatorRunService
                         ? "outcome_spec_draft_timeout"
                         : isDraftAuthorizationFailure
                             ? CoordinatorFailureCodes.OutcomeSpecDraftFailed
+                        : failed.Data is not null && ContainsDecompositionFailure(failed.Data)
+                            ? "coordinator_decomposition_unverified"
                         : providerFailure?.ErrorCode ?? $"coordinator_executor_failed:{failed.ExecutorId}";
                     _logger.LogError(
                         failed.Data,
@@ -3297,6 +3309,8 @@ public sealed class CoordinatorRunService
             {
                 errorCode = failure is MandatoryContextBudgetExceededException
                     ? "mandatory_context_budget_exceeded"
+                    : reason == "coordinator_decomposition_unverified"
+                        ? reason
                     : reason == "coordinator_executor_failed:coordinator-direct"
                         ? "coordinator_direct_execution_failed"
                         : "coordinator_execution_failed";
@@ -3304,7 +3318,9 @@ public sealed class CoordinatorRunService
                 {
                     reason,
                     errorCode,
-                    message = StructuredRunFailureTerminal.CreateDiagnosticMessage(errorCode, retryable: false),
+                    message = reason == "coordinator_decomposition_unverified"
+                        ? "The coordinator could not verify separate tasks for the listed deliverables. Retry with the model available or clarify each deliverable's distinct name."
+                        : StructuredRunFailureTerminal.CreateDiagnosticMessage(errorCode, retryable: false),
                     retryable = false,
                     correlationId,
                     traceId = Activity.Current?.TraceId.ToHexString(),
@@ -3415,6 +3431,13 @@ public sealed class CoordinatorRunService
         if (exception is not null)
             causes.AddRange(StructuredRunFailureTerminal.BuildExceptionCauseChain(exception));
         return StructuredRunFailureTerminal.NormalizeCauseChain(causes);
+    }
+
+    private static bool ContainsDecompositionFailure(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+            if (current is CoordinatorDecompositionException) return true;
+        return false;
     }
 
     private static string? NormalizeDiagnosticIdentifier(string? value)

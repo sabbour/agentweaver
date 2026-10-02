@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Backlog;
@@ -113,8 +114,8 @@ public sealed class CoordinatorOrchestratorExecutor
 
     /// <summary>
     /// Orchestrates a confirmed spec into a persisted work plan. Idempotent: if a work plan already
-    /// exists for the run it returns without re-planning. Best-effort decomposition (model turn with
-    /// a deterministic fallback) — it always produces a valid, persisted plan.
+    /// exists for the run it returns without re-planning. Atomic outcomes can use a deterministic
+    /// fallback; explicitly enumerated deliverables require a verifiable decomposition.
     /// </summary>
     public async Task<CoordinatorOrchestrationResult> OrchestrateAsync(
         CoordinatorDraftInput input, CancellationToken ct, RunLeaseFence? recoveredFence = null)
@@ -214,6 +215,7 @@ public sealed class CoordinatorOrchestratorExecutor
         if (drafts.Count == 0)
             drafts = DecomposeDeterministic(spec).Select(NormalizePlanningDraft).ToList();
 
+        ValidateExplicitDeliverables(spec, drafts);
         var (drafts2, cycleNote) = BreakCycles(drafts);
         drafts = drafts2;
 
@@ -916,7 +918,7 @@ public sealed class CoordinatorOrchestratorExecutor
     }
 
     // -----------------------------------------------------------------------
-    // Decomposition (real model turn + deterministic fallback)
+    // Decomposition (real model turn + atomic deterministic fallback)
     // -----------------------------------------------------------------------
 
     internal async Task<List<SubtaskDraft>?> DecomposeWithModelAsync(
@@ -1217,11 +1219,13 @@ public sealed class CoordinatorOrchestratorExecutor
 
     internal static bool CanUseModelFallback(Exception exception) =>
         exception is not ModelProviderConnectionRequiredException
+            and not AgentProviderException { FailureKind: AgentProviderFailureKind.Authorization }
             and not MandatoryContextBudgetExceededException;
 
     /// <summary>
-    /// Deterministic, never-failing decomposition used when the model is unavailable or returns
-    /// unparseable output. Yields a single subtask covering the whole spec, with planning/prose
+    /// Deterministic decomposition used when the model is unavailable or returns
+    /// unparseable output. Explicitly enumerated deliverables are rejected before persistence.
+    /// Yields a single subtask covering the whole spec, with planning/prose
     /// deliverables classified deterministically so the
     /// decompose -> select -> persist path works fully offline.
     /// </summary>
@@ -1250,6 +1254,70 @@ public sealed class CoordinatorOrchestratorExecutor
                 PromotionOverride: "inline")
         ];
     }
+
+    internal static void ValidateExplicitDeliverables(OutcomeSpec spec, IReadOnlyList<SubtaskDraft> drafts)
+    {
+        // Only an explicit, labeled list is evidence of independently named deliverables.
+        // Do not guess task boundaries from conjunctions or enforce a minimum on atomic goals.
+        // The confirmed draft may paraphrase the original goal, so retain the user's
+        // explicit list even if the outcome-spec model flattened its formatting.
+        var text = spec.Goal + "\n" + spec.DesiredOutcome + "\n" + spec.Scope;
+        var sections = Regex.Matches(text,
+            @"(?im)^[ \t]*(?:#{1,6}[ \t]*)?(?:deliverables|outputs)[ \t]*:[ \t]*(?:\r?\n[ \t]*)+(?<items>(?:[ \t]*(?:[-*]|\d+[.)])[ \t]+[^\r\n]+(?:\r?\n[ \t]*)*)+)");
+        foreach (Match section in sections)
+        {
+            var items = Regex.Matches(section.Groups["items"].Value,
+                @"(?m)^[ \t]*(?:[-*]|\d+[.)])[ \t]+(?<item>[^\r\n]+)")
+                .Select(m => m.Groups["item"].Value)
+                .ToList();
+            if (items.Count < 2) continue;
+
+            // Each item needs a distinctive name in a different task title. Discard
+            // dependency clauses before comparison so references do not erase names.
+            var words = items.Select(item => Regex.Matches(
+                    Regex.Split(item, @"(?i)\b(?:after|depends on|following)\b")[0],
+                    @"[\p{L}\p{N}][\p{L}\p{N}_-]*")
+                    .Select(m => m.Value.ToLowerInvariant())
+                    .Where(word => word.Length >= 2 && !DecompositionCommonWords.Contains(word))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase))
+                .ToList();
+            var titleWords = drafts.Select(draft => Regex.Matches(draft.Title,
+                    @"[\p{L}\p{N}][\p{L}\p{N}_-]*")
+                .Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase)).ToList();
+            var candidates = words.Select((itemWords, index) =>
+            {
+                var distinctive = itemWords.Except(words.Where((_, i) => i != index)
+                    .SelectMany(other => other), StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                return Enumerable.Range(0, drafts.Count)
+                    .Where(i => distinctive.Any(titleWords[i].Contains)).ToList();
+            }).ToList();
+            var assigned = new int?[drafts.Count];
+            bool Match(int item, HashSet<int> visited)
+            {
+                foreach (var draft in candidates[item])
+                {
+                    if (!visited.Add(draft)) continue;
+                    if (assigned[draft] is int previous && !Match(previous, visited)) continue;
+                    assigned[draft] = item;
+                    return true;
+                }
+                return false;
+            }
+            var covered = Enumerable.Range(0, words.Count)
+                .All(item => Match(item, new HashSet<int>()));
+            if (!covered)
+                throw new CoordinatorDecompositionException(
+                    "Coordinator decomposition could not verify separate tasks for the explicitly listed deliverables. "
+                    + "Retry with the model available or clarify each deliverable with a distinct name; no work plan was saved.");
+        }
+    }
+
+    private static readonly HashSet<string> DecompositionCommonWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "build", "create", "write", "implement", "deliver", "produce", "update", "draft",
+        "make", "then", "with", "from", "into", "that", "this", "each", "using",
+        "an", "to", "of", "on", "in", "is", "as", "by", "or", "and", "the", "for",
+    };
 
     private static SubtaskDraft NormalizePlanningDraft(SubtaskDraft draft)
     {
@@ -2404,3 +2472,5 @@ public sealed class CoordinatorOrchestratorExecutor
 
     internal sealed record PromotionOverrideParseResult(string? Override, string CleanTitle, bool IsValid);
 }
+
+internal sealed class CoordinatorDecompositionException(string message) : InvalidOperationException(message);

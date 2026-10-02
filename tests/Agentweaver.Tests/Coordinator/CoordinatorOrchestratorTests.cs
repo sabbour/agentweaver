@@ -12,6 +12,7 @@ using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Workflows;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
@@ -534,9 +535,208 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
 
         CoordinatorOrchestratorExecutor.CanUseModelFallback(exception).Should().BeFalse(
             "an AgentHost pre-launch provider failure must remain the terminal actionable cause");
+        CoordinatorOrchestratorExecutor.CanUseModelFallback(
+            new GitHubCopilotUnauthorizedException("Sign in to GitHub Copilot")).Should().BeFalse(
+            "decomposition authorization failures must retain their sign-in diagnostic");
         CoordinatorOrchestratorExecutor.CanUseModelFallback(new HttpRequestException()).Should().BeTrue(
             "ordinary model availability failures may still use deterministic decomposition");
     }
+
+    private const string ExplicitDeliverables = """
+        Deliverables:
+        - Create schema
+        - Create consumer after schema
+        """;
+
+    [Theory]
+    [InlineData("## Deliverables:\n\n- Create schema\n- Create consumer after schema")]
+    [InlineData("Outputs:\r\n\r\n1. Create schema\r\n2. Create consumer after schema")]
+    public void ExplicitDeliverables_MarkdownFormattingCannotBypassGuard(string goal)
+    {
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "project", CoordinatorRunId = "run", Goal = goal,
+            DesiredOutcome = goal, Scope = "", Assumptions = "", Status = "confirmed",
+        };
+        var fallback = CoordinatorOrchestratorExecutor.DecomposeDeterministic(spec);
+        var act = () => CoordinatorOrchestratorExecutor.ValidateExplicitDeliverables(spec, fallback);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*could not verify separate tasks*");
+    }
+
+    [Fact]
+    public void ExplicitDeliverables_OverlappingTitlesCanMatchDistinctTasks()
+    {
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "project", CoordinatorRunId = "run", Goal = ExplicitDeliverables,
+            DesiredOutcome = ExplicitDeliverables, Scope = "", Assumptions = "", Status = "confirmed",
+        };
+        var fallback = CoordinatorOrchestratorExecutor.DecomposeDeterministic(spec)[0];
+        var drafts = new[]
+        {
+            fallback with { Title = "Integrate schema into consumer" },
+            fallback with { Title = "Create schema" },
+        };
+        var act = () => CoordinatorOrchestratorExecutor.ValidateExplicitDeliverables(spec, drafts);
+        act.Should().NotThrow("both named deliverables have separate, matching task titles");
+    }
+
+    [Fact]
+    public async Task Direct_ExplicitDeliverables_OfflineFallbackFailsWithoutSavingPlan()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, ExplicitDeliverables, startMode: "direct");
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        var failed = await PollAsync(async _ =>
+        {
+            var run = await store.GetAsync(RunId.Parse(runId));
+            return run?.Status == RunStatus.Failed ? run : null;
+        });
+        failed.Should().NotBeNull("the offline one-item fallback cannot satisfy the named deliverables");
+        var failureEvents = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(runId)!.GetSnapshotSince(0).Events.Where(e => e.Type == EventTypes.RunFailed).ToList();
+        failureEvents.Should().ContainSingle();
+        JsonSerializer.Serialize(failureEvents).Should().Contain("coordinator_decomposition_unverified")
+            .And.Contain("Retry with the model available");
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.WorkPlans.CountAsync(p => p.CoordinatorRunId == runId)).Should().Be(0);
+        (await db.OutcomeSpecs.SingleAsync(s => s.CoordinatorRunId == runId))
+            .Status.Should().Be("confirmed", "direct mode skips only the outcome gate");
+    }
+
+    [Fact]
+    public async Task Confirm_ExplicitDeliverables_OfflineFallbackFailsWithActionableReason()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, ExplicitDeliverables);
+        await WaitForGateAsync(runId);
+        (await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        (await PollAsync(async _ =>
+            (await store.GetAsync(RunId.Parse(runId))) is { Status: RunStatus.Failed } run ? run : null))
+            .Should().NotBeNull();
+        var events = _factory.Services.GetRequiredService<RunStreamStore>()
+            .Get(runId)!.GetSnapshotSince(0).Events;
+        JsonSerializer.Serialize(events.Where(e => e.Type == EventTypes.RunFailed))
+            .Should().Contain("coordinator_decomposition_unverified")
+            .And.Contain("Retry with the model available");
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.WorkPlans.CountAsync(p => p.CoordinatorRunId == runId)).Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("{invalid")]
+    [InlineData("[{\"story_key\":\"schema\",\"title\":\"Create schema\",\"scope\":\"Create schema\",\"depends_on\":[]}]")]
+    public async Task Confirm_ExplicitDeliverables_InvalidOrCollapsedModelFailsBeforePlan(string response)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = RunId.New().ToString();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(new Run
+        {
+            Id = RunId.Parse(runId), RepositoryPath = project.WorkingDirectory,
+            OriginatingBranch = "main", ModelSource = ModelSource.GitHubCopilot,
+            Task = ExplicitDeliverables, SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.Parse(projectId), AgentName = "Coordinator",
+        });
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = projectId, CoordinatorRunId = runId, Goal = ExplicitDeliverables,
+                DesiredOutcome = "Ship an integrated feature", Scope = "", Assumptions = "",
+                Status = "confirmed", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+        var executor = CreateDecompositionExecutor(new DependentDagWorkflowAgentFactory(response));
+        var input = new CoordinatorDraftInput(runId, projectId, ExplicitDeliverables,
+            CoordinatorWebApplicationFactory.OwnerUser, project.WorkingDirectory, "test-model");
+        var act = () => executor.OrchestrateAsync(input, CancellationToken.None);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*could not verify separate tasks*");
+        using var verifyScope = _factory.Services.CreateScope();
+        var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verify.WorkPlans.CountAsync(p => p.CoordinatorRunId == runId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Confirm_ExplicitDeliverables_DistinctModelTasksPersistDependency()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = RunId.New().ToString();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(new Run
+        {
+            Id = RunId.Parse(runId), RepositoryPath = project.WorkingDirectory,
+            OriginatingBranch = "main", ModelSource = ModelSource.GitHubCopilot,
+            Task = ExplicitDeliverables, SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.Parse(projectId), AgentName = "Coordinator",
+        });
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = projectId, CoordinatorRunId = runId, Goal = ExplicitDeliverables,
+                DesiredOutcome = ExplicitDeliverables, Scope = "", Assumptions = "",
+                Status = "confirmed", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+        var input = new CoordinatorDraftInput(runId, projectId, ExplicitDeliverables,
+            CoordinatorWebApplicationFactory.OwnerUser, project.WorkingDirectory, "test-model");
+        var result = await CreateDecompositionExecutor(new DependentDagWorkflowAgentFactory())
+            .OrchestrateAsync(input, CancellationToken.None);
+        result.InlineSubtaskCount.Should().Be(2);
+        using var verifyScope = _factory.Services.CreateScope();
+        var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var tasks = await verify.Subtasks.Where(s => s.WorkPlanId == result.WorkPlanId).ToListAsync();
+        tasks.Select(t => t.Title).Should().BeEquivalentTo(["Create schema", "Create consumer"]);
+        var edges = await verify.SubtaskDependencies
+            .Where(e => tasks.Select(t => t.Id).Contains(e.SubtaskId)).ToListAsync();
+        edges.Should().ContainSingle(e => e.SubtaskId == tasks.Single(t => t.Title == "Create consumer").Id
+            && e.DependsOnSubtaskId == tasks.Single(t => t.Title == "Create schema").Id);
+        var plan = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}/work-plan");
+        plan.GetProperty("subtasks").GetArrayLength().Should().Be(2);
+        var graph = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}/graph");
+        graph.GetProperty("nodes").EnumerateArray()
+            .Where(n => n.GetProperty("node_type").GetString() == "subtask")
+            .Select(n => n.GetProperty("label").GetString())
+            .Should().BeEquivalentTo(["Create schema", "Create consumer"]);
+    }
+
+    [Fact]
+    public void AtomicGoal_OneSubtaskRemainsValid()
+    {
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "project", CoordinatorRunId = "run", Goal = "Fix typo in README",
+            DesiredOutcome = "Fix typo in README", Scope = "", Assumptions = "", Status = "confirmed",
+        };
+        var fallback = CoordinatorOrchestratorExecutor.DecomposeDeterministic(spec);
+        var act = () => CoordinatorOrchestratorExecutor.ValidateExplicitDeliverables(spec, fallback);
+        act.Should().NotThrow();
+        fallback.Should().ContainSingle();
+    }
+
+    private CoordinatorOrchestratorExecutor CreateDecompositionExecutor(IWorkflowAgentFactory factory) =>
+        new(factory, _factory.Services.GetRequiredService<RunStreamStore>(),
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            _factory.Services.GetRequiredService<ILoggerFactory>(),
+            _factory.Services.GetRequiredService<IStoryIndependenceClassifier>(),
+            _factory.Services.GetRequiredService<IAssemblyGateCodeClassifier>(),
+            "gpt-5-mini", null, null);
 
     [Fact]
     public async Task Confirm_AutoSelectedPmDiscovery_NonCodeDecomposition_KeepsPmDiscovery()
@@ -717,7 +917,10 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
 
     internal sealed class DependentDagWorkflowAgentFactory : IWorkflowAgentFactory
     {
-        private readonly DependentDagWorkflowTurnAgent _agent = new();
+        private readonly DependentDagWorkflowTurnAgent _agent;
+
+        public DependentDagWorkflowAgentFactory(string? response = null) =>
+            _agent = new DependentDagWorkflowTurnAgent(response);
 
         public IWorkflowTurnAgent CreateWorkerAgent() => _agent;
         public IWorkflowTurnAgent CreateRaiAgent() => _agent;
@@ -728,6 +931,10 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
 
     private sealed class DependentDagWorkflowTurnAgent : IWorkflowTurnAgent
     {
+        private readonly string? _response;
+
+        public DependentDagWorkflowTurnAgent(string? response) => _response = response;
+
         public Task SetupAsync(
             string workingDirectory,
             string repositoryPath,
@@ -743,7 +950,7 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
             string? userId = null) => Task.CompletedTask;
 
         public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
-            Task.FromResult(
+            Task.FromResult(_response ??
                 """
                 [
                   {
@@ -759,7 +966,7 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
                   },
                   {
                     "story_key": "consumer",
-                    "title": "Consume schema",
+                    "title": "Create consumer",
                     "scope": "Read generated/schema.txt and create generated/consumer.txt.",
                     "role": "lead-architect",
                     "complexity": "low",

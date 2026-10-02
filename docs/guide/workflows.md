@@ -41,6 +41,15 @@ preview checks available without changing the project's selectable workflow list
 overrides remain pinned; when an override lacks Build & Test for code work, the work plan surfaces a
 warning instead of silently changing the user's choice.
 
+For ordinary coordinator planning, explicitly list independent outputs under a `Deliverables:`
+or `Outputs:` heading (one named item per bullet) when each needs its own task; Markdown
+headings and blank lines before the list are supported. If the model is unavailable,
+returns malformed output, or collapses those named deliverables into one task, planning fails
+before saving a work plan with a `coordinator_decomposition_unverified` diagnostic. Retry when the model is available or
+clarify the distinct names; Agentweaver does not guess how to split arbitrary prose. A small
+atomic goal can still produce one task. Direct mode skips outcome confirmation, not this planning
+check or child delegation; an explicitly pinned static-fan workflow keeps its own fixed graph.
+
 The matched workflow is shown in the run detail. If the auto-match picks the wrong one, you can
 override it at submission time.
 For coordinator runs, the final choice is saved with the work plan, after any Build & Test
