@@ -136,8 +136,17 @@ fail explicitly; decisions and other writes are never retried.
 At each assembly review the driver verifies the current work-plan ID, review
 tree, immutable revision tree and source bytes, completed Build & Test event,
 and runtime-owned `sandbox.preview_ready` event (`source: preview-step`).
-It matches the event's run, tree, claim-bound pod, supervised runner session,
-actual target port, session token and URL against the current GET listing.
+It requires `GET /api/runs/{id}` to report `sandbox.current_binding.state:
+verified` for that run and its positive lifecycle generation, with a
+KubernetesSandboxClaim provisioner, claim/pod UIDs, namespace, assembly
+attempt and nonempty source repository/ref/base commit/worktree identity.
+The binding's source tree must match the current review tree and its pod must
+match the latest bound event. Historical top-level `sandbox.backend`, phase,
+claim and pod fields do not establish current ownership; an unavailable,
+conflicting, missing or rotated binding fails even when those fields look
+valid. It matches the event's run, tree, verified claim-bound pod,
+supervised runner session, actual target port, session token and URL against
+the current GET listing.
 Stale, manual, foreign, ambiguous, mismatched or failed sessions are never
 adopted or deleted. Missing automatic previews are polled read-only within
 the phase budget, then fail closed. HTTP 200 in Chrome, expected application

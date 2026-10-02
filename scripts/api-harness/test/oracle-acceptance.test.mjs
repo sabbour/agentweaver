@@ -155,7 +155,8 @@ async function driveReviewFixture(fixtureOptions = {}) {
     transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
     advanceThrownRunMs = 0, planningBudget = 6,
     approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
-    previewCase = null, previewReadTimeouts = 0, sourceCase = null,
+    previewCase = null, previewReadTimeouts = 0, sourceCase = null, bindingCase = null,
+    correctedBindingCase = null, legacyLooksCurrent = false,
     initialDetailWorkPlanId, correctedDetailWorkPlanId,
     reviewEventWorkPlanId = 42, buildEventWorkPlanId = 42, previewEventWorkPlanId = 42,
   } = fixtureOptions;
@@ -316,10 +317,31 @@ async function driveReviewFixture(fixtureOptions = {}) {
           return { status: 0, body: { error: 'transport_error', message: 'fetch failed' } };
         }
       }
+      const currentCase = revised ? correctedBindingCase : bindingCase;
       return { status: 200, body: {
         status: approved ? 'completed' : 'in_progress', project_id: 'project',
-        sandbox: { backend: 'kubernetes-sandbox-claim',
-          phase: previewCase === 'lost' ? 'Lost' : 'Bound', claim_name: 'agent-parent', pod_name: 'parent-pod' },
+        lifecycle_generation: currentCase === 'rotatedGeneration' ? 2 : 1,
+        sandbox: { backend: legacyLooksCurrent ? 'kubernetes-sandbox-claim' : 'kata-exec-sidecar',
+          phase: 'Bound', claim_name: legacyLooksCurrent ? 'agent-parent' : 'historic-claim',
+          pod_name: legacyLooksCurrent ? 'parent-pod' : 'historic-pod',
+          current_binding: currentCase === 'missing' ? undefined : {
+            state: currentCase === 'unavailable' || previewCase === 'lost' ? 'unavailable'
+              : currentCase === 'conflict' ? 'conflict' : 'verified',
+            run_id: currentCase === 'foreignRun' ? 'foreign' : 'parent',
+            provisioner: currentCase === 'provisioner' ? 'other' : 'kubernetes-sandbox-claim',
+            claim_name: currentCase === 'claimName' ? '' : 'agent-parent',
+            claim_uid: currentCase === 'claimUid' ? '' : 'claim-uid',
+            pod_name: currentCase === 'podName' ? 'other-pod' : 'parent-pod',
+            pod_uid: currentCase === 'podUid' ? '' : 'pod-uid',
+            namespace: currentCase === 'namespace' ? '' : 'agentweaver',
+            lifecycle_generation: currentCase === 'generation' ? 0 : 1,
+            assembly_attempt: currentCase === 'attempt' ? '' : '4',
+            source_repository: currentCase === 'repository' ? '' : '/repository',
+            source_ref: currentCase === 'ref' ? '' : 'branch',
+            source_base_commit: currentCase === 'baseCommit' ? '' : 'commit',
+            source_tree: currentCase === 'sourceTree' ? 'stale-tree' : tree(),
+            source_worktree: currentCase === 'worktree' ? '' : '/worktree',
+          } },
       } };
     };
     const result = await runOracleAcceptance({
@@ -514,7 +536,7 @@ test('stale, manual, foreign, ambiguous, mismatched and failed previews are not 
     const { result, previewPosts, opened, deleted, decisions } = await driveReviewFixture({ previewCase });
     assert.equal(result.verdict, 'fail', previewCase);
     assert.equal(result.phase, 'initialPreview', previewCase);
-    assert.match(result.error.message, /preview|claim-bound/i, previewCase);
+    assert.match(result.error.message, /preview|verified claim/i, previewCase);
     assert.deepEqual([previewPosts, opened, deleted, decisions], [[], [], [], []], previewCase);
   }
 });
@@ -545,8 +567,12 @@ test('same-tree recovery selects only the latest terminal event and its live ses
     await deltas.poll('parent');
     return () => selectCurrentAutomaticPreview({
       runId: 'parent', plan: { workPlanId: planWorkPlanId, coordinatorRunId: 'parent', status: 'in_review' },
-      run: { sandbox: { backend: 'kubernetes-sandbox-claim', phase: 'Bound',
-        claim_name: 'agent-parent', pod_name: 'parent-pod' } },
+      run: { lifecycle_generation: 1, sandbox: { backend: 'kata-exec-sidecar', pod_name: 'historic-pod',
+        current_binding: { state: 'verified', run_id: 'parent', provisioner: 'kubernetes-sandbox-claim',
+          claim_name: 'agent-parent', claim_uid: 'claim-uid', pod_name: 'parent-pod', pod_uid: 'pod-uid',
+          namespace: 'agentweaver', lifecycle_generation: 1, assembly_attempt: '4',
+          source_repository: '/repository', source_ref: 'branch', source_base_commit: 'commit',
+          source_tree: 'tree-original', source_worktree: '/worktree' } } },
       revision: { tree_hash: 'tree-original', ...detail }, deltas, sessions,
     });
   };
@@ -577,6 +603,33 @@ test('same-tree recovery selects only the latest terminal event and its live ses
   for (const planId of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '42']) {
     const invalid = await select([ready('current', 2)], [session('current')], { work_plan_id: '42' }, planId);
     assert.throws(invalid, /Current review, work plan and revision tree do not match/, String(planId));
+  }
+});
+
+test('current automatic preview requires verified current claim and source for both review gates', async () => {
+  const valid = await driveReviewFixture();
+  assert.equal(valid.result.verdict, 'pass');
+  assert.deepEqual(valid.opened.map((entry) => entry[1]), ['original', 'fixed']);
+  assert.deepEqual(valid.decisions.map((entry) => entry.body.output_revision_id), ['revision-1', 'revision-2']);
+  for (const bindingCase of ['missing', 'unavailable', 'conflict', 'foreignRun', 'provisioner',
+    'claimName', 'claimUid', 'podName', 'podUid', 'namespace', 'generation', 'rotatedGeneration',
+    'attempt', 'repository', 'ref', 'baseCommit', 'sourceTree', 'worktree']) {
+    const { result, opened, decisions, previewPosts } = await driveReviewFixture({
+      bindingCase, legacyLooksCurrent: true,
+    });
+    assert.equal(result.verdict, 'fail', bindingCase);
+    assert.equal(result.phase, 'initialPreview', bindingCase);
+    assert.match(result.error.message, /verified claim and source binding/, bindingCase);
+    assert.deepEqual([opened, decisions, previewPosts], [[], [], []], bindingCase);
+  }
+  for (const correctedBindingCase of ['unavailable', 'foreignRun', 'claimUid', 'podUid',
+    'rotatedGeneration', 'sourceTree']) {
+    const { result, opened, decisions } = await driveReviewFixture({ correctedBindingCase });
+    assert.equal(result.verdict, 'fail', correctedBindingCase);
+    assert.equal(result.phase, 'correctedPreview', correctedBindingCase);
+    assert.match(result.error.message, /verified claim and source binding/, correctedBindingCase);
+    assert.deepEqual(opened.map((entry) => entry[1]), ['original'], correctedBindingCase);
+    assert.deepEqual(decisions.map((entry) => entry.body.output_revision_id), ['revision-1'], correctedBindingCase);
   }
 });
 
