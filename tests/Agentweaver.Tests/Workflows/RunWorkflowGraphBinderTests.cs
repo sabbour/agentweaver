@@ -111,6 +111,18 @@ public sealed class RunWorkflowGraphBinderTests
     }
 
     [Fact]
+    public void ComposedNode_AgentEdgePublishesAcceptedTreeBeforeComposedBinding()
+    {
+        var bindings = FakeBindings.Create();
+        var wiring = (FakeWiring)bindings.Wiring;
+        var builder = new GraphDescriptorBuilder(bindings.AgentInputStorer);
+
+        RunWorkflowGraphBinder.WireFull(builder, ComposedDefinition(), bindings);
+
+        wiring.PublishedComposedTree.Should().BeTrue();
+    }
+
+    [Fact]
     public void ComposedRecovery_EntersOnlySavedComposedNode_WithoutChangingAuthoredStart()
     {
         var definition = ComposedDefinition();
@@ -984,10 +996,15 @@ internal sealed class FakeWiring(
     ExecutorBinding mergeToOutputAdapter,
     ScribeSubPath openPrScribePath) : IRunWorkflowWiringSupport
 {
+    public bool PublishedComposedTree { get; private set; }
     public ExecutorBinding ResolveAgentNode(WorkflowNode node) => agent;
     public ExecutorBinding ResolvePeerReviewNode(WorkflowNode node) => agent;
     public ExecutorBinding ResolveOpenPullRequestNode(WorkflowNode node) => openPr;
-    public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
+    public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge, bool publishComposedTree = false)
+    {
+        PublishedComposedTree |= publishComposedTree;
+        return mergeToOutputAdapter;
+    }
     public ExecutorBinding ReviewToAgentForwardAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ExecutorBinding ReviewToAgentReviseAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
     public ExecutorBinding StoreAgentOutputAdapter(WorkflowEdge edge) => mergeToOutputAdapter;
