@@ -33,6 +33,10 @@
     "deps:verify": "node scripts/ci/shared-deps.mjs verify",
     "validate:layer": "node scripts/ci/validate.mjs --profile layer",
     "validate:full": "node scripts/ci/validate.mjs --profile full",
+    "coverage:dotnet": "node scripts/ci/coverage.mjs dotnet",
+    "coverage:web": "node scripts/ci/coverage.mjs web",
+    "coverage:node": "node scripts/ci/coverage.mjs node",
+    "coverage:all": "node scripts/ci/coverage.mjs all",
     "workflow:ponytail-gate": "node scripts/ci/ponytail-gate.mjs",
     "demo:record": "node scripts/demo-recording/cli.mjs",
     "changeset": "changeset add",
@@ -50,6 +54,7 @@
     "@types/node": "^26.2.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
+    "c8": "10.1.3",
     "elkjs": "0.11.0",
     "playwright": "^1.62.1",
     "yaml": "^2.9.0"
