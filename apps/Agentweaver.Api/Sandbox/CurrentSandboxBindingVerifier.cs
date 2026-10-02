@@ -59,7 +59,8 @@ public sealed record CurrentSandboxAttestation(
     string SourceRef,
     string SourceBaseCommit,
     string SourceTree,
-    string SourceWorktree);
+    string SourceWorktree,
+    string? SourceWorktreeIdentity = null);
 
 public static class CurrentSandboxBindingVerifier
 {
