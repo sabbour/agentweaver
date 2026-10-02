@@ -54,6 +54,9 @@ test("every area uploads its report unconditionally with bounded retention", () 
     assert.match(job, /uses: actions\/upload-artifact@v4/);
     assert.match(job, /if: always\(\)\n\s+uses: actions\/upload-artifact@v4/, "upload must run even if the coverage step failed");
     assert.match(job, /retention-days: \$\{\{ fromJSON\(env\.COVERAGE_ARTIFACT_RETENTION_DAYS\) \}\}/);
+    // A coverage command that exits zero but drops/moves its output path must
+    // still fail the job — "warn" would let a missing report pass silently.
+    assert.match(job, /if-no-files-found: error/, "a missing coverage report must fail the upload step, not just warn");
   }
   assert.match(dotnetJob, /path: TestResults\/coverage/);
   assert.match(webJob, /path: apps\/web\/coverage/);
