@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using LibGit2Sharp;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
@@ -78,6 +79,67 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     internal string? ApiKey => _apiKey;
 
     internal IWorkflowAgentFactory AgentFactory => _agentFactory;
+
+    internal async Task PublishComposedAgentTreeAsync(
+        AgentTurnInput? previous, AgentTurnOutput output, CancellationToken ct)
+    {
+        if (previous is null || !RunId.TryParse(previous.RunId, out var rootId)
+            || output.RunId != previous.RunId || output.TerminalFailureReason is not null
+            || output.WorktreePath != previous.WorktreePath
+            || output.WorktreeBranch != previous.WorktreeBranch
+            || output.RepositoryPath != previous.RepositoryPath
+            || output.OriginatingBranch != previous.OriginatingBranch
+            || output.ProjectId != previous.ProjectId
+            || output.SubmittingUser != previous.SubmittingUser
+            || output.ModelSource != previous.ModelSource
+            || output.ModelId != previous.ModelId
+            || output.ByokProviderFingerprint != previous.ByokProviderFingerprint
+            || output.WorktreeBranch != Git.WorktreeManager.BranchNameFor(rootId)
+            || string.IsNullOrWhiteSpace(output.TreeHash)
+            || _worktreeOps.GetTreeHash(output.WorktreePath) != output.TreeHash)
+            throw new InvalidOperationException("Composed agent output does not match the root execution input.");
+        using (var repository = new Repository(output.WorktreePath))
+        {
+            if (repository.Info.IsHeadDetached
+                || repository.Head.FriendlyName != output.WorktreeBranch
+                || repository.RetrieveStatus(new StatusOptions { IncludeUntracked = true }).IsDirty)
+                throw new InvalidOperationException("Composed agent output worktree is not clean on the root branch.");
+        }
+        var expected = await _runStore.GetAsync(rootId, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Composed root run is unavailable.");
+        if (expected.ParentRunId is not null
+            || expected.RepositoryPath != previous.RepositoryPath
+            || expected.OriginatingBranch != previous.OriginatingBranch
+            || expected.ModelSource.ToApiString() != previous.ModelSource
+            || expected.ModelId != previous.ModelId
+            || expected.SubmittingUser != previous.SubmittingUser
+            || expected.ProjectId?.ToString() != previous.ProjectId)
+            throw new InvalidOperationException("Composed root execution context changed.");
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var claim = await scope.ServiceProvider.GetRequiredService<IRunLeaseStore>()
+            .GetActiveClaimAsync(previous.RunId, ct).ConfigureAwait(false);
+        if (claim is null || claim.LifecycleGeneration != expected.LifecycleGeneration)
+            throw new InvalidOperationException("Composed root lease changed.");
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var published = await db.Runs.Where(run =>
+                run.RunId == previous.RunId && run.ParentRunId == null
+                && run.Status == "in_progress"
+                && run.LifecycleGeneration == expected.LifecycleGeneration
+                && run.TreeHash == expected.TreeHash
+                && run.WorktreePath == previous.WorktreePath
+                && run.WorktreeBranch == previous.WorktreeBranch
+                && run.ProjectId == previous.ProjectId
+                && run.CurrentOutputRevisionId == null
+                && run.ApprovedOutputRevisionId == null
+                && run.OwnerId == claim.OwnerId
+                && run.FencingToken == claim.FencingToken
+                && run.LeaseExpiresAt > now)
+            .ExecuteUpdateAsync(update => update.SetProperty(run => run.TreeHash, output.TreeHash), ct)
+            .ConfigureAwait(false);
+        if (published != 1)
+            throw new InvalidOperationException("Composed agent output could not be published to the current root lifecycle.");
+    }
 
     internal async Task FinalizeScribeHousekeepingAsync(
         ScribeTurnInput input,
@@ -892,9 +954,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     var parentRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false)
                         ?? throw new InvalidOperationException($"Parent workflow run '{input.RunId}' was not found.");
                     var baseTree = _worktreeOps.GetTreeHash(input.WorktreePath);
-                    if (string.IsNullOrWhiteSpace(baseTree))
+                    if (string.IsNullOrWhiteSpace(baseTree) || baseTree != parentRun.TreeHash)
                         throw new InvalidOperationException(
-                            $"Coordinator-composed node '{composedNode.Id}' could not capture the parent tree.");
+                            $"Coordinator-composed node '{composedNode.Id}' cannot capture an unpublished parent tree.");
 
                     await using var scope = _scopeFactory.CreateAsyncScope();
                     var attachment = await scope.ServiceProvider
@@ -1268,7 +1330,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         private static string EdgeId(string role, WorkflowEdge e) =>
             $"{role}-{e.From}-{e.To}-{e.When ?? "x"}";
 
-        public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge)
+        public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge, bool publishComposedTree = false)
         {
             var id = EdgeId("seq-turn", edge);
             return new VisualFunctionExecutor<AgentTurnOutput, AgentTurnInput>(
@@ -1276,6 +1338,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 async (output, ctx, ct) =>
                 {
                     var prev = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    if (publishComposedTree)
+                        await _factory.PublishComposedAgentTreeAsync(prev, output, ct).ConfigureAwait(false);
                     var next = ContinueTurn(prev, output, "Previous step output", isRevision: false);
                     await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
                     return next;

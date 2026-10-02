@@ -866,7 +866,7 @@ internal static class RunWorkflowGraphBinder
             {
                 if (b.ComposedBinding is null)
                     return false;
-                var adapter = s.SequentialAgentAdapter(edge);
+                var adapter = s.SequentialAgentAdapter(edge, publishComposedTree: true);
                 g.AddEdge<AgentTurnOutput>(
                         s.ResolveAgentNode(fromNode),
                         adapter,

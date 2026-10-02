@@ -1947,8 +1947,9 @@ app.MapPost("/api/runs/{id}/request-changes", async (
 
 // POST /api/runs/{id}/retry — resume eligible coordinators/composed workflows in place, otherwise
 // create a fresh run linked via retried_from. Owner-scoped (401 unauth via middleware, 403 non-owner,
-// 404 unknown). Eligible source states: Failed and MergeFailed. Child runs and every other state are
-// rejected 409. A soft cap blocks retries once the retried_from chain reaches depth 3.
+// 404 unknown). Eligible source states: Failed, MergeFailed, and an unlaunched composed
+// recovery with its durable marker. Child runs and every other state are rejected 409.
+// A soft cap blocks retries once the retried_from chain reaches depth 3.
 app.MapPost("/api/runs/{id}/retry", async (
     HttpContext httpContext,
     string id,
@@ -1987,9 +1988,9 @@ app.MapPost("/api/runs/{id}/retry", async (
     if (run.ParentRunId is not null)
         return Results.Conflict(new { error = "run_not_retryable", status = run.Status.ToApiString() });
 
-    // Eligible source states: terminal-failure only (Failed, MergeFailed). Declined and every
-    // non-failure / in-flight / terminal-success state is rejected.
-    if (run.Status is not (RunStatus.Failed or RunStatus.MergeFailed))
+    var pendingComposedRecovery = run.Status == RunStatus.InProgress
+        && await composedRecovery.CanRetryPendingAsync(run, ct).ConfigureAwait(false);
+    if (run.Status is not (RunStatus.Failed or RunStatus.MergeFailed) && !pendingComposedRecovery)
         return Results.Conflict(new { error = "run_not_retryable", status = run.Status.ToApiString() });
 
     // Soft cap: walk the retried_from provenance chain. Depth >= 3 means three retries already
@@ -2018,7 +2019,8 @@ app.MapPost("/api/runs/{id}/retry", async (
     var isPinnedWorkflowRun = run.ParentRunId is null
         && run.GetExecutableWorkflowPin() is { } executablePin
         && RunWorkflowGraphBinder.ContainsStaticFanRegion(executablePin);
-    var isComposedRecovery = WorkflowComposedRecoveryService.IsDecompositionFailure(run);
+    var isComposedRecovery = pendingComposedRecovery
+        || WorkflowComposedRecoveryService.IsDecompositionFailure(run);
     using var execution = await EndpointHelpers.BeginAiExecutionAsync(
         httpContext,
         isCoordinatorRun || isPinnedWorkflowRun || isComposedRecovery ? "orchestration" : "agent_turn",
