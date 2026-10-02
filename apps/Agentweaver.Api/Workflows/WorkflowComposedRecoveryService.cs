@@ -168,7 +168,7 @@ internal sealed class WorkflowComposedRecoveryService(
             if (!await EfRunStore.TryReopenTerminalOnContextAsync(
                     db, parent.Id, ct, parent, lease, clearResult: true).ConfigureAwait(false)
                 || !await EfRunStore.TryReopenTerminalOnContextAsync(
-                    db, child.Id, ct, child, clearResult: true).ConfigureAwait(false))
+                    db, child.Id, ct, child, clearResult: true, requireNoActiveLease: true).ConfigureAwait(false))
                 throw Rejected("composed_recovery_run_changed", parent.Id);
             var resumedGeneration = parent.LifecycleGeneration + 1;
             plan.Status = WorkPlanStatus.Planned;

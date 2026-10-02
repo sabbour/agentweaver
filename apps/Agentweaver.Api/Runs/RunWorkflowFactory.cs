@@ -81,7 +81,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     internal IWorkflowAgentFactory AgentFactory => _agentFactory;
 
     internal async Task PublishComposedAgentTreeAsync(
-        AgentTurnInput? previous, AgentTurnOutput output, CancellationToken ct)
+        AgentTurnInput? previous, AgentTurnOutput output, RunLeaseClaim executionLease, CancellationToken ct)
     {
         if (previous is null || !RunId.TryParse(previous.RunId, out var rootId)
             || output.RunId != previous.RunId || output.TerminalFailureReason is not null
@@ -117,12 +117,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             || expected.SubmittingUser != previous.SubmittingUser
             || expected.ProjectId?.ToString() != previous.ProjectId)
             throw new InvalidOperationException("Composed root execution context changed.");
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var claim = await scope.ServiceProvider.GetRequiredService<IRunLeaseStore>()
-            .GetActiveClaimAsync(previous.RunId, ct).ConfigureAwait(false);
-        if (claim is null || claim.LifecycleGeneration != expected.LifecycleGeneration)
+        if (executionLease.LifecycleGeneration != expected.LifecycleGeneration)
             throw new InvalidOperationException("Composed root lease changed.");
-        if (!await _runStore.TryPublishComposedAgentTreeAsync(expected, output.TreeHash, claim, ct)
+        if (!await _runStore.TryPublishComposedAgentTreeAsync(expected, output.TreeHash, executionLease, ct)
                 .ConfigureAwait(false))
             throw new InvalidOperationException("Composed agent output could not be published to the current root lifecycle.");
     }
@@ -478,7 +475,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     private (Workflow Workflow, GraphDescriptor Descriptor, IReadOnlyDictionary<string, ExecutorNodeMeta> ExecutorMeta) BuildWorkflow(
         bool isChild = false,
         WorkflowDefinition? effectiveDefinition = null,
-        string? recoveryComposedNodeId = null)
+        string? recoveryComposedNodeId = null,
+        RunLeaseClaim? executionLease = null)
     {
         // A fresh worker agent per workflow build (per run), resolved through the injectable
         // IWorkflowAgentFactory seam. In production this builds a CopilotAIAgent — an AIAgent the
@@ -1094,7 +1092,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         // The per-node / per-edge executor mint for generic catalog topologies (Feature 015 US3). Seeded
         // with the canonical "agent" node so the default + review-policy-composed pipelines keep the exact
         // same agent executor instance the policy plumbing references (golden descriptor parity).
-        var wiringSupport = new GenericWiringSupport(this, canonicalAgentNodeId: "agent", canonicalAgentBinding: agentBinding);
+        var wiringSupport = new GenericWiringSupport(
+            this, canonicalAgentNodeId: "agent", canonicalAgentBinding: agentBinding, executionLease);
 
         RunWorkflowGraphBinder.WireFull(
             fullBuilder,
@@ -1195,14 +1194,17 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     private sealed class GenericWiringSupport : IRunWorkflowWiringSupport
     {
         private readonly RunWorkflowFactory _factory;
+        private readonly RunLeaseClaim? _executionLease;
         private readonly Dictionary<string, ExecutorBinding> _agentNodes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ExecutorBinding> _peerReviewNodes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ExecutorBinding> _openPrNodes = new(StringComparer.Ordinal);
 
         public GenericWiringSupport(
-            RunWorkflowFactory factory, string canonicalAgentNodeId, ExecutorBinding canonicalAgentBinding)
+            RunWorkflowFactory factory, string canonicalAgentNodeId, ExecutorBinding canonicalAgentBinding,
+            RunLeaseClaim? executionLease)
         {
             _factory = factory;
+            _executionLease = executionLease;
             // Seed the canonical agent node so the DEFAULT (and review-policy-composed) pipeline keeps the
             // exact same agent executor instance the policy plumbing also references (b.AgentBinding) — this
             // is what preserves golden descriptor parity and keeps loop-backs targeting one agent node.
@@ -1325,7 +1327,11 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 {
                     var prev = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
                     if (publishComposedTree)
-                        await _factory.PublishComposedAgentTreeAsync(prev, output, ct).ConfigureAwait(false);
+                    {
+                        if (_executionLease is null)
+                            throw new InvalidOperationException("Composed agent output has no execution lease.");
+                        await _factory.PublishComposedAgentTreeAsync(prev, output, _executionLease, ct).ConfigureAwait(false);
+                    }
                     var next = ContinueTurn(prev, output, "Previous step output", isRevision: false);
                     await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
                     return next;
@@ -1751,7 +1757,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     /// </summary>
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false,
         int? steeringDirectiveId = null, int? steeringAttempt = null,
-        string? recoveryComposedNodeId = null)
+        string? recoveryComposedNodeId = null, RunLeaseClaim? executionLease = null)
     {
         WorkflowDefinition? effectiveDefinition = null;
         if (!isChild)
@@ -1789,7 +1795,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         if (recoveryComposedNodeId is not null && (isChild || effectiveDefinition is null))
             throw new WorkflowBindException("Composed recovery requires a pinned root workflow.", runId);
         var (workflow, descriptor, executorMeta) = BuildWorkflow(
-            isChild, effectiveDefinition, recoveryComposedNodeId);
+            isChild, effectiveDefinition, recoveryComposedNodeId, executionLease);
         // Capture the executorId -> render-metadata map so the watch loop can translate MAF executor
         // lifecycle events into workflow.step UI events for nodes without a dedicated self-emitter.
         _runExecutorMeta[runId] = executorMeta;

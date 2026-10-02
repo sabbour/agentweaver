@@ -134,7 +134,7 @@ public sealed partial class PostgresAppBootTests
         }
     }
 
-    [PostgresFact]
+    [PostgresRequiredFact]
     public async Task ComposedRecovery_ReopensOriginalIdentitiesAtomically_PreservesInputs_AndRejectsRepeat()
     {
         var seeded = await SeedComposedFailureAsync();
@@ -723,6 +723,9 @@ public sealed partial class PostgresAppBootTests
             var claimed = await leases.TryClaimAsync(
                 seeded.Parent.Id.ToString(), "composed-producer-test", TimeSpan.FromMinutes(5));
             claimed.Claimed.Should().BeTrue();
+            var producerLease = new RunLeaseClaim(
+                "composed-producer-test", claimed.FencingToken,
+                (await store.GetAsync(seeded.Parent.Id))!.LifecycleGeneration);
             var output = new AgentTurnOutput(
                 seeded.Parent.Id.ToString(), seeded.CapturedTree, "Committed metadata", 1,
                 seeded.Directory, seeded.Parent.WorktreeBranch!,
@@ -745,15 +748,30 @@ public sealed partial class PostgresAppBootTests
                 output with { ProjectId = ProjectId.New().ToString() },
             })
             {
-                var reject = () => factory.PublishComposedAgentTreeAsync(seeded.Input, invalid, CancellationToken.None);
+                var reject = () => factory.PublishComposedAgentTreeAsync(
+                    seeded.Input, invalid, producerLease, CancellationToken.None);
                 await reject.Should().ThrowAsync<InvalidOperationException>();
             }
             (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.Parent.TreeHash);
-            await factory.PublishComposedAgentTreeAsync(seeded.Input, output, CancellationToken.None);
+            await leases.ReleaseAsync(
+                seeded.Parent.Id.ToString(), producerLease.OwnerId, producerLease.FencingToken);
+            var replacement = await leases.TryClaimAsync(
+                seeded.Parent.Id.ToString(), "replacement-producer", TimeSpan.FromMinutes(5));
+            replacement.Claimed.Should().BeTrue();
+            var stale = () => factory.PublishComposedAgentTreeAsync(
+                seeded.Input, output, producerLease, CancellationToken.None);
+            await stale.Should().ThrowAsync<InvalidOperationException>();
+            (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.Parent.TreeHash);
+            await leases.ReleaseAsync(seeded.Parent.Id.ToString(), "replacement-producer", replacement.FencingToken);
+            var renewed = await leases.TryClaimAsync(
+                seeded.Parent.Id.ToString(), "composed-producer-test", TimeSpan.FromMinutes(5));
+            renewed.Claimed.Should().BeTrue();
+            producerLease = producerLease with { FencingToken = renewed.FencingToken };
+            await factory.PublishComposedAgentTreeAsync(seeded.Input, output, producerLease, CancellationToken.None);
             (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.CapturedTree);
 
             var changed = () => factory.PublishComposedAgentTreeAsync(
-                seeded.Input, output with { TreeHash = seeded.Parent.TreeHash! }, CancellationToken.None);
+                seeded.Input, output with { TreeHash = seeded.Parent.TreeHash! }, producerLease, CancellationToken.None);
             await changed.Should().ThrowAsync<InvalidOperationException>();
             (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().Be(seeded.CapturedTree);
             using var scope = _fixture.Services.CreateScope();
@@ -761,7 +779,7 @@ public sealed partial class PostgresAppBootTests
             await db.Runs.Where(run => run.RunId == seeded.Parent.Id.ToString())
                 .ExecuteUpdateAsync(update => update.SetProperty(run => run.Status, RunStatus.Failed.ToApiString()));
             var terminal = () => factory.PublishComposedAgentTreeAsync(
-                seeded.Input, output, CancellationToken.None);
+                seeded.Input, output, producerLease, CancellationToken.None);
             await terminal.Should().ThrowAsync<InvalidOperationException>();
         }
         finally
