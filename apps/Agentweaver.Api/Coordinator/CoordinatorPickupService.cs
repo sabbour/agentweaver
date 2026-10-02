@@ -86,7 +86,7 @@ public sealed class CoordinatorPickupService
                     task.AiExecutionProviderKey,
                     operation,
                     project.Id,
-                    task.CapturedByUserId ?? task.CapturedBy,
+                    task.ReadyByUserId ?? task.CapturedByUserId ?? task.CapturedBy,
                     ct).ConfigureAwait(false);
                 effectiveProvider = acceptedPlan.Provider;
                 if (effectiveProvider is EffectiveModelProviderResult.Byok expectedByok)
@@ -117,11 +117,10 @@ public sealed class CoordinatorPickupService
         else
         {
             effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
-            if (effectiveProvider is EffectiveModelProviderResult.Byok
-                && !WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
-                blockedReason = "operation_requires_github_copilot";
+            if (!WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
+                blockedReason = "queued_model_provider_confirmation_required";
         }
-        if (effectiveProvider is EffectiveModelProviderResult.Unavailable unavailable)
+        if (blockedReason is null && effectiveProvider is EffectiveModelProviderResult.Unavailable unavailable)
         {
             blockedReason = unavailable.UnavailableReason ==
                 EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization
@@ -147,7 +146,7 @@ public sealed class CoordinatorPickupService
             // Keep the human-facing GitHub login in CapturedBy while carrying the durable auth
             // subject into background execution. Legacy and automation tasks retain their existing
             // behavior through the fallback.
-            SubmittingUser = task.CapturedByUserId ?? task.CapturedBy,
+            SubmittingUser = task.ReadyByUserId ?? task.CapturedByUserId ?? task.CapturedBy,
             Status = staticFanWorkflow is null ? RunStatus.InProgress : RunStatus.Pending,
             StartedAt = now,
             ProjectId = project.Id,
@@ -210,7 +209,8 @@ public sealed class CoordinatorPickupService
         }
 
         var claim = await _backlogStore
-            .TryClaimAndReserveCoordinatorRunWithPolicyAsync(project.Id, task.Id, run, now, ct)
+            .TryClaimAndReserveCoordinatorRunWithPolicyAsync(project.Id, task.Id, run, now, ct,
+                task.AiExecutionProviderKey, task.ReadyByUserId)
             .ConfigureAwait(false);
 
         switch (claim.Result)

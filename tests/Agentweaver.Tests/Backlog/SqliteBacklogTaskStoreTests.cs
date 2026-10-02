@@ -78,6 +78,9 @@ public sealed class SqliteBacklogTaskStoreTests
                 "SELECT COUNT(*) FROM pragma_table_info('backlog_tasks') WHERE name = 'ai_execution_provider_key';";
             Convert.ToInt64(await verify.ExecuteScalarAsync()).Should().Be(1,
                 "queued AI work must retain its accepted execution plan across pickup");
+            verify.CommandText =
+                "SELECT COUNT(*) FROM pragma_table_info('backlog_tasks') WHERE name = 'ready_by_user_id';";
+            Convert.ToInt64(await verify.ExecuteScalarAsync()).Should().Be(1);
         }
 
         finally
@@ -99,12 +102,52 @@ public sealed class SqliteBacklogTaskStoreTests
         var task = MakeReadyTask(project.Id, "m") with
         {
             AiExecutionProviderKey = "signed.execution-plan",
+            ReadyByUserId = "ready-human",
         };
 
         await store.InsertAsync(task);
         var stored = await store.GetAsync(project.Id, task.Id);
 
         stored!.AiExecutionProviderKey.Should().Be("signed.execution-plan");
+        stored.ReadyByUserId.Should().Be("ready-human");
+    }
+
+    [Fact]
+    public async Task MoveReadyBacklogReady_ReplacesKeyAndActorTogether()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var task = MakeBacklogTask(project.Id, "n");
+        await store.InsertAsync(task);
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "n", DateTimeOffset.UtcNow,
+            providerKey: "first-key", readyByUserId: "first-human")).Should().BeTrue();
+        (await store.TryMoveToBacklogAsync(project.Id, task.Id, "n")).Should().BeTrue();
+        var reset = (await store.GetAsync(project.Id, task.Id))!;
+        reset.AiExecutionProviderKey.Should().BeNull();
+        reset.ReadyByUserId.Should().BeNull();
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "n", DateTimeOffset.UtcNow,
+            providerKey: "second-key", readyByUserId: "second-human")).Should().BeTrue();
+        var accepted = (await store.GetAsync(project.Id, task.Id))!;
+        accepted.AiExecutionProviderKey.Should().Be("second-key");
+        accepted.ReadyByUserId.Should().Be("second-human");
+    }
+
+    [Fact]
+    public async Task ServerCreatedManualWorkflow_ReadyKeepsPreSignedKeyWithoutHumanReadyActor()
+    {
+        var (testDb, store, project) = await NewStoreWithProjectAsync();
+        await using var _ = testDb;
+        var task = MakeBacklogTask(project.Id, "n") with
+        {
+            CapturedByUserId = "workflow-starter",
+            AiExecutionProviderKey = "workflow-signed-key",
+        };
+        await store.InsertAsync(task);
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "n", DateTimeOffset.UtcNow))
+            .Should().BeTrue();
+        var ready = (await store.GetAsync(project.Id, task.Id))!;
+        ready.AiExecutionProviderKey.Should().Be("workflow-signed-key");
+        ready.ReadyByUserId.Should().BeNull();
     }
 
     // =========================================================================

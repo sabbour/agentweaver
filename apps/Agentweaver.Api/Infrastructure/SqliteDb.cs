@@ -292,6 +292,7 @@ public sealed class SqliteDb
         await TryAlterAsync(connection,
             "ALTER TABLE backlog_tasks ADD COLUMN automation_invocation_pending INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN ai_execution_provider_key TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN ready_by_user_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN workflow_definition_snapshot_yaml TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN claimed_graph_revision INTEGER;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN claimed_prerequisites_json TEXT;", ct);
@@ -889,6 +890,7 @@ public sealed class SqliteDb
             order_key     TEXT NOT NULL,
             captured_by   TEXT NOT NULL,
             captured_by_user_id TEXT,
+            ready_by_user_id TEXT,
             created_at    TEXT NOT NULL,
             committed_at  TEXT,
             claimed_at    TEXT,

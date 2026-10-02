@@ -46,13 +46,13 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.CommandText =
             """
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
-                                       captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
+                                       captured_by, captured_by_user_id, ready_by_user_id, created_at, committed_at, claimed_at, run_id,
                                        workflow_override_id, workflow_definition_snapshot_yaml, archived_at, source_file_path,
                                        parent_prd_run_id, promotion_key, promotion_reason,
                                        automation_invocation_pending, ai_execution_provider_key,
                                        claimed_graph_revision, claimed_prerequisites_json)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
-                    $capturedBy, $capturedByUserId, $createdAt, $committedAt, $claimedAt, $runId,
+                    $capturedBy, $capturedByUserId, $readyByUserId, $createdAt, $committedAt, $claimedAt, $runId,
                     $workflowOverrideId, $workflowDefinitionSnapshotYaml, $archivedAt, $sourceFilePath,
                     $parentPrdRunId, $promotionKey, $promotionReason,
                     $automationInvocationPending, $aiExecutionProviderKey,
@@ -543,20 +543,25 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
     }
 
     public Task<bool> TryMoveToReadyAsync(
-        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt, CancellationToken ct = default) =>
+        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt,
+        CancellationToken ct = default, string? providerKey = null, string? readyByUserId = null) =>
         RunWithOrderKeyRetryAsync(projectId, id, "ready", newOrderKey, async (conn, key, c) =>
         {
             await using var command = conn.CreateCommand();
             command.CommandText =
                 """
                 UPDATE backlog_tasks
-                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt
+                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt,
+                       ai_execution_provider_key = COALESCE($providerKey, ai_execution_provider_key),
+                       ready_by_user_id = $readyByUserId
                  WHERE task_id = $taskId AND project_id = $projectId
                    AND state = 'backlog' AND archived_at IS NULL
                    AND automation_invocation_pending = 0;
                 """;
             command.Parameters.AddWithValue("$orderKey", key);
             command.Parameters.AddWithValue("$committedAt", Ts(committedAt));
+            command.Parameters.AddWithValue("$providerKey", (object?)providerKey ?? DBNull.Value);
+            command.Parameters.AddWithValue("$readyByUserId", (object?)readyByUserId ?? DBNull.Value);
             command.Parameters.AddWithValue("$taskId", id.ToString());
             command.Parameters.AddWithValue("$projectId", projectId.ToString());
             return await command.ExecuteNonQueryAsync(c).ConfigureAwait(false);
@@ -591,7 +596,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             command.CommandText =
                 """
                 UPDATE backlog_tasks
-                   SET state = 'backlog', order_key = $orderKey, committed_at = NULL
+                   SET state = 'backlog', order_key = $orderKey, committed_at = NULL,
+                       ai_execution_provider_key = NULL, ready_by_user_id = NULL
                  WHERE task_id = $taskId AND project_id = $projectId
                    AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
                    AND automation_invocation_pending = 0;
@@ -626,7 +632,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
     }
 
     public async Task<int> MoveAllBacklogToReadyAsync(
-        ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default)
+        ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default,
+        string? providerKey = null, string? readyByUserId = null)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var tx = connection.BeginTransaction();
@@ -687,13 +694,16 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             update.CommandText =
                 """
                 UPDATE backlog_tasks
-                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt
+                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt,
+                       ai_execution_provider_key = $providerKey, ready_by_user_id = $readyByUserId
                  WHERE task_id = $taskId AND project_id = $projectId
                    AND state = 'backlog' AND archived_at IS NULL
                    AND automation_invocation_pending = 0;
                 """;
             update.Parameters.AddWithValue("$orderKey", newKey);
             update.Parameters.AddWithValue("$committedAt", Ts(committedAt));
+            update.Parameters.AddWithValue("$providerKey", (object?)providerKey ?? DBNull.Value);
+            update.Parameters.AddWithValue("$readyByUserId", (object?)readyByUserId ?? DBNull.Value);
             update.Parameters.AddWithValue("$taskId", taskId);
             update.Parameters.AddWithValue("$projectId", projectId.ToString());
             moved += await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -718,7 +728,9 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         BacklogTaskId id,
         Run coordinatorRun,
         DateTimeOffset claimedAt,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? expectedProviderKey = null,
+        string? expectedReadyByUserId = null)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var tx = connection.BeginTransaction();
@@ -807,6 +819,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                        claimed_prerequisites_json = $claimedInputs
                  WHERE task_id = $taskId AND project_id = $projectId
                    AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
+                   AND ai_execution_provider_key IS $expectedProviderKey
+                   AND ready_by_user_id IS $expectedReadyByUserId
                    AND NOT EXISTS (
                         SELECT 1
                           FROM backlog_task_dependencies d
@@ -830,6 +844,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             claim.Parameters.AddWithValue("$claimedInputs", JsonSerializer.Serialize(claimedInputs));
             claim.Parameters.AddWithValue("$taskId", id.ToString());
             claim.Parameters.AddWithValue("$projectId", projectId.ToString());
+            claim.Parameters.AddWithValue("$expectedProviderKey", (object?)expectedProviderKey ?? DBNull.Value);
+            claim.Parameters.AddWithValue("$expectedReadyByUserId", (object?)expectedReadyByUserId ?? DBNull.Value);
             var claimedRows = await claim.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (claimedRows != 1)
             {
@@ -1061,6 +1077,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$orderKey", task.OrderKey);
         command.Parameters.AddWithValue("$capturedBy", task.CapturedBy);
         command.Parameters.AddWithValue("$capturedByUserId", (object?)task.CapturedByUserId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$readyByUserId", (object?)task.ReadyByUserId ?? DBNull.Value);
         command.Parameters.AddWithValue("$createdAt", Ts(task.CreatedAt));
         command.Parameters.AddWithValue("$committedAt", NullableTs(task.CommittedAt));
         command.Parameters.AddWithValue("$claimedAt", NullableTs(task.ClaimedAt));
@@ -1089,7 +1106,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
               captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
               workflow_override_id, workflow_definition_snapshot_yaml, archived_at, source_file_path,
               parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending,
-              ai_execution_provider_key, claimed_graph_revision, claimed_prerequisites_json
+              ai_execution_provider_key, claimed_graph_revision, claimed_prerequisites_json, ready_by_user_id
           FROM backlog_tasks
         """;
 
@@ -1103,6 +1120,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         OrderKey    = r.GetString(5),
         CapturedBy  = r.GetString(6),
         CapturedByUserId = r.IsDBNull(7) ? null : r.GetString(7),
+        ReadyByUserId = r.IsDBNull(23) ? null : r.GetString(23),
         CreatedAt   = DateTimeOffset.Parse(r.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         CommittedAt = r.IsDBNull(9)  ? null : DateTimeOffset.Parse(r.GetString(9),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         ClaimedAt   = r.IsDBNull(10) ? null : DateTimeOffset.Parse(r.GetString(10), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),

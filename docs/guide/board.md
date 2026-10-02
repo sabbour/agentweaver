@@ -24,6 +24,22 @@ the coordinator and agents.
 You can only drag tasks between **Backlog** and **Ready**. The coordinator owns every other column transition. Dragging a task back from Ready to Backlog pulls it out of the queue before the heartbeat picks it up.
 :::
 
+Moving one task or the entire backlog to **Ready** requires a signed-in Microsoft Entra
+user with a Contributor project role and an available model provider. Ready records
+the accepting user's identity and the selected provider separately from the original
+capturer; accepting a teammate's task does not change who captured it or who is
+accountable for its confirmation. Internal service credentials cannot accept tasks
+on a user's behalf. Moving a task back to Backlog clears its accepted provider and
+Ready identity; moving it to Ready again accepts the current provider and user.
+An empty bulk move changes nothing.
+REST callers use `POST /api/projects/{projectId}/backlog/tasks/{taskId}/ready`
+or `POST /api/projects/{projectId}/backlog/ready-all`; the latter returns
+`{ "moved": number }`. The MCP Ready tools delegate to these same routes.
+Both reject callers without a human Entra subject with
+`403 human_entra_subject_required`, and unavailable model providers with
+`409 model_provider_connection_required`. The accepted key and user subject
+are not part of the task response.
+
 ## Capturing tasks
 
 The **Backlog** column has a capture bar at the top. Type a short task title and press **Enter** or click **Add**.
@@ -153,6 +169,10 @@ From Problems, you can:
 - Open the run to read the full trace and understand what went wrong
 - Use the run's explicit retry or recovery controls after inspecting the failure
 - Capture revised work separately when a new task is needed; Problems cards cannot be dragged to Ready
+
+For an older Ready task without a recorded provider acceptance, capture a replacement
+task or move the unclaimed task back to Backlog and then to Ready again. The failed
+run itself stays in Problems; it is not automatically requeued.
 
 ## Human Review column
 

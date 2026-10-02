@@ -221,11 +221,12 @@ public static class BacklogEndpoints
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
             BacklogTaskReadModelFactory readModelFactory,
+            AiExecutionPlanService executionPlans,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid) || !BacklogTaskId.TryParse(taskId, out var tid))
                 return Results.BadRequest(new { error = "Invalid id." });
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
+            var auth = await AuthorizeReadyAsync(httpContext, pid, projectStore, ct);
             if (auth.Error is not null) return auth.Error;
 
             var task = await backlogStore.GetAsync(pid, tid, ct);
@@ -235,10 +236,14 @@ public static class BacklogEndpoints
 
             var existing = await backlogStore.ListByProjectAsync(pid, ct);
             var newKey = KeyForIndex(BucketKeys(existing, BacklogTaskState.Ready), request?.TargetIndex, movingTaskId: null);
+            var providerKey = await PrepareReadyProviderKeyAsync(executionPlans, pid, httpContext.GetCaller(), ct);
+            if (providerKey is null)
+                return Results.Conflict(new { error = "model_provider_connection_required" });
 
             try
             {
-                var moved = await backlogStore.TryMoveToReadyAsync(pid, tid, newKey, DateTimeOffset.UtcNow, ct);
+                var moved = await backlogStore.TryMoveToReadyAsync(pid, tid, newKey, DateTimeOffset.UtcNow,
+                    ct, providerKey, httpContext.GetCaller().EntraObjectId);
                 if (!moved) return Results.Conflict(new { error = "not_in_backlog" });
             }
             catch (OrderKeyConflictException)
@@ -256,15 +261,23 @@ public static class BacklogEndpoints
             string projectId,
             IProjectStore projectStore,
             IBacklogTaskStore backlogStore,
+            AiExecutionPlanService executionPlans,
             CancellationToken ct) =>
         {
             if (!ProjectId.TryParse(projectId, out var pid))
                 return Results.BadRequest(new { error = "Invalid project id." });
 
-            var auth = await AuthorizeProjectAsync(httpContext, pid, projectStore, ProjectRole.Contributor, ct);
+            var auth = await AuthorizeReadyAsync(httpContext, pid, projectStore, ct);
             if (auth.Error is not null) return auth.Error;
 
-            var moved = await backlogStore.MoveAllBacklogToReadyAsync(pid, DateTimeOffset.UtcNow, ct);
+            if (!(await backlogStore.ListByProjectAsync(pid, ct)).Any(t =>
+                    t.State == BacklogTaskState.Backlog && !t.IsAutomationInvocationPending))
+                return Results.Ok(new ReadyAllResponse { Moved = 0 });
+            var providerKey = await PrepareReadyProviderKeyAsync(executionPlans, pid, httpContext.GetCaller(), ct);
+            if (providerKey is null)
+                return Results.Conflict(new { error = "model_provider_connection_required" });
+            var moved = await backlogStore.MoveAllBacklogToReadyAsync(pid, DateTimeOffset.UtcNow,
+                ct, providerKey, httpContext.GetCaller().EntraObjectId);
             return Results.Ok(new ReadyAllResponse { Moved = moved });
         });
 
@@ -514,6 +527,31 @@ public static class BacklogEndpoints
             return (forbid, null);
 
         return (null, project);
+    }
+
+    private static async Task<(IResult? Error, Project? Project)> AuthorizeReadyAsync(
+        HttpContext httpContext, ProjectId projectId, IProjectStore projectStore, CancellationToken ct)
+    {
+        var project = await projectStore.GetAsync(projectId, ct);
+        if (project is null) return (Results.NotFound(), null);
+        if (HumanEntraSubjectAuthorization.Evaluate(httpContext.GetCaller(), httpContext.User) != HumanEntraSubjectState.Allowed
+            || ProjectAuthorization.IsDedicatedInternalServiceCaller(httpContext, httpContext.GetCaller()))
+            return (Results.Json(new { error = "human_entra_subject_required" },
+                statusCode: StatusCodes.Status403Forbidden), null);
+        var configuration = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var forbidden = await ProjectAuthorization.RequireAccessAsync(
+            httpContext, project, configuration, ProjectRole.Contributor, ct, allowInternalService: false);
+        return (forbidden, forbidden is null ? project : null);
+    }
+
+    private static async Task<string?> PrepareReadyProviderKeyAsync(
+        AiExecutionPlanService executionPlans, ProjectId projectId, CallerContext caller, CancellationToken ct)
+    {
+        if (!AiOperationCatalog.TryGet("orchestration", out var operation))
+            throw new InvalidOperationException("The orchestration AI operation is not registered.");
+        var plan = await executionPlans.PrepareAsync(operation, projectId, caller, ct);
+        return plan.Provider is EffectiveModelProviderResult.Unavailable
+            ? null : executionPlans.CreateQueuedProviderKey(plan);
     }
 
     private static string? FirstNonEmpty(params string?[] values) =>
