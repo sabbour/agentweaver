@@ -485,6 +485,8 @@ public sealed partial class PostgresAppBootTests
                 ModelSource: seeded.Input.ModelSource, ModelId: seeded.Parent.ModelId,
                 ByokProviderFingerprint: seeded.Input.ByokProviderFingerprint);
             var factory = _fixture.Services.GetRequiredService<RunWorkflowFactory>();
+            seeded.Parent.RepositoryPath.Should().NotBe(seeded.Directory);
+            seeded.Parent.TreeHash.Should().NotBe(seeded.CapturedTree);
             foreach (var invalid in new[]
             {
                 output with { RunId = seeded.Child.Id.ToString() },
@@ -792,6 +794,9 @@ public sealed partial class PostgresAppBootTests
         var capturedTree = tree;
         if (agentCommit)
         {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, "demo", "fan-result.md"), "Retained fan projection.\n");
+            parent = parent with { TreeHash = CommitFixture(directory, "Fan input projection") };
             await File.AppendAllTextAsync(Path.Combine(directory, ".squad", "decisions.md"), "\nAgent turn committed.\n");
             capturedTree = CommitFixture(directory, "Agent turn committed");
         }
