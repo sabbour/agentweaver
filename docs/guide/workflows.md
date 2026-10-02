@@ -182,7 +182,11 @@ dependencies; planning does not run again.
 Cancellation, previously dispatched work (including a prior child run whose subtask was reset), changed
 inputs, or competing recovery return an explicit conflict instead of creating a replacement run.
 A durable recovery marker lets startup finish a recovery interrupted between the database commit
-and workflow launch. SQLite keeps run and plan records in separate databases, so this atomic
+and workflow launch. If the worktree or provider changes after that commit, launch refuses to
+proceed; restoring the saved inputs permits either startup recovery or an explicit REST/MCP retry on
+the same still-unlaunched in-progress parent. That retry retains the committed lifecycle
+generation, original IDs, and plan; it cannot adopt changed inputs or take over a live lease.
+SQLite keeps run and plan records in separate databases, so this atomic
 composed-recovery path explicitly refuses SQLite rather than partially reopening its records;
 ordinary retries are unchanged.
 
