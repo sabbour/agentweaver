@@ -131,6 +131,11 @@ accepts an arbitrary URL or path. Refresh and disconnect use the corresponding
 `POST /api/auth/github/repo-app/authorization/refresh` and
 `DELETE /api/auth/github/repo-app/authorization` endpoints. Both require the same
 human Entra subject as authorization begin.
+Repository browsing refreshes a near-expiry Repo App user token and retries one GitHub
+401 after renewal. Refresh returns `503 github_provider_unavailable` when GitHub or
+credential storage is temporarily unavailable; it preserves the existing authorization
+so the caller can retry. A rejected refresh token invalidates the authorization and
+requires a new Repo App authorization.
 
 #### Repo App installation and webhook
 

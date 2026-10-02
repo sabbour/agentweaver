@@ -315,6 +315,77 @@ public sealed class RepoAppUserAuthorizationServiceTests
     }
 
     [Fact]
+    public async Task Refresh_TransientProviderResponsePreservesTheExistingAuthorization()
+    {
+        const string subject = "transient-refresh-subject";
+        await using var database = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var service = CreateService(
+            database,
+            secrets,
+            new StubHttpClientFactory(TokenResponse(), "not-json"));
+        var begin = await service.BeginAsync(Human(subject), HumanPrincipal(), "settings");
+        (await service.CompleteAsync(
+            Human(subject), HumanPrincipal(), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+        var reference = (await database.GitHubAppAuthorizations.SingleAsync()).CredentialReference;
+        var before = (await secrets.GetSecretAsync(reference)).Value;
+
+        (await service.RefreshAsync(Human(subject), HumanPrincipal()))
+            .Should().Be(RepoAppAuthorizationOutcome.GitHubProviderUnavailable);
+        (await secrets.GetSecretAsync(reference)).Value.Should().Be(before);
+        database.ChangeTracker.Clear();
+        (await database.GitHubAppAuthorizations.SingleAsync()).RevokedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Refresh_RejectedRefreshTokenRequiresNewRepoAppAuthorization()
+    {
+        const string subject = "rejected-refresh-subject";
+        await using var database = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var service = CreateService(
+            database,
+            secrets,
+            new StubHttpClientFactory(TokenResponse(), """{"error":"bad_refresh_token"}"""));
+        var begin = await service.BeginAsync(Human(subject), HumanPrincipal(), "settings");
+        (await service.CompleteAsync(
+            Human(subject), HumanPrincipal(), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+        var reference = (await database.GitHubAppAuthorizations.SingleAsync()).CredentialReference;
+
+        (await service.RefreshAsync(Human(subject), HumanPrincipal()))
+            .Should().Be(RepoAppAuthorizationOutcome.GitHubBindingUnavailable);
+        (await secrets.GetSecretAsync(reference)).Value.Should().Contain("revoked").And.NotContain("ghu_access");
+        database.ChangeTracker.Clear();
+        (await database.GitHubAppAuthorizations.SingleAsync()).RevokedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RepositoryCredentialRead_TemporaryVaultFailureLeavesTheBindingIntact()
+    {
+        const string subject = "vault-read-subject";
+        await using var database = await OpenDatabaseAsync();
+        var secrets = new InMemorySecretStore();
+        var factory = new StubHttpClientFactory(TokenResponse());
+        var setup = CreateService(database, secrets, factory);
+        var begin = await setup.BeginAsync(Human(subject), HumanPrincipal(), "settings");
+        (await setup.CompleteAsync(
+            Human(subject), HumanPrincipal(), Query(begin.AuthorizationUrl!, "state"), "code", begin.CallbackCookie))
+            .Outcome.Should().Be(RepoAppAuthorizationOutcome.Success);
+        var reference = (await database.GitHubAppAuthorizations.SingleAsync()).CredentialReference;
+        var service = CreateService(database, new FailingReadSecretStore(), factory);
+
+        (await service.RefreshForRepositoryAsync(subject, force: false, CancellationToken.None))
+            .Should().Be(RepoAppAuthorizationOutcome.GitHubProviderUnavailable);
+        (await service.RefreshForRepositoryAsync(subject, force: true, CancellationToken.None))
+            .Should().Be(RepoAppAuthorizationOutcome.GitHubProviderUnavailable);
+        (await secrets.GetSecretAsync(reference)).Value.Should().Contain("ghu_access");
+        database.ChangeTracker.Clear();
+        (await database.GitHubAppAuthorizations.SingleAsync()).RevokedAt.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ReauthorizationAndDisconnect_RevokeEveryPriorRepoAppCredential()
     {
         await using var database = await OpenDatabaseAsync();
@@ -667,6 +738,16 @@ public sealed class RepoAppUserAuthorizationServiceTests
         public Task<string> SetSecretAsync(string key, string value, string? etag = null, CancellationToken ct = default) =>
             Inner.SetSecretAsync(key, value, etag, ct);
         public Task DeleteSecretAsync(string key, CancellationToken ct = default) => Inner.DeleteSecretAsync(key, ct);
+    }
+
+    private sealed class FailingReadSecretStore : ISecretStore
+    {
+        public Task<SecretGetResult> GetSecretAsync(string key, CancellationToken ct = default) =>
+            throw new Azure.RequestFailedException(503, "Simulated Key Vault outage");
+        public Task<string> SetSecretAsync(string key, string value, string? etag = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task DeleteSecretAsync(string key, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class StructuredLogger : ILogger<RepoAppUserAuthorizationService>

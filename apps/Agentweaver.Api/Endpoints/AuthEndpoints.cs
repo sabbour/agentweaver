@@ -282,9 +282,14 @@ public static class AuthEndpoints
         {
             var service = new RepoAppUserAuthorizationService(configuration, persistence, secretStore, httpClientFactory, logger);
             var outcome = await service.RefreshAsync(httpContext.GetCaller(), httpContext.User, ct).ConfigureAwait(false);
-            return outcome == RepoAppAuthorizationOutcome.Success
-                ? Results.NoContent()
-                : Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) });
+            return outcome switch
+            {
+                RepoAppAuthorizationOutcome.Success => Results.NoContent(),
+                RepoAppAuthorizationOutcome.GitHubProviderUnavailable => Results.Json(
+                    new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) },
+                    statusCode: StatusCodes.Status503ServiceUnavailable),
+                _ => Results.Conflict(new { error = RepoAppUserAuthorizationService.ToStateCode(outcome) }),
+            };
         });
 
         app.MapDelete("/api/auth/github/repo-app/authorization", async (

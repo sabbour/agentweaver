@@ -12,6 +12,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -58,6 +59,151 @@ public sealed class GitHubRepositorySelectionBrokerTests
         var second = await CreateBroker(options, secrets, Repositories(42))
             .TryConsumeAsync(issued.Code!, "entra-one", CancellationToken.None);
         second.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BrowseAndIssue_RenewExpiredRepoAppCredentialBeforeRepositoryLookup()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        }));
+        var handler = new RefreshingRepositoryHandler();
+        var broker = CreateBroker(options, secrets, handler);
+
+        var browse = await broker.ListAsync("entra-one", CancellationToken.None);
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+        var resolved = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None);
+
+        browse.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        browse.Candidates.Should().ContainSingle();
+        issued.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        resolved.Should().NotBeNull();
+        handler.RefreshCount.Should().Be(1);
+        handler.RepositoryTokens.Should().OnlyContain(token => token == "renewed-token");
+    }
+
+    [Fact]
+    public async Task Browse_RenewsOnceWhenGitHubRejectsAnUnexpiredCachedToken()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        }));
+        var handler = new RefreshingRepositoryHandler();
+
+        var browse = await CreateBroker(options, secrets, handler)
+            .ListAsync("entra-one", CancellationToken.None);
+
+        browse.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        browse.Candidates.Should().ContainSingle();
+        handler.RefreshCount.Should().Be(1);
+        handler.RepositoryTokens.Should().Contain("stale-token").And.Contain("renewed-token");
+    }
+
+    [Fact]
+    public async Task Browse_StopsAfterOneRenewalWhenGitHubStillRejectsTheToken()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        }));
+        var handler = new RefreshingRepositoryHandler(rejectRenewedToken: true);
+
+        var browse = await CreateBroker(options, secrets, handler)
+            .ListAsync("entra-one", CancellationToken.None);
+
+        browse.Outcome.Should().Be(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable);
+        handler.RefreshCount.Should().Be(1);
+        handler.RepositoryTokens.Should().Equal("stale-token", "renewed-token");
+    }
+
+    [Fact]
+    public async Task SelectionCodeResolution_RenewsTheSameAuthorizationIfGitHubRejectsItAfterIssuance()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        }));
+        var handler = new RefreshingRepositoryHandler { RejectStaleToken = false };
+        var broker = CreateBroker(options, secrets, handler);
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+        issued.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        handler.RejectStaleToken = true;
+
+        var resolved = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None);
+
+        resolved.Should().NotBeNull();
+        resolved!.AccessToken.Should().Be("renewed-token");
+        resolved.RepositoryId.Should().Be(42);
+        handler.RefreshCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable, false)]
+    [InlineData(HttpStatusCode.BadRequest, true)]
+    public async Task Browse_ReportsRefreshFailureWithoutUsingTheRejectedToken(
+        HttpStatusCode refreshStatus,
+        bool reauthorizationRequired)
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        }));
+        var handler = new RefreshingRepositoryHandler(refreshStatus);
+
+        var browse = await CreateBroker(options, secrets, handler)
+            .ListAsync("entra-one", CancellationToken.None);
+
+        browse.Outcome.Should().Be(reauthorizationRequired
+            ? GitHubRepositorySelectionOutcome.GitHubBindingUnavailable
+            : GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError);
+        handler.RefreshCount.Should().Be(1);
+        handler.RepositoryTokens.Should().BeEmpty();
+        await using var inspect = new MemoryDbContext(options);
+        var revokedAt = (await inspect.GitHubAppAuthorizations.SingleAsync()).RevokedAt;
+        revokedAt.HasValue.Should().Be(reauthorizationRequired);
     }
 
     [Fact]
@@ -318,7 +464,13 @@ public sealed class GitHubRepositorySelectionBrokerTests
                 new MemoryDbContext(options),
                 secrets,
                 new StubHttpClientFactory(handler)),
-            new MemoryDbContext(options));
+            new MemoryDbContext(options),
+            new RepoAppUserAuthorizationService(
+                Config(),
+                new GitHubConnectionsPersistenceStore(new MemoryDbContext(options)),
+                secrets,
+                new StubHttpClientFactory(handler),
+                NullLogger<RepoAppUserAuthorizationService>.Instance));
 
     private static async Task SeedLiveAuthorizationAsync(
         DbContextOptions<MemoryDbContext> options,
@@ -350,6 +502,8 @@ public sealed class GitHubRepositorySelectionBrokerTests
         ["Auth:RepoApp:AppId"] = "123",
         ["Auth:RepoApp:PrivateKeySecretName"] = "repo-app-pem",
         ["Auth:RepoApp:ApiUrl"] = "https://api.github.test",
+        ["Auth:RepoApp:ClientId"] = "repo-client",
+        ["Auth:RepoApp:ClientSecret"] = "test-secret",
     }).Build();
 
     private static HttpMessageHandler Repositories(long id) => RepositoriesAndInstallations(id, 72);
@@ -433,6 +587,44 @@ public sealed class GitHubRepositorySelectionBrokerTests
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
             throw new HttpRequestException("Simulated transient network failure reaching GitHub.");
+    }
+
+    private sealed class RefreshingRepositoryHandler(
+        HttpStatusCode refreshStatus = HttpStatusCode.OK,
+        bool rejectRenewedToken = false) : HttpMessageHandler
+    {
+        public int RefreshCount { get; private set; }
+        public List<string?> RepositoryTokens { get; } = [];
+        public bool RejectStaleToken { get; set; } = true;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/login/oauth/access_token")
+            {
+                RefreshCount++;
+                return Task.FromResult(Response(refreshStatus,
+                    refreshStatus == HttpStatusCode.BadRequest
+                        ? """{"error":"bad_refresh_token"}"""
+                        : """{"access_token":"renewed-token","refresh_token":"rotated-token","expires_in":3600}"""));
+            }
+
+            var token = request.Headers.Authorization?.Parameter;
+            RepositoryTokens.Add(token);
+            if (token != "renewed-token" && (token != "stale-token" || RejectStaleToken) ||
+                token == "renewed-token" && rejectRenewedToken)
+                return Task.FromResult(Response(HttpStatusCode.Unauthorized, "{}"));
+
+            return Task.FromResult(Response(HttpStatusCode.OK, path switch
+            {
+                "/user/installations" => InstallationPayload(72),
+                "/user/installations/72/repositories" => RepositoryPayload(42),
+                _ => "{}",
+            }));
+        }
+
+        private static HttpResponseMessage Response(HttpStatusCode status, string body) =>
+            new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
     }
 
 }

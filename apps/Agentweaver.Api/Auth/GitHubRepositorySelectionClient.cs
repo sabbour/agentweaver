@@ -56,7 +56,8 @@ internal sealed class GitHubRepositorySelectionClient(
                     accessToken);
                 using var response = await httpClientFactory.CreateClient("github")
                     .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-                if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > MaximumResponseBytes)
+                EnsureProviderSuccess(response, "installation_repositories");
+                if (response.Content.Headers.ContentLength > MaximumResponseBytes)
                     return null;
 
                 var batch = await ReadBoundedEnvelopeAsync<GitHubRepositoryResponse>(
@@ -161,6 +162,8 @@ internal sealed class GitHubRepositorySelectionClient(
         using var request = CreateRequest(HttpMethod.Post, endpoint, accessToken);
         request.Content = JsonContent.Create(new { name, @private = isPrivate });
         using var response = await httpClientFactory.CreateClient("github").SendAsync(request, ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            EnsureProviderSuccess(response, "create_repository");
         if (response.StatusCode != System.Net.HttpStatusCode.Created)
             return null;
         var repository = await response.Content.ReadFromJsonAsync<GitHubCreatedRepositoryResponse>(ct).ConfigureAwait(false);
@@ -184,7 +187,8 @@ internal sealed class GitHubRepositorySelectionClient(
                 accessToken);
             using var response = await httpClientFactory.CreateClient("github")
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > MaximumResponseBytes)
+            EnsureProviderSuccess(response, "user_installations");
+            if (response.Content.Headers.ContentLength > MaximumResponseBytes)
                 return null;
 
             var batch = await ReadBoundedEnvelopeAsync<GitHubInstallationResponse>(
@@ -206,6 +210,15 @@ internal sealed class GitHubRepositorySelectionClient(
         }
 
         return installations.Values.ToList();
+    }
+
+    private static void EnsureProviderSuccess(HttpResponseMessage response, string operation)
+    {
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Repo App {operation} request returned HTTP {(int)response.StatusCode}.",
+                null,
+                response.StatusCode);
     }
 
     private static HttpRequestMessage CreateRequest(HttpMethod method, string url, string accessToken)
