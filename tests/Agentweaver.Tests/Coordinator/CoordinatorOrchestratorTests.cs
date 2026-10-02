@@ -594,8 +594,12 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
             return run?.Status == RunStatus.Failed ? run : null;
         });
         failed.Should().NotBeNull("the offline one-item fallback cannot satisfy the named deliverables");
-        var failureEvents = _factory.Services.GetRequiredService<RunStreamStore>()
-            .Get(runId)!.GetSnapshotSince(0).Events.Where(e => e.Type == EventTypes.RunFailed).ToList();
+        var failureEvents = await PollAsync(_ =>
+        {
+            var events = _factory.Services.GetRequiredService<RunStreamStore>()
+                .Get(runId)!.GetSnapshotSince(0).Events.Where(e => e.Type == EventTypes.RunFailed).ToList();
+            return Task.FromResult(events.Count > 0 ? events : null);
+        });
         failureEvents.Should().ContainSingle();
         JsonSerializer.Serialize(failureEvents).Should().Contain("coordinator_decomposition_unverified")
             .And.Contain("Retry with the model available");
@@ -619,9 +623,14 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         (await PollAsync(async _ =>
             (await store.GetAsync(RunId.Parse(runId))) is { Status: RunStatus.Failed } run ? run : null))
             .Should().NotBeNull();
-        var events = _factory.Services.GetRequiredService<RunStreamStore>()
-            .Get(runId)!.GetSnapshotSince(0).Events;
-        JsonSerializer.Serialize(events.Where(e => e.Type == EventTypes.RunFailed))
+        var failureEvents = await PollAsync(_ =>
+        {
+            var events = _factory.Services.GetRequiredService<RunStreamStore>()
+                .Get(runId)!.GetSnapshotSince(0).Events.Where(e => e.Type == EventTypes.RunFailed).ToList();
+            return Task.FromResult(events.Count > 0 ? events : null);
+        });
+        failureEvents.Should().ContainSingle();
+        JsonSerializer.Serialize(failureEvents)
             .Should().Contain("coordinator_decomposition_unverified")
             .And.Contain("Retry with the model available");
         using var scope = _factory.Services.CreateScope();
