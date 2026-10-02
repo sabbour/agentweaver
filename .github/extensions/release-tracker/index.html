@@ -31,16 +31,29 @@
     .card h2 { font-size: 14px; color: var(--text-color-muted, #59636e); }
     .card p { overflow-wrap: anywhere; }
     .badge { display: inline-block; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: var(--font-weight-semibold, 600); text-transform: uppercase; letter-spacing: .03em; }
-    .badge[data-status="passed"], .badge[data-status="closed"], .badge[data-status="merged"], .badge[data-status="deployed"] { color: var(--true-color-blue, #0969da); }
-    .badge[data-status="blocked"], .badge[data-status="failed"] { color: var(--true-color-red, #cf222e); }
+    .badge[data-status="passed"], .badge[data-status="closed"], .badge[data-status="merged"], .badge[data-status="deployed"] { color: var(--true-color-green, #1a7f37); border-color: currentColor; background: color-mix(in srgb, currentColor 10%, var(--background-color-default, #fff)); }
+    .badge[data-status="active"], .badge[data-status="in progress"], .badge[data-status="open"], .badge[data-status="draft"] { color: var(--true-color-blue, #0969da); border-color: currentColor; background: color-mix(in srgb, currentColor 10%, var(--background-color-default, #fff)); }
+    .badge[data-status="blocked"], .badge[data-status="failed"] { color: var(--true-color-red, #cf222e); border-color: currentColor; background: color-mix(in srgb, currentColor 10%, var(--background-color-default, #fff)); }
+    .badge[data-kind="pr"][data-status="closed"] { color: var(--text-color-muted, #59636e); }
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; min-width: 790px; }
     th, td { padding: 11px 8px; border-bottom: 1px solid var(--border-color-default, #d1d9e0); text-align: left; vertical-align: top; }
     th { color: var(--text-color-muted, #59636e); font-size: 12px; }
     td:first-child { white-space: nowrap; }
+    #issues tr[data-status="active"] { background: color-mix(in srgb, var(--true-color-blue, #0969da) 7%, var(--background-color-default, #fff)); }
+    #issues tr[data-status="closed"] { background: color-mix(in srgb, var(--true-color-green, #1a7f37) 7%, var(--background-color-default, #fff)); }
+    #issues tr[data-status="blocked"] { background: color-mix(in srgb, var(--true-color-red, #cf222e) 7%, var(--background-color-default, #fff)); }
+    #issues tr[data-status="active"] td:first-child { border-left: 4px solid var(--true-color-blue, #0969da); }
+    #issues tr[data-status="closed"] td:first-child { border-left: 4px solid var(--true-color-green, #1a7f37); }
+    #issues tr[data-status="blocked"] td:first-child { border-left: 4px solid var(--true-color-red, #cf222e); }
     .detail { white-space: pre-wrap; overflow-wrap: anywhere; }
-    .chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; }
-    .chain span { padding: 6px 10px; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 6px; }
+    .delivery-wrap { overflow-x: auto; }
+    #delivery { display: block; width: 100%; min-width: 900px; height: auto; }
+    .delivery-node[data-status="passed"] circle, .delivery-node[data-status="deployed"] circle { fill: var(--true-color-green, #1a7f37); }
+    .delivery-node[data-status="passed"] rect, .delivery-node[data-status="deployed"] rect { stroke: var(--true-color-green, #1a7f37); }
+    .delivery-node[data-status="in progress"] circle, .delivery-node[data-status="active"] circle { fill: var(--true-color-blue, #0969da); }
+    .graph-node.delivery-node text { font-size: 15px; }
+    .graph-node.delivery-node .graph-detail { font-size: 13px; }
     .graph-wrap { max-height: 700px; overflow: auto; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 6px; }
     .graph-link { fill: none; stroke: var(--border-color-default, #d1d9e0); stroke-width: 2; }
     .graph-link-next { stroke: var(--true-color-blue, #0969da); stroke-dasharray: 5 5; }
@@ -70,13 +83,15 @@
   <section aria-label="Release gates" class="grid" id="gates"></section>
   <section class="panel" aria-labelledby="chain-title">
     <h2 id="chain-title">Delivery chain</h2>
-    <div class="chain"><span>Current-head review pair + issue-specific API/UI and GitHub gates</span> → <span>Serialized rebase auto-merges</span> → <span>Combined RC + pinned digest/revision</span> → <span>RC deployment</span> → <span>Direct API + UI behavior proof</span> → <span>Release</span> → <span>AKS deployment</span></div>
+    <div class="delivery-wrap"><svg id="delivery" role="img" aria-label="Milestone delivery dependency graph" viewBox="0 0 1180 235"></svg></div>
+    <p class="muted">Solid arrows lead to recorded completed stages; dotted arrows show remaining dependencies. Direct API and UI proof run in parallel, and both feed the live behavior gate. Statuses come from the tracker, not live GitHub.</p>
     <p>Each milestone PR needs a final local rubber-duck and code-review pair on its current head before readiness. After issue-specific API/UI and GitHub gates pass, authorize <code>gh pr merge --rebase --auto</code> one PR at a time; monitor until merged before admitting the next.</p>
     <p class="muted">Platform integrity checks establish setup only; they do not pass the live behavior gate.</p>
   </section>
   <section class="panel" aria-labelledby="issues-title">
     <h2 id="issues-title">Milestone issues and linked PRs</h2>
-    <div class="table-wrap"><table><thead><tr><th>Issue</th><th>Title</th><th>Status</th><th>Linked PR / status</th><th>Rubber duck</th><th>Code review</th><th>Issue API</th><th>Issue UI</th><th>GitHub</th><th>Priority</th></tr></thead><tbody id="issues"></tbody></table></div>
+    <p class="muted">Green = complete, blue = active, red = blocked or failed; gray = pending or unrecorded. “Not run” means no evidence recorded for the current PR head, not proof that a review or CI check never ran. The GitHub gate is manually recorded PR/CI readiness, not live GitHub status.</p>
+    <div class="table-wrap"><table><thead><tr><th>Issue</th><th>Title</th><th>Status</th><th>Linked PR / status</th><th>Rubber duck</th><th>Code review</th><th>Issue API</th><th>Issue UI</th><th>GitHub gate</th><th>Priority</th></tr></thead><tbody id="issues"></tbody></table></div>
   </section>
   <section class="panel" aria-labelledby="agents-title">
     <h2 id="agents-title">Agents and subagents</h2>
@@ -102,10 +117,11 @@
     a.textContent = `#${number}`;
     return a;
   };
-  function badge(status) {
+  function badge(status, kind) {
     const el = document.createElement("span");
     el.className = "badge";
     el.dataset.status = status;
+    if (kind) el.dataset.kind = kind;
     el.textContent = status;
     return el;
   }
@@ -127,6 +143,61 @@
     for (const [key, value] of Object.entries(attributes)) el.setAttribute(key, value);
     return el;
   };
+  function renderDelivery(data) {
+    const open = data.issues.filter((issue) => issue.status !== "closed");
+    const checked = (issue) => issue.prNumber && issue.head &&
+      Object.values(issue.checks).every((check) => check.status === "passed" && check.head === issue.head);
+    const checks = data.issues.length && open.every(checked) ? "passed" :
+      open.some((issue) => Object.values(issue.checks).some((check) => ["in progress", "passed"].includes(check.status))) ? "in progress" : "pending";
+    const merges = data.issues.length && data.issues.every((issue) => issue.status === "closed" || issue.prStatus === "merged") ? "passed" :
+      data.issues.some((issue) => issue.prStatus === "merged") ? "in progress" : "pending";
+    const stages = [
+      { lines: ["Current-head", "PR checks"], status: checks, x: 20, y: 80 },
+      { lines: ["Serialized", "rebase merges"], status: merges, x: 187, y: 80 },
+      { lines: ["Combined RC", "pin + deploy"], status: data.integrationRc.status, x: 354, y: 80 },
+      { lines: ["Direct API", "behavior proof"], status: data.directApi.status, x: 521, y: 20 },
+      { lines: ["Direct UI", "behavior proof"], status: data.directUi.status, x: 521, y: 140 },
+      { lines: ["Live behavior", "gate"], status: data.liveGate.status, x: 688, y: 80 },
+      { lines: ["Release", ""], status: data.release.status, x: 855, y: 80 },
+      { lines: ["AKS", "deployment"], status: data.aksDeployment.status, x: 1022, y: 80 },
+    ];
+    const complete = (status) => ["passed", "deployed"].includes(status);
+    const edges = [[0, 1], [1, 2], [2, 3], [2, 4], [3, 5], [4, 5], [5, 6], [6, 7]];
+    const defs = svgElement("defs");
+    for (const [id, color] of [["delivery-arrow", "var(--border-color-default, #d1d9e0)"], ["delivery-arrow-next", "var(--true-color-blue, #0969da)"]]) {
+      const marker = svgElement("marker", { id, viewBox: "0 0 6 6", refX: 6, refY: 3, markerWidth: 6, markerHeight: 6, orient: "auto" });
+      marker.append(svgElement("path", { d: "M 0 0 L 6 3 L 0 6 Z", fill: color }));
+      defs.append(marker);
+    }
+    const description = svgElement("desc");
+    description.textContent = stages.map((stage) => `${stage.lines.join(" ").trim()}: ${stage.status}`).join("; ");
+    const elements = [description, defs];
+    for (const [from, to] of edges) {
+      const a = stages[from], b = stages[to];
+      const start = a.y + 38, end = b.y + 38, mid = a.x + 154;
+      elements.push(svgElement("path", {
+        class: `graph-link${complete(b.status) ? "" : " graph-link-next"}`,
+        d: `M ${a.x + 142} ${start} H ${mid} V ${end} H ${b.x}`,
+        "marker-end": `url(#delivery-arrow${complete(b.status) ? "" : "-next"})`,
+      }));
+    }
+    for (const stage of stages) {
+      const group = svgElement("g", { class: "graph-node delivery-node", "data-status": stage.status, transform: `translate(${stage.x},${stage.y})` });
+      const title = svgElement("title");
+      title.textContent = `${stage.lines.join(" ").trim()} · ${stage.status} (recorded tracker)`;
+      group.append(title, svgElement("rect", { width: 142, height: 76, rx: 7 }));
+      stage.lines.forEach((line, index) => {
+        const label = svgElement("text", { x: 12, y: 23 + index * 17 });
+        label.textContent = line;
+        group.append(label);
+      });
+      const status = svgElement("text", { x: 12, y: 64, class: "graph-detail" });
+      status.textContent = stage.status;
+      group.append(status, svgElement("circle", { cx: 128, cy: 61, r: 5 }));
+      elements.push(group);
+    }
+    $("delivery").replaceChildren(...elements);
+  }
   function render(data) {
     milestone = data;
     $("heading").textContent = `v${data.version} delivery tracker`;
@@ -134,6 +205,7 @@
     $("priority-status").replaceChildren(badge(data.priority.status));
     $("priority").textContent = data.priority.priority;
     $("priority-note").textContent = data.priority.note;
+    renderDelivery(data);
     const gates = Object.entries(labels).map(([key, label]) => {
       const item = data[key];
       const card = document.createElement("article");
@@ -148,14 +220,23 @@
     $("gates").replaceChildren(...gates);
     $("issues").replaceChildren(...data.issues.map((issue) => {
       const row = document.createElement("tr");
+      row.dataset.status = issue.status;
       const issueCell = row.insertCell();
       issueCell.append(link("issues", issue.number));
       row.insertCell().textContent = issue.title;
       row.insertCell().append(badge(issue.status), paragraph(issue.note, true));
       const pr = row.insertCell();
       if (issue.prNumber) pr.append(link("pull", issue.prNumber), " ");
-      pr.append(badge(issue.prStatus));
-      for (const kind of ["rubberDuck", "codeReview", "api", "ui", "github"]) checkCell(row, issue.checks[kind]);
+      pr.append(badge(issue.prStatus, "pr"));
+      const kinds = ["rubberDuck", "codeReview", "api", "ui", "github"];
+      if (!issue.prNumber && kinds.every((kind) => issue.checks[kind].status === "not run")) {
+        const empty = row.insertCell();
+        empty.colSpan = kinds.length;
+        empty.className = "muted";
+        empty.textContent = "No linked PR · no current-head checks";
+      } else {
+        for (const kind of kinds) checkCell(row, issue.checks[kind]);
+      }
       row.insertCell().textContent = issue.priority;
       return row;
     }));

@@ -7,6 +7,16 @@ the current priority, the combined integration RC, direct API and UI behavior ga
 the release, and AKS deployment. The **Refresh status** button rereads the project
 artifact; agents can also invoke the canvas `refresh` action.
 
+The **Delivery chain** is a dependency graph: current-head issue checks feed
+serialized rebase merges, then the combined RC pin and deployment; direct API
+and UI behavior tests fork from that RC and rejoin at the live behavior gate
+before release and AKS deployment. Each node displays its recorded tracker
+status. Solid arrows lead to completed stages; dotted arrows lead to remaining
+stages. The first two statuses summarize tracked issue checks and merges; RC
+assembly, pin, and deployment share the single `integrationRc` gate rather
+than implying a separately measured deployment. This is recorded progress,
+not a live GitHub or deployment feed.
+
 The source of truth is one project-owned file per version under
 `.github/extensions/release-tracker/milestones/<version>.json`, committed with the
 extension. To start tracking a new release, invoke the canvas `create_milestone`
@@ -36,14 +46,21 @@ it. For example:
 ```
 
 Each issue row displays rubber-duck, code-review, and issue-specific API, UI,
-and GitHub gate statuses. Set the
+and GitHub gate statuses. The table colors completed work green, active work
+blue, and blocked or failed work red; pending or unrecorded states remain
+gray. With no linked PR, unrecorded checks collapse into **No linked PR**
+instead of implying a review was attempted. The GitHub gate is an
+agent-recorded check of issue PR/CI readiness, **not** a live GitHub status
+feed. Set the
 issue's `head` to the exact current linked PR commit through `update_status`,
 then invoke `update_review` with `version`, `number`, `kind` (`rubberDuck` or
 `codeReview`, `api`, `ui`, or `github`), `status`, `head`, and `evidence`.
 A passing check requires a matching full commit SHA and nonempty evidence.
 Changing the linked PR or head resets all five checks to **not run**; an older
 head cannot be used to pass them.
-Unreviewed work is displayed as **not run**, not implicitly approved.
+**Not run** means no current-head evidence has been entered in this tracker;
+it does not claim that a reviewer or GitHub CI never ran. Unrecorded work
+is not implicitly approved.
 
 The **Agents and subagents** graph fetches the app's current session activity
 every 15 seconds while visible. Edges connect milestone project sessions
