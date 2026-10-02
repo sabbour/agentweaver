@@ -82,6 +82,59 @@ and requires a usable bubblewrap user namespace.
 Each shard uploads a TRX artifact, whose test outcomes and per-test durations are
 machine-readable.
 
+## Coverage reports
+
+Coverage uses the test families already owned by the repository: Coverlet across the
+authoritative .NET shard matrix, Vitest's V8 provider for the web app, and pinned local
+`c8` for the Node-native CI toolchain tests. Run an individual family or every family:
+
+```bash
+npm run coverage:dotnet
+npm run coverage:web
+npm run coverage:node
+npm run coverage:all
+```
+
+The commands print the tested source scope, revision, generated report paths, and any
+failed or unsupported required family. They remove only their own previous report
+directory, require fresh regular in-repository reports, and reject missing, stale,
+malformed, or symlinked .NET report inputs before combining them.
+
+- .NET reports are written to `TestResults/coverage/<shard>/coverage.cobertura.xml`,
+  then locally combined by pinned ReportGenerator in
+  `TestResults/coverage/combined/{Cobertura.xml,Summary.json,Summary.txt,index.html}`.
+  `TestResults/coverage/status.json` lists verified test counts and missing families;
+  when a shard fails, the combined report contains **only** successful shards and
+  `complete` is false. If merging itself fails, `status.json` records that error
+  and leaves `combined` null. Partial numbers are never a complete .NET result,
+  and the command exits nonzero.
+  Coverlet explicitly includes the five named app assemblies, the supporting
+  `Agentweaver.Api.Data` app assembly, and seven `packages/Agentweaver.*`
+  assemblies, excluding tests, `obj/` and migration designer files. Only
+  loaded/instrumented assemblies appear in the denominator: compare
+  report assembly names with the printed inclusion list before interpreting totals.
+  Each shard obeys the timeout in the authoritative CI shard matrix (15 minutes by
+  default, 20 for orchestration); a timed-out shard is a failed required family.
+- Web includes untouched `apps/web/src/**/*.{ts,tsx}` product sources while excluding
+  tests, fixtures, setup, declarations, and generated files. Reports
+  `coverage-final.json`, `coverage-summary.json`, `lcov.info`, text and HTML live in
+  `apps/web/coverage/`.
+- Node includes untouched `.mjs` sources under `scripts/azure`, `scripts/changesets`,
+  `scripts/ci`, and `scripts/demo-recording`, excluding tests, fixtures, generated
+  outputs and vendored files. `c8 --all` instruments the canonical tests in those
+  four areas and writes `coverage-final.json`, `coverage-summary.json`, `lcov.info`,
+  text and HTML to `coverage/node/`.
+
+The Kata runtime shard requires Linux bubblewrap user namespaces. A host that cannot
+run it is reported as a partial .NET coverage run and exits nonzero. PostgreSQL
+Testcontainers is attempted, but an unavailable Docker runtime or database is also
+reported as a failed required shard, not silently omitted. Browser E2E, API/MCP persona
+harnesses, deployment checks, and other integration families are outside these
+instrumentation commands and must be run through their own contracts. Line, branch,
+and function coverage describe executed instrumentation, not behavioral completeness;
+use the JSON/Cobertura machine reports for uncovered paths and counters, not an
+estimated threshold or test-adequacy score.
+
 Each stacked PR gets its path-targeted preflight. Run the full profile against the
 exact integrated tree at the stack top:
 

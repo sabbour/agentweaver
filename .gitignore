@@ -63,6 +63,8 @@ obj/
 # Vite build cache
 apps/web/.vite/
 docs/.vitepress/cache/
+apps/web/coverage/
+coverage/node/
 
 # E2E test generated artifacts
 tests/e2e/node_modules/

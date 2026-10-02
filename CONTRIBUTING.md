@@ -179,6 +179,12 @@ npm --prefix apps/web run test
 # Web frontend lint
 npm --prefix apps/web run lint
 
+# Machine-generated coverage reports. These do not prove behavioral completeness.
+npm run coverage:dotnet
+npm run coverage:web
+npm run coverage:node
+npm run coverage:all
+
 # Docs site build (only if you changed docs/)
 npm run docs:build
 ```

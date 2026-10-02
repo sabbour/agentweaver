@@ -9,7 +9,8 @@
     "typecheck": "tsc -b --noEmit --pretty false",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run --config vitest.config.ts"
+    "test": "vitest run --config vitest.config.ts",
+    "coverage": "vitest run --coverage --config vitest.config.ts"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.74.6",
