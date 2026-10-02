@@ -3810,7 +3810,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                         treeHash, diff, context.SubmittingUser,
                         buildTestGate.GraphNodeId, buildTestGate.Label, buildTestGate.AgentId,
                         provider.ModelSource, provider.ByokProviderFingerprint,
-                        context.AssemblyAttemptToken),
+                        context.AssemblyAttemptToken, run.LifecycleGeneration),
                     ct).ConfigureAwait(false);
             }
             catch (CollectiveBuildTestInfrastructureException ex)

@@ -619,6 +619,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _streamStore.Create(coordinatorRunId, "alice");
         var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId, [SubtaskStatus.AssembleReady]);
         await BindSoftwareWorkflowAsync(coordinatorRunId, workPlanId);
+        var generation = (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.LifecycleGeneration;
+        _pipeline.OnBuildTest = request => request.LifecycleGeneration.Should().Be(generation);
 
         foreach (var (tree, expectedBuilds) in new[] { ("tree-1", 1), ("tree-1", 1), ("tree-2", 2), ("tree-3", 3) })
         {
