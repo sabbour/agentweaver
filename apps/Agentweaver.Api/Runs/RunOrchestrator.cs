@@ -1260,7 +1260,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             return await _workflowFactory.StartAsync(
                 input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt,
-                recoveryComposedNodeId).ConfigureAwait(false);
+                recoveryComposedNodeId, existingLease).ConfigureAwait(false);
         }
 
         catch (Exception) when (ct.IsCancellationRequested)

@@ -273,11 +273,13 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             worktree.WorktreePath, worktree.BranchName, repositoryPath, "main",
             "github-copilot", null, parent.SubmittingUser,
             ProjectId: project.Id.ToString());
-        var started = await services.GetRequiredService<RunWorkflowFactory>()
-            .StartAsync(input, parentId.ToString(), CancellationToken.None);
         var parentClaim = await services.GetRequiredService<IRunLeaseStore>()
             .TryClaimAsync(parentId.ToString(), "fan-composed-graph-producer", TimeSpan.FromMinutes(5));
         parentClaim.Claimed.Should().BeTrue();
+        var started = await services.GetRequiredService<RunWorkflowFactory>()
+            .StartAsync(input, parentId.ToString(), CancellationToken.None,
+                executionLease: new RunLeaseClaim(
+                    "fan-composed-graph-producer", parentClaim.FencingToken, parent.LifecycleGeneration));
         WorkflowComposedCompletedOutput? terminal = null;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         await foreach (var evt in started.WatchStreamAsync(timeout.Token))
@@ -594,10 +596,12 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             run.ModelId,
             run.SubmittingUser,
             ProjectId: project.Id.ToString());
-        var started = await workflowFactory.StartAsync(input, run.Id.ToString(), CancellationToken.None);
         var producerClaim = await services.GetRequiredService<IRunLeaseStore>()
             .TryClaimAsync(run.Id.ToString(), "composed-graph-producer", TimeSpan.FromMinutes(5));
         producerClaim.Claimed.Should().BeTrue();
+        var started = await workflowFactory.StartAsync(input, run.Id.ToString(), CancellationToken.None,
+            executionLease: new RunLeaseClaim(
+                "composed-graph-producer", producerClaim.FencingToken, run.LifecycleGeneration));
         WorkflowComposedCompletedOutput? terminal = null;
         var observedOutputs = new List<string>();
 

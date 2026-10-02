@@ -716,7 +716,8 @@ public sealed class EfRunStore : IRunStore
 
     internal static async Task<bool> TryReopenTerminalOnContextAsync(
         MemoryDbContext db, RunId runId, CancellationToken ct,
-        Run? expectedRun = null, RunLeaseClaim? requiredLease = null, bool clearResult = false)
+        Run? expectedRun = null, RunLeaseClaim? requiredLease = null, bool clearResult = false,
+        bool requireNoActiveLease = false)
     {
         var terminalStatuses = new[]
         {
@@ -736,6 +737,8 @@ public sealed class EfRunStore : IRunStore
         if (requiredLease is not null)
             eligible = eligible.Where(r => r.OwnerId == requiredLease.OwnerId
                 && r.FencingToken == requiredLease.FencingToken && r.LeaseExpiresAt > now);
+        if (requireNoActiveLease)
+            eligible = eligible.Where(r => r.OwnerId == null || r.LeaseExpiresAt <= now);
         var rows = await eligible
             .ExecuteUpdateAsync(updates => updates
                 .SetProperty(r => r.Status, RunStatus.InProgress.ToApiString())
