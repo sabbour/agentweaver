@@ -233,6 +233,48 @@ public sealed class KubernetesRemoteApiManifestTests
     }
 
     [Fact]
+    public void WorkerSandboxRole_GrantsOnlyNamespacedSandboxGet()
+    {
+        var manifest = ReadManifest("rbac-api.yaml");
+        var documents = Regex.Split(manifest, @"(?m)^---\s*$");
+        var role = documents.Single(document =>
+            Regex.IsMatch(document, @"(?m)^kind: Role\s*$") &&
+            Regex.IsMatch(document, @"(?m)^  name: agentweaver-worker-sandbox\s*$"));
+        var binding = documents.Single(document =>
+            Regex.IsMatch(document, @"(?m)^kind: RoleBinding\s*$") &&
+            Regex.IsMatch(document, @"(?m)^  name: agentweaver-worker-sandbox\s*$"));
+
+        role.Should().MatchRegex(@"(?m)^  namespace: agentweaver\s*$");
+        binding.Should().MatchRegex(@"(?m)^  namespace: agentweaver\s*$");
+        binding.Should().MatchRegex(
+            @"(?s)subjects:\s+- kind: ServiceAccount\s+name: agentweaver-worker\s+" +
+            @"namespace: agentweaver\s+roleRef:\s+apiGroup: rbac\.authorization\.k8s\.io\s+" +
+            @"kind: Role\s+name: agentweaver-worker-sandbox\s*$");
+
+        var rules = Regex.Matches(role,
+            @"(?ms)^  - apiGroups:\r?\n(?<groups>(?:      - \S+\r?\n)+)" +
+            @"    resources:\r?\n(?<resources>(?:      - \S+\r?\n)+)" +
+            @"    verbs:\r?\n(?<verbs>(?:      - \S+\r?\n)+)");
+        var sandboxRules = rules.Where(rule =>
+            Regex.Matches(rule.Groups["resources"].Value, @"(?m)^      - (\S+)$")
+                .Any(resource => resource.Groups[1].Value == "sandboxes")).ToArray();
+        sandboxRules.Should().ContainSingle("the worker must have exactly one Sandbox resource rule");
+        Regex.Matches(sandboxRules[0].Groups["groups"].Value, @"(?m)^      - (\S+)$")
+            .Select(group => group.Groups[1].Value).Should().BeEquivalentTo(["agents.x-k8s.io"]);
+        Regex.Matches(sandboxRules[0].Groups["resources"].Value, @"(?m)^      - (\S+)$")
+            .Select(resource => resource.Groups[1].Value).Should().BeEquivalentTo(["sandboxes"]);
+        Regex.Matches(sandboxRules[0].Groups["verbs"].Value, @"(?m)^      - (\S+)$")
+            .Select(verb => verb.Groups[1].Value).Should().BeEquivalentTo(["get"]);
+        var routeRules = rules.Where(rule =>
+            Regex.Matches(rule.Groups["resources"].Value, @"(?m)^      - (\S+)$")
+                .Any(resource => resource.Groups[1].Value == "httproutes")).ToArray();
+        routeRules.Should().ContainSingle();
+        Regex.Matches(routeRules[0].Groups["verbs"].Value, @"(?m)^      - (\S+)$")
+            .Select(verb => verb.Groups[1].Value).Should().BeEquivalentTo(["get", "list"],
+                "preview route writes belong only to the API");
+    }
+
+    [Fact]
     public void ApiAndWorker_CannotMutateTemplatesPoolsOrWorkspacePvcs()
     {
         var rbac = ReadManifest("rbac-api.yaml");
