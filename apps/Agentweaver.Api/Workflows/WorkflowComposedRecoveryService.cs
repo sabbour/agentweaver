@@ -205,14 +205,19 @@ internal sealed class WorkflowComposedRecoveryService(
                 throw Rejected("composed_recovery_run_changed", parent.Id);
             var postCommitProvider = await scope.ServiceProvider.GetRequiredService<RunModelProviderSnapshotStore>()
                 .TryGetAsync(parent, ct).ConfigureAwait(false);
-            ValidateInput(parent, committedPlan, postCommitProvider);
+            var committedInput = ValidateInput(parent, committedPlan, postCommitProvider);
+            if (committedPlan.ParentTurnInputJson != plan.ParentTurnInputJson
+                || committedPlan.ParentWorkflowNodeId != plan.ParentWorkflowNodeId
+                || committedPlan.ExecutionBaseTreeHash != plan.ExecutionBaseTreeHash)
+                throw Rejected("composed_recovery_input_changed", parent.Id);
             await scope.ServiceProvider.GetRequiredService<RunOrchestrator>()
                 .ValidateComposedRecoveryLaunchAsync(parent, ct).ConfigureAwait(false);
             if (!await leases.IsLeaseOwnerAsync(parent.Id.ToString(), owner, acquired.FencingToken, ct)
                     .ConfigureAwait(false))
                 throw Rejected("composed_recovery_busy", parent.Id);
             lease = new RunLeaseClaim(owner, acquired.FencingToken, resumedGeneration);
-            await LaunchAsync(parent, input, plan.ParentWorkflowNodeId!, lease, ct).ConfigureAwait(false);
+            await LaunchAsync(parent, committedInput, committedPlan.ParentWorkflowNodeId!, lease, ct)
+                .ConfigureAwait(false);
             transferred = true;
             logger.LogInformation(
                 "Recovered composed workflow {RunId} at node {NodeId}, preserving plan {PlanId} and coordinator {CoordinatorRunId}",
