@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { copyFile, mkdtemp, readFile, rm } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { addIssue, createMilestone, listMilestones, normalizeVersion, readStatus, updateReview, updateStatus } from "./state.mjs";
 import { buildLiveStatus } from "./live.mjs";
+import { readSubagents } from "./journal.mjs";
 
 const source = fileURLToPath(new URL("./milestones/0.34.1.json", import.meta.url));
 
@@ -125,6 +126,29 @@ test("live activity selects milestone agents and coordinator, nesting local suba
     assert.deepEqual(buildLiveStatus({ sessions, tasks }, "self", "0.36.0", []).nodes, []);
     assert.throws(() => buildLiveStatus({ sessions: [], tasks }, "self", "0.34.1", issues), /missing from live activity/);
 });
+
+test("peer subagent journal updates live without exposing unrelated events", async () => fixture(async (dir) => {
+    const sessionId = "11111111-1111-1111-1111-111111111111";
+    const agentId = "22222222-2222-2222-2222-222222222222";
+    const folder = join(dir, sessionId);
+    const journal = join(folder, "events.jsonl");
+    await mkdir(folder);
+    const event = (type) => JSON.stringify({ type, agentId, timestamp: "2026-10-02T16:00:00.000Z", data: { agentName: "Peer reviewer" } });
+    await writeFile(journal, `${JSON.stringify({ type: "user.message", data: { content: "private" } })}\n${event("subagent.started")}`);
+    assert.deepEqual(await readSubagents(sessionId, dir), []);
+    await appendFile(journal, "\n");
+    assert.equal((await readSubagents(sessionId, dir))[0].status, "running");
+    await appendFile(journal, `${event("subagent.completed")}\n`);
+    const agents = await readSubagents(sessionId, dir);
+    assert.equal(agents[0].name, "Peer reviewer");
+    assert.equal(agents[0].status, "completed");
+    assert.equal(agents[0].parentId, sessionId);
+    assert.equal(agents.length, 1);
+    await writeFile(journal, "");
+    assert.deepEqual(await readSubagents(sessionId, dir), []);
+    await assert.rejects(readSubagents("not-a-session", dir), /Invalid local session ID/);
+    await assert.rejects(readSubagents("33333333-3333-3333-3333-333333333333", dir), { code: "ENOENT" });
+}));
 
 test("live behavior proof requires matching RC and both direct test gates", async () => fixture(async (dir) => {
     const proof = { status: "passed", evidence: "Observed full behavior", revision: "abc123", digest: "sha256:abcd" };

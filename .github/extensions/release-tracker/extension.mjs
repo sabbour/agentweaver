@@ -1,9 +1,11 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCanvas, CanvasError, joinSession } from "@github/copilot-sdk/extension";
 import { addIssue, createMilestone, defaultVersion, listMilestones, normalizeVersion, readStatus, updateReview, updateStatus } from "./state.mjs";
 import { buildLiveStatus } from "./live.mjs";
+import { readSubagents } from "./journal.mjs";
 
 const servers = new Map();
 const page = fileURLToPath(new URL("./index.html", import.meta.url));
@@ -20,7 +22,23 @@ async function readLiveStatus(version) {
         throw new Error(`Live session activity unavailable: ${response.error || response.textResultForLlm || response}`);
     }
     const { sessions } = JSON.parse(response.sessionLog || response.textResultForLlm);
-    return buildLiveStatus({ sessions, tasks: background.tasks }, metadata.sessionId, status.version, status.issues);
+    const live = buildLiveStatus({ sessions, tasks: background.tasks }, metadata.sessionId, status.version, status.issues);
+    const sessionRoot = metadata.workspacePath ? dirname(metadata.workspacePath) : undefined;
+    const known = new Set(live.nodes.map((node) => node.id));
+    await Promise.all(live.nodes.filter((node) => node.kind !== "subagent").map(async (node) => {
+        try {
+            for (const agent of await readSubagents(node.id, sessionRoot)) {
+                if (!known.has(agent.id)) {
+                    known.add(agent.id);
+                    live.nodes.push(agent);
+                }
+            }
+        } catch (error) {
+            if (!["ENOENT", "EACCES", "EPERM"].includes(error.code)) throw error;
+            node.subagentError = `Subagent journal unavailable (${error.code})`;
+        }
+    }));
+    return live;
 }
 
 async function startServer() {
@@ -81,7 +99,7 @@ session = await joinSession({
                 },
                 {
                     name: "live_activity",
-                    description: "Read the current app session hierarchy and this session's background subagent tasks for a milestone version.",
+                    description: "Read the current app session hierarchy and local session subagent activity for a milestone version.",
                     inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" } } },
                     handler: async ({ input }) => readLiveStatus(input?.version || defaultVersion),
                 },

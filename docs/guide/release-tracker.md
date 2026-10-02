@@ -45,15 +45,19 @@ Changing the linked PR or head resets all five checks to **not run**; an older
 head cannot be used to pass them.
 Unreviewed work is displayed as **not run**, not implicitly approved.
 
-The **Agents and subagents** panel fetches the app's current session
-activity every 15 seconds while visible. It shows milestone-related project
-sessions beneath their coordinator, links matched issue assignments, and
-nests the canvas session's live CLI subagent tasks under that session. The
-canvas `live_activity` action reads the same feed on demand. Other sessions'
-internal CLI task lists are not exposed to this extension; the panel does
-not invent subagents for them. If the live feed fails, the panel shows an
-error rather than displaying stored reports as live activity. Unlike
-recorded release gates, activity is not committed to a milestone artifact.
+The **Agents and subagents** graph fetches the app's current session activity
+every 15 seconds while visible. Edges connect milestone project sessions
+to their coordinator and each session's actual CLI subagents; issue-linked
+nodes open the issue. Subagent lifecycle comes from each selected local
+session's read-only Copilot event journal (`subagent.started`, `completed`,
+and `failed`); only those lifecycle events are parsed. The canvas session's
+task registry supplies its current task state directly. Peer statuses reflect
+the latest durable lifecycle event, with its timestamp shown in the graph;
+an unreadable journal is marked unavailable rather than shown as empty. The
+canvas `live_activity` action reads the same sources on demand. If the live
+feed fails, the graph shows an error rather than displaying stored reports
+as live activity. Unlike recorded release gates, activity is not committed
+to a milestone artifact.
 
 For gates, use `section` values `priority`, `integrationRc`, `directApi`,
 `directUi`, `liveGate`, `release`, or `aksDeployment` without `number`. Changes

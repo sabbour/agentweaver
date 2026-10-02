@@ -41,10 +41,15 @@
     .detail { white-space: pre-wrap; overflow-wrap: anywhere; }
     .chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; }
     .chain span { padding: 6px 10px; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 6px; }
-    .agent-tree, .agent-tree ul { list-style: none; padding: 0; margin: 0; }
-    .agent-tree ul { margin: 8px 0 0 18px; padding-left: 14px; border-left: 1px solid var(--border-color-default, #d1d9e0); }
-    .agent-tree li { padding: 7px 0; }
-    .agent-tree .agent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .graph-wrap { max-height: 700px; overflow: auto; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 6px; }
+    .graph-link { fill: none; stroke: var(--border-color-default, #d1d9e0); stroke-width: 2; }
+    .graph-node rect { fill: var(--background-color-default, #fff); stroke: var(--border-color-default, #d1d9e0); stroke-width: 1.5; }
+    .graph-node text { fill: var(--text-color-default, #1f2328); font: 13px var(--font-sans, system-ui, sans-serif); }
+    .graph-node .graph-detail { fill: var(--text-color-muted, #59636e); font-size: 11px; }
+    .graph-node circle { fill: var(--text-color-muted, #59636e); }
+    .graph-node[data-status="busy"] circle, .graph-node[data-status="running"] circle { fill: var(--true-color-blue, #0969da); }
+    .graph-node[data-status="failed"] circle, .graph-node[data-status="blocked"] circle { fill: var(--true-color-red, #cf222e); }
+    .graph-node a:focus-visible rect { stroke: var(--color-focus-outline, #0969da); stroke-width: 3; }
     #error { color: var(--true-color-red, #cf222e); }
   </style>
 </head>
@@ -72,8 +77,8 @@
   </section>
   <section class="panel" aria-labelledby="agents-title">
     <h2 id="agents-title">Agents and subagents</h2>
-    <p class="muted"><span id="live-updated">Loading live activity…</span> · Project sessions and their coordinator come from the app's live activity. CLI task subagents are visible for this canvas session; other sessions' internal task lists are not exposed.</p>
-    <ul class="agent-tree" id="agents"></ul>
+    <p class="muted"><span id="live-updated">Loading live activity…</span> · Project sessions come from the app's live activity; subagents come from each local session's lifecycle journal. Blue dots are active; red dots need attention. Select an issue-linked node to open its issue.</p>
+    <div class="graph-wrap" id="graph-wrap"><svg id="agents" role="img" aria-label="Live milestone agent and subagent graph"></svg></div>
   </section>
 </main>
 <script>
@@ -113,26 +118,11 @@
     if (check.evidence) cell.append(paragraph(check.evidence, true));
     if (check.updatedAt) cell.append(paragraph(`Reported ${new Date(check.updatedAt).toLocaleString()}`, true));
   }
-  function agentNode(agent, children) {
-    const item = document.createElement("li");
-    const detail = document.createElement("div");
-    detail.className = "agent";
-    const name = document.createElement("strong");
-    name.textContent = agent.name;
-    detail.append(name, badge(agent.status));
-    if (agent.issueNumber) detail.append(link("issues", agent.issueNumber));
-    const kind = document.createElement("small");
-    kind.textContent = agent.busyForSeconds ? `${agent.kind} · busy for ${agent.busyForSeconds}s` : agent.kind;
-    detail.append(kind);
-    item.append(detail);
-    const descendants = children.filter((child) => child.parentId === agent.id);
-    if (descendants.length) {
-      const nested = document.createElement("ul");
-      nested.append(...descendants.map((child) => agentNode(child, children)));
-      item.append(nested);
-    }
-    return item;
-  }
+  const svgElement = (name, attributes = {}) => {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", name);
+    for (const [key, value] of Object.entries(attributes)) el.setAttribute(key, value);
+    return el;
+  };
   function render(data) {
     $("heading").textContent = `v${data.version} delivery tracker`;
     $("updated").textContent = `Updated ${new Date(data.updatedAt).toLocaleString()}`;
@@ -167,9 +157,62 @@
   }
   function renderLive(data) {
     $("live-updated").textContent = `Live as of ${new Date(data.observedAt).toLocaleTimeString()}`;
-    const roots = data.nodes.filter((agent) => !agent.parentId);
-    $("agents").replaceChildren(...roots.map((agent) => agentNode(agent, data.nodes)));
-    if (!roots.length) $("agents").append(paragraph("No active project sessions for this milestone.", true));
+    const svg = $("agents");
+    const children = new Map();
+    for (const node of data.nodes) {
+      if (!children.has(node.parentId)) children.set(node.parentId, []);
+      children.get(node.parentId).push(node);
+    }
+    const byIssue = (a, b) => (a.issueNumber || Infinity) - (b.issueNumber || Infinity) || a.name.localeCompare(b.name);
+    for (const group of children.values()) group.sort(byIssue);
+    const positions = new Map();
+    const visiting = new Set();
+    let row = 0;
+    function position(node, depth) {
+      if (visiting.has(node.id)) throw new Error("Cycle in live agent hierarchy");
+      visiting.add(node.id);
+      positions.set(node.id, { x: 20 + depth * 350, y: 20 + row++ * 76 });
+      for (const child of children.get(node.id) || []) position(child, depth + 1);
+      visiting.delete(node.id);
+    }
+    for (const root of children.get(null) || []) position(root, 0);
+    const width = Math.max(340, ...[...positions.values()].map(({ x }) => x + 320));
+    svg.setAttribute("viewBox", `0 0 ${width} ${Math.max(90, row * 76 + 20)}`);
+    svg.setAttribute("width", width);
+    svg.setAttribute("height", Math.max(90, row * 76 + 20));
+    const elements = [];
+    for (const node of data.nodes) {
+      const parent = positions.get(node.id);
+      const descendants = (children.get(node.id) || []).map((child) => positions.get(child.id)).filter(Boolean);
+      if (!parent || !descendants.length) continue;
+      const spine = parent.x + 325;
+      elements.push(svgElement("path", {
+        class: "graph-link",
+        d: `M ${parent.x + 300} ${parent.y + 29} H ${spine} V ${descendants.at(-1).y + 29}`
+      }));
+      for (const child of descendants) elements.push(svgElement("path", {
+        class: "graph-link", d: `M ${spine} ${child.y + 29} H ${child.x}`
+      }));
+    }
+    for (const node of data.nodes) {
+      const at = positions.get(node.id);
+      if (!at) continue;
+      const group = svgElement("g", { class: "graph-node", "data-status": node.status, transform: `translate(${at.x},${at.y})` });
+      const title = svgElement("title");
+      title.textContent = `${node.name} · ${node.kind} · ${node.status}${node.lastEventAt ? ` · last event ${node.lastEventAt}` : ""}${node.subagentError ? ` · ${node.subagentError}` : ""}`;
+      group.append(title, svgElement("rect", { width: 300, height: 58, rx: 7 }), svgElement("circle", { cx: 16, cy: 22, r: 5 }));
+      const name = svgElement("text", { x: 30, y: 25 });
+      name.textContent = node.name.length > 37 ? `${node.name.slice(0, 34)}…` : node.name;
+      const detail = svgElement("text", { x: 16, y: 45, class: "graph-detail" });
+      detail.textContent = node.subagentError || `${node.kind} · ${node.status}${node.busyForSeconds ? ` · ${node.busyForSeconds}s` : ""}${node.lastEventAt ? ` · ${new Date(node.lastEventAt).toLocaleTimeString()}` : ""}`;
+      group.append(name, detail);
+      if (node.issueNumber) {
+        const anchor = svgElement("a", { href: `https://github.com/sabbour/agentweaver/issues/${node.issueNumber}`, target: "_blank", rel: "noopener noreferrer" });
+        anchor.append(group);
+        elements.push(anchor);
+      } else elements.push(group);
+    }
+    svg.replaceChildren(...elements);
   }
   async function refresh() {
     $("refresh").disabled = true;
@@ -194,7 +237,7 @@
       renderLive(await liveResponse.json());
       $("error").hidden = true;
     } catch (error) {
-      $("agents").replaceChildren(paragraph("Live agent activity unavailable.", true));
+      $("agents").replaceChildren();
       $("live-updated").textContent = "Live activity unavailable";
       $("error").textContent = `Could not refresh release status: ${error.message}`;
       $("error").hidden = false;
