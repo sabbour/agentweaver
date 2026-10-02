@@ -179,6 +179,34 @@ test("run: probes pods/exec create via --subresource=exec, not the deprecated sl
   );
 });
 
+test("run: worker Sandbox GET denial fails RBAC despite other permissions passing", async () => {
+  const probes = [];
+  const captureImpl = (_cmd, args) => {
+    const joined = args.join(" ");
+    if (joined.includes("auth can-i")) {
+      probes.push(joined);
+      if (joined.includes("get sandboxes.agents.x-k8s.io")) {
+        return { stdout: "no", stderr: "", code: 0 };
+      }
+      return { stdout: "yes", stderr: "", code: 0 };
+    }
+    if (joined.includes("--field-selector=status.phase=Running")) return { stdout: "pod-1\n", stderr: "", code: 0 };
+    if (joined.includes("Programmed") || joined.includes("Accepted") || joined.includes("ResolvedRefs")) return { stdout: "True", stderr: "", code: 0 };
+    if (joined.includes("addresses")) return { stdout: "1.2.3.4", stderr: "", code: 0 };
+    if (joined.includes("defaultdomaincertificate")) return { stdout: "", stderr: "", code: 0 };
+    if (joined.includes("secretproviderclasspodstatus")) return { stdout: "spc-1\n", stderr: "", code: 0 };
+    if (joined.includes("agentweaver-sandbox")) return { stdout: "", stderr: "", code: 1 };
+    return { stdout: "", stderr: "", code: 0 };
+  };
+  const result = await run(CFG, { exec: fakeExec(captureImpl), log: noopLog(), env: {} });
+  assert.ok(probes.some((probe) => probe.includes(
+    "get sandboxes.agents.x-k8s.io --as=system:serviceaccount:agentweaver:agentweaver-worker --namespace agentweaver",
+  )));
+  assert.equal(result.ok, false);
+  assert.ok(result.results.some((entry) =>
+    !entry.ok && entry.message.includes("Worker ServiceAccount lacks required sandbox permissions")));
+});
+
 test("run: reports failures for missing pods and unprogrammed gateway", async () => {
   const captureImpl = (cmd, args) => {
     const joined = args.join(" ");

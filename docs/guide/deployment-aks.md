@@ -351,6 +351,8 @@ npm run azure:verify
 The verifier checks cluster resources, routes, health, the canonical OAuth public
 origin and `/mcp` resource, runtime certificate-family configuration, Key Vault
 certificate versions, the canonical Repo App private-key secret, and JWKS.
+It also checks that the Worker ServiceAccount can read namespaced Sandboxes for
+post-configure AgentHost binding attestation; missing `sandboxes/get` fails verification.
 
 Useful follow-up commands:
 
@@ -378,5 +380,6 @@ described above.
 | ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
 | API/MCP auth failures | confirm Entra client/tenant IDs, canonical OAuth public origin, both configured Key Vault certificate families/versions, and readable `ghtok-repo-app-private-key` |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
+| Worker AgentHost launch fails with Sandbox GET 403 | Check `kubectl auth can-i get sandboxes.agents.x-k8s.io -n agentweaver --as=system:serviceaccount:agentweaver:agentweaver-worker`; redeploy the worker namespaced Role/RoleBinding if denied. Do not bypass binding attestation. |
 | Warm-pool image verification fails despite ready replicas | Inspect `status.selector` with `kubectl get sandboxwarmpool agentweaver-agent-host -n agentweaver -o json`, then query its selected pods; check membership, readiness, and image digests. Let the controller replace pods; do not delete them manually. |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |
