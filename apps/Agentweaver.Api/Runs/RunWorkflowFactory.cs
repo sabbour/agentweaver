@@ -110,6 +110,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         if (expected.ParentRunId is not null
             || expected.RepositoryPath != previous.RepositoryPath
             || expected.OriginatingBranch != previous.OriginatingBranch
+            || expected.WorktreePath != previous.WorktreePath
+            || expected.WorktreeBranch != previous.WorktreeBranch
             || expected.ModelSource.ToApiString() != previous.ModelSource
             || expected.ModelId != previous.ModelId
             || expected.SubmittingUser != previous.SubmittingUser
@@ -120,24 +122,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             .GetActiveClaimAsync(previous.RunId, ct).ConfigureAwait(false);
         if (claim is null || claim.LifecycleGeneration != expected.LifecycleGeneration)
             throw new InvalidOperationException("Composed root lease changed.");
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-        var now = DateTimeOffset.UtcNow;
-        var published = await db.Runs.Where(run =>
-                run.RunId == previous.RunId && run.ParentRunId == null
-                && run.Status == "in_progress"
-                && run.LifecycleGeneration == expected.LifecycleGeneration
-                && run.TreeHash == expected.TreeHash
-                && run.WorktreePath == previous.WorktreePath
-                && run.WorktreeBranch == previous.WorktreeBranch
-                && run.ProjectId == previous.ProjectId
-                && run.CurrentOutputRevisionId == null
-                && run.ApprovedOutputRevisionId == null
-                && run.OwnerId == claim.OwnerId
-                && run.FencingToken == claim.FencingToken
-                && run.LeaseExpiresAt > now)
-            .ExecuteUpdateAsync(update => update.SetProperty(run => run.TreeHash, output.TreeHash), ct)
-            .ConfigureAwait(false);
-        if (published != 1)
+        if (!await _runStore.TryPublishComposedAgentTreeAsync(expected, output.TreeHash, claim, ct)
+                .ConfigureAwait(false))
             throw new InvalidOperationException("Composed agent output could not be published to the current root lifecycle.");
     }
 

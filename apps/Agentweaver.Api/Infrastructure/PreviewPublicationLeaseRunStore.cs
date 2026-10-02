@@ -347,6 +347,10 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default) =>
         Inner.UpdateTreeHashAfterCommitAsync(runId, newTreeHash, ct);
 
+    public Task<bool> TryPublishComposedAgentTreeAsync(
+        Run expected, string treeHash, RunLeaseClaim requiredLease, CancellationToken ct = default) =>
+        Inner.TryPublishComposedAgentTreeAsync(expected, treeHash, requiredLease, ct);
+
     public Task<bool> TryTransitionToIdleAsync(RunId runId, CancellationToken ct = default) =>
         Inner.TryTransitionToIdleAsync(runId, ct);
 
