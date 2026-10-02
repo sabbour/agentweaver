@@ -111,14 +111,19 @@ export class EventDeltas {
 }
 
 const nonempty = (value) => typeof value === 'string' && value.trim().length > 0;
+const matchesRevisionWorkPlanId = (revisionId, planId) => Number.isSafeInteger(planId) && planId > 0
+  && (typeof revisionId === 'number' ? Number.isSafeInteger(revisionId) && revisionId > 0
+    : typeof revisionId === 'string' && /^[1-9]\d*$/.test(revisionId)
+      && Number.isSafeInteger(Number(revisionId)))
+  && Number(revisionId) === planId;
 
 export function selectCurrentAutomaticPreview({ runId, plan, run, revision, deltas, sessions }) {
   if (!Array.isArray(sessions)) throw new AcceptanceFailure('Preview sessions response must be an array.');
   const review = deltas.reviewRequests.get(runId);
-  if (!Number.isInteger(plan?.workPlanId) || plan.workPlanId < 1
+  if (!Number.isSafeInteger(plan?.workPlanId) || plan.workPlanId < 1
     || plan.coordinatorRunId !== runId || normalize(plan.status) !== 'in_review' || !review
     || review.workPlanId !== plan.workPlanId || !nonempty(review.treeHash)
-    || revision?.tree_hash !== review.treeHash || revision.work_plan_id !== plan.workPlanId) {
+    || revision?.tree_hash !== review.treeHash || !matchesRevisionWorkPlanId(revision.work_plan_id, plan.workPlanId)) {
     throw new AcceptanceFailure('Current review, work plan and revision tree do not match.');
   }
   const binding = deltas.podBindings.get(runId);
@@ -268,7 +273,7 @@ export async function runOracleAcceptance({
     if (typeof contentIdentity !== 'string' || !contentIdentity) {
       throw new AcceptanceFailure('Review revision has no artifact content identity.');
     }
-    if (detail.tree_hash !== requested.treeHash || detail.work_plan_id !== latest.plan?.workPlanId
+    if (detail.tree_hash !== requested.treeHash || !matchesRevisionWorkPlanId(detail.work_plan_id, latest.plan?.workPlanId)
       || !nonempty(detail.tree_content_sha256) || !Array.isArray(detail.files) || !detail.files.length) {
       throw new AcceptanceFailure('Review revision tree does not match current work plan.');
     }
