@@ -174,7 +174,8 @@ public sealed record CollectiveBuildTestRequest(
     string? AgentId = null,
     string? ModelSource = null,
     string? ByokProviderFingerprint = null,
-    string? AssemblyAttemptToken = null);
+    string? AssemblyAttemptToken = null,
+    int? LifecycleGeneration = null);
 
 /// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
 /// <param name="TargetFiles">

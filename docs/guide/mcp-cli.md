@@ -196,6 +196,9 @@ settings.
 ## Poll vs. stream
 
 - Use `run_status` for quick snapshots.
+- `run_status` preserves the API's `sandbox.current_binding` projection. Use its
+  `verified` claim and Pod UIDs for current ownership; the legacy sandbox pod and
+  executor backend describe launch history, not a current preview.
 - Use `run_watch` only when the operator explicitly wants a live stream.
 - Tell the operator that `run_watch` blocks while waiting; that is expected, not a hang.
 

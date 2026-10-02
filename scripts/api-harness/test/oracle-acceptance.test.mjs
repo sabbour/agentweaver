@@ -154,7 +154,7 @@ async function driveReviewFixture({
   transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
   advanceThrownRunMs = 0, planningBudget = 6,
   approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
-  previewCase = null, previewReadTimeouts = 0, sourceCase = null,
+  previewCase = null, previewReadTimeouts = 0, sourceCase = null, physicalBuildChildEnded = false,
 } = {}) {
   const directory = await mkdtemp(path.join(process.cwd(), '.oracle-acceptance-test-'));
   try {
@@ -310,10 +310,22 @@ async function driveReviewFixture({
           return { status: 0, body: { error: 'transport_error', message: 'fetch failed' } };
         }
       }
+      if (physicalBuildChildEnded && url === '/api/runs/first') {
+        return { status: 200, body: {
+          status: 'assemble_ready', ended_at: '2026-10-02T00:43:05Z', parent_run_id: 'parent',
+          sandbox: { backend: 'kata-exec-sidecar', pod_name: 'historic-child-pod',
+            current_binding: { state: 'unavailable', reason: 'active_lease_missing' } },
+        } };
+      }
       return { status: 200, body: {
-        status: approved ? 'completed' : 'in_progress', project_id: 'project',
-        sandbox: { backend: 'kubernetes-sandbox-claim',
-          phase: previewCase === 'lost' ? 'Lost' : 'Bound', claim_name: 'agent-parent', pod_name: 'parent-pod' },
+        status: approved ? 'completed' : 'in_progress', project_id: 'project', lifecycle_generation: 1,
+        sandbox: { backend: 'kata-exec-sidecar', claim_name: 'historic-claim', pod_name: 'historic-pod',
+          current_binding: { state: previewCase === 'lost' ? 'unavailable' : 'verified', run_id: 'parent',
+            provisioner: 'kubernetes-sandbox-claim', claim_name: 'agent-parent',
+            claim_uid: 'claim-uid', pod_name: 'parent-pod', pod_uid: 'pod-uid',
+            namespace: 'agentweaver', lifecycle_generation: 1, assembly_attempt: '4',
+            source_repository: '/repository', source_ref: 'branch',
+            source_base_commit: 'commit', source_tree: tree(), source_worktree: '/worktree' } },
       } };
     };
     const result = await runOracleAcceptance({
@@ -494,8 +506,13 @@ test('same-tree recovery selects only the latest terminal event and its live ses
     await deltas.poll('parent');
     return () => selectCurrentAutomaticPreview({
       runId: 'parent', plan: { workPlanId: 42, coordinatorRunId: 'parent', status: 'in_review' },
-      run: { sandbox: { backend: 'kubernetes-sandbox-claim', phase: 'Bound',
-        claim_name: 'agent-parent', pod_name: 'parent-pod' } },
+      run: { lifecycle_generation: 1, sandbox: { backend: 'kata-exec-sidecar', pod_name: 'historic-pod', current_binding: {
+        state: 'verified', run_id: 'parent', provisioner: 'kubernetes-sandbox-claim', claim_name: 'agent-parent',
+        claim_uid: 'claim-uid', pod_name: 'parent-pod', pod_uid: 'pod-uid',
+        namespace: 'agentweaver', lifecycle_generation: 1, assembly_attempt: '4',
+        source_repository: '/repository', source_ref: 'branch', source_base_commit: 'commit',
+        source_tree: 'tree-original', source_worktree: '/worktree',
+      } } },
       revision: { tree_hash: 'tree-original', work_plan_id: 42 }, deltas, sessions,
     });
   };
@@ -513,6 +530,58 @@ test('same-tree recovery selects only the latest terminal event and its live ses
   assert.throws(foreign, /does not match the current automatic preview event/);
   const unknown = await select([], [session('unknown')]);
   assert.throws(unknown, /no current automatic preview-ready event/);
+});
+
+test('current binding rejects historical pods and missing provenance without changing preview fences', async () => {
+  const { result } = await driveReviewFixture();
+  assert.equal(result.verdict, 'pass');
+  for (const bindingCase of ['missing', 'unavailable', 'foreignRun', 'claimUid', 'podUid', 'sourceTree', 'attempt', 'generation', 'rotatedGeneration']) {
+    const base = {
+      state: 'verified', run_id: 'parent', provisioner: 'kubernetes-sandbox-claim', claim_name: 'agent-parent',
+      claim_uid: 'claim-uid', pod_name: 'parent-pod', pod_uid: 'pod-uid',
+      namespace: 'agentweaver', lifecycle_generation: 1, assembly_attempt: '4',
+      source_repository: '/repository', source_ref: 'branch', source_base_commit: 'commit',
+      source_tree: 'tree-original', source_worktree: '/worktree',
+    };
+    if (bindingCase === 'unavailable') base.state = 'unavailable';
+    if (bindingCase === 'foreignRun') base.run_id = 'physical-child';
+    if (bindingCase === 'claimUid') base.claim_uid = '';
+    if (bindingCase === 'podUid') base.pod_uid = '';
+    if (bindingCase === 'sourceTree') base.source_tree = 'old-tree';
+    if (bindingCase === 'attempt') base.assembly_attempt = '';
+    if (bindingCase === 'generation') base.lifecycle_generation = 0;
+    const deltas = new EventDeltas(async () => ({ status: 200, body: [
+      { sequence: 1, type: 'sandbox.execution_pod.bound', payload: { podName: 'parent-pod' } },
+      { sequence: 2, type: 'sandbox.preview_ready', payload: {
+        run_id: 'parent', work_plan_id: 42, tree_hash: 'tree-original', source: 'preview-step',
+        session_id: 'preview', preview_runner_session_id: 'runner', pod_name: 'parent-pod',
+        target_port: 8235, preview_url: 'https://preview.example.test',
+      } },
+      { sequence: 3, type: 'coordinator.assembly_build_test_completed', payload: {
+        workPlanId: 42, treeHash: 'tree-original',
+      } },
+      { sequence: 4, type: 'coordinator.assembly_review_requested', payload: {
+        workPlanId: 42, treeHash: 'tree-original', outputRevisionId: 'revision',
+      } },
+    ] }));
+    await deltas.poll('parent');
+    assert.throws(() => selectCurrentAutomaticPreview({
+      runId: 'parent', plan: { workPlanId: 42, coordinatorRunId: 'parent', status: 'in_review' },
+      run: { lifecycle_generation: bindingCase === 'rotatedGeneration' ? 2 : 1,
+        sandbox: { backend: 'kata-exec-sidecar', pod_name: 'historic-pod',
+        current_binding: bindingCase === 'missing' ? undefined : base } },
+      revision: { tree_hash: 'tree-original', work_plan_id: 42 }, deltas,
+      sessions: [{ session_id: 'preview', preview_runner_session_id: 'runner',
+        pod_name: 'parent-pod', target_port: 8235, preview_url: 'https://preview.example.test' }],
+    }), /verified claim and source binding/, bindingCase);
+  }
+});
+
+test('reviewer selects the logical parent preview while a physical build child has ended', async () => {
+  const { result, opened, decisions } = await driveReviewFixture({ physicalBuildChildEnded: true });
+  assert.equal(result.verdict, 'pass');
+  assert.equal(opened.length, 2);
+  assert.equal(decisions.length, 2);
 });
 
 test('corrected tree freshness and both revisions source bytes are enforced', async () => {

@@ -70,7 +70,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
         IAgentHostReadinessProbe? readinessProbe = null,
         ILogger<KubernetesSandboxExecutor>? logger = null,
-        IEffectivePermissionBindingProvider? permissionBindingProvider = null) =>
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null,
+        Agentweaver.Api.Infrastructure.IRunEventStream? runEventStream = null) =>
         new(ClientFor(handler), Options(), logger ?? NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: readinessProbe,
             submittingUserResolver: submittingUserResolver,
@@ -79,7 +80,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
             previewService: previewService,
             byokProviderConfiguration: byokProviderConfiguration,
             effectiveProviderResolver: effectiveProviderResolver,
-            permissionBindingProvider: permissionBindingProvider ?? new FixedPermissionBindingProvider());
+            permissionBindingProvider: permissionBindingProvider ?? new FixedPermissionBindingProvider(),
+            runEventStream: runEventStream);
 
     private sealed class FixedPermissionBindingProvider : IEffectivePermissionBindingProvider
     {
@@ -1108,18 +1110,53 @@ public sealed class KubernetesSandboxExecutorClaimTests
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
+        var events = new RecordingBindingEvents();
         handler.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
-            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+            JsonSerializer.Serialize(new
+            {
+                metadata = new
+                {
+                    name = claimName, @namespace = "agentweaver", uid = "claim-uid", resourceVersion = "42",
+                    annotations = new Dictionary<string, string>
+                    {
+                        [SandboxClaimConventions.RunIdAnnotation] = runId,
+                        ["agentweaver.io/run-lifecycle-generation"] = "1",
+                        ["agentweaver.io/agent-host-holder-token"] = "4",
+                        ["agentweaver.io/working-directory"] = Path.GetFullPath("/workspace/reviewer"),
+                        [CurrentSandboxBindingVerifier.SourceRepositoryAnnotation] = "/workspace/repository",
+                        [CurrentSandboxBindingVerifier.SourceRefAnnotation] = "agentweaver/integration/run-claim-assembly",
+                        [CurrentSandboxBindingVerifier.SourceBaseCommitAnnotation] = commitSha,
+                        [CurrentSandboxBindingVerifier.SourceTreeAnnotation] = treeHash,
+                    },
+                },
+                status = new
+                {
+                    conditions = new[] { new { type = "Ready", status = "True" } },
+                    sandbox = new { name = "agent-pod-1" },
+                },
+            }));
+        handler.OnGet(
+            "/apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/agent-pod-1",
+            JsonSerializer.Serialize(new
+            {
+                metadata = new
+                {
+                    name = "agent-pod-1", @namespace = "agentweaver", uid = "sandbox-uid",
+                    labels = new Dictionary<string, string> { [CurrentSandboxBindingVerifier.ClaimUidLabel] = "claim-uid" },
+                    ownerReferences = new[] { new { kind = "SandboxClaim", name = claimName, uid = "claim-uid", controller = true } },
+                },
+            }));
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
-            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1","namespace":"agentweaver","uid":"pod-uid","ownerReferences":[{"kind":"Sandbox","name":"agent-pod-1","uid":"sandbox-uid","controller":true}]},"status":{"podIP":"10.0.0.7","phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}""");
 
         var configureHandler = new RecordingConfigureHandler();
         var executor = NewExecutor(
             handler,
             new StubSubmittingUserResolver("sabbour"),
             httpClientFactory: new StubHttpClientFactory(configureHandler),
-            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider(),
+            runEventStream: events);
 
         await executor.LaunchAgentHostPodAsync(
             runId,
@@ -1131,7 +1168,34 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 ExpectedTreeHash: treeHash,
                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
                 Purpose: AgentHostPurpose.AssemblyBuildTest,
-                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot));
+                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot,
+                HolderToken: "4",
+                LifecycleGeneration: 1));
+
+        var created = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "POST" && r.Path.EndsWith("/sandboxclaims", StringComparison.Ordinal)).Which;
+        using var claim = JsonDocument.Parse(created.Body!);
+        var annotations = claim.RootElement.GetProperty("metadata").GetProperty("annotations");
+        annotations.GetProperty(CurrentSandboxBindingVerifier.SourceRepositoryAnnotation).GetString()
+            .Should().Be("/workspace/repository");
+        annotations.GetProperty(CurrentSandboxBindingVerifier.SourceRefAnnotation).GetString()
+            .Should().Be("agentweaver/integration/run-claim-assembly");
+        annotations.GetProperty(CurrentSandboxBindingVerifier.SourceBaseCommitAnnotation).GetString()
+            .Should().Be(commitSha);
+        annotations.GetProperty(CurrentSandboxBindingVerifier.SourceTreeAnnotation).GetString()
+            .Should().Be(treeHash);
+        annotations.GetProperty("agentweaver.io/run-lifecycle-generation").GetString().Should().Be("1");
+        annotations.GetProperty("agentweaver.io/agent-host-holder-token").GetString().Should().Be("4");
+        annotations.GetProperty("agentweaver.io/working-directory").GetString()
+            .Should().Be(Path.GetFullPath("/workspace/reviewer"));
+        var attestation = events.Events.Should().ContainSingle(e =>
+            e.Type == CurrentSandboxBindingVerifier.EventType).Which;
+        var proof = JsonSerializer.Deserialize<CurrentSandboxAttestation>(
+            JsonSerializer.Serialize(attestation.Payload));
+        proof!.ClaimUid.Should().Be("claim-uid");
+        proof.SandboxUid.Should().Be("sandbox-uid");
+        proof.PodUid.Should().Be("pod-uid");
+        proof.AssemblyAttempt.Should().Be("4");
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         var body = doc.RootElement;
@@ -1145,6 +1209,23 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("expectedTreeHash").GetString().Should().Be(treeHash);
         body.GetProperty("scratchRoot").GetString().Should()
             .Be(PodLocalExecutionWorkspace.DefaultScratchRoot);
+    }
+
+    private sealed class RecordingBindingEvents : Agentweaver.Api.Infrastructure.IRunEventStream
+    {
+        public List<RunEvent> Events { get; } = [];
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            Events.Add(evt);
+            return ValueTask.FromResult(Events.Count);
+        }
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) => ValueTask.CompletedTask;
     }
 
     [Fact]

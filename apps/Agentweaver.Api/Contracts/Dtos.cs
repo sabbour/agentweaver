@@ -104,6 +104,9 @@ public sealed record RunResponse
     [JsonPropertyName("run_id")]
     public required string RunId { get; init; }
 
+    [JsonPropertyName("lifecycle_generation")]
+    public int LifecycleGeneration { get; init; }
+
     [JsonPropertyName("project_id")]
     public string? ProjectId { get; init; }
 
@@ -351,6 +354,9 @@ public sealed record SandboxStatusDto
     /// </summary>
     [JsonPropertyName("phase")]
     public string? Phase { get; init; }
+
+    [JsonPropertyName("current_binding")]
+    public Agentweaver.Api.Sandbox.CurrentSandboxBindingResult? CurrentBinding { get; init; }
 
     [JsonPropertyName("claim_name")]
     public string? ClaimName { get; init; }

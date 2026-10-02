@@ -49,22 +49,26 @@ public sealed class RunSandboxPersistenceTests : IClassFixture<ReviewWebApplicat
         updated.SandboxNamespace.Should().Be("agentweaver");
     }
 
-    [Fact]
-    public async Task GetRun_FallsBackToPersistedSandboxInfo_WhenStreamEntryIsEvicted()
+    [Theory]
+    [InlineData("kubernetes-sandbox-claim")]
+    [InlineData("kata-exec-sidecar")]
+    public async Task GetRun_FallsBackToPersistedSandboxInfo_WhenStreamEntryIsEvicted(string backend)
     {
         var store = _factory.Services.GetRequiredService<SqliteRunStore>();
         var run = await InsertOwnerRunAsync(store);
-        await store.SetSandboxInfoAsync(run.Id, "kubernetes-sandbox-claim", "claim-db", "pod-db", "agentweaver");
+        await store.SetSandboxInfoAsync(run.Id, backend, "claim-db", "pod-db", "agentweaver");
 
         var response = await _ownerClient.GetAsync($"/api/runs/{run.Id}");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var sandbox = doc.RootElement.GetProperty("sandbox");
-        sandbox.GetProperty("backend").GetString().Should().Be("kubernetes-sandbox-claim");
+        sandbox.GetProperty("backend").GetString().Should().Be(backend);
         sandbox.GetProperty("claim_name").GetString().Should().Be("claim-db");
         sandbox.GetProperty("pod_name").GetString().Should().Be("pod-db");
         sandbox.GetProperty("namespace").GetString().Should().Be("agentweaver");
+        sandbox.GetProperty("current_binding").GetProperty("state").GetString().Should().Be("unavailable");
+        sandbox.GetProperty("current_binding").GetProperty("pod_name").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
@@ -91,6 +95,7 @@ public sealed class RunSandboxPersistenceTests : IClassFixture<ReviewWebApplicat
         sandbox.GetProperty("backend").GetString().Should().Be("kubernetes-sandbox-claim");
         sandbox.GetProperty("is_real_isolation").GetBoolean().Should().BeTrue();
         sandbox.GetProperty("claim_name").GetString().Should().Be("claim-db");
+        sandbox.GetProperty("current_binding").GetProperty("state").GetString().Should().Be("unavailable");
     }
 
     private static async Task<Run> InsertOwnerRunAsync(SqliteRunStore store, RunStatus status = RunStatus.InProgress)
