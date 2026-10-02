@@ -23,7 +23,7 @@ test("UI harness changes select the required Node toolchain job", () => {
   assert.match(filter, /- 'scripts\/harness-shared\/\*\*'/);
 
   const job = workflowSection("  node-toolchain-tests:\n", "\n  web-tests:\n");
-  assert.match(job, /if: needs\.changes\.outputs\.node-toolchain == 'true'/);
+  assert.match(job, /if: \(needs\.changes\.outputs\.node-toolchain == 'true' \|\| needs\.changes\.outputs\.collect_coverage == 'true'\)/);
   assert.match(job, /cache-dependency-path: \|\n\s+package-lock\.json\n\s+scripts\/ui-harness\/package-lock\.json/);
   assert.match(job, /run: node scripts\/ci\/shared-deps\.mjs ensure --project \. --isolated/);
   assert.match(job, /run: node scripts\/ci\/shared-deps\.mjs ensure --project scripts\/ui-harness --isolated/);
@@ -106,7 +106,11 @@ test(".NET tests run as stable independent shards", () => {
   assert.match(jobs, /strategy:\n\s+fail-fast: false\n\s+matrix: \$\{\{ fromJSON\(needs\.dotnet-test-plan\.outputs\.matrix\) \}\}/);
   assert.match(jobs, /dotnet-test-shards:[\s\S]*?timeout-minutes: \$\{\{ matrix\.timeoutMinutes \}\}/);
   assert.match(jobs, /name: \.NET tests/);
-  assert.match(jobs, /--logger "trx;LogFileName=\$\{\{ matrix\.id \}\}\.trx"/);
+  // The shard job delegates to the shared Node CLI (which builds the real
+  // `dotnet test --logger trx;LogFileName=...` invocation, covered by
+  // coverage.test.mjs's `dotnetShardArguments` assertions) instead of
+  // inlining the `dotnet test` command directly in the workflow.
+  assert.match(jobs, /run-dotnet-test-shard\.mjs --shard "\$\{\{ matrix\.id \}\}"/);
   assert.doesNotMatch(jobs, /Run full \.NET test suite/);
 });
 
@@ -134,10 +138,10 @@ test("every dev PR produces the seven required .NET shard contexts", () => {
   );
   assert.match(
     jobs,
-    /dotnet-test-shards:\n\s+name: \.NET test shard \(\$\{\{ matrix\.name \}\}\)\n\s+needs: dotnet-test-plan\n\s+if: needs\.dotnet-test-plan\.result == 'success'/,
+    /dotnet-test-shards:\n\s+name: \.NET test shard \(\$\{\{ matrix\.name \}\}\)\n\s+needs: \[changes, dotnet-test-plan\]\n\s+if: needs\.dotnet-test-plan\.result == 'success'/,
     "each rendered context must run the real shard job after a successful plan",
   );
-  assert.match(jobs, /dotnet test tests\/Agentweaver\.Tests\/Agentweaver\.Tests\.csproj/);
+  assert.match(jobs, /run-dotnet-test-shard\.mjs --shard "\$\{\{ matrix\.id \}\}"/);
 });
 
 test("source, metadata-only, and draft dev PRs all run the real shard matrix", () => {

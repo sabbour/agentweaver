@@ -140,39 +140,48 @@ estimated threshold or test-adequacy score.
 Ordinary `ci.yml` PR runs do **not** run these instrumented commands — they run the
 same test suites uninstrumented, split across the seven required .NET shards plus the
 web/Node/docs jobs, so a PR never pays the extra instrumentation+merge cost on top of
-already-expensive required checks. Instead, the separate
-[`.github/workflows/coverage.yml`](https://github.com/sabbour/agentweaver/blob/dev/.github/workflows/coverage.yml)
-workflow runs `coverage:dotnet`, `coverage:web`, and `coverage:node` weekly (Monday
-05:00 UTC) and on manual `workflow_dispatch`, each in its own job against the exact
-triggering commit SHA.
+already-expensive required checks. There is no separate coverage workflow file:
+coverage is collected by the exact same `dotnet-test-shards`, `web-tests`, and
+`node-toolchain-tests` jobs in [`.github/workflows/ci.yml`](https://github.com/sabbour/agentweaver/blob/dev/.github/workflows/ci.yml),
+instrumented in place. A weekly schedule (Monday 05:00 UTC) and an opt-in
+`collect_coverage` `workflow_dispatch` boolean input both set a `collect_coverage`
+output on the `changes` job; when true, it (a) forces those three jobs to run
+regardless of path filters or draft state, and (b) threads a `--collect-coverage` flag
+into the *same single* `dotnet test` / `vitest` / `node --test` command each job
+already runs — never a second test invocation, and byte-identical command lines to an
+ordinary PR when the flag is unset.
 
-Every job uploads its report directory as a GitHub Actions artifact — `dotnet-coverage`,
-`web-coverage`, `node-coverage` — with a **14-day retention** (not the repository
-default), and does so with `if: always()` so a partial or failed coverage run still
-leaves its reports and `status.json`/`coverage-summary.json` inspectable. The coverage
-step itself is **not** `continue-on-error`: a partial or unsupported family (for
-example a timed-out .NET shard, or Postgres/Kata being unavailable) fails that job, so
-GitHub's own job status is never a false green for a partial run.
+Each coverage-collecting job uploads its own report as a GitHub Actions artifact —
+`dotnet-coverage-<shard-id>` per .NET shard, `web-coverage`, `node-coverage` — with a
+**14-day retention** (not the repository default), and does so with `if: always()` so
+a partial or failed coverage run still leaves its reports and `status.json`/
+`coverage-summary.json` inspectable. The coverage step itself is **not**
+`continue-on-error`: a partial or unsupported family (for example a timed-out .NET
+shard, or Postgres/Kata being unavailable) fails that job, so GitHub's own job status
+is never a false green for a partial run.
 
-A final `coverage-summary` job downloads whichever artifacts exist and runs
-`node scripts/ci/coverage-summary.mjs` to append a per-area markdown report (covered/
-total lines, branches, methods/functions; completed vs. missing .NET shards; absent
-instrumented assemblies) to the run's job summary. This summary job only reports — it
-never fails the workflow on another job's behalf, and it never computes or displays a
-pass/fail coverage threshold; read the linked artifacts for the authoritative numbers
-and uncovered paths.
+Two jobs run only when `collect_coverage` is true, after the test jobs above:
 
-`workflow_dispatch` only appears in the Actions "Run workflow" UI/API once the workflow
-file is present on the repository's default branch (`dev`); dispatching it from a
-feature branch before that lands will fail with "workflow does not exist" even though
-the YAML is valid. The scheduled trigger has the same requirement. To still exercise
-this workflow for real before it merges, it also declares a `pull_request` trigger
-narrowly scoped to its own files (`.github/workflows/coverage.yml`,
-`scripts/ci/coverage.mjs`, `scripts/ci/coverage-summary.mjs`, and their tests) — the
-same pattern [`agent-host-maintenance.yml`](https://github.com/sabbour/agentweaver/blob/dev/.github/workflows/agent-host-maintenance.yml)
-uses to validate itself on its own introducing PR. A PR that only touches those paths
-gets one full `dotnet-coverage`/`web-coverage`/`node-coverage`/`coverage-summary` run;
-an ordinary product PR never trips it, so coverage still is not doubled onto every PR.
+- `dotnet-coverage-combine` downloads every `dotnet-coverage-*` shard artifact produced
+  in the *same run* (never re-running tests), merges them with pinned
+  ReportGenerator via `scripts/ci/coverage-combine.mjs`, and uploads the result as
+  `dotnet-coverage-combined`.
+- `coverage-summary` downloads `dotnet-coverage-combined`, `web-coverage`, and
+  `node-coverage`, then runs `node scripts/ci/coverage-summary.mjs` to append a
+  per-area markdown report (covered/total lines, branches, methods/functions;
+  completed vs. missing .NET shards; absent instrumented assemblies) to the run's job
+  summary. This summary job only reports — it never fails the workflow on another
+  job's behalf, and it never computes or displays a pass/fail coverage threshold; read
+  the linked artifacts for the authoritative numbers and uncovered paths.
+
+`workflow_dispatch` inputs only appear in the Actions "Run workflow" UI/API once the
+workflow file on the repository's default branch (`dev`) declares them; dispatching
+`ci.yml` with `collect_coverage: true` from a feature branch before that input lands on
+`dev` will not offer the input. The scheduled trigger has the same requirement, but
+since `ci.yml` already runs on every pull request, there is no bootstrap problem to
+work around with a narrowly-scoped `pull_request` trigger the way a brand-new
+standalone workflow would need — the feature branch introducing this already gets the
+same jobs exercised, uninstrumented, on its own PR.
 
 Each stacked PR gets its path-targeted preflight. Run the full profile against the
 exact integrated tree at the stack top:
