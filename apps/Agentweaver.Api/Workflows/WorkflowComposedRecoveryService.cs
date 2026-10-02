@@ -7,6 +7,7 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Domain;
@@ -89,36 +90,68 @@ internal sealed class WorkflowComposedRecoveryService(
             var parent = EfRunStore.FromRecord(currentParentRecord);
             if (parent.Status != RunStatus.Failed
                 || parent.LifecycleGeneration != expectedParent.LifecycleGeneration
-                || parent.Result != expectedParent.Result)
+                || parent.Result != expectedParent.Result || parent.TreeHash != expectedParent.TreeHash)
                 throw Rejected("composed_recovery_run_changed", parent.Id);
             var childRecord = await db.Runs.AsNoTracking()
                 .SingleOrDefaultAsync(run => run.RunId == plan.CoordinatorRunId, ct).ConfigureAwait(false);
             if (childRecord is null)
                 throw Rejected("composed_recovery_coordinator_unavailable", parent.Id);
             var child = EfRunStore.FromRecord(childRecord);
-            var input = ValidateInput(parent, plan);
+            var provider = await scope.ServiceProvider.GetRequiredService<RunModelProviderSnapshotStore>()
+                .TryGetAsync(parent, ct).ConfigureAwait(false);
+            var input = ValidateInput(parent, plan, provider);
             var failure = plan.ParentResumeResultJson is null ? null
                 : JsonSerializer.Deserialize<WorkflowChildWorkResult>(
                     plan.ParentResumeResultJson, JsonDefaults.Options);
             if (child.Status != RunStatus.Failed || child.ParentRunId != parent.Id.ToString()
                 || child.ProjectId != parent.ProjectId || child.Result != parent.Result
+                || child.LifecycleGeneration != parent.LifecycleGeneration
+                || child.ArchivedAt is not null
                 || child.SubtaskId != WorkflowChildWorkService.ChildCoordinatorSubtaskKey(plan.ParentWorkflowNodeId!)
                 || failure is null || failure.Succeeded || failure.WorkPlanId != plan.Id
                 || failure.ChildCoordinatorRunId != child.Id.ToString()
                 || failure.FailureReason != parent.Result || failure.Assembly is not null
-                || plan.CoordinatorPodId is not null || plan.MergeEffectId is not null)
+                || plan.CoordinatorPodId is not null || plan.MergeEffectId is not null
+                || plan.ParentResumeState != WorkflowChildWorkResumeStates.Delivered
+                || plan.ParentRecoveryGeneration is not null)
                 throw Rejected("composed_recovery_not_eligible", parent.Id);
+            var pendingGate = await db.PendingRequests
+                .SingleOrDefaultAsync(request => request.RunId == parent.Id.ToString(), ct)
+                .ConfigureAwait(false);
+            if (pendingGate is null
+                || pendingGate.RequestId != plan.ParentResumeRequestId
+                    || pendingGate.DeliveryKind != PendingRequestDeliveryKinds.WorkflowChildWork
+                    || pendingGate.DeliveryState != PendingRequestDeliveryStates.Delivered
+                    || pendingGate.OwnerUser != parent.SubmittingUser)
+                throw Rejected("composed_recovery_gate_changed", parent.Id);
 
             // Validate the durable provider before reopening either identity.
             await scope.ServiceProvider.GetRequiredService<RunOrchestrator>()
                 .ValidateComposedRecoveryLaunchAsync(parent, ct).ConfigureAwait(false);
+            if (parent.TreeHash != plan.ExecutionBaseTreeHash)
+            {
+                var aligned = await db.Runs.Where(run => run.RunId == parent.Id.ToString()
+                        && run.Status == RunStatus.Failed.ToApiString()
+                        && run.LifecycleGeneration == parent.LifecycleGeneration
+                        && run.Result == parent.Result && run.TreeHash == parent.TreeHash
+                        && run.WorktreePath == parent.WorktreePath
+                        && run.WorktreeBranch == parent.WorktreeBranch
+                        && run.CurrentOutputRevisionId == null
+                        && run.ApprovedOutputRevisionId == null
+                        && run.OwnerId == owner && run.FencingToken == acquired.FencingToken)
+                    .ExecuteUpdateAsync(update => update
+                        .SetProperty(run => run.TreeHash, plan.ExecutionBaseTreeHash), ct)
+                    .ConfigureAwait(false);
+                if (aligned != 1)
+                    throw Rejected("composed_recovery_run_changed", parent.Id);
+                parent = parent with { TreeHash = plan.ExecutionBaseTreeHash };
+            }
             var lease = new RunLeaseClaim(owner, acquired.FencingToken, parent.LifecycleGeneration);
             if (!await EfRunStore.TryReopenTerminalOnContextAsync(
                     db, parent.Id, ct, parent, lease, clearResult: true).ConfigureAwait(false)
                 || !await EfRunStore.TryReopenTerminalOnContextAsync(
                     db, child.Id, ct, child, clearResult: true).ConfigureAwait(false))
                 throw Rejected("composed_recovery_run_changed", parent.Id);
-            var failureRequestId = plan.ParentResumeRequestId;
             var resumedGeneration = parent.LifecycleGeneration + 1;
             plan.Status = WorkPlanStatus.Planned;
             plan.ParentResumeRequestId = null;
@@ -134,20 +167,12 @@ internal sealed class WorkflowComposedRecoveryService(
             plan.AssemblyStatusReason = RecoveryMarkerPrefix
                 + resumedGeneration.ToString(CultureInfo.InvariantCulture);
             plan.UpdatedAt = DateTimeOffset.UtcNow;
-            var pending = await db.PendingRequests
-                .SingleOrDefaultAsync(request => request.RunId == parent.Id.ToString(), ct)
-                .ConfigureAwait(false);
-            if (pending is not null)
-            {
-                if (pending.RequestId != failureRequestId
-                    || pending.DeliveryKind != PendingRequestDeliveryKinds.WorkflowChildWork)
-                    throw Rejected("composed_recovery_gate_changed", parent.Id);
-                db.PendingRequests.Remove(pending);
-            }
+            db.PendingRequests.Remove(pendingGate);
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             await transaction.CommitAsync(ct).ConfigureAwait(false);
             parent = await runStore.GetAsync(parent.Id, ct).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Recovered composed workflow disappeared.");
+            ValidatePhysicalTree(parent, plan.ExecutionBaseTreeHash!);
             lease = new RunLeaseClaim(owner, acquired.FencingToken, resumedGeneration);
             await LaunchAsync(parent, input, plan.ParentWorkflowNodeId!, lease, ct).ConfigureAwait(false);
             transferred = true;
@@ -183,7 +208,9 @@ internal sealed class WorkflowComposedRecoveryService(
         if (parent.Status is not (RunStatus.InProgress or RunStatus.AwaitingReview)
             || lease.LifecycleGeneration != parent.LifecycleGeneration)
             throw Rejected("composed_recovery_run_changed", parent.Id);
-        var input = ValidateInput(parent, plan);
+        var provider = await scope.ServiceProvider.GetRequiredService<RunModelProviderSnapshotStore>()
+            .TryGetAsync(parent, ct).ConfigureAwait(false);
+        var input = ValidateInput(parent, plan, provider);
         if (parent.Status == RunStatus.AwaitingReview)
         {
             if (!await runStore.TryResumeFromChildWorkAsync(
@@ -209,7 +236,8 @@ internal sealed class WorkflowComposedRecoveryService(
             && plan.ParentResumeState != WorkflowChildWorkResumeStates.Suppressed, ct).ConfigureAwait(false);
     }
 
-    private AgentTurnInput ValidateInput(Run parent, WorkPlan plan)
+    private AgentTurnInput ValidateInput(
+        Run parent, WorkPlan plan, ResolvedRunModelProviderBoundary? provider)
     {
         var pin = parent.GetExecutableWorkflowPin()
             ?? throw Rejected("composed_recovery_workflow_unavailable", parent.Id);
@@ -223,15 +251,38 @@ internal sealed class WorkflowComposedRecoveryService(
             || input.WorktreePath != parent.WorktreePath || input.WorktreeBranch != parent.WorktreeBranch
             || input.RepositoryPath != parent.RepositoryPath || input.SubmittingUser != parent.SubmittingUser
             || input.ProjectId != parent.ProjectId?.ToString()
+            || input.OriginatingBranch != parent.OriginatingBranch
+            || input.ModelSource != parent.ModelSource.ToApiString()
+            || input.ModelId != parent.ModelId
+            || provider is null || provider.Provider.ToModelSource() != parent.ModelSource
+            || input.ByokProviderFingerprint != provider.ByokProviderFingerprint
             || parent.ArchivedAt is not null || parent.WorktreePath is null
-            || parent.TreeHash is null || plan.ExecutionBaseTreeHash != parent.TreeHash
-            || !worktrees.WorktreeExists(parent.WorktreePath)
-            || worktrees.GetTreeHash(parent.WorktreePath) != parent.TreeHash)
+            || parent.ParentRunId is not null || parent.TreeHash is null
+            || parent.CurrentOutputRevisionId is not null
+            || parent.ApprovedOutputRevisionId is not null
+            || plan.ExecutionBaseTreeHash is null
+            || input.WorktreeBranch != WorktreeManager.BranchNameFor(parent.Id))
+            throw Rejected("composed_recovery_input_changed", parent.Id);
+        ValidatePhysicalTree(parent, plan.ExecutionBaseTreeHash);
+        using var repository = new Repository(parent.WorktreePath);
+        if (parent.TreeHash != plan.ExecutionBaseTreeHash
+            && (parent.Status != RunStatus.Failed || repository.Head.Tip?.Parents.Count() != 1
+                || repository.Head.Tip.Parents.Single().Tree.Sha != parent.TreeHash))
+            throw Rejected("composed_recovery_input_changed", parent.Id);
+        return input;
+    }
+
+    private void ValidatePhysicalTree(Run parent, string treeHash)
+    {
+        if (parent.WorktreePath is null || !worktrees.WorktreeExists(parent.WorktreePath)
+            || worktrees.GetTreeHash(parent.WorktreePath) != treeHash)
             throw Rejected("composed_recovery_input_changed", parent.Id);
         using var repository = new Repository(parent.WorktreePath);
-        if (repository.RetrieveStatus(new StatusOptions { IncludeUntracked = false }).IsDirty)
+        if (repository.Info.IsHeadDetached
+            || repository.Head.FriendlyName != WorktreeManager.BranchNameFor(parent.Id)
+            || repository.Head.Tip?.Tree.Sha != treeHash
+            || repository.RetrieveStatus(new StatusOptions { IncludeUntracked = true }).IsDirty)
             throw Rejected("composed_recovery_worktree_changed", parent.Id);
-        return input;
     }
 
     private async Task LaunchAsync(
