@@ -1,0 +1,243 @@
+name: Coverage
+
+# Runs the instrumented .NET, web, and Node coverage commands documented in
+# CONTRIBUTING.md (npm run coverage:dotnet / coverage:web / coverage:node) on a
+# schedule and on demand, and publishes their machine/human reports as bounded
+# retention artifacts plus an honest run summary.
+#
+# This is deliberately a *separate* workflow from `ci.yml`. The seven required
+# .NET shard jobs there already run on every PR targeting dev; re-running the
+# full instrumented matrix a second time on every PR would double that already
+# expensive required gate for no gain, since coverage instrumentation measures
+# the same tests, not additional behavior. Coverage is a periodic/manual
+# cross-surface baseline, not a PR gate, and applies no pass/fail threshold.
+#
+# Each coverage command can finish in a *partial* state (for example, a timed
+# out .NET shard or an unsupported Kata runtime). That partial state must stay
+# visible: the per-area jobs below do not swallow a nonzero exit code, so a
+# partial/failed area is reported as a failed job, not silently masked as
+# green. Artifacts are still uploaded via `if: always()` even when a job
+# fails, so partial reports remain inspectable.
+
+on:
+  schedule:
+    # Every Monday at 05:00 UTC — after the agent-host image maintenance run,
+    # off the back of any busy PR-hours window.
+    - cron: "0 5 * * 1"
+  workflow_dispatch: {}
+  # workflow_dispatch and schedule only fire for a workflow file already present
+  # on the default branch, so this workflow cannot otherwise be exercised by its
+  # own introducing PR. Mirror agent-host-maintenance.yml's precedent (a
+  # pull_request trigger scoped to the one file it validates) so a change to
+  # this workflow, the coverage runner, or the summary script gets one real run
+  # against its own PR, without adding instrumented coverage to ordinary PRs.
+  pull_request:
+    paths:
+      - '.github/workflows/coverage.yml'
+      - 'scripts/ci/coverage.mjs'
+      - 'scripts/ci/coverage-summary.mjs'
+      - 'scripts/ci/tests/coverage.test.mjs'
+      - 'scripts/ci/tests/coverage-summary.test.mjs'
+      - 'scripts/ci/tests/coverage-workflow.test.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Reports are a periodic diagnostic baseline, not a compliance archive: bound
+# retention instead of relying on the repository-wide default.
+env:
+  COVERAGE_ARTIFACT_RETENTION_DAYS: 14
+
+jobs:
+  dotnet-coverage:
+    name: .NET coverage
+    runs-on: ubuntu-latest
+    # coverage.mjs runs all seven shards serially in-process (20 + 6×15 = 110
+    # minutes of worst-case shard budget) plus restore/build/report-merge time.
+    # The job ceiling must clear that plus setup/checkout/upload overhead so a
+    # legitimately slow (not hung) run still reaches the unconditional upload
+    # step below; the step-level timeout on the coverage command itself is what
+    # turns an actually-hung run into an ordinary failed step instead of a job
+    # termination that would skip the upload.
+    timeout-minutes: 140
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', 'nuget.config', 'Directory.*', '**/*.csproj', '**/*.props', '**/*.targets', '**/packages.lock.json') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-${{ runner.arch }}-
+
+      # The Kata runtime shard requires a usable bubblewrap user namespace,
+      # same as the required ci.yml shard job.
+      - name: Cache bubblewrap
+        uses: actions/cache@v6
+        id: bwrap-cache
+        with:
+          path: /usr/bin/bwrap
+          key: bwrap-${{ runner.os }}-apt
+
+      - name: Install bubblewrap
+        if: steps.bwrap-cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
+
+      - name: Verify bubblewrap runtime
+        run: |
+          set -euo pipefail
+          bwrap --version
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc --dev /dev \
+            -- /bin/true
+
+      # Intentionally not continue-on-error: a partial/failed coverage run
+      # must fail this job so the run summary below reports it honestly. The
+      # step-level timeout (below the job ceiling) ensures a hung run fails
+      # this step, rather than the job being terminated outright and skipping
+      # the unconditional upload step.
+      - name: Run instrumented .NET coverage
+        timeout-minutes: 130
+        env:
+          # Matches the required ci.yml Kata shard: fail the shard outright if
+          # bubblewrap stops being usable instead of letting it return early.
+          AGENTWEAVER_REQUIRE_BWRAP: "1"
+        run: npm run coverage:dotnet
+
+      - name: Upload .NET coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-coverage
+          path: TestResults/coverage
+          if-no-files-found: warn
+          retention-days: ${{ fromJSON(env.COVERAGE_ARTIFACT_RETENTION_DAYS) }}
+
+  web-coverage:
+    name: Web coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web npm dependencies
+        run: node scripts/ci/shared-deps.mjs ensure --project apps/web --isolated
+
+      # Step-level timeout below the job ceiling so a hung run fails this step
+      # (and still reaches the unconditional upload below) instead of the job
+      # being terminated outright.
+      - name: Run instrumented web coverage
+        timeout-minutes: 20
+        run: npm run coverage:web
+
+      - name: Upload web coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage
+          path: apps/web/coverage
+          if-no-files-found: warn
+          retention-days: ${{ fromJSON(env.COVERAGE_ARTIFACT_RETENTION_DAYS) }}
+
+  node-coverage:
+    name: Node coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install root npm dependencies
+        run: node scripts/ci/shared-deps.mjs ensure --project . --isolated
+
+      # Step-level timeout below the job ceiling so a hung run fails this step
+      # (and still reaches the unconditional upload below) instead of the job
+      # being terminated outright.
+      - name: Run instrumented Node coverage
+        timeout-minutes: 20
+        run: npm run coverage:node
+
+      - name: Upload Node coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-coverage
+          path: coverage/node
+          if-no-files-found: warn
+          retention-days: ${{ fromJSON(env.COVERAGE_ARTIFACT_RETENTION_DAYS) }}
+
+  coverage-summary:
+    name: Coverage summary
+    needs: [dotnet-coverage, web-coverage, node-coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Download .NET coverage report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: dotnet-coverage
+          path: downloaded/dotnet
+
+      - name: Download web coverage report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: web-coverage
+          path: downloaded/web
+
+      - name: Download Node coverage report
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: node-coverage
+          path: downloaded/node
+
+      # This job only reports; it intentionally never fails the workflow run
+      # on behalf of a partial/failed coverage area above — each area job
+      # already reports its own true status, and this step renders exactly
+      # that (no invented pass/fail threshold, no masking of partial results).
+      - name: Write coverage summary
+        if: always()
+        run: |
+          node scripts/ci/coverage-summary.mjs \
+            --sha "${{ github.sha }}" \
+            --dotnet-status "${{ needs.dotnet-coverage.result }}" \
+            --dotnet-dir downloaded/dotnet \
+            --web-status "${{ needs.web-coverage.result }}" \
+            --web-dir downloaded/web \
+            --node-status "${{ needs.node-coverage.result }}" \
+            --node-dir downloaded/node \
+            --out "$GITHUB_STEP_SUMMARY"
