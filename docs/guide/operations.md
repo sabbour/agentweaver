@@ -180,6 +180,14 @@ deleted by an older cleanup. Failures are logged as `Terminal child cleanup`
 warnings for retry rather than changing the coordinator's outcome. If a new
 revision stays pending on Kata, inspect these warnings and the child claim
 inventory before considering cluster capacity changes.
+For a current preview, inspect `GET /api/runs/{id}` `sandbox.current_binding`:
+`verified` identifies the configured claim UID, Pod UID, namespace, generation,
+attempt, and source tree; `unavailable` or `conflict` includes a reason and must
+not be replaced with the historical `sandbox.pod_name`. A released execution
+lease and a retained child-owned preview are distinct lifecycle facts. A
+child's claim, Pod, and preview session do not attest its coordinator parent's
+claim or automatic preview. Older claims lacking the post-configure attestation
+remain explicitly unavailable.
 After a durable `agent.turn.end`, coordinator observation first waits
 `Coordinator:PostTurnFinalizationGraceSeconds` (default 10 seconds, clamped to
 0.1–30 seconds) for assemble-ready or another terminal event. If the recovered

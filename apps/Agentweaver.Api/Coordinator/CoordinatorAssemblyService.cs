@@ -1427,7 +1427,8 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                             gate.AgentId,
                             assemblyProvider.ModelSource,
                             assemblyProvider.ByokProviderFingerprint,
-                            context.AssemblyAttemptToken),
+                            context.AssemblyAttemptToken,
+                            candidate.LifecycleGeneration),
                         ct).ConfigureAwait(false);
                 }
                 catch (CollectiveBuildTestInfrastructureException ex)

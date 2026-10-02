@@ -254,7 +254,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
                                 Purpose: AgentHostPurpose.AssemblyBuildTest,
                                 ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot,
-                                HolderToken: request.AssemblyAttemptToken),
+                                HolderToken: request.AssemblyAttemptToken,
+                                LifecycleGeneration: request.LifecycleGeneration),
                             gateCt).ConfigureAwait(false);
                         break;
                     }
@@ -565,12 +566,19 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         string integrationBranch,
         string? assemblyAttemptToken)
     {
-        // #236: provision a detached worktree at the assembled integration branch so the collective RAI
-        // + rubber-duck reviewers can read the integration files host-side. Reuse the SAME pattern (and
-        // deterministic name) as RunBuildTestAsync: AddDetachedWorktree destructively recreates the dir
-        // (Directory.Delete + prune + `git worktree add --detach`), so reviewer writes can never bleed
-        // into a later Build/Test run (Build/Test recreates the same-named worktree fresh), and teardown
-        // is handled by the existing CleanupBuildTestResourcesAsync path — no extra cleanup wiring.
+        var path = GetBuildTestWorktreePath(coordinatorRunId, assemblyAttemptToken);
+        using var repository = new Repository(repositoryPath);
+        var commit = repository.Branches[integrationBranch]?.Tip
+            ?? throw new InvalidOperationException("Reviewer integration ref is missing.");
+        var registered = repository.Worktrees[Path.GetFileName(path)];
+        if (registered is not null || Directory.Exists(path))
+        {
+            if (WorktreeManager.ReadDetachedWorktreeIdentity(
+                    repositoryPath, path, commit.Sha, commit.Tree.Sha) is null)
+                throw new InvalidOperationException(
+                    "Reviewer source worktree changed or was removed after Build/Test; refusing to replace it.");
+            return path;
+        }
         var info = _worktreeManager.AddDetachedWorktree(
             repositoryPath,
             integrationBranch,

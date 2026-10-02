@@ -2945,6 +2945,59 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             ex.Which.Reason.Should().Be("agenthost_launch_failed");
             ex.Which.Retryable.Should().BeTrue();
         }
+
+        finally
+        {
+            TryDeleteDirectory(repoPath);
+            TryDeleteDirectory(worktreesBase);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BuildTest_worktree_is_not_replaced_when_preparing_reviewer_after_launch(bool dirty)
+    {
+        var repoPath = CreateGitRepository();
+        var worktreesBase = Path.Combine(Path.GetTempPath(), $"agentweaver-review-source-{Guid.NewGuid():N}");
+        var runId = RunId.New().ToString();
+        try
+        {
+            var manager = new WorktreeManager(
+                new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Worktrees:BasePath"] = worktreesBase,
+                }).Build(), NullLogger<WorktreeManager>.Instance);
+            var pipeline = new CollectiveAssemblyPipeline(
+                worktreeManager: manager, mergeLock: null!, workflowFactory: null!,
+                copilotClientFactory: null!, scopeProvider: null!, sandboxExecutor: null!,
+                sandboxPolicyStore: null!, approvalStore: null!, toolApprovalGate: null!,
+                loggerFactory: NullLoggerFactory.Instance,
+                podLifecycle: new ThrowingLaunchPodLifecycle(new InvalidOperationException("launch stopped after source provision")),
+                sandboxRuntime: Options.Create(new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" }));
+            var request = new CollectiveBuildTestRequest(
+                runId, null, repoPath, "main", "tree", "diff", "alice",
+                AssemblyAttemptToken: "1");
+            var initial = pipeline.PrepareReviewerWorktree(runId, repoPath, "main", "1");
+            await pipeline.Invoking(p => p.RunBuildTestAsync(request, CancellationToken.None))
+                .Should().ThrowAsync<CollectiveBuildTestInfrastructureException>();
+            string marker;
+            using (var built = new Repository(initial))
+                marker = Path.Combine(built.Info.Path, "1713-proof");
+            File.WriteAllText(marker, "build-test-source");
+            if (dirty)
+            {
+                File.WriteAllText(Path.Combine(initial, "reviewer-write.txt"), "untracked");
+                pipeline.Invoking(p => p.PrepareReviewerWorktree(runId, repoPath, "main", "1"))
+                    .Should().Throw<InvalidOperationException>();
+                File.Exists(marker).Should().BeTrue("refusing a dirty source must not replace it");
+                return;
+            }
+            var reviewer = pipeline.PrepareReviewerWorktree(runId, repoPath, "main", "1");
+            reviewer.Should().Be(initial);
+            File.Exists(marker).Should().BeTrue(
+                "review must preserve the exact registered Build/Test worktree, not recreate it at the same path");
+        }
         finally
         {
             TryDeleteDirectory(repoPath);
