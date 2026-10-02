@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.Net.Http.Json;
 using System.Text.Json;
 using LibGit2Sharp;
 using Microsoft.Agents.AI.Workflows;
@@ -805,6 +806,7 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
         var runId = RunId.New();
         var worktrees = services.GetRequiredService<WorktreeManager>();
         var worktree = worktrees.AddWorktree(repositoryPath, "main", runId);
+        using var watchCancellation = new CancellationTokenSource();
         try
         {
             var yaml = RubberduckReviewWorkflowYaml();
@@ -820,6 +822,7 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
                 WorktreeBranch = worktree.BranchName,
                 ExecutableWorkflowDefinitionYaml = yaml,
                 Task = "rubberduck first human review",
+                SubmittingUser = WorkflowWebApplicationFactory.TestUser,
             };
             await services.GetRequiredService<IRunStore>().InsertAsync(run);
             var input = new AgentTurnInput(
@@ -828,26 +831,46 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
 
             var started = await services.GetRequiredService<RunWorkflowFactory>()
                 .StartAsync(input, runId.ToString(), CancellationToken.None);
-            WorkflowReviewRequest? review = null;
-            var events = new List<string>();
-            await foreach (var evt in started.WatchStreamAsync(CancellationToken.None))
+            var entry = services.GetRequiredService<RunStreamStore>()
+                .Create(runId.ToString(), run.SubmittingUser);
+            services.GetRequiredService<RunWatchLoopService>().StartWatching(
+                runId.ToString(), started, entry, run.SubmittingUser,
+                watchCancellation.Token, run.LifecycleGeneration);
+            var pending = services.GetRequiredService<PendingRequestStore>();
+            PendingEntry? gate = null;
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(20);
+            while (gate is null && DateTimeOffset.UtcNow < deadline)
             {
-                events.Add(evt.ToString() ?? evt.GetType().Name);
-                if (evt is RequestInfoEvent request
-                    && request.Request.TryGetDataAs<WorkflowReviewRequest>(out var value))
-                {
-                    review = value;
-                    break;
-                }
+                gate = await pending.GetAsync(runId.ToString());
+                if (gate is null)
+                    await Task.Delay(50);
             }
 
-            review.Should().NotBeNull("workflow events: {0}", string.Join("; ", events));
-            review!.LifecycleGeneration.Should().Be(run.LifecycleGeneration);
-            review.Diff.Should().NotBeNullOrEmpty();
+            gate.Should().NotBeNull("the production watcher must persist the workflow review request");
+            gate!.Request.RequestId.Should().NotBeNullOrWhiteSpace();
+            (await pending.GetRequestKindAsync(runId.ToString()))
+                .Should().Be(PendingRequestDeliveryKinds.WorkflowReview);
             started.LastCheckpoint.Should().NotBeNull();
+            var published = (await services.GetRequiredService<IRunStore>().GetAsync(runId))!;
+            published.LifecycleGeneration.Should().Be(run.LifecycleGeneration);
+            published.Diff.Should().NotBeNullOrEmpty();
+            var revision = await services.GetRequiredService<IRunStore>()
+                .GetLatestOutputRevisionAsync(runId);
+            revision.Should().NotBeNull();
+            published.CurrentOutputRevisionId.Should().Be(revision!.RevisionId);
+            (await pending.GetActionableRequestKindAsync(published, revision))
+                .Should().Be(PendingRequestDeliveryKinds.WorkflowReview);
+            using var client = factory.CreateClient();
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue(
+                    "Bearer", WorkflowWebApplicationFactory.TestApiKey);
+            var detail = await client.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+            detail.GetProperty("pending_request_kind").GetString()
+                .Should().Be(PendingRequestDeliveryKinds.WorkflowReview);
         }
         finally
         {
+            watchCancellation.Cancel();
             worktrees.RemoveWorktree(repositoryPath, worktree.WorktreePath, worktree.BranchName);
             foreach (var file in Directory.EnumerateFiles(repositoryPath, "*", SearchOption.AllDirectories))
                 File.SetAttributes(file, FileAttributes.Normal);
