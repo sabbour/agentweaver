@@ -234,6 +234,19 @@ steps call the same dependency helper with `--isolated`, preserving `npm ci`
 reproducibility. Local concurrent worktrees share only npm download content; writable
 dependency trees and build/test outputs never cross worktree boundaries.
 
+### Scheduled coverage reports
+
+The separate [`Coverage` workflow](.github/workflows/coverage.yml) runs the
+`coverage:dotnet` / `coverage:web` / `coverage:node` commands from [Testing](#testing)
+weekly and on manual dispatch — not on every PR, so it never doubles the seven
+already-required .NET shard jobs above. Each area's job fails honestly when its
+coverage run is partial (an unsupported Kata/Postgres shard, a timed-out shard, etc.),
+and still uploads its report with bounded (14-day) retention via `if: always()`. A
+final summary job renders measured per-area totals and gaps to the run's job summary
+without applying any coverage threshold. See
+[Coverage reports](docs/guide/validation.md#coverage-reports) for the full report
+layout and the `workflow_dispatch` default-branch requirement.
+
 ### Container image publishing
 
 The [`Publish images` workflow](.github/workflows/publish-images.yml) builds the four

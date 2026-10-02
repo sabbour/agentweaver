@@ -135,6 +135,45 @@ and function coverage describe executed instrumentation, not behavioral complete
 use the JSON/Cobertura machine reports for uncovered paths and counters, not an
 estimated threshold or test-adequacy score.
 
+### Scheduled cross-surface coverage reports
+
+Ordinary `ci.yml` PR runs do **not** run these instrumented commands — they run the
+same test suites uninstrumented, split across the seven required .NET shards plus the
+web/Node/docs jobs, so a PR never pays the extra instrumentation+merge cost on top of
+already-expensive required checks. Instead, the separate
+[`.github/workflows/coverage.yml`](https://github.com/sabbour/agentweaver/blob/dev/.github/workflows/coverage.yml)
+workflow runs `coverage:dotnet`, `coverage:web`, and `coverage:node` weekly (Monday
+05:00 UTC) and on manual `workflow_dispatch`, each in its own job against the exact
+triggering commit SHA.
+
+Every job uploads its report directory as a GitHub Actions artifact — `dotnet-coverage`,
+`web-coverage`, `node-coverage` — with a **14-day retention** (not the repository
+default), and does so with `if: always()` so a partial or failed coverage run still
+leaves its reports and `status.json`/`coverage-summary.json` inspectable. The coverage
+step itself is **not** `continue-on-error`: a partial or unsupported family (for
+example a timed-out .NET shard, or Postgres/Kata being unavailable) fails that job, so
+GitHub's own job status is never a false green for a partial run.
+
+A final `coverage-summary` job downloads whichever artifacts exist and runs
+`node scripts/ci/coverage-summary.mjs` to append a per-area markdown report (covered/
+total lines, branches, methods/functions; completed vs. missing .NET shards; absent
+instrumented assemblies) to the run's job summary. This summary job only reports — it
+never fails the workflow on another job's behalf, and it never computes or displays a
+pass/fail coverage threshold; read the linked artifacts for the authoritative numbers
+and uncovered paths.
+
+`workflow_dispatch` only appears in the Actions "Run workflow" UI/API once the workflow
+file is present on the repository's default branch (`dev`); dispatching it from a
+feature branch before that lands will fail with "workflow does not exist" even though
+the YAML is valid. The scheduled trigger has the same requirement. To still exercise
+this workflow for real before it merges, it also declares a `pull_request` trigger
+narrowly scoped to its own files (`.github/workflows/coverage.yml`,
+`scripts/ci/coverage.mjs`, `scripts/ci/coverage-summary.mjs`, and their tests) — the
+same pattern [`agent-host-maintenance.yml`](https://github.com/sabbour/agentweaver/blob/dev/.github/workflows/agent-host-maintenance.yml)
+uses to validate itself on its own introducing PR. A PR that only touches those paths
+gets one full `dotnet-coverage`/`web-coverage`/`node-coverage`/`coverage-summary` run;
+an ordinary product PR never trips it, so coverage still is not doubled onto every PR.
+
 Each stacked PR gets its path-targeted preflight. Run the full profile against the
 exact integrated tree at the stack top:
 
