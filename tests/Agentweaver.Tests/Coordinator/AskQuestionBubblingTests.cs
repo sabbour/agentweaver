@@ -164,6 +164,7 @@ public sealed class AskQuestionBubblingTests : IDisposable
         var evt = new RunEvent(1, EventTypes.SandboxProvisioningPending, new
         {
             claimName = "agent-child-bubble-capacity",
+            schedulingReason = "Unschedulable: 0/5 nodes are available: 5 Insufficient memory.",
             timestamp_utc = "2026-09-16T22:00:00Z",
         });
         sut.BubbleChildInteraction(coordinatorRunId, subtaskId, childRunId, evt);
@@ -174,6 +175,32 @@ public sealed class AskQuestionBubblingTests : IDisposable
         payload.GetProperty("childRunId").GetString().Should().Be(childRunId);
         payload.GetProperty("subtaskId").GetInt32().Should().Be(subtaskId);
         payload.GetProperty("claimName").GetString().Should().Be("agent-child-bubble-capacity");
+        payload.GetProperty("schedulingReason").GetString().Should().Contain("Insufficient memory");
+    }
+
+    [Fact]
+    public void BubbleChildInteraction_ProvisioningReasonChange_ReProjectsUpdatedDiagnosis()
+    {
+        const string coordinatorRunId = "coord-bubble-capacity-reason";
+        var streamStore = new RunStreamStore();
+        streamStore.Create(coordinatorRunId, "alice");
+        var sut = NewDispatchService(streamStore);
+
+        sut.BubbleChildInteraction(coordinatorRunId, 4, "child-capacity",
+            new RunEvent(1, EventTypes.SandboxProvisioningPending,
+                new { claimName = "agent-child-capacity", schedulingReason = (string?)null }));
+        sut.BubbleChildInteraction(coordinatorRunId, 4, "child-capacity",
+            new RunEvent(2, EventTypes.SandboxProvisioningPending,
+                new { claimName = "agent-child-capacity", schedulingReason = "Unschedulable: Insufficient memory" }));
+        sut.BubbleChildInteraction(coordinatorRunId, 4, "child-capacity",
+            new RunEvent(3, EventTypes.SandboxProvisioningPending,
+                new { claimName = "agent-child-capacity", schedulingReason = "Unschedulable: Insufficient memory" }));
+
+        var projected = streamStore.Get(coordinatorRunId)!.GetSnapshotSince(0).Events
+            .Where(e => e.Type == EventTypes.CoordinatorChildProvisioningPending).ToList();
+        projected.Should().HaveCount(2);
+        JsonSerializer.SerializeToElement(projected[1].Payload)
+            .GetProperty("schedulingReason").GetString().Should().Contain("Insufficient memory");
     }
 
     [Fact]

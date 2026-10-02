@@ -1533,8 +1533,10 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
       const reason = readString(p, ['reason', 'capacityReason', 'capacity_reason']);
       return `Subtask waiting for capacity: ${subtaskDescription(p, subtasks)}${reason ? ` — ${reason}` : ''}.`;
     }
-    case 'coordinator.child_provisioning_pending':
-      return `Waiting for sandbox capacity: ${subtaskDescription(p, subtasks)}. Kubernetes will schedule it when capacity becomes available.`;
+    case 'coordinator.child_provisioning_pending': {
+      const reason = readString(p, ['schedulingReason', 'scheduling_reason']);
+      return `Waiting for sandbox capacity: ${subtaskDescription(p, subtasks)}. ${reason ?? 'Kubernetes will schedule it when capacity becomes available.'}`;
+    }
     case 'subtask.running':
       return `Subtask running: ${subtaskDescription(p, subtasks)}.`;
     case 'subtask.assemble_ready':

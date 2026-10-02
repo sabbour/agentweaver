@@ -90,6 +90,12 @@ public sealed class KubernetesSandboxOptions
     /// </summary>
     public int AgentHostReadyTimeoutSeconds { get; init; } = 90;
 
+    /// <summary>Maximum seconds to wait for an AgentHost claim to bind before failing its launch.</summary>
+    public int AgentHostProvisioningTimeoutSeconds { get; init; } = 600;
+
+    internal TimeSpan ProvisioningHeartbeatInterval { get; init; } =
+        KubernetesSandboxExecutor.SandboxProvisioningHeartbeatInterval;
+
     /// <summary>Interval between AgentHost readiness probe attempts. Default: 1000ms.</summary>
     public int AgentHostReadyPollIntervalMs { get; init; } = 1000;
 
@@ -544,6 +550,7 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         }
         var turnToken = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var claimCreated = false;
+        AgentHostClaimSnapshot? reusedClaim = null;
         try
         {
             // Bind to the SHARED, pre-warmed AgentHost warm pool (replicas: 2). No per-run SPC,
@@ -694,6 +701,9 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             // repository credential could never learn that another replica deleted the claim).
             await PersistAgentHostClaimNameAsync(runId, claimName, ct).ConfigureAwait(false);
 
+            if (!claimCreated)
+                reusedClaim = await ReadAgentHostClaimSnapshotAsync(
+                    runId, requireDispatch: false, ct).ConfigureAwait(false);
             var podName = await WaitForBoundWithProvisioningHeartbeatAsync(runId, claimName, ct).ConfigureAwait(false);
             _logger.LogInformation(
                 "KubernetesSandboxExecutor: AgentHost claim {Claim} bound to pod {Pod}", claimName, podName);
@@ -829,8 +839,30 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
 
             return endpointUrl;
         }
-        catch
+        catch (Exception launchError)
         {
+            if (!claimCreated && reusedClaim is not null
+                && launchError is AgentHostPodReconcilerErrorException)
+            {
+                try
+                {
+                    var current = await ReadAgentHostClaimSnapshotAsync(
+                        runId, requireDispatch: false, CancellationToken.None).ConfigureAwait(false);
+                    if (current is not null && current.Uid == reusedClaim.Uid
+                        && current.Context.HolderToken == reusedClaim.Context.HolderToken)
+                    {
+                        await ReleaseCapturedAgentHostClaimAsync(
+                            runId, current, current.Context.HolderToken ?? string.Empty,
+                            force: false, CancellationToken.None).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "KubernetesSandboxExecutor: could not release reused claim {Claim} after provisioning failed",
+                        claimName);
+                }
+            }
             if (claimCreated)
                 await DeleteClaimAsync(claimName).ConfigureAwait(false);
             _podRegistry?.Unregister(runId);
@@ -1735,32 +1767,121 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// <summary>
     /// Waits for the AgentHost <c>SandboxClaim</c> to bind while emitting periodic
     /// <see cref="EventTypes.SandboxProvisioningPending"/> heartbeats into the CHILD run's event
-    /// stream. Scheduling is Kubernetes' job: a claim may sit unbound (pod Pending) for a while until
-    /// a node frees up or the pool autoscales — that is FINE and must not fail the run (issue #217).
+    /// stream. Scheduling is Kubernetes' job: a claim may sit unbound (pod Pending) while
+    /// a node frees up or the pool autoscales, but the wait has a product-level limit.
     /// The heartbeat keeps the parent coordinator's subtask-stall timer alive during that legitimate
-    /// wait, mirroring the #212 tool.approval_pending heartbeat. Best-effort: if no
-    /// <see cref="IRunEventStream"/> is wired (unit tests) this degrades to a plain
-    /// <see cref="WaitForBoundAsync"/>.
+    /// wait, mirroring the #212 tool.approval_pending heartbeat. Without a
+    /// <see cref="IRunEventStream"/>, the same bounded wait applies without emitting events.
     /// </summary>
     private async Task<string> WaitForBoundWithProvisioningHeartbeatAsync(
         string runId, string claimName, CancellationToken ct)
     {
-        if (_runEventStream is null)
-            return await WaitForBoundAsync(claimName, ct).ConfigureAwait(false);
+        if (_options.AgentHostProvisioningTimeoutSeconds <= 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(_options.AgentHostProvisioningTimeoutSeconds),
+                "AgentHost provisioning timeout must be positive.");
 
-        var boundTask = WaitForBoundAsync(claimName, ct);
-        while (true)
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(_options.AgentHostProvisioningTimeoutSeconds));
+        try
         {
-            var delayTask = Task.Delay(SandboxProvisioningHeartbeatInterval, ct);
-            var completed = await Task.WhenAny(boundTask, delayTask).ConfigureAwait(false);
-            if (ReferenceEquals(completed, boundTask))
-                return await boundTask.ConfigureAwait(false); // propagates the bound pod name / any error
+            var boundTask = WaitForBoundAsync(claimName, timeout.Token);
+            while (true)
+            {
+                var delayTask = Task.Delay(_options.ProvisioningHeartbeatInterval, timeout.Token);
+                var completed = await Task.WhenAny(boundTask, delayTask).ConfigureAwait(false);
+                if (ReferenceEquals(completed, boundTask))
+                    return await boundTask.ConfigureAwait(false);
 
-            // The claim is still unbound after the heartbeat interval — emit a non-terminal
-            // heartbeat so the coordinator's stall window resets while Kubernetes schedules the pod.
-            await delayTask.ConfigureAwait(false); // observe cancellation
-            await EmitProvisioningPendingAsync(runId, claimName, ct).ConfigureAwait(false);
+                await delayTask.ConfigureAwait(false);
+                if (_runEventStream is not null)
+                {
+                    var reason = await TryGetProvisioningReasonAsync(claimName, timeout.Token)
+                        .ConfigureAwait(false);
+                    await EmitProvisioningPendingAsync(runId, claimName, reason, timeout.Token)
+                        .ConfigureAwait(false);
+                }
+            }
         }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            using var diagnosticsTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var reason = await TryGetProvisioningReasonAsync(claimName, diagnosticsTimeout.Token)
+                .ConfigureAwait(false);
+            throw new AgentHostPodReconcilerErrorException(
+                $"SandboxClaim '{claimName}' did not bind within " +
+                $"{_options.AgentHostProvisioningTimeoutSeconds}s. " +
+                (reason is null
+                    ? "Kubernetes scheduling details are unavailable; inspect the claim and pod events."
+                    : $"Kubernetes scheduling: {reason}"));
+        }
+    }
+
+    private async Task<string?> TryGetProvisioningReasonAsync(string claimName, CancellationToken ct)
+    {
+        try
+        {
+            var raw = await ExecuteK8sWithRetryAsync(
+                token => _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                    ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                    cancellationToken: token),
+                ct).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(raw));
+            if (!doc.RootElement.TryGetProperty("status", out var status))
+                return null;
+
+            if (status.TryGetProperty("sandbox", out var sandbox)
+                && sandbox.TryGetProperty("name", out var name)
+                && name.GetString() is { Length: > 0 } podName)
+            {
+                var pod = await _client.CoreV1.ReadNamespacedPodAsync(
+                    podName, _options.Namespace, cancellationToken: ct).ConfigureAwait(false);
+                var scheduled = pod.Status?.Conditions?.FirstOrDefault(condition =>
+                    condition.Type == "PodScheduled" && condition.Status == "False");
+                if (scheduled is not null)
+                    return BoundedSchedulingReason(scheduled.Reason, scheduled.Message);
+            }
+
+            if (status.TryGetProperty("conditions", out var conditions)
+                && conditions.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var condition in conditions.EnumerateArray())
+                {
+                    if (condition.TryGetProperty("type", out var type)
+                        && type.GetString() == "Ready"
+                        && condition.TryGetProperty("status", out var state)
+                        && state.GetString() == "False")
+                    {
+                        var reason = condition.TryGetProperty("reason", out var r) ? r.GetString() : null;
+                        var message = condition.TryGetProperty("message", out var m) ? m.GetString() : null;
+                        return BoundedSchedulingReason(reason, message);
+                    }
+                }
+            }
+        }
+        catch (HttpOperationException ex) when (ex.Response?.StatusCode == HttpStatusCode.NotFound)
+        {
+            // The claim or its pod can disappear between reads during a bind or release.
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Diagnostics must not replace the provisioning timeout with a second timeout.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "KubernetesSandboxExecutor: could not read scheduling reason for claim {Claim}",
+                claimName);
+        }
+        return null;
+    }
+
+    private static string? BoundedSchedulingReason(string? reason, string? message)
+    {
+        var detail = string.Join(": ", new[] { reason, message }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim()));
+        return detail.Length == 0 ? null : detail[..Math.Min(detail.Length, 512)];
     }
 
     /// <summary>
@@ -1768,13 +1889,15 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
     /// <paramref name="runId"/>'s durable event stream. Best-effort: a stream-append failure is
     /// logged and swallowed so it can never fail a launch that Kubernetes would otherwise admit.
     /// </summary>
-    private async Task EmitProvisioningPendingAsync(string runId, string claimName, CancellationToken ct)
+    private async Task EmitProvisioningPendingAsync(
+        string runId, string claimName, string? schedulingReason, CancellationToken ct)
     {
         try
         {
             await _runEventStream!.AppendAsync(runId, new RunEvent(0, EventTypes.SandboxProvisioningPending, new
             {
                 claimName,
+                schedulingReason,
                 timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
             }), ct).ConfigureAwait(false);
         }

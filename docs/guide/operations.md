@@ -180,6 +180,12 @@ deleted by an older cleanup. Failures are logged as `Terminal child cleanup`
 warnings for retry rather than changing the coordinator's outcome. If a new
 revision stays pending on Kata, inspect these warnings and the child claim
 inventory before considering cluster capacity changes.
+An unbound AgentHost claim emits `sandbox.provisioning_pending` with the pod's
+`PodScheduled=False` reason when available; the coordinator displays that reason.
+If a pod cannot schedule before `Sandbox:Kubernetes:AgentHostProvisioningTimeoutSeconds`
+(default 600 seconds), the launch fails with the latest scheduling diagnosis and
+releases its claim. Check the pending pod's scheduler condition and node-pool
+autoscaler before retrying. Do not stop unrelated users' previews to free capacity.
 After a durable `agent.turn.end`, coordinator observation first waits
 `Coordinator:PostTurnFinalizationGraceSeconds` (default 10 seconds, clamped to
 0.1–30 seconds) for assemble-ready or another terminal event. If the recovered

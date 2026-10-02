@@ -1212,7 +1212,7 @@ describe('AgentSessionPanel', () => {
       },
       { sequence: 4, type: 'subtask.dispatched', payload: { subtaskId: '1' } },
       { sequence: 5, type: 'coordinator.child_provisioning_pending', payload: { subtaskId: '1', childRunId: 'child-run-1', claimName: 'agent-child-run-1' } },
-      { sequence: 6, type: 'coordinator.child_provisioning_pending', payload: { subtaskId: '1', childRunId: 'child-run-1', claimName: 'agent-child-run-1' } },
+      { sequence: 6, type: 'coordinator.child_provisioning_pending', payload: { subtaskId: '1', childRunId: 'child-run-1', claimName: 'agent-child-run-1', schedulingReason: 'Unschedulable: 5 Insufficient memory' } },
       { sequence: 7, type: 'subtask.completed', payload: { subtaskId: '1' } },
     ];
 
@@ -1236,6 +1236,7 @@ describe('AgentSessionPanel', () => {
     expect(within(timeline).getByText('Coordinator started')).toBeDefined();
     expect(within(timeline).getByText('Dispatched subtask')).toBeDefined();
     expect(within(timeline).getAllByText('Waiting for sandbox capacity')).toHaveLength(1);
+    expect(within(timeline).getByText(/Unschedulable: 5 Insufficient memory/)).toBeDefined();
     expect(within(timeline).getByText('Subtask completed')).toBeDefined();
     // The generic literal 'Coordinator' header must not be repeated across these steps.
     expect(within(timeline).queryAllByText('Coordinator').length).toBe(0);
