@@ -152,9 +152,11 @@ Bound from the `Sandbox:Preview` section into [`SandboxPreviewOptions.cs`](#sour
 
 Preview routes are durable capacity leases: terminal or `assemble_ready` run status does not release
 their backing claims. Kubernetes owns scheduling, so an unbound claim remains nonterminal and emits
-`sandbox.provisioning_pending`; the coordinator shows **Waiting for sandbox capacity** until cleanup
-or Kubernetes makes room. Operators can inspect pending claims and pool saturation from Cluster
-diagnostics. Cleanup removes only stopped, expired, orphaned, or authoritatively stale leases.
+`sandbox.provisioning_pending`; the coordinator shows **Waiting for sandbox capacity** and the
+scheduler reason when available. AgentHost provisioning fails and releases a newly created claim
+after its configured timeout if Kubernetes cannot make room. Operators can inspect pending claims
+and pool saturation from Cluster diagnostics. Preview cleanup removes only stopped, expired,
+orphaned, or authoritatively stale leases.
 
 ## Status codes
 

@@ -137,6 +137,8 @@ public sealed class SandboxExecutorRouter : ISandboxExecutorRouter
                 AgentHostHealthzPath = _config["Sandbox:Kubernetes:AgentHostHealthzPath"] ?? "/healthz",
                 AgentHostReadyTimeoutSeconds = int.TryParse(
                     _config["Sandbox:Kubernetes:AgentHostReadyTimeoutSeconds"], out int rt) ? rt : 90,
+                AgentHostProvisioningTimeoutSeconds = int.TryParse(
+                    _config["Sandbox:Kubernetes:AgentHostProvisioningTimeoutSeconds"], out int pt) ? pt : 600,
                 AgentHostReadyPollIntervalMs = int.TryParse(
                     _config["Sandbox:Kubernetes:AgentHostReadyPollIntervalMs"], out int ri) ? ri : 1000,
                 ToolApprovalApiBaseUrl = _config["Agentweaver:ApiBaseUrl"],

@@ -7,6 +7,7 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
 using Agentweaver.Domain;
@@ -70,16 +71,40 @@ public sealed class KubernetesSandboxExecutorClaimTests
         Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
         IAgentHostReadinessProbe? readinessProbe = null,
         ILogger<KubernetesSandboxExecutor>? logger = null,
-        IEffectivePermissionBindingProvider? permissionBindingProvider = null) =>
-        new(ClientFor(handler), Options(), logger ?? NullLogger<KubernetesSandboxExecutor>.Instance,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null,
+        KubernetesSandboxOptions? options = null,
+        IRunEventStream? runEventStream = null) =>
+        new(ClientFor(handler), options ?? Options(), logger ?? NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: readinessProbe,
             submittingUserResolver: submittingUserResolver,
-            httpClientFactory: httpClientFactory, runOptions: runOptions,
+            httpClientFactory: httpClientFactory, runOptions: runOptions, runEventStream: runEventStream,
             copilotCredentials: copilotCredentials ?? new FixedGitHubCopilotCapabilityCredentialProvider(),
             previewService: previewService,
             byokProviderConfiguration: byokProviderConfiguration,
             effectiveProviderResolver: effectiveProviderResolver,
             permissionBindingProvider: permissionBindingProvider ?? new FixedPermissionBindingProvider());
+
+    private sealed class RecordingProvisioningStream : IRunEventStream
+    {
+        public List<RunEvent> Events { get; } = new();
+
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            Events.Add(evt);
+            return ValueTask.FromResult(Events.Count);
+        }
+
+        public IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(
+            string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<RunEvent>>(Events);
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
+    }
 
     private sealed class FixedPermissionBindingProvider : IEffectivePermissionBindingProvider
     {
@@ -356,6 +381,132 @@ public sealed class KubernetesSandboxExecutorClaimTests
         handler.Requests.Should().NotContain(r =>
             r.Method == "POST" && r.Path.EndsWith("/secretproviderclasses"),
             "the per-run CSI SecretProviderClass is replaced by runtime KV fetch");
+    }
+
+    [Fact]
+    public async Task AgentHostProvisioning_timeout_reports_pod_scheduling_reason_and_releases_claim()
+    {
+        const string runId = "run-capacity-blocked";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"False"}],"sandbox":{"name":"pending-agent-pod"}}}""");
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods/pending-agent-pod",
+            """{"kind":"Pod","status":{"conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable","message":"0/5 nodes are available: 5 Insufficient memory."}]}}""");
+        var events = new RecordingProvisioningStream();
+        var options = new KubernetesSandboxOptions
+        {
+            Namespace = "agentweaver",
+            AgentHostProvisioningTimeoutSeconds = 1,
+            ProvisioningHeartbeatInterval = TimeSpan.FromMilliseconds(100),
+            RequireMtls = false,
+        };
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            options: options, runEventStream: events);
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        var failure = await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        failure.Which.Message.Should().Contain("within 1s")
+            .And.Contain("Unschedulable")
+            .And.Contain("5 Insufficient memory");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        events.Events.Should().Contain(e =>
+            e.Type == EventTypes.SandboxProvisioningPending
+            && JsonSerializer.Serialize(e.Payload).Contains("Insufficient memory", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AgentHostProvisioning_timeout_without_pod_details_is_explicit_and_releases_claim()
+    {
+        const string runId = "run-capacity-no-pod";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"False"}]}}""");
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            options: new KubernetesSandboxOptions { AgentHostProvisioningTimeoutSeconds = 1 });
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        var failure = await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        failure.Which.Message.Should().Contain("scheduling details are unavailable");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+    }
+
+    [Fact]
+    public async Task AgentHostProvisioning_unbound_claim_condition_reports_scheduling_reason_without_pod_name()
+    {
+        const string runId = "run-capacity-claim-condition";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"False","reason":"FailedScheduling","message":"0/5 nodes are available: 5 Insufficient memory."}]}}""");
+        var events = new RecordingProvisioningStream();
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            options: new KubernetesSandboxOptions
+            {
+                AgentHostProvisioningTimeoutSeconds = 1,
+                ProvisioningHeartbeatInterval = TimeSpan.FromMilliseconds(100),
+            }, runEventStream: events);
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        var failure = await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        failure.Which.Message.Should().Contain("FailedScheduling")
+            .And.Contain("Insufficient memory");
+        events.Events.Should().Contain(e =>
+            e.Type == EventTypes.SandboxProvisioningPending
+            && JsonSerializer.Serialize(e.Payload).Contains("FailedScheduling", StringComparison.Ordinal));
+        handler.Requests.Should().NotContain(r => r.Path.Contains("/pods/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AgentHostProvisioning_timeout_releases_reused_claim_with_uid_precondition()
+    {
+        const string runId = "run-capacity-reused";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path =
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var handler = new FakeKubeHandler();
+        handler.OnStatus("POST",
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims",
+            HttpStatusCode.Conflict,
+            """{"kind":"Status","status":"Failure","reason":"AlreadyExists","code":409}""");
+        handler.OnGet(path, JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                uid = "original-uid",
+                resourceVersion = "5",
+                annotations = new Dictionary<string, string>
+                {
+                    [SandboxClaimConventions.RunIdAnnotation] = runId,
+                    [KubernetesSandboxExecutor.HolderTokenAnnotation] = "holder-1",
+                },
+            },
+            status = new { conditions = new[] { new { type = "Ready", status = "False" } } },
+        }));
+        var tokens = new RecordingTurnTokenRegistry();
+        tokens.RegisterTurnToken(runId, "held-token");
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            turnTokenRegistry: tokens,
+            options: new KubernetesSandboxOptions { AgentHostProvisioningTimeoutSeconds = 1 });
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        var deleted = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "DELETE" && r.Path == path).Subject;
+        using var deleteBody = JsonDocument.Parse(deleted.Body!);
+        deleteBody.RootElement.GetProperty("preconditions").GetProperty("uid")
+            .GetString().Should().Be("original-uid");
+        tokens.TryGetTurnToken(runId).Should().BeNull();
     }
 
     [Fact]

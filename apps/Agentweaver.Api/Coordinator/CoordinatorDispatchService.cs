@@ -109,7 +109,7 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
 
     private readonly ConcurrentDictionary<string, byte> _active = new();
 
-    private readonly ConcurrentDictionary<string, byte> _provisioningPendingChildren = new();
+    private readonly ConcurrentDictionary<string, string> _provisioningPendingChildren = new();
 
     /// <summary>
     /// Per-run cancellation source (linked to <see cref="_appStopping"/>) for each active dispatch
@@ -2913,17 +2913,24 @@ public sealed class CoordinatorDispatchService : ICoordinatorDispatch
                 expired = ReadBool(evt.Payload, "expired"),
             });
         }
-        else if (evt.Type == EventTypes.SandboxProvisioningPending
-            && _provisioningPendingChildren.TryAdd(childRunId, 0))
+        else if (evt.Type == EventTypes.SandboxProvisioningPending)
         {
-            var entry = _streamStore.Get(coordinatorRunId);
-            entry?.RecordNext(EventTypes.CoordinatorChildProvisioningPending, new
+            var schedulingReason = ReadString(evt.Payload, "schedulingReason");
+            var reasonKey = schedulingReason ?? string.Empty;
+            if (!_provisioningPendingChildren.TryGetValue(childRunId, out var lastReason)
+                || lastReason != reasonKey)
             {
-                childRunId,
-                subtaskId,
-                claimName = ReadString(evt.Payload, "claimName"),
-                timestamp_utc = ReadString(evt.Payload, "timestamp_utc"),
-            });
+                _provisioningPendingChildren[childRunId] = reasonKey;
+                var entry = _streamStore.Get(coordinatorRunId);
+                entry?.RecordNext(EventTypes.CoordinatorChildProvisioningPending, new
+                {
+                    childRunId,
+                    subtaskId,
+                    claimName = ReadString(evt.Payload, "claimName"),
+                    schedulingReason,
+                    timestamp_utc = ReadString(evt.Payload, "timestamp_utc"),
+                });
+            }
         }
     }
 
