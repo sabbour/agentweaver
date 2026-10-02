@@ -111,6 +111,10 @@ public interface IRunStore
     Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> CompleteMergingAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null);
     Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default);
+    /// <summary>Publishes a composed agent commit only while the original root and its run lease still match.</summary>
+    Task<bool> TryPublishComposedAgentTreeAsync(
+        Run expected, string treeHash, RunLeaseClaim requiredLease, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot publish a fenced composed agent tree.");
     Task<bool> SetAssembleReadyAsync(RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount, DateTimeOffset endedAt, CancellationToken ct = default);
     Task<bool> TrySetTerminalStatusAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default);
 

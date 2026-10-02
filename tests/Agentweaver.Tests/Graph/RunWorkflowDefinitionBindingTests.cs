@@ -248,6 +248,7 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
         };
         var store = services.GetRequiredService<IRunStore>();
         await store.InsertAsync(parent);
+        await SeedComposedRootAsync(services, store, parent);
         var sourceText = new[] { "p95 latency 2400 ms", "rollback at 09:12 UTC" };
         baseFactory.TestAgentRunner.ExecuteOverride = (task, workingDirectory) =>
         {
@@ -273,6 +274,9 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             ProjectId: project.Id.ToString());
         var started = await services.GetRequiredService<RunWorkflowFactory>()
             .StartAsync(input, parentId.ToString(), CancellationToken.None);
+        var parentClaim = await services.GetRequiredService<IRunLeaseStore>()
+            .TryClaimAsync(parentId.ToString(), "fan-composed-graph-producer", TimeSpan.FromMinutes(5));
+        parentClaim.Claimed.Should().BeTrue();
         WorkflowComposedCompletedOutput? terminal = null;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         await foreach (var evt in started.WatchStreamAsync(timeout.Token))
@@ -576,6 +580,7 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             WorktreeBranch = worktree.BranchName,
         };
         await services.GetRequiredService<IRunStore>().InsertAsync(run);
+        await SeedComposedRootAsync(services, services.GetRequiredService<IRunStore>(), run);
 
         var input = new AgentTurnInput(
             run.Id.ToString(),
@@ -589,10 +594,16 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             run.SubmittingUser,
             ProjectId: project.Id.ToString());
         var started = await workflowFactory.StartAsync(input, run.Id.ToString(), CancellationToken.None);
+        var producerClaim = await services.GetRequiredService<IRunLeaseStore>()
+            .TryClaimAsync(run.Id.ToString(), "composed-graph-producer", TimeSpan.FromMinutes(5));
+        producerClaim.Claimed.Should().BeTrue();
         WorkflowComposedCompletedOutput? terminal = null;
+        var observedOutputs = new List<string>();
 
         await foreach (var evt in started.WatchStreamAsync(CancellationToken.None))
         {
+            if (evt is WorkflowErrorEvent error)
+                observedOutputs.Add(error.ToString());
             if (evt is RequestInfoEvent request
                 && request.Request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out var pause))
             {
@@ -658,10 +669,21 @@ public sealed class CoordinatorRunWorkflowDefinitionBindingTests
             }
         }
 
-        terminal.Should().NotBeNull();
+        terminal.Should().NotBeNull("workflow outputs: {0}", string.Join(", ", observedOutputs));
         terminal!.WorkPlanId.Should().BeGreaterThan(0);
         terminal.Assembly.TreeHash.Should().Be(new string('a', 40));
         terminal.Assembly.IncludedChildRunIds.Should().Equal("child-a", "child-b");
+    }
+
+    private static async Task SeedComposedRootAsync(
+        IServiceProvider services, IRunStore store, DomainRun run)
+    {
+        var tree = services.GetRequiredService<IWorktreeOperations>().GetTreeHash(run.WorktreePath!)
+            ?? throw new InvalidOperationException("Composed root source tree is missing.");
+        await store.UpdateStatusAsync(run.Id, DomainRunStatus.AwaitingReview, null);
+        (await store.TryRecordFanInputProjectionAsync(
+            run.Id, run.LifecycleGeneration, tree, tree, run.WorktreeBranch!)).Should().BeTrue();
+        await store.UpdateStatusAsync(run.Id, DomainRunStatus.InProgress, null);
     }
 
     [Fact]
