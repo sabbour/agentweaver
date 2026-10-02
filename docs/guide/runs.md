@@ -113,8 +113,10 @@ the proof is absent (including older claims with no post-configuration attestati
 `conflict` means live identity differs from the attested binding. Check `reason`
 before trusting a preview. The executor backend can remain `kata-exec-sidecar` even
 when the provisioner is a Kubernetes SandboxClaim; a historical pod name is not
-evidence of the current preview pod. A terminal run can retain a live preview on a
-different physical child run, whose binding must be checked separately.
+evidence of the current preview pod. A child run can retain its own live preview
+after its execution ends; that child's claim and session are separate from the
+coordinator's claim and automatic preview. Never substitute a child binding for
+the coordinator's exact run and preview identity.
 
 For a custom workflow without that gate, ask the coordinator to have an agent build and start
 the app in its sandbox. The agent can call `start_preview(port=PORT)` and optionally include

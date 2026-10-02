@@ -170,6 +170,7 @@ async function driveReviewFixture({
     let remainingTransientRunReads = transientRunReads;
     let remainingThrownRunReads = thrownRunReads;
     let previewReads = 0;
+    let childPreviewReads = 0;
     const tree = () => revised ? 'tree-revised' : 'tree-original';
     const previewSession = () => ({
       session_id: revised ? 'second-preview' : 'first-preview',
@@ -288,6 +289,13 @@ async function driveReviewFixture({
       }
       if (method === 'DELETE') { deleted.push(url); throw new Error('Oracle must not delete an automatic preview'); }
       if (url.endsWith('/sandbox/port-forward')) {
+        if (physicalBuildChildEnded && url === '/api/runs/first/sandbox/port-forward') {
+          childPreviewReads++;
+          return { status: 200, body: [{
+            session_id: 'marten-maple', preview_runner_session_id: 'child-runner',
+            pod_name: 'child-pod', target_port: 4981, preview_url: 'https://child.example.test',
+          }] };
+        }
         previewReads++;
         if (previewReadTimeouts-- > 0) throw new AcceptanceFailure('GET preview timed out', 'request_timeout');
         if (revised) now += advancePreviewReadMs;
@@ -336,7 +344,8 @@ async function driveReviewFixture({
       clock: () => now, pause: async (ms) => { now += ms; },
       approveShell,
     });
-    return { result, opened, decisions, deleted, runReadAttempts, approvalPosts, pendingReads, previewPosts, previewReads };
+    return { result, opened, decisions, deleted, runReadAttempts, approvalPosts,
+      pendingReads, previewPosts, previewReads, childPreviewReads };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -577,11 +586,12 @@ test('current binding rejects historical pods and missing provenance without cha
   }
 });
 
-test('reviewer selects the logical parent preview while a physical build child has ended', async () => {
-  const { result, opened, decisions } = await driveReviewFixture({ physicalBuildChildEnded: true });
+test('reviewer selects the root preview, not a distinct ended child preview', async () => {
+  const { result, opened, decisions, childPreviewReads } = await driveReviewFixture({ physicalBuildChildEnded: true });
   assert.equal(result.verdict, 'pass');
   assert.equal(opened.length, 2);
   assert.equal(decisions.length, 2);
+  assert.equal(childPreviewReads, 0);
 });
 
 test('corrected tree freshness and both revisions source bytes are enforced', async () => {
