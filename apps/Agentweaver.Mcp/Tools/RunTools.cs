@@ -477,7 +477,7 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         return JsonSerializer.Serialize(result, JsonOpts);
     }
 
-    [McpServerTool(Name = "run_retry"), Description("Retry a failed run. Eligible coordinators and pre-dispatch composed failures resume the original run; other retries create a fresh run.")]
+    [McpServerTool(Name = "run_retry"), Description("Retry a failed run, or only an exact unlaunched in-progress composed recovery. Eligible coordinators, pre-dispatch composed failures, and that narrow in-progress recovery resume the same run ID; other failed-run retries create a fresh run. Arbitrary active runs cannot be retried.")]
     public async Task<string> RunRetryAsync(
         [Description("Run ID")] string run_id,
         CancellationToken ct)

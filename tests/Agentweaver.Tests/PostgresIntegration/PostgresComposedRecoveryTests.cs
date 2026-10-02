@@ -591,6 +591,70 @@ public sealed partial class PostgresAppBootTests
     }
 
     [PostgresRequiredFact]
+    public async Task ComposedRecovery_PostCommitValidInputChange_RefusesLaunchUntilRestored()
+    {
+        var seeded = await SeedComposedFailureAsync(agentCommit: true);
+        var recovery = _fixture.Services.GetRequiredService<WorkflowComposedRecoveryService>();
+        var store = _fixture.Services.GetRequiredService<IRunStore>();
+        var leases = _fixture.Services.GetRequiredService<IRunLeaseStore>();
+        var launches = 0;
+        try
+        {
+            recovery.AfterCommitOverride = async _ =>
+            {
+                using var scope = _fixture.Services.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                await db.WorkPlans.Where(plan => plan.Id == seeded.PlanId)
+                    .ExecuteUpdateAsync(update => update.SetProperty(plan => plan.ParentTurnInputJson,
+                        JsonSerializer.Serialize(seeded.Input with { Task = "Different valid task" },
+                            JsonDefaults.Options)));
+            };
+            recovery.LaunchOverride = (_, _, _, _, _) =>
+            {
+                launches++;
+                return Task.CompletedTask;
+            };
+            var changed = () => recovery.ResumeFailedAsync(seeded.Parent, CancellationToken.None);
+            await changed.Should().ThrowAsync<WorkflowComposedRecoveryException>()
+                .WithMessage("composed_recovery_input_changed");
+            launches.Should().Be(0, "neither stale input nor unapproved changed input may launch");
+            var parent = (await store.GetAsync(seeded.Parent.Id))!;
+            parent.Status.Should().Be(RunStatus.InProgress);
+            parent.LifecycleGeneration.Should().Be(seeded.Parent.LifecycleGeneration + 1);
+            (await store.GetAsync(seeded.Child.Id))!.Status.Should().Be(RunStatus.InProgress);
+            (await recovery.CanRetryPendingAsync(parent, CancellationToken.None)).Should().BeTrue();
+            (await recovery.HasPendingRecoveryAsync(parent, CancellationToken.None)).Should().BeTrue();
+            (await leases.GetActiveClaimAsync(parent.Id.ToString())).Should().BeNull();
+            using (var scope = _fixture.Services.CreateScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var plan = await db.WorkPlans.AsNoTracking().SingleAsync(p => p.Id == seeded.PlanId);
+                (await db.Runs.AsNoTracking().SingleAsync(r => r.RunId == parent.Id.ToString()))
+                    .OwnerId.Should().BeNull("the rejected launch must release its recovery claim");
+                plan.ParentTurnInputJson.Should().Be(JsonSerializer.Serialize(
+                    seeded.Input with { Task = "Different valid task" }, JsonDefaults.Options));
+                plan.AssemblyStatusReason.Should().Be(
+                    WorkflowComposedRecoveryService.RecoveryMarkerPrefix + parent.LifecycleGeneration);
+                plan.CoordinatorRunId.Should().Be(seeded.Child.Id.ToString());
+                (await db.Subtasks.CountAsync(s => s.WorkPlanId == seeded.PlanId)).Should().Be(0);
+                await db.WorkPlans.Where(p => p.Id == seeded.PlanId)
+                    .ExecuteUpdateAsync(update => update.SetProperty(p => p.ParentTurnInputJson,
+                        JsonSerializer.Serialize(seeded.Input, JsonDefaults.Options)));
+            }
+            recovery.AfterCommitOverride = null;
+            await recovery.ResumeFailedAsync(parent, CancellationToken.None);
+            launches.Should().Be(1);
+            (await store.GetAsync(parent.Id))!.LifecycleGeneration.Should().Be(parent.LifecycleGeneration);
+        }
+        finally
+        {
+            recovery.AfterCommitOverride = null;
+            recovery.LaunchOverride = null;
+            await CleanupComposedFailureAsync(seeded);
+        }
+    }
+
+    [PostgresRequiredFact]
     public async Task ComposedRecovery_PostCommitProviderChange_RefusesLaunchUntilRestored()
     {
         var seeded = await SeedComposedFailureAsync(agentCommit: true);
