@@ -173,7 +173,10 @@ Recovery requires the clean canonical parent worktree and its captured composed-
 correlated failed plan with only unstarted pending subtasks, unchanged saved root routing input,
 available durable model provider, and launch capabilities (including a redeemable Copilot capability
 when required). A successful agent turn publishes its committed tree to the root run before the
-composed plan captures its base. For a previously failed run whose stored tree predates that commit,
+composed plan captures its base. On both SQLite and PostgreSQL, this publication requires a clean
+canonical worktree and an atomic root-run update fenced by the current lifecycle, prior tree,
+unreviewed state, worktree identity, and active run-lease owner and token. A stale or expired claim
+cannot publish a tree. For a previously failed run whose stored tree predates that commit,
 recovery accepts only the saved plan base on the canonical branch with a proven direct commit from
 the original root tree; it atomically aligns the original run and reopens the original parent,
 coordinator, and plan. It never adopts a changed HEAD by itself. The worktree is checked again

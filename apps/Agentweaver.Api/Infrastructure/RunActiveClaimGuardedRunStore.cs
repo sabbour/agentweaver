@@ -223,6 +223,10 @@ public sealed class RunActiveClaimGuardedRunStore(IRunStore inner, RunActiveClai
     public Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default) =>
         inner.UpdateTreeHashAfterCommitAsync(runId, newTreeHash, ct);
 
+    public Task<bool> TryPublishComposedAgentTreeAsync(
+        Run expected, string treeHash, RunLeaseClaim requiredLease, CancellationToken ct = default) =>
+        inner.TryPublishComposedAgentTreeAsync(expected, treeHash, requiredLease, ct);
+
     public async Task<bool> SetAssembleReadyAsync(
         RunId runId,
         string treeHash,
