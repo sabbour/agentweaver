@@ -841,41 +841,48 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         }
         catch (Exception launchError)
         {
-            if (!claimCreated && reusedClaim is not null
-                && launchError is AgentHostPodReconcilerErrorException)
+            var cleanRunState = true;
+            if (!claimCreated && launchError is AgentHostPodReconcilerErrorException)
             {
-                try
+                cleanRunState = false;
+                if (reusedClaim is not null)
                 {
-                    var current = await ReadAgentHostClaimSnapshotAsync(
-                        runId, requireDispatch: false, CancellationToken.None).ConfigureAwait(false);
-                    if (current is not null && current.Uid == reusedClaim.Uid
-                        && current.Context.HolderToken == reusedClaim.Context.HolderToken)
+                    try
                     {
-                        await ReleaseCapturedAgentHostClaimAsync(
-                            runId, current, current.Context.HolderToken ?? string.Empty,
-                            force: false, CancellationToken.None).ConfigureAwait(false);
+                        var current = await ReadAgentHostClaimSnapshotAsync(
+                            runId, requireDispatch: false, CancellationToken.None).ConfigureAwait(false);
+                        if (current is not null && current.Uid == reusedClaim.Uid
+                            && current.Context.HolderToken == reusedClaim.Context.HolderToken)
+                        {
+                            await ReleaseCapturedAgentHostClaimAsync(
+                                runId, current, current.Context.HolderToken ?? string.Empty,
+                                force: false, CancellationToken.None).ConfigureAwait(false);
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex,
-                        "KubernetesSandboxExecutor: could not release reused claim {Claim} after provisioning failed",
-                        claimName);
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "KubernetesSandboxExecutor: could not release reused claim {Claim} after provisioning failed",
+                            claimName);
+                    }
                 }
             }
             if (claimCreated)
                 await DeleteClaimAsync(claimName).ConfigureAwait(false);
-            _podRegistry?.Unregister(runId);
-            _turnTokenRegistry?.UnregisterTurnToken(runId);
-            if (_authorshipCapabilityStore is not null)
+            if (cleanRunState)
             {
-                await _authorshipCapabilityStore.RemoveAsync(runId, CancellationToken.None)
-                    .ConfigureAwait(false);
+                _podRegistry?.Unregister(runId);
+                _turnTokenRegistry?.UnregisterTurnToken(runId);
+                if (_authorshipCapabilityStore is not null)
+                {
+                    await _authorshipCapabilityStore.RemoveAsync(runId, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                // Crash/timeout during launch: delete any credential minted before the failure so it is
+                // never left behind (spec-006 decouple-preview, RESIDUAL rev3 gap).
+                await DeletePreviewRunnerCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
+                await RevokeRepositoryCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             }
-            // Crash/timeout during launch: delete any credential minted before the failure so it is
-            // never left behind (spec-006 decouple-preview, RESIDUAL rev3 gap).
-            await DeletePreviewRunnerCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
-            await RevokeRepositoryCredentialAsync(runId, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
     }

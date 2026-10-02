@@ -510,6 +510,52 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task AgentHostProvisioning_replaced_reused_claim_preserves_new_owner_state()
+    {
+        const string runId = "run-capacity-replaced";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path =
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var handler = new FakeKubeHandler();
+        handler.OnStatus("POST",
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims",
+            HttpStatusCode.Conflict,
+            """{"kind":"Status","status":"Failure","reason":"AlreadyExists","code":409}""");
+        string Claim(string uid) => JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                uid,
+                resourceVersion = "5",
+                annotations = new Dictionary<string, string>
+                {
+                    [SandboxClaimConventions.RunIdAnnotation] = runId,
+                    [KubernetesSandboxExecutor.HolderTokenAnnotation] = "holder-1",
+                },
+            },
+            status = new { conditions = new[] { new { type = "Ready", status = "False" } } },
+        });
+        handler.OnSequence("GET", path,
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("replacement-uid")));
+        var tokens = new RecordingTurnTokenRegistry();
+        tokens.RegisterTurnToken(runId, "held-token");
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            turnTokenRegistry: tokens,
+            options: new KubernetesSandboxOptions { AgentHostProvisioningTimeoutSeconds = 1 });
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        handler.Requests.Should().NotContain(r => r.Method == "DELETE");
+        tokens.TryGetTurnToken(runId).Should().Be("held-token");
+    }
+
+    [Fact]
     public async Task CreateClaim_generic_posts_v1beta1_warmPoolRef_body()
     {
         // Drive the private generic claim path directly (the public ExecuteAsync path also needs a
