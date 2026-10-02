@@ -74,6 +74,25 @@ export interface RunSandboxInfo {
   isRealIsolation: boolean;
   /** Live SandboxClaim phase: "Pending" | "Bound" | "Lost". Null in non-k8s environments. */
   phase?: string | null;
+  /** Live, post-configuration ownership proof; historical backend and pod fields are not current proof. */
+  current_binding?: {
+    state: 'verified' | 'unavailable' | 'conflict';
+    reason?: string | null;
+    run_id?: string | null;
+    provisioner?: string | null;
+    claim_name?: string | null;
+    claim_uid?: string | null;
+    pod_name?: string | null;
+    pod_uid?: string | null;
+    namespace?: string | null;
+    lifecycle_generation?: number | null;
+    assembly_attempt?: string | null;
+    source_repository?: string | null;
+    source_ref?: string | null;
+    source_base_commit?: string | null;
+    source_tree?: string | null;
+    source_worktree?: string | null;
+  } | null;
 }
 
 export interface SandboxPolicy {
@@ -223,6 +242,7 @@ export interface RunDetail {
   diff: string | null;
   step_count: number;
   tree_hash: string | null;
+  lifecycle_generation?: number;
   sandbox?: RunSandboxInfo | null;
   worktree_branch?: string | null;
   // Feature 008 — coordinator child runs. Non-null parent_run_id ⇒ this run is a

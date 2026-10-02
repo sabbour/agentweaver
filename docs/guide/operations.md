@@ -186,6 +186,12 @@ If a pod cannot schedule before `Sandbox:Kubernetes:AgentHostProvisioningTimeout
 (default 600 seconds), the launch fails with the latest scheduling diagnosis and
 releases its claim. Check the pending pod's scheduler condition and node-pool
 autoscaler before retrying. Do not stop unrelated users' previews to free capacity.
+For a current preview, inspect `GET /api/runs/{id}` `sandbox.current_binding`:
+`verified` identifies the configured claim UID, Pod UID, namespace, generation,
+attempt, and source tree; `unavailable` or `conflict` includes a reason and must
+not be replaced with the historical `sandbox.pod_name`. A released execution
+lease and a retained physical-child preview are distinct lifecycle facts. Older
+claims lacking the post-configure attestation remain explicitly unavailable.
 After a durable `agent.turn.end`, coordinator observation first waits
 `Coordinator:PostTurnFinalizationGraceSeconds` (default 10 seconds, clamped to
 0.1–30 seconds) for assemble-ready or another terminal event. If the recovered

@@ -463,6 +463,8 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
         var requestedWorkingDirectory = string.IsNullOrWhiteSpace(launchContext.SharedWorkingDirectory)
             ? null
             : Path.GetFullPath(launchContext.SharedWorkingDirectory);
+        if (requestedWorkingDirectory is not null)
+            launchContext = launchContext with { SharedWorkingDirectory = requestedWorkingDirectory };
 
         _logger.LogInformation(
             "KubernetesSandboxExecutor: launching AgentHost pod for run {RunId} via claim {Claim}",
@@ -823,6 +825,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
                         ? EffectiveModelProviderProvenance.ScopePlatform
                         : EffectiveModelProviderProvenance.ScopeProject,
                     ct).ConfigureAwait(false);
+                if (launchContext.Purpose == AgentHostPurpose.AssemblyBuildTest && _httpClientFactory is not null)
+                {
+                    try
+                    {
+                        await AttestConfiguredAssemblyPodAsync(runId, claimName, podName, launchContext, ct)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex,
+                            "Configured assembly pod for run {RunId} could not be attested; current binding stays unavailable",
+                            runId);
+                    }
+                }
             }
             else
             {
@@ -1374,6 +1390,20 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             annotations[DispatchIdAnnotation] = launchContext.DispatchId;
         if (launchContext.LifecycleGeneration is { } lifecycleGeneration)
             annotations[LifecycleGenerationAnnotation] = lifecycleGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (launchContext.Purpose == AgentHostPurpose.AssemblyBuildTest
+            && !string.IsNullOrWhiteSpace(launchContext.HolderToken)
+            && launchContext.LifecycleGeneration is not null
+            && !string.IsNullOrWhiteSpace(launchContext.SourceRepositoryPath)
+            && !string.IsNullOrWhiteSpace(launchContext.SourceRef)
+            && !string.IsNullOrWhiteSpace(launchContext.BaseCommitSha)
+            && !string.IsNullOrWhiteSpace(launchContext.ExpectedTreeHash)
+            && !string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            annotations[CurrentSandboxBindingVerifier.SourceRepositoryAnnotation] = launchContext.SourceRepositoryPath;
+            annotations[CurrentSandboxBindingVerifier.SourceRefAnnotation] = launchContext.SourceRef;
+            annotations[CurrentSandboxBindingVerifier.SourceBaseCommitAnnotation] = launchContext.BaseCommitSha;
+            annotations[CurrentSandboxBindingVerifier.SourceTreeAnnotation] = launchContext.ExpectedTreeHash;
+        }
         if (!string.IsNullOrWhiteSpace(launchContext.DispatchProjectId))
             annotations[DispatchProjectAnnotation] = launchContext.DispatchProjectId;
         if (!string.IsNullOrWhiteSpace(launchContext.DispatchUserId))
@@ -1940,6 +1970,64 @@ internal sealed class KubernetesSandboxExecutor : ISandboxExecutor, IAgentHostPo
             new RunEvent(0, EventTypes.RunModelProviderResolved,
                 effectiveProvider.ToProvenancePayload(runId, modelId, resolutionScope)),
             ct).ConfigureAwait(false);
+    }
+
+    private async Task AttestConfiguredAssemblyPodAsync(
+        string runId, string claimName, string podName, AgentHostLaunchContext context, CancellationToken ct)
+    {
+        if (_runEventStream is null || context.LifecycleGeneration is null
+            || !long.TryParse(context.HolderToken, out var token))
+            throw new AgentHostConfigureException(
+                "assembly_binding_unverifiable", "Configured assembly pod has no durable event stream or lease.",
+                StatusCodes.Status409Conflict);
+
+        using var claim = JsonDocument.Parse(JsonSerializer.Serialize(
+            await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                cancellationToken: ct).ConfigureAwait(false)));
+        using var sandbox = JsonDocument.Parse(JsonSerializer.Serialize(
+            await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                "agents.x-k8s.io", ApiVersion, _options.Namespace, "sandboxes", podName,
+                cancellationToken: ct).ConfigureAwait(false)));
+        using var pod = CurrentSandboxBindingVerifier.PodDocument(
+            await _client.CoreV1.ReadNamespacedPodAsync(podName, _options.Namespace, cancellationToken: ct)
+                .ConfigureAwait(false));
+        var claimMeta = claim.RootElement.GetProperty("metadata");
+        var sandboxMeta = sandbox.RootElement.GetProperty("metadata");
+        var podMeta = pod.RootElement.GetProperty("metadata");
+        var claimUid = claimMeta.GetProperty("uid").GetString()!;
+        var claimVersion = claimMeta.GetProperty("resourceVersion").GetString()!;
+        var sandboxUid = sandboxMeta.GetProperty("uid").GetString()!;
+        var podUid = podMeta.GetProperty("uid").GetString()!;
+        var proof = CurrentSandboxBindingVerifier.Verify(
+            runId, _options.Namespace, context.LifecycleGeneration.Value, context.ExpectedTreeHash,
+            token, context.LifecycleGeneration.Value, podName, claimUid, sandboxUid, podUid,
+            context.HolderToken, context.SourceRepositoryPath, context.SourceRef,
+            context.BaseCommitSha, context.SharedWorkingDirectory,
+            claim.RootElement, sandbox.RootElement, pod.RootElement);
+        if (proof.State != "verified")
+            throw new AgentHostConfigureException(
+                "assembly_binding_unverifiable",
+                $"Configured assembly pod ownership cannot be attested ({proof.Reason}).",
+                StatusCodes.Status409Conflict);
+
+        using var reread = JsonDocument.Parse(JsonSerializer.Serialize(
+            await _client.CustomObjects.GetNamespacedCustomObjectAsync(
+                ApiGroup, ApiVersion, _options.Namespace, ClaimPlural, claimName,
+                cancellationToken: ct).ConfigureAwait(false)));
+        var rereadMeta = reread.RootElement.GetProperty("metadata");
+        if (rereadMeta.GetProperty("uid").GetString() != claimUid
+            || rereadMeta.GetProperty("resourceVersion").GetString() != claimVersion)
+            throw new AgentHostConfigureException(
+                "assembly_binding_changed", "Assembly claim changed after configuration.",
+                StatusCodes.Status409Conflict);
+
+        await _runEventStream.AppendAsync(runId, new RunEvent(0, CurrentSandboxBindingVerifier.EventType,
+            new CurrentSandboxAttestation(
+                runId, claimName, claimUid, claimVersion, sandboxUid, podName, podUid,
+                _options.Namespace, context.LifecycleGeneration.Value, context.HolderToken!,
+                context.SourceRepositoryPath!, context.SourceRef!, context.BaseCommitSha!,
+                context.ExpectedTreeHash!, context.SharedWorkingDirectory!)), ct).ConfigureAwait(false);
     }
 
     /// <summary>
