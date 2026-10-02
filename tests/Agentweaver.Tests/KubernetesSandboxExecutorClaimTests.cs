@@ -1350,9 +1350,11 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task LaunchAgentHostPod_configure_body_carries_assembly_purpose_and_immutable_source_refs(bool failAttestation)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task LaunchAgentHostPod_configure_body_carries_assembly_purpose_and_immutable_source_refs(
+        bool failAttestation, bool forbidSandboxGet)
     {
         const string runId = "run-claim-assembly";
         const string sourceRef = "agentweaver/integration/run-claim-assembly";
@@ -1410,9 +1412,12 @@ public sealed class KubernetesSandboxExecutorClaimTests
                     sandbox = new { name = "agent-pod-1" },
                 },
             }));
-        handler.OnGet(
-            "/apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/agent-pod-1",
-            JsonSerializer.Serialize(new
+        var sandboxPath = "/apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/agent-pod-1";
+        if (forbidSandboxGet)
+            handler.OnStatus("GET", sandboxPath, HttpStatusCode.Forbidden,
+                """{"kind":"Status","status":"Failure","reason":"Forbidden","code":403}""");
+        else
+            handler.OnGet(sandboxPath, JsonSerializer.Serialize(new
             {
                 metadata = new
                 {
@@ -1425,9 +1430,11 @@ public sealed class KubernetesSandboxExecutorClaimTests
             """{"kind":"Pod","metadata":{"name":"agent-pod-1","namespace":"agentweaver","uid":"pod-uid","ownerReferences":[{"kind":"Sandbox","name":"agent-pod-1","uid":"sandbox-uid","controller":true}]},"status":{"podIP":"10.0.0.7","phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}""");
 
         var configureHandler = new RecordingConfigureHandler();
-        var executor = NewExecutor(
-            handler,
-            new StubSubmittingUserResolver("sabbour"),
+        var conflictFirst = new ConflictFirstClaimHandler();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflictFirst, handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
             httpClientFactory: new StubHttpClientFactory(configureHandler),
             copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider(),
             runEventStream: events);
@@ -1446,16 +1453,29 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 HolderToken: "4",
                 LifecycleGeneration: 1));
 
-        if (failAttestation)
+        if (forbidSandboxGet)
+        {
+            var forbidden = await launch.Should().ThrowAsync<k8s.Autorest.HttpOperationException>();
+            forbidden.Which.Response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            configureHandler.Body.Should().NotBeNull();
+            handler.Requests.Should().Contain(r => r.Method == "GET" && r.Path == sandboxPath);
+            events.Events.Should().NotContain(e => e.Type == CurrentSandboxBindingVerifier.EventType);
+        }
+        else if (failAttestation)
         {
             var failure = await launch.Should().ThrowAsync<AgentHostConfigureException>();
             failure.Which.Reason.Should().Be("assembly_binding_unverifiable");
             failure.Which.Retryable.Should().BeTrue();
             events.Events.Should().NotContain(e => e.Type == CurrentSandboxBindingVerifier.EventType);
-            return;
         }
-        await launch();
-
+        else
+            await launch();
+        conflictFirst.ClaimCreateRequests.Should().Be(2,
+            "an existing owned claim must be fenced out and replaced for the LocalReadOnly launch");
+        var deleted = handler.Requests.First(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}", StringComparison.Ordinal));
+        using var deleteBody = JsonDocument.Parse(deleted.Body!);
+        deleteBody.RootElement.GetProperty("preconditions").GetProperty("uid").GetString().Should().Be("claim-uid");
         var created = handler.Requests.Should().ContainSingle(r =>
             r.Method == "POST" && r.Path.EndsWith("/sandboxclaims", StringComparison.Ordinal)).Which;
         using var claim = JsonDocument.Parse(created.Body!);
@@ -1472,6 +1492,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
         annotations.GetProperty("agentweaver.io/agent-host-holder-token").GetString().Should().Be("4");
         annotations.GetProperty("agentweaver.io/working-directory").GetString()
             .Should().Be(worktree);
+        if (failAttestation || forbidSandboxGet)
+            return;
         var attestation = events.Events.Should().ContainSingle(e =>
             e.Type == CurrentSandboxBindingVerifier.EventType).Which;
         var proof = JsonSerializer.Deserialize<CurrentSandboxAttestation>(

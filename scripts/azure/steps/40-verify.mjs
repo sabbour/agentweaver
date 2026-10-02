@@ -579,11 +579,17 @@ export async function run(cfg, opts = {}) {
     const canCreate = await kubectlOk(canICreateArgs(resource, workerServiceAccount, NAMESPACE), { exec });
     if (!canCreate) workerCanCreateAll = false;
   }
+  const sandboxRead = await exec.capture("kubectl",
+    ["auth", "can-i", "get", "sandboxes.agents.x-k8s.io",
+      `--as=${workerServiceAccount}`, "--namespace", NAMESPACE],
+    { allowFailure: true },
+  );
+  const workerCanReadSandboxes = sandboxRead.code === 0 && sandboxRead.stdout.trim() === "yes";
   record(
-    workerCanCreateAll,
-    workerCanCreateAll
-      ? "Worker ServiceAccount can create SandboxClaims and use legacy pods/exec"
-      : "Worker ServiceAccount lacks required sandbox permissions",
+    workerCanCreateAll && workerCanReadSandboxes,
+    workerCanCreateAll && workerCanReadSandboxes
+      ? "Worker ServiceAccount can create SandboxClaims, use legacy pods/exec, and get Sandboxes"
+      : "Worker ServiceAccount lacks required sandbox permissions (including sandboxes/get)",
   );
 
   log.info("");
