@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Agentweaver milestone delivery tracker</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 24px;
+      background: var(--background-color-default, #fff);
+      color: var(--text-color-default, #1f2328);
+      font: var(--text-body-medium, 14px)/var(--leading-body-medium, 1.5) var(--font-sans, system-ui, sans-serif);
+    }
+    main { max-width: 1250px; margin: auto; }
+    header { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
+    h1 { font-size: var(--text-title-large, 26px); line-height: var(--leading-title-large, 1.2); margin: 0; }
+    h2 { font-size: 18px; margin: 0 0 12px; }
+    p { margin: 8px 0; }
+    small, .muted { color: var(--text-color-muted, #59636e); }
+    a { color: var(--true-color-blue, #0969da); }
+    a:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--color-focus-outline, #0969da); outline-offset: 2px; }
+    button, select { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border-color-default, #d1d9e0); background: var(--background-color-default, #fff); color: inherit; font: inherit; }
+    button { cursor: pointer; }
+    button:hover { text-decoration: underline; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 18px 0; }
+    .card, .panel { padding: 16px; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 8px; }
+    .panel { margin: 16px 0; }
+    .card h2 { font-size: 14px; color: var(--text-color-muted, #59636e); }
+    .card p { overflow-wrap: anywhere; }
+    .badge { display: inline-block; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: var(--font-weight-semibold, 600); text-transform: uppercase; letter-spacing: .03em; }
+    .badge[data-status="passed"], .badge[data-status="closed"], .badge[data-status="merged"], .badge[data-status="deployed"] { color: var(--true-color-blue, #0969da); }
+    .badge[data-status="blocked"], .badge[data-status="failed"] { color: var(--true-color-red, #cf222e); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 790px; }
+    th, td { padding: 11px 8px; border-bottom: 1px solid var(--border-color-default, #d1d9e0); text-align: left; vertical-align: top; }
+    th { color: var(--text-color-muted, #59636e); font-size: 12px; }
+    td:first-child { white-space: nowrap; }
+    .detail { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .chain { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0; }
+    .chain span { padding: 6px 10px; border: 1px solid var(--border-color-default, #d1d9e0); border-radius: 6px; }
+    .agent-tree, .agent-tree ul { list-style: none; padding: 0; margin: 0; }
+    .agent-tree ul { margin: 8px 0 0 18px; padding-left: 14px; border-left: 1px solid var(--border-color-default, #d1d9e0); }
+    .agent-tree li { padding: 7px 0; }
+    .agent-tree .agent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    #error { color: var(--true-color-red, #cf222e); }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1 id="heading">Milestone delivery tracker</h1><p class="muted">Project-owned status · <span id="updated">Loading…</span></p></div>
+    <div><label for="version">Milestone </label><select id="version" aria-label="Milestone version"></select> <button id="refresh" type="button">Refresh status</button></div>
+  </header>
+  <p id="error" role="alert" hidden></p>
+  <section class="panel" aria-labelledby="priority-title">
+    <h2 id="priority-title">Current priority</h2>
+    <span id="priority-status"></span><p id="priority"></p><p id="priority-note" class="muted"></p>
+  </section>
+  <section aria-label="Release gates" class="grid" id="gates"></section>
+  <section class="panel" aria-labelledby="chain-title">
+    <h2 id="chain-title">Delivery chain</h2>
+    <div class="chain"><span>Current-head review pair + issue-specific API/UI and GitHub gates</span> → <span>Serialized rebase auto-merges</span> → <span>Combined RC + pinned digest/revision</span> → <span>RC deployment</span> → <span>Direct API + UI behavior proof</span> → <span>Release</span> → <span>AKS deployment</span></div>
+    <p>Each milestone PR needs a final local rubber-duck and code-review pair on its current head before readiness. After issue-specific API/UI and GitHub gates pass, authorize <code>gh pr merge --rebase --auto</code> one PR at a time; monitor until merged before admitting the next.</p>
+    <p class="muted">Platform integrity checks establish setup only; they do not pass the live behavior gate.</p>
+  </section>
+  <section class="panel" aria-labelledby="issues-title">
+    <h2 id="issues-title">Milestone issues and linked PRs</h2>
+    <div class="table-wrap"><table><thead><tr><th>Issue</th><th>Title</th><th>Status</th><th>Linked PR / status</th><th>Rubber duck</th><th>Code review</th><th>Issue API</th><th>Issue UI</th><th>GitHub</th><th>Priority</th></tr></thead><tbody id="issues"></tbody></table></div>
+  </section>
+  <section class="panel" aria-labelledby="agents-title">
+    <h2 id="agents-title">Agents and subagents</h2>
+    <p class="muted">Timestamped agent reports, not a live process monitor. Reports older than 5 minutes are marked stale; refreshes check the shared project file every 15 seconds.</p>
+    <ul class="agent-tree" id="agents"></ul>
+  </section>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let selectedVersion = new URLSearchParams(location.search).get("version") || "0.34.1";
+  const labels = {
+    integrationRc: "Combined integration RC", directApi: "Direct API behavior",
+    directUi: "Direct UI behavior", liveGate: "Live behavior gate",
+    release: "Release", aksDeployment: "AKS deployment"
+  };
+  const link = (kind, number) => {
+    if (!Number.isSafeInteger(number) || number <= 0) throw new Error("Invalid issue or PR number in tracker");
+    const a = document.createElement("a");
+    a.href = `https://github.com/sabbour/agentweaver/${kind}/${number}`;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = `#${number}`;
+    return a;
+  };
+  function badge(status) {
+    const el = document.createElement("span");
+    el.className = "badge";
+    el.dataset.status = status;
+    el.textContent = status;
+    return el;
+  }
+  function paragraph(text, muted = false) {
+    const el = document.createElement("p");
+    el.className = muted ? "muted detail" : "detail";
+    el.textContent = text;
+    return el;
+  }
+  function checkCell(row, check) {
+    const cell = row.insertCell();
+    cell.append(badge(check.status));
+    if (check.head) cell.append(paragraph(`Head: ${check.head}`, true));
+    if (check.evidence) cell.append(paragraph(check.evidence, true));
+    if (check.updatedAt) cell.append(paragraph(`Reported ${new Date(check.updatedAt).toLocaleString()}`, true));
+  }
+  function agentNode(agent, children) {
+    const item = document.createElement("li");
+    const detail = document.createElement("div");
+    detail.className = "agent";
+    const name = document.createElement("strong");
+    name.textContent = agent.name;
+    detail.append(name, badge(agent.status));
+    if (agent.issueNumber) detail.append(link("issues", agent.issueNumber));
+    const reportedAt = Date.parse(agent.updatedAt);
+    const age = document.createElement("small");
+    age.textContent = Number.isFinite(reportedAt)
+      ? `Reported ${new Date(reportedAt).toLocaleString()}${Date.now() - reportedAt > 300000 ? " · stale" : ""}`
+      : "No report yet";
+    detail.append(age);
+    item.append(detail);
+    if (agent.note) item.append(paragraph(agent.note, true));
+    const descendants = children.filter((child) => child.parentId === agent.id);
+    if (descendants.length) {
+      const nested = document.createElement("ul");
+      nested.append(...descendants.map((child) => agentNode(child, children)));
+      item.append(nested);
+    } else {
+      item.append(paragraph("No subagents reported", true));
+    }
+    return item;
+  }
+  function render(data) {
+    $("heading").textContent = `v${data.version} delivery tracker`;
+    $("updated").textContent = `Updated ${new Date(data.updatedAt).toLocaleString()}`;
+    $("priority-status").replaceChildren(badge(data.priority.status));
+    $("priority").textContent = data.priority.priority;
+    $("priority-note").textContent = data.priority.note;
+    const gates = Object.entries(labels).map(([key, label]) => {
+      const item = data[key];
+      const card = document.createElement("article");
+      card.className = "card";
+      const title = document.createElement("h2");
+      title.textContent = label;
+      card.append(title, badge(item.status), paragraph(item.note));
+      if (item.revision || item.digest) card.append(paragraph(`Revision: ${item.revision || "unrecorded"} · Digest: ${item.digest || "unrecorded"}`, true));
+      if (item.evidence) card.append(paragraph(`Evidence: ${item.evidence}`, true));
+      return card;
+    });
+    $("gates").replaceChildren(...gates);
+    $("issues").replaceChildren(...data.issues.map((issue) => {
+      const row = document.createElement("tr");
+      const issueCell = row.insertCell();
+      issueCell.append(link("issues", issue.number));
+      row.insertCell().textContent = issue.title;
+      row.insertCell().append(badge(issue.status), paragraph(issue.note, true));
+      const pr = row.insertCell();
+      if (issue.prNumber) pr.append(link("pull", issue.prNumber), " ");
+      pr.append(badge(issue.prStatus));
+      for (const kind of ["rubberDuck", "codeReview", "api", "ui", "github"]) checkCell(row, issue.checks[kind]);
+      row.insertCell().textContent = issue.priority;
+      return row;
+    }));
+    const roots = data.agents.filter((agent) => !agent.parentId);
+    $("agents").replaceChildren(...roots.map((agent) => agentNode(agent, data.agents)));
+    if (!roots.length) $("agents").append(paragraph("No agent reports recorded for this milestone.", true));
+  }
+  async function refresh() {
+    $("refresh").disabled = true;
+    try {
+      const versionsResponse = await fetch("/milestones", { cache: "no-store" });
+      if (!versionsResponse.ok) throw new Error(`Milestone list failed (${versionsResponse.status})`);
+      const versions = await versionsResponse.json();
+      const options = versions.map((version) => {
+        const option = document.createElement("option");
+        option.value = version;
+        option.textContent = `v${version}`;
+        return option;
+      });
+      $("version").replaceChildren(...options);
+      if (!versions.includes(selectedVersion)) throw new Error(`Milestone v${selectedVersion} has no project artifact`);
+      $("version").value = selectedVersion;
+      const response = await fetch(`/status?version=${encodeURIComponent(selectedVersion)}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`Status request failed (${response.status})`);
+      render(await response.json());
+      $("error").hidden = true;
+    } catch (error) {
+      $("error").textContent = `Could not refresh release status: ${error.message}`;
+      $("error").hidden = false;
+    } finally {
+      $("refresh").disabled = false;
+    }
+  }
+  $("version").addEventListener("change", () => {
+    selectedVersion = $("version").value;
+    history.replaceState(null, "", `?version=${encodeURIComponent(selectedVersion)}`);
+    refresh();
+  });
+  $("refresh").addEventListener("click", refresh);
+  setInterval(() => { if (!document.hidden) refresh(); }, 15000);
+  refresh();
+</script>
+</body>
+</html>

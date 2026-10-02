@@ -1,0 +1,565 @@
+{
+  "version": "0.34.1",
+  "updatedAt": "2026-10-02T14:17:19.664Z",
+  "priority": {
+    "status": "active",
+    "priority": "#1707 recovery repair, then serialized issue/PR admission and combined RC",
+    "note": "Each current-head milestone PR needs local rubber-duck + code-review and issue-specific API/UI and GitHub gates before serialized rebase auto-merge. Platform integrity checks are setup only, not live behavior proof."
+  },
+  "issues": [
+    {
+      "number": 1705,
+      "title": "Resolve the relevant parent workflow plan instead of an arbitrary older node",
+      "status": "closed",
+      "priority": "Complete",
+      "prNumber": null,
+      "prStatus": "none",
+      "head": "",
+      "note": "Closed.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1707,
+      "title": "Recover composed plan persistence after PostgreSQL serialization conflict",
+      "status": "active",
+      "priority": "Current recovery repair",
+      "prNumber": null,
+      "prStatus": "pending",
+      "head": "",
+      "note": "Active recovery fix.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1687,
+      "title": "Surface and resolve capacity-blocked sandbox provisioning",
+      "status": "pending",
+      "priority": "Implementation path",
+      "prNumber": null,
+      "prStatus": "pending",
+      "head": "",
+      "note": "Implementation pending.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1690,
+      "title": "Restore repository selection when Repo App reports connected",
+      "status": "pending",
+      "priority": "Implementation path",
+      "prNumber": null,
+      "prStatus": "pending",
+      "head": "",
+      "note": "Implementation pending.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1718,
+      "title": "Fix user BYOK pickup before outcome-spec with Copilot-only gate",
+      "status": "pending",
+      "priority": "Implementation path",
+      "prNumber": null,
+      "prStatus": "pending",
+      "head": "",
+      "note": "Implementation pending.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1720,
+      "title": "Avoid opaque single-subtask fallback for multi-part goals",
+      "status": "pending",
+      "priority": "Implementation path",
+      "prNumber": null,
+      "prStatus": "pending",
+      "head": "",
+      "note": "Implementation pending.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1721,
+      "title": "Add and run instrumented .NET, web, and Node coverage reports",
+      "status": "pending",
+      "priority": "Implementation path",
+      "prNumber": null,
+      "prStatus": "pending",
+      "head": "",
+      "note": "Implementation pending.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1709,
+      "title": "Match Oracle revision work-plan IDs across API wire types",
+      "status": "pending",
+      "priority": "Existing PR path",
+      "prNumber": 1710,
+      "prStatus": "open",
+      "head": "",
+      "note": "Direct Oracle API and browser behavior test required on combined RC.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1713,
+      "title": "Reconcile Oracle preview execution binding on current Kata runtime",
+      "status": "pending",
+      "priority": "Existing PR path",
+      "prNumber": 1716,
+      "prStatus": "open",
+      "head": "",
+      "note": "Direct Oracle API and browser behavior test required on combined RC.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    },
+    {
+      "number": 1719,
+      "title": "Await target Blueprint job completion in MCP status contract test",
+      "status": "pending",
+      "priority": "Existing PR path",
+      "prNumber": 1722,
+      "prStatus": "open",
+      "head": "",
+      "note": "Exact-RC regression plus real Generate Blueprint to exact job result to artifact UI roundtrip required.",
+      "checks": {
+        "rubberDuck": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "codeReview": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "api": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "ui": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        },
+        "github": {
+          "status": "not run",
+          "evidence": "",
+          "head": "",
+          "updatedAt": ""
+        }
+      }
+    }
+  ],
+  "agents": [
+    {
+      "id": "b6063a03-aeb3-4c21-a08a-9a856d65f871",
+      "name": "#1707 recovery",
+      "parentId": null,
+      "issueNumber": 1707,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "df2200fd-20b8-4a48-9a9e-fd8a7b053ff5",
+      "name": "#1687 capacity",
+      "parentId": null,
+      "issueNumber": 1687,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "ed1d4113-d9c4-4765-a963-d3c3059f5154",
+      "name": "#1690 repo selection",
+      "parentId": null,
+      "issueNumber": 1690,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "1ed41557-bace-4c8c-8cdc-8fa390ef1829",
+      "name": "#1718 BYOK",
+      "parentId": null,
+      "issueNumber": 1718,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "ccd5c63e-3255-4f09-aa8e-bbd546a4bdfc",
+      "name": "#1720 coordinator",
+      "parentId": null,
+      "issueNumber": 1720,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "f47a67f3-a1bc-4857-b84c-acca92ac60ec",
+      "name": "#1721 coverage",
+      "parentId": null,
+      "issueNumber": 1721,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "c14adc20-451a-4de8-8698-a66e34d504ad",
+      "name": "#1709 Oracle",
+      "parentId": null,
+      "issueNumber": 1709,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "45e4ff71-e1c7-4722-ab96-b0f0adc5864c",
+      "name": "#1713 Oracle",
+      "parentId": null,
+      "issueNumber": 1713,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "14bd6c72-5f2b-4a23-b877-5e35dcdb886b",
+      "name": "#1719 Blueprint PR",
+      "parentId": null,
+      "issueNumber": 1719,
+      "status": "unknown",
+      "note": "Project session observed; awaiting its first agent report.",
+      "updatedAt": ""
+    },
+    {
+      "id": "fc479165-0ecd-4fbf-a28f-ec2724071db5",
+      "name": "v0.34.1 tracker canvas",
+      "parentId": null,
+      "issueNumber": null,
+      "status": "idle",
+      "note": "Tracker implementation and local review complete; PR publishing pending.",
+      "updatedAt": "2026-10-02T14:17:19.664Z"
+    }
+  ],
+  "integrationRc": {
+    "status": "pending",
+    "note": "Serialize merges, assemble one combined RC, pin its image digest and revision, then deploy before behavior tests.",
+    "evidence": "",
+    "revision": "",
+    "digest": ""
+  },
+  "directApi": {
+    "status": "not run",
+    "note": "One shared Oracle run for #1709/#1713: direct API start, current revision and hashes. #1719: exact-RC deterministic regression and exact Blueprint job completion/result.",
+    "evidence": "",
+    "revision": "",
+    "digest": ""
+  },
+  "directUi": {
+    "status": "not run",
+    "note": "One shared Oracle run for #1709/#1713: browser original/corrected interactions, request-changes, approval and terminal UI state. #1719: real Generate Blueprint to generated-artifact UI roundtrip.",
+    "evidence": "",
+    "revision": "",
+    "digest": ""
+  },
+  "liveGate": {
+    "status": "not run",
+    "note": "Auth ready. Public /api/version reports gitSha a5768a5 / version 0.33.2 while deployments are tagged 61dc441. Pin final RC digest/revision before live behavior proof; platform integrity checks are setup only.",
+    "evidence": "",
+    "revision": "",
+    "digest": ""
+  },
+  "release": {
+    "status": "pending",
+    "note": "Release only after serialized merges, combined RC, and required direct API + UI behavior tests pass.",
+    "evidence": "",
+    "revision": "",
+    "digest": ""
+  },
+  "aksDeployment": {
+    "status": "pending",
+    "note": "AKS deployment follows release; do not conflate current staging with final release deployment.",
+    "evidence": "",
+    "revision": "",
+    "digest": ""
+  }
+}

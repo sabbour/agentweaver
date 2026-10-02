@@ -80,6 +80,7 @@ export default withMermaid({
           items: [
             { text: 'Configuration', link: '/guide/configuration' },
             { text: 'Operations Guide', link: '/guide/operations' },
+            { text: 'Milestone delivery tracker', link: '/guide/release-tracker' },
             { text: 'Validation workflow', link: '/guide/validation' },
             { text: 'Diagram authoring', link: '/guide/diagram-authoring' },
             { text: 'GitHub connections cutover validation', link: '/guide/fleet-cutover-validation' },
