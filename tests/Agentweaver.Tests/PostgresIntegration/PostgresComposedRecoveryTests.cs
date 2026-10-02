@@ -771,6 +771,81 @@ public sealed partial class PostgresAppBootTests
     }
 
     [PostgresRequiredFact]
+    public async Task ComposedPublication_RefusesStaleClaimOrChangedRoot()
+    {
+        foreach (var change in new[]
+        {
+            "foreign", "stale_token", "expired", "generation", "tree", "worktree",
+            "branch", "project", "child", "current_revision", "reviewed", "terminal",
+        })
+        {
+            var seeded = await SeedComposedFailureAsync(agentCommit: true);
+            try
+            {
+                var store = _fixture.Services.GetRequiredService<IRunStore>();
+                var leases = _fixture.Services.GetRequiredService<IRunLeaseStore>();
+                (await store.TryReopenTerminalToInProgressAsync(seeded.Parent.Id)).Should().BeTrue();
+                var expected = (await store.GetAsync(seeded.Parent.Id))!;
+                var claimed = await leases.TryClaimAsync(
+                    seeded.Parent.Id.ToString(), "producer", TimeSpan.FromMinutes(5));
+                claimed.Claimed.Should().BeTrue();
+                var fence = new RunLeaseClaim(
+                    change == "foreign" ? "other" : "producer",
+                    claimed.FencingToken + (change == "stale_token" ? 1 : 0),
+                    expected.LifecycleGeneration);
+                if (change == "expired")
+                    await leases.ReleaseAsync(seeded.Parent.Id.ToString(), "producer", claimed.FencingToken);
+                using (var scope = _fixture.Services.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                    var row = db.Runs.Where(run => run.RunId == seeded.Parent.Id.ToString());
+                    switch (change)
+                    {
+                        case "generation":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(
+                                run => run.LifecycleGeneration, run => run.LifecycleGeneration + 1));
+                            break;
+                        case "tree":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(run => run.TreeHash, "external"));
+                            break;
+                        case "worktree":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(run => run.WorktreePath, "other"));
+                            break;
+                        case "branch":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(run => run.WorktreeBranch, "other"));
+                            break;
+                        case "project":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(
+                                run => run.ProjectId, ProjectId.New().ToString()));
+                            break;
+                        case "child":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(run => run.ParentRunId, "other"));
+                            break;
+                        case "reviewed":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(
+                                run => run.ApprovedOutputRevisionId, "reviewed"));
+                            break;
+                        case "current_revision":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(
+                                run => run.CurrentOutputRevisionId, "reviewed"));
+                            break;
+                        case "terminal":
+                            await row.ExecuteUpdateAsync(set => set.SetProperty(run => run.Status, "failed"));
+                            break;
+                    }
+                }
+                (await store.TryPublishComposedAgentTreeAsync(
+                    expected, seeded.CapturedTree, fence)).Should().BeFalse(change);
+                (await store.GetAsync(seeded.Parent.Id))!.TreeHash.Should().NotBe(seeded.CapturedTree);
+            }
+            finally
+            {
+                await CleanupComposedFailureAsync(seeded);
+            }
+        }
+    }
+
+    [PostgresRequiredFact]
     public async Task ComposedRecovery_CapturedAgentCommit_ReopensOriginalPlanAndPendingChild()
     {
         var seeded = await SeedComposedFailureAsync(agentCommit: true);

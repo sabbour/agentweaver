@@ -1016,6 +1016,41 @@ public sealed class SqliteRunStore : IRunStore
         WarnIfNoRows(rows, runId, "update tree hash after commit");
     }
 
+    public async Task<bool> TryPublishComposedAgentTreeAsync(
+        Run expected, string treeHash, RunLeaseClaim requiredLease, CancellationToken ct = default)
+    {
+        if (requiredLease.LifecycleGeneration != expected.LifecycleGeneration)
+            return false;
+        return await ExecuteNonQueryAsync(
+            """
+            UPDATE runs SET tree_hash=$newTree
+             WHERE run_id=$runId AND parent_run_id IS NULL AND status='in_progress'
+               AND lifecycle_generation=$generation
+               AND tree_hash IS $expectedTree
+               AND worktree_path=$worktreePath AND worktree_branch=$worktreeBranch
+               AND project_id IS $projectId
+               AND current_output_revision_id IS NULL
+               AND approved_output_revision_id IS NULL
+               AND EXISTS (
+                   SELECT 1 FROM run_execution_leases lease
+                    WHERE lease.run_id=runs.run_id AND lease.owner_id=$owner
+                      AND lease.fencing_token=$token AND lease.lease_expires_at>$now);
+            """,
+            cmd =>
+            {
+                cmd.Parameters.AddWithValue("$newTree", treeHash);
+                cmd.Parameters.AddWithValue("$runId", expected.Id.ToString());
+                cmd.Parameters.AddWithValue("$generation", expected.LifecycleGeneration);
+                cmd.Parameters.AddWithValue("$expectedTree", (object?)expected.TreeHash ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$worktreePath", (object?)expected.WorktreePath ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$worktreeBranch", (object?)expected.WorktreeBranch ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$projectId", (object?)expected.ProjectId?.ToString() ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$owner", requiredLease.OwnerId);
+                cmd.Parameters.AddWithValue("$token", requiredLease.FencingToken);
+                cmd.Parameters.AddWithValue("$now", Ts(DateTimeOffset.UtcNow));
+            }, ct).ConfigureAwait(false) == 1;
+    }
+
     public async Task<bool> TryRecordFanInputProjectionAsync(
         RunId runId, int generation, string expectedBaseTree, string projectedTree,
         string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default)

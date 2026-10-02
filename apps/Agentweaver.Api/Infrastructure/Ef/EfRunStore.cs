@@ -895,6 +895,31 @@ public sealed class EfRunStore : IRunStore
         WarnIfNoRows(rows, runId, "update tree hash after commit");
     }
 
+    public async Task<bool> TryPublishComposedAgentTreeAsync(
+        Run expected, string treeHash, RunLeaseClaim requiredLease, CancellationToken ct = default)
+    {
+        if (requiredLease.LifecycleGeneration != expected.LifecycleGeneration)
+            return false;
+        await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        var now = DateTimeOffset.UtcNow;
+        var projectId = expected.ProjectId?.ToString();
+        return await db.Runs.Where(run =>
+                run.RunId == expected.Id.ToString() && run.ParentRunId == null
+                && run.Status == "in_progress"
+                && run.LifecycleGeneration == expected.LifecycleGeneration
+                && run.TreeHash == expected.TreeHash
+                && run.WorktreePath == expected.WorktreePath
+                && run.WorktreeBranch == expected.WorktreeBranch
+                && run.ProjectId == projectId
+                && run.CurrentOutputRevisionId == null
+                && run.ApprovedOutputRevisionId == null
+                && run.OwnerId == requiredLease.OwnerId
+                && run.FencingToken == requiredLease.FencingToken
+                && run.LeaseExpiresAt > now)
+            .ExecuteUpdateAsync(update => update.SetProperty(run => run.TreeHash, treeHash), ct)
+            .ConfigureAwait(false) == 1;
+    }
+
     public async Task<bool> TryRecordFanInputProjectionAsync(
         RunId runId, int generation, string expectedBaseTree, string projectedTree,
         string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default)
