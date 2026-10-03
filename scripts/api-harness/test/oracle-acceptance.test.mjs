@@ -155,7 +155,8 @@ async function driveReviewFixture(fixtureOptions = {}) {
     transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
     advanceThrownRunMs = 0, planningBudget = 6, pollMs = 5000,
     raiCorrections = 0, replacementWorkMs = 0, correctionWithoutDispatch = false,
-    replacementAgent = 'Adama', stalePlanReadyAfterDispatch = false, staleReviewWhileCorrectionPending = false,
+    replacementAgent = 'Adama', planAssignmentLagMs = 0,
+    stalePlanReadyAfterDispatch = false, staleReviewWhileCorrectionPending = false,
     failParentEventPolls = false,
     buildTestReviewBudget = 10, implementationBudget = 18, revisionProvisioningBudget = 12,
     approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
@@ -228,6 +229,7 @@ async function driveReviewFixture(fixtureOptions = {}) {
             assemblyStage: approved ? 'complete' : ready || staleReview ? 'review' : 'awaiting_assembly',
             subtasks: [{
               subtaskId: 542,
+              assignedAgent: correctionStarted && now >= planAssignmentLagMs ? replacementAgent : 'Adama',
               status: !correctionStarted || ready || stalePlanReadyAfterDispatch ? 'assemble_ready' : 'running',
             }],
           } };
@@ -495,13 +497,14 @@ test('latest workplan and child status survive an event-poll failure', async () 
   );
 });
 
-test('RAI correction rejects a replacement assigned to a different author', async () => {
+test('RAI correction accepts a rotated author after the workplan assignment catches up', async () => {
   const { result, opened, decisions } = await driveReviewFixture({
-    raiCorrections: 1, replacementAgent: 'Another agent',
+    raiCorrections: 1, replacementAgent: 'Another agent', planAssignmentLagMs: 5000,
   });
-  assert.equal(result.verdict, 'fail');
-  assert.equal(result.error.code, 'assembly_correction_unverified');
-  assert.deepEqual([opened, decisions, result.assemblyCorrections], [[], [], []]);
+  assert.equal(result.verdict, 'pass', result.error?.message);
+  assert.deepEqual(opened.map((entry) => entry[1]), ['original', 'fixed']);
+  assert.deepEqual(decisions.map((entry) => entry.body.request_changes), [true, undefined]);
+  assert.deepEqual(result.assemblyCorrections[0].children.map((child) => child.assignedAgent), ['Another agent']);
 });
 
 test('repeated RAI corrections stop at the fixed generation cap', async () => {

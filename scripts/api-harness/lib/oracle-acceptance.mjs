@@ -558,10 +558,11 @@ export async function runOracleAcceptance({
         if (!children.some((child) => child.childRunId === childRunId)) return null;
         const previousDispatch = deltas.subtaskDispatches.findLast((prior) => prior.runId === result.parentRunId
           && prior.subtaskId === subtaskId && prior.sequence < correction.sequence);
-        if (!agentIdentity(previousDispatch?.assignedAgent)
-          || agentIdentity(dispatch.assignedAgent) !== agentIdentity(previousDispatch.assignedAgent)) {
-          throw new AcceptanceFailure(`Assembly correction changed or omitted the assigned author for subtask ${subtaskId}.`, 'assembly_correction_unverified');
+        if (!agentIdentity(previousDispatch?.assignedAgent) || !agentIdentity(dispatch.assignedAgent)) {
+          throw new AcceptanceFailure(`Assembly correction omitted an assigned author for subtask ${subtaskId}.`, 'assembly_correction_unverified');
         }
+        const subtask = state.plan?.subtasks?.find((entry) => entry.subtaskId === subtaskId);
+        if (agentIdentity(subtask?.assignedAgent) !== agentIdentity(dispatch.assignedAgent)) return null;
         return {
           subtaskId, childRunId, dispatchSequence: dispatch.sequence,
           assignedAgent: dispatch.assignedAgent,
