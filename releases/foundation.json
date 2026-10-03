@@ -1,0 +1,26 @@
+{
+  "$schema": "./manifest.schema.json",
+  "schemaVersion": 1,
+  "stage": "draft",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "kind": "contract",
+      "version": "0.1.0",
+      "project": "packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj"
+    },
+    {
+      "id": "Agentweaver.Providers",
+      "kind": "library",
+      "version": "0.1.0",
+      "project": "packages/Agentweaver.Providers/Agentweaver.Providers.csproj"
+    }
+  ],
+  "compatibility": [
+    {
+      "consumer": "Agentweaver.Providers",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.1.0"]
+    }
+  ]
+}

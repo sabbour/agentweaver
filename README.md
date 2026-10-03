@@ -7,7 +7,9 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
   a source of code to copy.
 - **1.0 ports behavior, not code.** Each 0.x capability is tracked in a parity map and
   rebuilt behind the 1.0 contracts.
-- **Status:** design proposal. There is no code on this branch yet.
+- **Status:** P0 foundations are under development. The architecture remains Proposed;
+  the first implementation slice supplies libraries and validation tooling, not a
+  deployable platform.
 
 ## Start here
 
@@ -31,3 +33,40 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 - Previews and published applications become **one application model**, shown in
   Agentweaver's own UI next to a **surface panel**.
 - 1.0 runs **in the cloud only** (AKS and Azure first). There is no local runtime mode.
+
+## First foundation slice
+
+The initial P0 delivery contains provider descriptor and binding contracts, a pure
+catalog/resolver, conformance-focused tests, and build/release validation. It does not
+start any product services or provision Azure resources.
+
+Provider selection initially covers exclusive and platform-singleton seams. Composite,
+layered, meter-keyed, and application-scoped selection remain subsequent work; callers
+receive an explicit error for unsupported selection rather than a fallback. Resolving a
+descriptor produces a candidate, not a provisioned resource. A run binding pins the
+resource's negotiated capabilities only after provisioning.
+
+The release manifest describes the independently versioned foundation libraries.
+It is a draft composition, not evidence of deployment or a released platform.
+
+Remaining P0 work includes service-owned Postgres schemas and the transactional outbox,
+Identity/Key Vault, Blob storage, telemetry, and deployable control-plane services.
+
+## Build and check the foundation
+
+Use the .NET 10 SDK selected by `global.json` and Node.js 24. Run these commands from
+the repository root; tests do not start local product services or contact Azure.
+
+```powershell
+dotnet restore Agentweaver.slnx --locked-mode
+dotnet build Agentweaver.slnx --no-restore --configuration Release
+dotnet test tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
+npm run release:validate
+npm run test:release
+```
+
+The Node tooling has no external dependencies; no npm installation is required.
+The `v1 foundation CI` workflow runs these same checks for PRs targeting `v1` and
+pushes to `v1`. See [provider foundation](packages/Agentweaver.Providers/README.md)
+for supported resolution behavior and [release composition](releases/README.md)
+for manifest constraints.

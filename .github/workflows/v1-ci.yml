@@ -1,0 +1,32 @@
+name: v1 foundation CI
+
+on:
+  pull_request:
+    branches: [v1]
+  push:
+    branches: [v1]
+
+permissions:
+  contents: read
+
+jobs:
+  foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate release composition
+        run: npm run release:validate
+      - name: Test release validator
+        run: npm run test:release
+      - name: Restore locked dependencies
+        run: dotnet restore Agentweaver.slnx --locked-mode
+      - name: Build foundation
+        run: dotnet build Agentweaver.slnx --no-restore --configuration Release
+      - name: Test provider contracts
+        run: dotnet test tests/Agentweaver.Providers.Tests/Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release

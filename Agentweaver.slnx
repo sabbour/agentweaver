@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
+  <Project Path="packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+  <Project Path="tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj" />
+</Solution>
