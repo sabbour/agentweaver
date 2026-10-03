@@ -2,6 +2,11 @@
 <RunSettings>
   <RunConfiguration>
     <DisableParallelization>true</DisableParallelization>
+    <EnvironmentVariables>
+      <GIT_CONFIG_COUNT>1</GIT_CONFIG_COUNT>
+      <GIT_CONFIG_KEY_0>core.longpaths</GIT_CONFIG_KEY_0>
+      <GIT_CONFIG_VALUE_0>true</GIT_CONFIG_VALUE_0>
+    </EnvironmentVariables>
   </RunConfiguration>
   <XUnit>
     <ParallelizeTestCollections>false</ParallelizeTestCollections>
