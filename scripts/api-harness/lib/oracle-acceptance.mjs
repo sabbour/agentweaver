@@ -8,7 +8,9 @@ export const DEFAULT_BUDGETS = Object.freeze({
   buildTestReview: 10, revisionProvisioning: 12, correctedPreview: 5, terminalCompletion: 8,
 });
 
+export const MAX_ASSEMBLY_CORRECTIONS = 3;
 const TERMINAL = new Set(['failed', 'cancelled', 'canceled', 'blocked', 'assembly_blocked', 'assembly_failed', 'assembly_declined', 'merge_failed', 'rai_blocked', 'needs_resolution', 'assembly_unknown']);
+const DISPATCH_REENTRY_PHASES = new Set(['implementation', 'buildTestReview']);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const normalize = (value) => String(value ?? '').toLowerCase().replaceAll(' ', '_');
 const bodyOf = (call) => call.transientResponseBody ?? call.responseBody;
@@ -64,6 +66,9 @@ export class EventDeltas {
     this.previewEvents = new Map();
     this.podBindings = new Map();
     this.buildTests = new Map();
+    this.assemblyChangesRequests = [];
+    this.subtaskDispatches = [];
+    this.subtaskStatuses = new Map();
   }
 
   async poll(runId) {
@@ -88,6 +93,25 @@ export class EventDeltas {
         if (event.type === 'coordinator.assembly_build_test_completed') {
           this.buildTests.set(runId, { sequence: cursor, ...event.payload });
         }
+        if (event.type === 'coordinator.assembly_changes_requested') {
+          this.assemblyChangesRequests.push({
+            runId, sequence: cursor, workPlanId: event.payload?.workPlanId,
+            redispatchedSubtaskIds: event.payload?.redispatchedSubtaskIds,
+          });
+        }
+        if (event.type === 'subtask.dispatched') {
+          this.subtaskDispatches.push({
+            runId, sequence: cursor, subtaskId: event.payload?.subtaskId,
+            childRunId: event.payload?.childRunId, assignedAgent: event.payload?.assignedAgent,
+          });
+        }
+        if (event.type?.startsWith('subtask.') && nonempty(event.payload?.childRunId)) {
+          this.subtaskStatuses.set(event.payload.childRunId, {
+            childRunId: event.payload.childRunId, subtaskId: event.payload.subtaskId,
+            assignedAgent: event.payload?.assignedAgent,
+            status: event.type.slice('subtask.'.length), sequence: cursor,
+          });
+        }
         if (['sandbox.preview_ready', 'sandbox.preview_failed', 'sandbox.preview_skipped_not_applicable'].includes(event.type)) {
           const events = this.previewEvents.get(runId) ?? [];
           events.push(event);
@@ -111,6 +135,7 @@ export class EventDeltas {
 }
 
 const nonempty = (value) => typeof value === 'string' && value.trim().length > 0;
+const agentIdentity = (value) => nonempty(value) ? value.trim().toLowerCase() : '';
 const matchesRevisionWorkPlanId = (revisionId, planId) => Number.isSafeInteger(planId) && planId > 0
   && (typeof revisionId === 'number' ? Number.isSafeInteger(revisionId) && revisionId > 0
     : typeof revisionId === 'string' && /^[1-9]\d*$/.test(revisionId)
@@ -205,22 +230,80 @@ export async function runOracleAcceptance({
     childRunIds: [], revisionIds: [], previews: [], decisions: [],
     shellApprovalReconciliations: [],
     lastEvents: [], terminalDiagnostic: null, transcriptPath, resultPath, cleanup: [],
-    phaseTimingsMs: {},
+    phaseTimingsMs: {}, phaseAttempts: [], assemblyCorrections: [],
+    lastWorkPlan: null, lastChildStatuses: [],
   };
   const owned = [];
   const submittedShellApprovals = new Set();
   const deltas = new EventDeltas(request);
-  let phaseStarted = clock();
+  const runStartedAt = clock();
+  let phaseStarted = runStartedAt;
   let phaseDeadline = Infinity;
   let latest = {};
-  const phase = (name) => {
-    result.phaseTimingsMs[result.phase] = clock() - phaseStarted;
+  const phaseAttemptCounts = new Map([['preflight', 1]]);
+  const usedPhaseDispatches = new Map();
+  let activePhaseAttempt = { phase: 'preflight', attempt: 1, startedAtElapsedMs: 0 };
+  let assemblyReviewDeadline = null;
+  let assemblyReviewComplete = false;
+  let nextAssemblyChangesRequest = 0;
+  const phaseBudgetMinutes = (name) => budgets[name] ?? 2;
+  const finishPhase = () => {
+    if (!activePhaseAttempt) return;
+    const durationMs = Math.max(0, clock() - phaseStarted);
+    activePhaseAttempt.durationMs = durationMs;
+    result.phaseTimingsMs[activePhaseAttempt.phase] = (result.phaseTimingsMs[activePhaseAttempt.phase] ?? 0) + durationMs;
+    result.phaseAttempts.push(activePhaseAttempt);
+    activePhaseAttempt = null;
+  };
+  const phase = (name, { dispatchIds } = {}) => {
+    if (result.phase === name && activePhaseAttempt) return;
+    let dispatchKey;
+    if (dispatchIds !== undefined) {
+      if (!Array.isArray(dispatchIds) || !dispatchIds.length || dispatchIds.some((id) => !nonempty(id))) {
+        throw new AcceptanceFailure(`Phase ${name} requires a verified dispatched child generation.`, 'invalid_dispatch_generation');
+      }
+      dispatchKey = JSON.stringify([...dispatchIds].sort());
+    }
+    const previousAttempts = phaseAttemptCounts.get(name) ?? 0;
+    if (DISPATCH_REENTRY_PHASES.has(name) && previousAttempts > 0) {
+      const used = usedPhaseDispatches.get(name) ?? new Set();
+      if (!dispatchKey || used.has(dispatchKey)) {
+        throw new AcceptanceFailure(`Phase ${name} cannot restart without a new child dispatch.`, 'phase_restart_without_dispatch');
+      }
+      used.add(dispatchKey);
+      usedPhaseDispatches.set(name, used);
+    } else if (DISPATCH_REENTRY_PHASES.has(name) && dispatchKey) {
+      usedPhaseDispatches.set(name, new Set([dispatchKey]));
+    }
+    finishPhase();
     result.phase = name;
     phaseStarted = clock();
-    phaseDeadline = phaseStarted + (budgets[name] ?? 2) * 60_000;
+    phaseDeadline = phaseStarted + phaseBudgetMinutes(name) * 60_000;
+    const attempt = previousAttempts + 1;
+    phaseAttemptCounts.set(name, attempt);
+    activePhaseAttempt = {
+      phase: name, attempt, startedAtElapsedMs: phaseStarted - runStartedAt,
+      ...(dispatchIds ? { dispatchChildRunIds: [...dispatchIds].sort() } : {}),
+    };
+    if (name === 'buildTestReview' && assemblyReviewDeadline === null) {
+      const lifecycleMinutes = phaseBudgetMinutes('buildTestReview')
+        + MAX_ASSEMBLY_CORRECTIONS * (
+          phaseBudgetMinutes('revisionProvisioning')
+          + phaseBudgetMinutes('implementation')
+          + phaseBudgetMinutes('buildTestReview')
+        );
+      assemblyReviewDeadline = phaseStarted + lifecycleMinutes * 60_000;
+    }
   };
   const remaining = () => {
-    const ms = phaseDeadline - clock();
+    let ms = phaseDeadline - clock();
+    if (assemblyReviewDeadline !== null && !assemblyReviewComplete) {
+      const lifecycleRemaining = assemblyReviewDeadline - clock();
+      if (lifecycleRemaining <= 0) {
+        throw new AcceptanceFailure('Assembly review lifecycle exceeded its fixed overall deadline.', 'phase_timeout');
+      }
+      ms = Math.min(ms, lifecycleRemaining);
+    }
     if (ms <= 0) throw new AcceptanceFailure(`Phase ${result.phase} exceeded its budget.`, 'phase_timeout');
     return ms;
   };
@@ -356,6 +439,27 @@ export async function runOracleAcceptance({
       return true;
     });
   };
+  const recordLatestStatuses = () => {
+    const subtasks = Array.isArray(latest.plan?.subtasks) ? latest.plan.subtasks : [];
+    result.lastWorkPlan = latest.plan ? {
+      workPlanId: latest.plan.workPlanId ?? null,
+      status: latest.plan.status ?? null,
+      assemblyStage: latest.plan.assemblyStage ?? null,
+      subtasks: subtasks.map((subtask) => ({
+        subtaskId: subtask.subtaskId ?? null, status: subtask.status ?? null,
+      })),
+    } : null;
+    result.lastChildStatuses = (Array.isArray(latest.children) ? latest.children : []).map((child) => {
+      const subtask = subtasks.find((entry) => entry.subtaskId === child.subtaskId);
+      const eventStatus = deltas.subtaskStatuses.get(child.childRunId);
+      return {
+        childRunId: child.childRunId,
+        subtaskId: child.subtaskId ?? eventStatus?.subtaskId ?? null,
+        status: child.status ?? eventStatus?.status ?? subtask?.status ?? null,
+        latestEventStatus: eventStatus?.status ?? null,
+      };
+    });
+  };
   const snapshot = async () => {
     const [run, plan, children] = await Promise.all([
       checkedRequest('GET', path('')), checkedRequest('GET', path('/work-plan')), checkedRequest('GET', path('/children')),
@@ -364,11 +468,13 @@ export async function runOracleAcceptance({
     if (plan.status !== 200 && plan.status !== 404) requireResponse(plan, 'work plan');
     requireResponse(children, 'children');
     latest = { run: run.body, plan: plan.status === 200 ? plan.body : null, children: children.body };
+    recordLatestStatuses();
     const ids = [result.parentRunId, ...(Array.isArray(children.body) ? children.body.map((c) => c.childRunId).filter(Boolean) : [])];
     result.childRunIds = [...new Set([...result.childRunIds, ...ids.slice(1)])];
     for (const id of ids) {
       await deltas.poll(id);
     }
+    recordLatestStatuses();
     for (const approval of await pendingShellApprovals(ids)) {
       const key = `${approval.action_run_id}\0${approval.request_id}`;
       if (!approveShell) {
@@ -401,11 +507,102 @@ export async function runOracleAcceptance({
     if (terminal) throw new AcceptanceFailure(`Terminal run state: ${terminal}`);
     return latest;
   };
-  const wait = async (name, predicate) => {
-    phase(name);
+  const wait = async (name, predicate, options = {}) => {
+    phase(name, options);
     for (;;) {
       const state = await snapshot();
       if (await predicate(state)) { remaining(); return state; }
+      await pause(Math.min(pollMs, remaining()));
+    }
+  };
+  const nextDispatchedCorrection = (state) => {
+    const requests = deltas.assemblyChangesRequests;
+    for (let index = nextAssemblyChangesRequest; index < requests.length; index++) {
+      const correction = requests[index];
+      if (correction.runId !== result.parentRunId) {
+        nextAssemblyChangesRequest = index + 1;
+        continue;
+      }
+      if (!Number.isSafeInteger(correction.workPlanId) || correction.workPlanId < 1
+        || !Array.isArray(correction.redispatchedSubtaskIds)
+        || !correction.redispatchedSubtaskIds.length
+        || correction.redispatchedSubtaskIds.some((id) => !Number.isSafeInteger(id) || id < 1)) {
+        throw new AcceptanceFailure('Assembly correction event has no valid work plan or redispatched subtasks.', 'assembly_correction_unverified');
+      }
+      if (state.plan?.workPlanId !== correction.workPlanId) {
+        throw new AcceptanceFailure('Assembly correction event does not match the current work plan.', 'assembly_correction_unverified');
+      }
+      const subtaskIds = [...new Set(correction.redispatchedSubtaskIds)];
+      const nextCorrection = requests.slice(index + 1).find((entry) => entry.runId === result.parentRunId);
+      const children = Array.isArray(state.children) ? state.children : [];
+      const dispatchedChildren = subtaskIds.map((subtaskId) => {
+        const candidates = deltas.subtaskDispatches.filter((dispatch) => dispatch.runId === result.parentRunId
+          && dispatch.subtaskId === subtaskId
+          && dispatch.sequence > correction.sequence
+          && (!nextCorrection || dispatch.sequence < nextCorrection.sequence)
+          && nonempty(dispatch.childRunId));
+        const childRunIds = [...new Set(candidates.map((dispatch) => dispatch.childRunId))];
+        if (childRunIds.length > 1) {
+          throw new AcceptanceFailure(`Assembly correction dispatched multiple children for subtask ${subtaskId}.`, 'assembly_correction_unverified');
+        }
+        const childRunId = childRunIds[0];
+        if (!childRunId) return null;
+        if (candidates.length !== 1) {
+          throw new AcceptanceFailure(`Assembly correction dispatch for subtask ${subtaskId} is ambiguous.`, 'assembly_correction_unverified');
+        }
+        const dispatch = candidates[0];
+        if (deltas.subtaskDispatches.some((prior) => prior.runId === result.parentRunId
+          && prior.childRunId === childRunId && prior.sequence < correction.sequence)) {
+          throw new AcceptanceFailure(`Assembly correction reused an existing child for subtask ${subtaskId}.`, 'assembly_correction_unverified');
+        }
+        if (!children.some((child) => child.childRunId === childRunId)) return null;
+        const previousDispatch = deltas.subtaskDispatches.findLast((prior) => prior.runId === result.parentRunId
+          && prior.subtaskId === subtaskId && prior.sequence < correction.sequence);
+        if (!agentIdentity(previousDispatch?.assignedAgent)
+          || agentIdentity(dispatch.assignedAgent) !== agentIdentity(previousDispatch.assignedAgent)) {
+          throw new AcceptanceFailure(`Assembly correction changed or omitted the assigned author for subtask ${subtaskId}.`, 'assembly_correction_unverified');
+        }
+        return {
+          subtaskId, childRunId, dispatchSequence: dispatch.sequence,
+          assignedAgent: dispatch.assignedAgent,
+        };
+      });
+      if (dispatchedChildren.some((child) => child === null)) return null;
+      nextAssemblyChangesRequest = index + 1;
+      return {
+        sequence: correction.sequence, workPlanId: correction.workPlanId, subtaskIds,
+        children: dispatchedChildren,
+        childRunIds: dispatchedChildren.map((child) => child.childRunId),
+      };
+    }
+    return null;
+  };
+  const hasPendingAssemblyCorrection = () => deltas.assemblyChangesRequests
+    .slice(nextAssemblyChangesRequest)
+    .some((correction) => correction.runId === result.parentRunId);
+  const waitForAssemblyReview = async (dispatchIds) => {
+    phase('buildTestReview', { dispatchIds });
+    for (;;) {
+      const state = await snapshot();
+      const correction = nextDispatchedCorrection(state);
+      if (correction) {
+        result.assemblyCorrections.push({
+          attempt: result.assemblyCorrections.length + 1,
+          workPlanId: correction.workPlanId, sequence: correction.sequence,
+          subtaskIds: correction.subtaskIds, childRunIds: correction.childRunIds,
+          children: correction.children,
+        });
+        if (result.assemblyCorrections.length > MAX_ASSEMBLY_CORRECTIONS) {
+          throw new AcceptanceFailure(`Assembly correction retry cap (${MAX_ASSEMBLY_CORRECTIONS}) exceeded.`, 'assembly_correction_limit');
+        }
+        return { correction };
+      }
+      if (!hasPendingAssemblyCorrection()
+        && (normalize(state.plan?.status) === 'in_review' || normalize(state.plan?.assemblyStage).includes('review'))) {
+        remaining();
+        assemblyReviewComplete = true;
+        return { review: state };
+      }
       await pause(Math.min(pollMs, remaining()));
     }
   };
@@ -471,7 +668,24 @@ export async function runOracleAcceptance({
     await wait('planning', (s) => Boolean(s.plan));
     await wait('claimProvisioning', (s) => s.children.some((c) => deltas.boundClaims.has(c.childRunId)));
     await wait('implementation', (s) => /assembl|review|complet/.test(normalize(s.plan?.status)));
-    await wait('buildTestReview', (s) => normalize(s.plan?.status) === 'in_review' || normalize(s.plan?.assemblyStage).includes('review'));
+    let reviewDispatchIds;
+    for (;;) {
+      const lifecycle = await waitForAssemblyReview(reviewDispatchIds);
+      if (lifecycle.review) break;
+      const correction = lifecycle.correction;
+      const dispatchIds = correction.children.map((child) => child.childRunId);
+      const dispatch = { dispatchIds };
+      await wait('revisionProvisioning',
+        () => dispatchIds.every((id) => deltas.boundClaims.has(id)), dispatch);
+      await wait('implementation', (s) => correction.children.every(({ subtaskId, childRunId, dispatchSequence }) => {
+        const subtask = s.plan?.subtasks?.find((entry) => entry.subtaskId === subtaskId);
+        const childStatus = deltas.subtaskStatuses.get(childRunId);
+        return normalize(subtask?.status) === 'assemble_ready'
+          && childStatus?.sequence > dispatchSequence
+          && normalize(childStatus?.status) === 'assemble_ready';
+      }), dispatch);
+      reviewDispatchIds = dispatchIds;
+    }
     const firstFiles = requireResponse(await checkedRequest('GET', path('/assembly/files')), 'initial assembly files');
     if (!Array.isArray(firstFiles) || !firstFiles.length) throw new AcceptanceFailure('No assembled files at initial review.');
     const firstRevision = await currentReviewRevision();
@@ -523,7 +737,7 @@ export async function runOracleAcceptance({
       if (result.parentRunId) await snapshot();
     } catch { /* Preserve original failure and last known state. */ }
   } finally {
-    result.phaseTimingsMs[result.phase] = clock() - phaseStarted;
+    finishPhase();
     result.lastEvents = deltas.recent;
     result.cleanup.push(...await cleanupOwnedPreviews(request, owned));
     if (result.cleanup.some((entry) => !entry.deleted)) {

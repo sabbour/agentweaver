@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { AcceptanceFailure, DEFAULT_BUDGETS, EventDeltas, cleanupOwnedPreviews, createAcceptanceTransport, runOracleAcceptance, selectCurrentAutomaticPreview } from '../lib/oracle-acceptance.mjs';
+import { AcceptanceFailure, DEFAULT_BUDGETS, EventDeltas, MAX_ASSEMBLY_CORRECTIONS, cleanupOwnedPreviews, createAcceptanceTransport, runOracleAcceptance, selectCurrentAutomaticPreview } from '../lib/oracle-acceptance.mjs';
 import { parseOracleArgs } from '../run-oracle-acceptance.mjs';
 import { verifyRenderedPreview } from '../../harness-shared/preview-browser.mjs';
 
@@ -153,7 +153,11 @@ async function driveReviewFixture(fixtureOptions = {}) {
     unchangedContent = false, advanceBrowserMs = 0, correctedBudget = 5, initialBudget = 5,
     rejectReviewHeader = false, staleDecision = false, advancePreviewReadMs = 0,
     transientRunReads = 0, thrownRunReads = 0, skipInitialRunRead = false,
-    advanceThrownRunMs = 0, planningBudget = 6,
+    advanceThrownRunMs = 0, planningBudget = 6, pollMs = 5000,
+    raiCorrections = 0, replacementWorkMs = 0, correctionWithoutDispatch = false,
+    replacementAgent = 'Adama', stalePlanReadyAfterDispatch = false, staleReviewWhileCorrectionPending = false,
+    failParentEventPolls = false,
+    buildTestReviewBudget = 10, implementationBudget = 18, revisionProvisioningBudget = 12,
     approvals = [], approveShell = false, approvalConflict = null, pendingBody = null,
     previewCase = null, previewReadTimeouts = 0, sourceCase = null, physicalBuildChildEnded = false,
     initialDetailWorkPlanId, correctedDetailWorkPlanId,
@@ -164,6 +168,7 @@ async function driveReviewFixture(fixtureOptions = {}) {
     let revised = false;
     let approved = false;
     let now = 0;
+    let workPlanReads = 0;
     const opened = [];
     const deleted = [];
     const decisions = [];
@@ -174,6 +179,9 @@ async function driveReviewFixture(fixtureOptions = {}) {
     let remainingThrownRunReads = thrownRunReads;
     let previewReads = 0;
     let childPreviewReads = 0;
+    const correctionChildIds = Array.from({ length: raiCorrections }, (_, index) => `rai-child-${index + 1}`);
+    const correctionVisible = () => raiCorrections > 0 && workPlanReads >= 4;
+    const replacementReady = () => now >= replacementWorkMs;
     const tree = () => revised ? 'tree-revised' : 'tree-original';
     const previewSession = () => ({
       session_id: revised ? 'second-preview' : 'first-preview',
@@ -181,8 +189,8 @@ async function driveReviewFixture(fixtureOptions = {}) {
       preview_runner_session_id: revised ? 'runner-second' : 'runner-first',
       pod_name: 'parent-pod', target_port: 8235, local_port: 0,
     });
-    const readyEvent = (second) => ({
-      sequence: second ? 5 : 2, type: previewCase === 'failed' ? 'sandbox.preview_failed' : 'sandbox.preview_ready',
+    const readyEvent = (second, sequence = second ? 5 : 2) => ({
+      sequence, type: previewCase === 'failed' ? 'sandbox.preview_failed' : 'sandbox.preview_ready',
       payload: {
         run_id: 'parent', work_plan_id: previewEventWorkPlanId,
         tree_hash: previewCase === 'stale' || (second && previewCase === 'correctedStale')
@@ -208,10 +216,32 @@ async function driveReviewFixture(fixtureOptions = {}) {
       if (url === '/api/auth/session') return { status: 200, body: { authenticated: true } };
       if (url === '/api/ai/execution-context') return { status: 200, body: missingExecutionKey ? {} : { execution_key: `key-${decisions.length + 1}` } };
       if (url === '/api/projects/project') return { status: 200, body: {} };
-      if (url.endsWith('/work-plan')) return { status: 200, body: {
-        workPlanId: 42, coordinatorRunId: 'parent', status: approved ? 'complete' : 'in_review',
-      } };
-      if (url.endsWith('/children')) return { status: 200, body: [{ childRunId: 'first' }, ...(revised ? [{ childRunId: 'second' }] : [])] };
+      if (url.endsWith('/work-plan')) {
+        workPlanReads++;
+        if (raiCorrections > 0) {
+          const correctionStarted = correctionVisible();
+          const ready = correctionStarted && !correctionWithoutDispatch && replacementReady();
+          const staleReview = correctionStarted && correctionWithoutDispatch && staleReviewWhileCorrectionPending;
+          return { status: 200, body: {
+            workPlanId: 42, coordinatorRunId: 'parent',
+            status: approved ? 'complete' : ready || staleReview ? 'in_review' : correctionStarted ? 'dispatching' : 'awaiting_assembly',
+            assemblyStage: approved ? 'complete' : ready || staleReview ? 'review' : 'awaiting_assembly',
+            subtasks: [{
+              subtaskId: 542,
+              status: !correctionStarted || ready || stalePlanReadyAfterDispatch ? 'assemble_ready' : 'running',
+            }],
+          } };
+        }
+        return { status: 200, body: {
+          workPlanId: 42, coordinatorRunId: 'parent', status: approved ? 'complete' : 'in_review',
+        } };
+      }
+      if (url.endsWith('/children')) return { status: 200, body: [
+        { childRunId: 'first', subtaskId: 542 },
+        ...(revised ? [{ childRunId: 'second', subtaskId: 542 }] : []),
+        ...(correctionVisible() && !correctionWithoutDispatch
+          ? correctionChildIds.map((childRunId) => ({ childRunId, subtaskId: 542 })) : []),
+      ] };
       if (url.endsWith('/pending-approvals')) {
         pendingReads++;
         const current = approvals.filter((entry) => (!entry.onRevision || revised)
@@ -222,24 +252,94 @@ async function driveReviewFixture(fixtureOptions = {}) {
           : pendingBody ?? { run_id: 'parent', count: current.length, approvals: current } };
       }
       if (url.includes('/events?')) {
+        if (failParentEventPolls && url.includes('/parent/')) {
+          throw new AcceptanceFailure('GET parent events timed out', 'request_timeout');
+        }
         const after = Number(new URL(url, 'https://example.test').searchParams.get('after'));
-        if (url.includes('/parent/')) return { status: 200, body: [
-          { sequence: 1, type: previewCase === 'unbound' ? 'sandbox.execution_pod.unbound'
-            : 'sandbox.execution_pod.bound', payload: { podName: 'parent-pod' } },
-          readyEvent(false),
-          { sequence: 3, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: buildEventWorkPlanId, treeHash: 'tree-original' } },
-          { sequence: 4, type: 'coordinator.assembly_review_requested', payload: {
-            workPlanId: reviewEventWorkPlanId, treeHash: 'tree-original', outputRevisionId: missingInitialId ? undefined : 'revision-1',
-          } },
-          ...(revised ? [
-            readyEvent(true),
-            { sequence: 6, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: 42, treeHash: 'tree-revised' } },
-            { sequence: 7, type: 'coordinator.assembly_review_requested', payload: {
-              workPlanId: 42, treeHash: 'tree-revised', outputRevisionId: staleCorrectedId ? 'revision-1' : 'revision-2',
+        if (url.includes('/parent/')) {
+          if (raiCorrections > 0) {
+            const events = [{
+              sequence: 1, type: previewCase === 'unbound' ? 'sandbox.execution_pod.unbound'
+                : 'sandbox.execution_pod.bound', payload: { podName: 'parent-pod' },
+            }];
+            if (correctionVisible()) {
+              let sequence = 2;
+              events.push({
+                sequence: sequence++, type: 'subtask.dispatched',
+                payload: { subtaskId: 542, childRunId: 'first', assignedAgent: 'Adama' },
+              });
+              for (const childRunId of correctionChildIds) {
+                events.push({
+                  sequence: sequence++, type: 'coordinator.assembly_changes_requested',
+                  payload: { workPlanId: 42, redispatchedSubtaskIds: [542] },
+                });
+                if (!correctionWithoutDispatch) {
+                  events.push({
+                    sequence: sequence++, type: 'subtask.dispatched',
+                    payload: { subtaskId: 542, childRunId, assignedAgent: replacementAgent },
+                  });
+                  events.push({
+                    sequence: sequence++, type: 'subtask.running',
+                    payload: { subtaskId: 542, childRunId, assignedAgent: replacementAgent },
+                  });
+                }
+              }
+              if (!correctionWithoutDispatch && replacementReady()) {
+                for (const childRunId of correctionChildIds) {
+                  events.push({
+                    sequence: sequence++, type: 'subtask.assemble_ready',
+                    payload: { subtaskId: 542, childRunId, assignedAgent: replacementAgent },
+                  });
+                }
+                events.push(readyEvent(false, sequence++));
+                events.push({
+                  sequence: sequence++, type: 'coordinator.assembly_build_test_completed',
+                  payload: { workPlanId: buildEventWorkPlanId, treeHash: 'tree-original' },
+                });
+                events.push({
+                  sequence, type: 'coordinator.assembly_review_requested',
+                  payload: {
+                    workPlanId: reviewEventWorkPlanId, treeHash: 'tree-original',
+                    outputRevisionId: missingInitialId ? undefined : 'revision-1',
+                  },
+                });
+                sequence++;
+                if (revised) {
+                  events.push(readyEvent(true, sequence++));
+                  events.push({
+                    sequence: sequence++, type: 'coordinator.assembly_build_test_completed',
+                    payload: { workPlanId: 42, treeHash: 'tree-revised' },
+                  });
+                  events.push({
+                    sequence, type: 'coordinator.assembly_review_requested',
+                    payload: {
+                      workPlanId: 42, treeHash: 'tree-revised',
+                      outputRevisionId: staleCorrectedId ? 'revision-1' : 'revision-2',
+                    },
+                  });
+                }
+              }
+            }
+            return { status: 200, body: events.filter((event) => event.sequence > after) };
+          }
+          return { status: 200, body: [
+            { sequence: 1, type: previewCase === 'unbound' ? 'sandbox.execution_pod.unbound'
+              : 'sandbox.execution_pod.bound', payload: { podName: 'parent-pod' } },
+            readyEvent(false),
+            { sequence: 3, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: buildEventWorkPlanId, treeHash: 'tree-original' } },
+            { sequence: 4, type: 'coordinator.assembly_review_requested', payload: {
+              workPlanId: reviewEventWorkPlanId, treeHash: 'tree-original', outputRevisionId: missingInitialId ? undefined : 'revision-1',
             } },
-          ] : []),
-        ].filter((event) => event.sequence > after) };
-        const owner = url.includes('/first/') ? 'first' : url.includes('/second/') ? 'second' : null;
+            ...(revised ? [
+              readyEvent(true),
+              { sequence: 6, type: 'coordinator.assembly_build_test_completed', payload: { workPlanId: 42, treeHash: 'tree-revised' } },
+              { sequence: 7, type: 'coordinator.assembly_review_requested', payload: {
+                workPlanId: 42, treeHash: 'tree-revised', outputRevisionId: staleCorrectedId ? 'revision-1' : 'revision-2',
+              } },
+            ] : []),
+          ].filter((event) => event.sequence > after) };
+        }
+        const owner = ['first', 'second', ...correctionChildIds].find((id) => url.includes(`/${id}/`));
         return { status: 200, body: owner && after === 0
           ? [{ sequence: 1, type: 'sandbox.execution_pod.bound', payload: {} },
             ...approvals.filter((entry) => entry.owning_run_id === owner).map((entry, index) => ({
@@ -346,8 +446,12 @@ async function driveReviewFixture(fixtureOptions = {}) {
       request, runId: 'parent', expectedText: 'original', correctedText: 'fixed',
       feedback: 'The initial app is missing a visible feature.', targetFiles: ['index.html'],
       browser, transcriptPath: path.join(directory, 'trace.jsonl'), resultPath: path.join(directory, 'result.json'),
-      budgets: { ...DEFAULT_BUDGETS, planning: planningBudget, initialPreview: initialBudget, correctedPreview: correctedBudget },
-      clock: () => now, pause: async (ms) => { now += ms; },
+      budgets: {
+        ...DEFAULT_BUDGETS, planning: planningBudget, initialPreview: initialBudget,
+        correctedPreview: correctedBudget, buildTestReview: buildTestReviewBudget,
+        implementation: implementationBudget, revisionProvisioning: revisionProvisioningBudget,
+      },
+      pollMs, clock: () => now, pause: async (ms) => { now += ms; },
       approveShell,
     });
     return { result, opened, decisions, deleted, runReadAttempts, approvalPosts,
@@ -360,6 +464,71 @@ async function driveReviewFixture(fixtureOptions = {}) {
 const shellApproval = (owner = 'first', hash = 'command-hash') => ({
   root_run_id: 'parent', owning_run_id: owner, action_run_id: owner,
   request_id: hash, tool_name: 'run_command', is_shell: true,
+});
+
+test('RAI replacement gets fresh provisioning, implementation and review budgets beyond ten minutes', async () => {
+  const { result, opened, decisions } = await driveReviewFixture({
+    raiCorrections: 1, replacementWorkMs: 11 * 60_000, stalePlanReadyAfterDispatch: true,
+  });
+  assert.equal(result.verdict, 'pass', result.error?.message);
+  assert.deepEqual(opened.map((entry) => entry[1]), ['original', 'fixed']);
+  assert.deepEqual(decisions.map((entry) => entry.body.request_changes), [true, undefined]);
+  assert.equal(result.assemblyCorrections.length, 1);
+  assert.deepEqual(result.assemblyCorrections[0].childRunIds, ['rai-child-1']);
+  assert.equal(result.phaseTimingsMs.implementation, 11 * 60_000);
+  assert.equal(result.phaseAttempts.filter((entry) => entry.phase === 'implementation').length, 2);
+  assert.equal(result.phaseAttempts.filter((entry) => entry.phase === 'buildTestReview').length, 2);
+  assert.equal(result.lastWorkPlan.status, 'complete');
+  assert.equal(result.lastChildStatuses.find((entry) => entry.childRunId === 'rai-child-1').latestEventStatus, 'assemble_ready');
+});
+
+test('latest workplan and child status survive an event-poll failure', async () => {
+  const { result } = await driveReviewFixture({
+    raiCorrections: 1, failParentEventPolls: true,
+  });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.error.code, 'request_timeout');
+  assert.equal(result.lastWorkPlan.status, 'awaiting_assembly');
+  assert.deepEqual(
+    result.lastChildStatuses.map(({ childRunId, status }) => ({ childRunId, status })),
+    [{ childRunId: 'first', status: 'assemble_ready' }],
+  );
+});
+
+test('RAI correction rejects a replacement assigned to a different author', async () => {
+  const { result, opened, decisions } = await driveReviewFixture({
+    raiCorrections: 1, replacementAgent: 'Another agent',
+  });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.error.code, 'assembly_correction_unverified');
+  assert.deepEqual([opened, decisions, result.assemblyCorrections], [[], [], []]);
+});
+
+test('repeated RAI corrections stop at the fixed generation cap', async () => {
+  const { result, opened, decisions } = await driveReviewFixture({
+    raiCorrections: MAX_ASSEMBLY_CORRECTIONS + 1,
+  });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.error.code, 'assembly_correction_limit');
+  assert.equal(result.assemblyCorrections.length, MAX_ASSEMBLY_CORRECTIONS + 1);
+  assert.equal(result.phaseAttempts.filter((entry) => entry.phase === 'revisionProvisioning').length, MAX_ASSEMBLY_CORRECTIONS);
+  assert.deepEqual([opened, decisions], [[], []]);
+});
+
+test('assembly correction without a new child dispatch cannot reset the review deadline', async () => {
+  const { result } = await driveReviewFixture({
+    raiCorrections: 1, correctionWithoutDispatch: true, staleReviewWhileCorrectionPending: true,
+    buildTestReviewBudget: 0.001, pollMs: 50,
+  });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.error.code, 'phase_timeout');
+  assert.equal(result.phase, 'buildTestReview');
+  assert.equal(result.phaseTimingsMs.buildTestReview, 60);
+  assert.equal(result.phaseAttempts.filter((entry) => entry.phase === 'buildTestReview').length, 1);
+  assert.equal(result.phaseAttempts.find((entry) => entry.phase === 'buildTestReview').durationMs, 60);
+  assert.equal(result.phaseAttempts.some((entry) => entry.phase === 'revisionProvisioning'), false);
+  assert.equal(result.lastWorkPlan.status, 'in_review');
+  assert.equal(result.lastWorkPlan.subtasks[0].status, 'running');
 });
 
 test('attaching at review keeps completed-child shell history but does not approve it', async () => {
