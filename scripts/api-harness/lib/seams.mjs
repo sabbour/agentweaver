@@ -30,6 +30,11 @@ import { redact } from '../../harness-shared/redaction.mjs';
 // bugs in generation structure — they make the seam un-assessable. We surface them as
 // an inconclusive result rather than a false regression.
 const PROVIDER_FAIL_STATUS = new Set([401, 402, 429, 500, 502, 503, 504]);
+const WORKFLOW_PROVIDER_FAILURE_CODES = new Set([
+  'workflow_provider_timeout',
+  'workflow_provider_unavailable',
+  'workflow_provider_authorization_required',
+]);
 const MODEL_PROVIDER_KEY_HEADER = 'If-Model-Provider-Key';
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
@@ -166,6 +171,50 @@ function jobStatus(response) {
 
 function jobId(response) {
   return response?.responseBody?.job_id ?? response?.responseBody?.jobId ?? null;
+}
+
+export function resolveWorkflowGenerationOutcome(request) {
+  const durable = request?.durable === true;
+  const final = durable ? request.final : null;
+  const terminalStatus = jobStatus(final);
+  const result = durable ? request.result : request?.result ?? null;
+  const failure = final?.responseBody?.failure ?? null;
+  const yaml = result?.responseBody?.yaml;
+  const hasArtifact = result?.ok === true
+    && result.status === 200
+    && typeof yaml === 'string'
+    && yaml.trim().length > 0;
+  const response = hasArtifact && (!durable || terminalStatus === 'completed')
+    ? result
+    : null;
+  const inconclusive = !response && (
+    WORKFLOW_PROVIDER_FAILURE_CODES.has(failure?.code)
+    || PROVIDER_FAIL_STATUS.has(result?.status)
+    || (durable && (!terminalStatus || terminalStatus === 'cancelled'
+      || !TERMINAL_JOB_STATUSES.has(terminalStatus)))
+  );
+  const outcome = {
+    response,
+    inconclusive,
+    detail: response
+      ? `completed job ${jobId(final) ?? '(unknown)'} returned a nonempty YAML artifact`
+      : failure?.code
+        ? `job ${jobId(final) ?? '(unknown)'} ended ${terminalStatus ?? '(unknown)'} with ${failure.code}`
+        : terminalStatus === 'completed'
+          ? `job ${jobId(final) ?? '(unknown)'} completed without a successful nonempty YAML artifact`
+          : durable
+            ? `job ${jobId(final) ?? '(unknown)'} ended with status ${terminalStatus ?? '(unknown)'}`
+            : `workflow generation returned no successful nonempty YAML artifact (status ${result?.status ?? '(missing)'})`,
+    evidence: {
+      status: final?.status ?? result?.status ?? null,
+      jobId: jobId(request?.accepted) ?? jobId(final),
+      terminalStatus,
+      resultStatus: request?.result?.status ?? null,
+      failure: redact(failure),
+      analysis: null,
+    },
+  };
+  return outcome;
 }
 
 function jobUrl(response, name) {
@@ -608,7 +657,7 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
         timeoutMs: opts.timeoutMs,
       })
       : null;
-    const workflowResult = workflowRequest?.durable === false
+    const directWorkflowResult = workflowRequest?.durable === false
       ? await retryWithReplacementContext(client, {
         response: workflowRequest.accepted,
         operation: 'workflow_generation',
@@ -618,7 +667,16 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
         timingKey: 'workflowGenerate',
         extraHeaders: { 'Idempotency-Key': workflowIdempotencyKey },
       })
-      : { response: workflowRequest?.result ?? workflowRequest?.final ?? null, replacement: null };
+      : null;
+    const workflowOutcome = workflowRequest
+      ? resolveWorkflowGenerationOutcome(workflowRequest.durable
+        ? workflowRequest
+        : { durable: false, result: directWorkflowResult?.response })
+      : null;
+    const workflowResult = {
+      response: workflowOutcome?.response ?? null,
+      replacement: directWorkflowResult?.replacement ?? null,
+    };
     const cancelRetryContext = workflowContext.ready && workflowRequest?.durable
       ? await time('workflowCancelRetryExecutionContextMs', () =>
         prepareAiExecutionContext(client, 'workflow_generation', evidence.projectId),
@@ -649,6 +707,8 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
           duplicateJobId: jobId(workflowRequest.duplicate),
           terminalStatus: jobStatus(workflowRequest.final),
           resultStatus: workflowRequest.result?.status ?? null,
+          failure: workflowOutcome?.evidence.failure ?? null,
+          analysis: null,
         },
       } : {}),
       ...(cancelRetry ? {
@@ -663,6 +723,8 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
       } : {}),
     };
     if (workflowRequest?.durable) {
+      const providerOutcomeInconclusive = workflowOutcome?.inconclusive === true;
+      const outcomeCategory = providerOutcomeInconclusive ? 'CANNOT_DETERMINE' : 'P0';
       add(
         'Advanced workflow generation job is accepted durably (202)',
         workflowRequest.accepted.status === 202 && !!jobId(workflowRequest.accepted),
@@ -677,15 +739,15 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
       );
       add(
         'Advanced workflow generation reaches terminal completed status through the hosted worker',
-        jobStatus(workflowRequest.final) === 'completed',
+        jobStatus(workflowRequest.final) === 'completed' || providerOutcomeInconclusive,
         `terminal status=${jobStatus(workflowRequest.final) ?? '(missing)'}`,
+        outcomeCategory,
       );
       add(
         'Advanced workflow generation exposes a result artifact',
-        workflowRequest.result?.ok === true
-          && !!workflowRequest.result.responseBody?.artifact_id
-          && !!workflowRequest.result.responseBody?.yaml,
-        `result status=${workflowRequest.result?.status ?? '(not fetched)'}`,
+        !!workflowOutcome?.response || providerOutcomeInconclusive,
+        workflowOutcome?.detail ?? `result status=${workflowRequest.result?.status ?? '(not fetched)'}`,
+        outcomeCategory,
       );
     } else if (scenario.requireDurableJobs && workflowRequest?.accepted) {
       add(
@@ -715,7 +777,14 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     }
     const genWf = workflowResult.response;
 
-    if (genWf && genWf.status !== 200) {
+    if (!genWf && workflowOutcome) {
+      if (workflowOutcome.inconclusive) {
+        inconclusive = true;
+        add('Workflow generation artifact is assessable', true, workflowOutcome.detail, 'CANNOT_DETERMINE');
+      } else {
+        add('Workflow generation returned a usable draft', false, workflowOutcome.detail);
+      }
+    } else if (genWf && genWf.status !== 200) {
       if (PROVIDER_FAIL_STATUS.has(genWf.status)) {
         inconclusive = true;
         add('Workflow generator reachable', true, `provider unavailable (status ${genWf.status}) — seam not assessed`, 'CANNOT_DETERMINE');
@@ -837,7 +906,7 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
       timingKey,
       timeoutMs: opts.timeoutMs,
     });
-    const result = request.durable === false
+    const directResult = request.durable === false
       ? await retryWithReplacementContext(client, {
         response: request.accepted,
         operation: 'workflow_generation',
@@ -847,25 +916,22 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
         timingKey,
         extraHeaders: { 'Idempotency-Key': idempotencyKey },
       })
-      : { response: request.result ?? request.final, replacement: null };
-    const response = result.response;
-    if (!response || response.status !== 200) {
-      const status = response?.status ?? request.accepted?.status ?? 0;
-      const providerFailure = PROVIDER_FAIL_STATUS.has(status);
+      : null;
+    const outcome = resolveWorkflowGenerationOutcome(request.durable
+      ? request
+      : { durable: false, result: directResult?.response });
+    const response = outcome.response;
+    if (!response) {
       return {
         pass: false,
-        inconclusive: providerFailure,
-        detail: providerFailure
-          ? `provider unavailable (status ${status})`
-          : `generation failed with status ${status}`,
+        inconclusive: outcome.inconclusive,
+        detail: outcome.detail,
         yaml: null,
         analysis: null,
         evidence: {
           id: fanCase.id,
           expectedMode: fanCase.expectedMode,
-          status,
-          jobId: jobId(request.accepted),
-          terminalStatus: jobStatus(request.final),
+          ...outcome.evidence,
         },
       };
     }
@@ -885,9 +951,7 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
       evidence: {
         id: fanCase.id,
         expectedMode: fanCase.expectedMode,
-        status: response.status,
-        jobId: jobId(request.accepted),
-        terminalStatus: jobStatus(request.final),
+        ...outcome.evidence,
         workflowId: response.responseBody?.workflow_id ?? response.responseBody?.workflowId ?? null,
         validation,
         analysis,

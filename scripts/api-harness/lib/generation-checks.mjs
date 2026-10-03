@@ -361,6 +361,10 @@ function graphHasCycle(nodes, edges) {
  * @returns {{ mode: 'fan'|'sequential'|'invalid', safe: boolean, errors: string[], branchIds: string[], outputPaths: string[] }}
  */
 export function analyzeConservativeFan(yamlText) {
+  if (typeof yamlText !== 'string' || !yamlText.trim()) {
+    return { mode: 'invalid', safe: false, errors: ['workflow YAML is empty or missing.'], branchIds: [], outputPaths: [] };
+  }
+
   let dto;
   try {
     dto = parseYaml(yamlText);

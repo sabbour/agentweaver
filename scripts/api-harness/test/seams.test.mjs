@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runGenerationSeams, verifyPmDiscovery } from '../lib/seams.mjs';
+import {
+  resolveWorkflowGenerationOutcome,
+  runGenerationSeams,
+  verifyPmDiscovery,
+} from '../lib/seams.mjs';
 import { redact } from '../../harness-shared/redaction.mjs';
 
 const SAFE_FAN_WORKFLOW = `id: retained-safe-fan
@@ -53,6 +57,129 @@ test('verifyPmDiscovery requires the ordered two-branch fan before synthesis', (
   assert.equal(verifyPmDiscovery(response).valid, true);
   response.responseBody.edges.at(-1).to = 'synthesize';
   assert.equal(verifyPmDiscovery(response).valid, false);
+});
+
+test('durable workflow outcome preserves failed job evidence without treating status as YAML', () => {
+  const failure = {
+    code: 'workflow_generation_invalid',
+    message: 'The generated workflow did not satisfy the workflow contract.',
+    retryable: false,
+  };
+  const outcome = resolveWorkflowGenerationOutcome({
+    durable: true,
+    accepted: { status: 202, responseBody: { job_id: 'failed-job' } },
+    final: {
+      ok: true,
+      status: 200,
+      responseBody: { job_id: 'failed-job', status: 'Failed', artifact: null, failure },
+    },
+    result: null,
+  });
+
+  assert.equal(outcome.response, null);
+  assert.equal(outcome.inconclusive, false);
+  assert.equal(outcome.evidence.jobId, 'failed-job');
+  assert.equal(outcome.evidence.terminalStatus, 'failed');
+  assert.deepEqual(outcome.evidence.failure, failure);
+  assert.equal(outcome.evidence.analysis, null);
+});
+
+test('durable workflow outcome leaves cancelled and deadline jobs unassessed', () => {
+  for (const status of ['Cancelled', 'Running']) {
+    const outcome = resolveWorkflowGenerationOutcome({
+      durable: true,
+      accepted: { status: 202, responseBody: { job_id: `${status.toLowerCase()}-job` } },
+      final: {
+        ok: true,
+        status: 200,
+        responseBody: { job_id: `${status.toLowerCase()}-job`, status, artifact: null, failure: null },
+      },
+      result: null,
+    });
+
+    assert.equal(outcome.response, null, status);
+    assert.equal(outcome.inconclusive, true, status);
+    assert.equal(outcome.evidence.terminalStatus, status.toLowerCase());
+    assert.equal(outcome.evidence.failure, null);
+    assert.equal(outcome.evidence.analysis, null);
+  }
+});
+
+test('durable workflow outcome treats canonical provider failures as inconclusive', () => {
+  for (const code of [
+    'workflow_provider_timeout',
+    'workflow_provider_unavailable',
+    'workflow_provider_authorization_required',
+  ]) {
+    const outcome = resolveWorkflowGenerationOutcome({
+      durable: true,
+      accepted: { status: 202, responseBody: { job_id: `${code}-job` } },
+      final: {
+        ok: true,
+        status: 200,
+        responseBody: {
+          job_id: `${code}-job`,
+          status: 'Failed',
+          artifact: null,
+          failure: { code, message: 'Provider request failed.', retryable: false },
+        },
+      },
+      result: null,
+    });
+
+    assert.equal(outcome.response, null, code);
+    assert.equal(outcome.inconclusive, true, code);
+    assert.equal(outcome.evidence.failure.code, code);
+    assert.equal(outcome.evidence.analysis, null);
+  }
+});
+
+test('durable workflow outcome rejects completed jobs without a successful nonempty YAML artifact', () => {
+  for (const result of [
+    null,
+    { ok: true, status: 200, responseBody: { artifact_id: 'artifact-without-yaml' } },
+    { ok: true, status: 200, responseBody: { artifact_id: 'artifact-with-empty-yaml', yaml: ' \n' } },
+  ]) {
+    const outcome = resolveWorkflowGenerationOutcome({
+      durable: true,
+      accepted: { status: 202, responseBody: { job_id: 'missing-artifact-job' } },
+      final: {
+        ok: true,
+        status: 200,
+        responseBody: { job_id: 'missing-artifact-job', status: 'Completed', artifact: null, failure: null },
+      },
+      result,
+    });
+
+    assert.equal(outcome.response, null);
+    assert.equal(outcome.inconclusive, false);
+    assert.equal(outcome.evidence.terminalStatus, 'completed');
+    assert.equal(outcome.evidence.analysis, null);
+  }
+});
+
+test('durable workflow outcome accepts only a completed job with a successful YAML result', () => {
+  const result = {
+    ok: true,
+    status: 200,
+    responseBody: { artifact_id: 'workflow-artifact', yaml: SAFE_FAN_WORKFLOW },
+  };
+  const outcome = resolveWorkflowGenerationOutcome({
+    durable: true,
+    accepted: { status: 202, responseBody: { job_id: 'completed-job' } },
+    final: {
+      ok: true,
+      status: 200,
+      responseBody: { job_id: 'completed-job', status: 'Completed', artifact: { artifact_id: 'workflow-artifact' } },
+    },
+    result,
+  });
+
+  assert.equal(outcome.response, result);
+  assert.equal(outcome.inconclusive, false);
+  assert.equal(outcome.evidence.terminalStatus, 'completed');
+  assert.equal(outcome.evidence.resultStatus, 200);
+  assert.equal(outcome.evidence.analysis, null);
 });
 
 test('Entra session preflight identifies the required bearer type without retaining config', async () => {
