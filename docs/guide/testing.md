@@ -16,6 +16,11 @@ answer different questions. Passing one does not substitute for the others.
 The provider tests use in-memory descriptors. Persistence tests use a disposable
 PostgreSQL container, not mocks, SQLite, or a shared developer database. They verify
 durable state through database reads as well as returned results.
+The Azure Key Vault adapter tests exercise the real Azure SDK authentication,
+request/response and error pipeline through an in-memory HTTP transport and fake
+`TokenCredential`; they require no Azure account, outbound network or provisioned
+vault. They prove adapter transport behavior, not live workload identity, RBAC or
+an Azure deployment.
 
 Run the commands in the [root README](../../README.md#build-and-check-the-foundation).
 The PostgreSQL suite requires a running Docker-compatible engine and permission to
@@ -39,10 +44,10 @@ npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs
 ```
 
-The .NET command restores the pinned local ReportGenerator tool, runs both
-existing test suites once with Coverlet, and merges their reports using
-ReportGenerator. Its scope is all three current production libraries:
-Abstractions, Providers, and Persistence.Postgres. Shared sources are merged,
+The .NET command restores the pinned local ReportGenerator tool, runs all three
+test suites once with Coverlet, and merges their reports using
+ReportGenerator. Its scope is all four current production libraries:
+Abstractions, Providers, Persistence.Postgres and Secrets.AzureKeyVault. Shared sources are merged,
 not summed twice. Node uses its built-in test coverage and spec/LCOV reporters
 for the release validator; test files, fixtures, and coverage wrappers are not
 production targets. No external JavaScript coverage dependency is needed.
@@ -53,6 +58,7 @@ Reports are written beneath `artifacts\coverage\` (ignored by Git):
 | --- | --- |
 | `dotnet\combined\` | HTML (`index.html`), Cobertura XML, JSON/text summaries, and GitHub Markdown summary |
 | `dotnet\providers\`, `dotnet\postgres\` | Individual test-suite Cobertura reports |
+| `dotnet\keyvault\` | Azure Key Vault adapter Cobertura report |
 | `node\` | `lcov.info` and `summary.txt` containing live test output and the native coverage table |
 | `source.json` (CI only) | Tested checkout SHA, PR head SHA, run ID, and run attempt |
 
@@ -78,6 +84,9 @@ behavioral completeness. Read the report for the exact tested candidate as
 source and tests change. Instrumented line, branch, and method/function coverage
 does not prove integration correctness, Azure connectivity, or platform E2E
 acceptance; the distinct test layers above still apply.
+The table predates the Azure Key Vault adapter; use the new combined report for
+the current four-library measurement rather than interpreting the old baseline
+as a threshold.
 
 ## When Azure is added
 

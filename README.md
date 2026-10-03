@@ -52,15 +52,18 @@ It is a draft composition, not evidence of deployment or a released platform.
 The provider-neutral Secrets foundation defines opaque, versioned references and
 purpose/run-bound requests for trusted Identity redemption. Short-lived credential
 values remain outside descriptors, bindings and durable state. This is a contract
-only: it does not authorize callers, connect to Key Vault or deploy a service.
+and an Azure Key Vault adapter library: the adapter resolves exact versions through
+an injected Azure SDK client or workload-identity-ready credential. It does not
+authorize callers, provision a vault or deploy a service.
 
 The next P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
 acknowledgment. Real PostgreSQL tests cover atomicity, duplicate handling, concurrency,
 and recovery. This is a persistence library, not a running relay or a deployed service.
 
-Remaining P0 work includes wiring these primitives into real services, Identity/Key
-Vault, Blob storage, telemetry, and the dedicated Azure integration environment.
+Remaining P0 work includes wiring these primitives into real services, Identity
+authorization and workload identity, Blob storage, telemetry, and the dedicated
+Azure integration environment.
 
 ## Build and check the foundation
 
@@ -73,6 +76,7 @@ Run these commands from the repository root:
 dotnet restore Agentweaver.slnx --locked-mode
 dotnet build Agentweaver.slnx --no-restore --configuration Release
 dotnet test tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj --no-build --no-restore --configuration Release
 npm run release:validate
 npm run test:release
@@ -135,6 +139,8 @@ and `npm run coverage:node` instead of the test commands above to reproduce its
 coverage reports. CI publishes a readable summary and downloadable reports with
 the tested source and PR head SHAs; no coverage percentage threshold is imposed.
 See [coverage commands and scope](docs/guide/testing.md#code-coverage).
+See [Azure Key Vault adapter](packages/Agentweaver.Secrets.AzureKeyVault/README.md)
+for trusted-host composition and transport-test scope.
 See [provider foundation](packages/Agentweaver.Providers/README.md)
 for supported resolution behavior and [release composition](releases/README.md)
 for manifest constraints. [Testing and Azure acceptance](docs/guide/testing.md)

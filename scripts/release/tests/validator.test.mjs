@@ -12,7 +12,8 @@ const abstraction = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyG
 const provider = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
 const projects = new Map(fixture.components.map((component) => [
   component.project,
-  component.id === 'Agentweaver.Providers' ? provider : abstraction,
+  ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault'].includes(component.id)
+    ? provider : abstraction,
 ]));
 const readProject = (file) => {
   const relative = path.relative(root, file).replaceAll('\\', '/');

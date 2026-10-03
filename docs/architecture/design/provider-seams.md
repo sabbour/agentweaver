@@ -603,6 +603,14 @@ delivery, purpose policy, secure storage and refresh belong to future trusted
 service implementations; neither these data contracts nor a provider adapter
 grant access on their own.
 
+`Agentweaver.Secrets.AzureKeyVault` implements redemption for the trusted control
+plane with the Azure Key Vault SDK. The configured vault URI is validated; callers
+inject a workload-identity-capable `TokenCredential` or an already configured
+`SecretClient`. The adapter fetches the exact referenced version and returns a
+credential that expires within five minutes (sooner if the vault secret expires).
+SDK transport tests cover its contract without contacting Azure. This does not
+implement Identity authorization or prove an AKS deployment.
+
 ## Source Control
 
 **Owner:** Source Control & Merge. **Cardinality:** exclusive. The GitHub adapter owns repository identity

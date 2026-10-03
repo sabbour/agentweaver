@@ -5,7 +5,7 @@
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
           <Format>cobertura</Format>
-          <Include>[Agentweaver.Abstractions]*,[Agentweaver.Providers]*,[Agentweaver.Persistence.Postgres]*</Include>
+          <Include>[Agentweaver.Abstractions]*,[Agentweaver.Providers]*,[Agentweaver.Persistence.Postgres]*,[Agentweaver.Secrets.AzureKeyVault]*</Include>
           <Exclude>[*.Tests]*</Exclude>
         </Configuration>
       </DataCollector>

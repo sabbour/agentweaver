@@ -2,8 +2,9 @@
 
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
 It pins the independently versioned .NET foundation libraries
-(`Agentweaver.Abstractions`, `Agentweaver.Providers`, and
-`Agentweaver.Persistence.Postgres`, each currently `0.1.0`).
+(`Agentweaver.Abstractions`, `Agentweaver.Providers`,
+`Agentweaver.Persistence.Postgres`, and `Agentweaver.Secrets.AzureKeyVault`,
+each currently `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
@@ -13,9 +14,12 @@ published as a platform release.
 The Abstractions foundation now exposes a provider-neutral, versioned Secrets
 reference and purpose/run-bound trusted redemption contract. Credential results
 have explicit expiry and invalidation and avoid default diagnostic/JSON value
-disclosure. This contract-only change adds no Key Vault adapter, authorization
-gate, deployable service or released version; the draft composition remains at
-`0.1.0` without a manual version bump.
+disclosure. The independent Azure Key Vault adapter uses validated vault
+configuration and an injected Azure SDK client or `TokenCredential`, fetches exact
+versions, and limits returned credentials to five minutes or the vault expiry.
+Account-free SDK transport tests cover failures, cancellation and redaction.
+This adds no authorization gate, deployable service or released version; the
+draft composition remains at `0.1.0` without a manual version bump.
 
 `manifest.schema.json` describes the strict wire shape. The dependency-free
 validator additionally checks unique component IDs and projects, safe project
