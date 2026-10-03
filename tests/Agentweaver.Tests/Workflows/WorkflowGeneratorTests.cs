@@ -2219,6 +2219,41 @@ public sealed class WorkflowGeneratorTests
     }
 
     [Fact]
+    public async Task GenerateEndpoint_ContentOnlySurvivesDurableJobAndBypassesSoftwareGates()
+    {
+        var yaml = ContentWorkflowWithoutBuildTestYaml.Replace(
+            "role: writer",
+            string.Empty,
+            StringComparison.Ordinal);
+        var runner = new ScriptedAgentRunner(yaml);
+        await using var factory = new ScriptedWorkflowGeneratorFactory(runner);
+        var client = factory.CreateAuthenticatedClient();
+        var (projectId, _) = await CreateProjectAsync(factory, client, "WfGen Durable ContentOnly Test");
+        await factory.PrepareAiExecutionAsync(client, "workflow_generation", projectId);
+
+        var (job, result) = await GenerateThroughDurableJobAsync(
+            factory,
+            client,
+            projectId,
+            new { description = "Draft a newsletter.", content_only = true });
+
+        var jobId = job.GetProperty("job_id").GetString()!;
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var persisted = await db.BlueprintGenerationJobs.AsNoTracking()
+            .SingleAsync(record => record.JobId == jobId);
+        WorkflowGenerationJobPayload.TryDeserialize(persisted.Description, out var payload)
+            .Should().BeTrue();
+        payload!.ContentOnly.Should().BeTrue();
+
+        var generatedYaml = result.GetProperty("yaml").GetString()!;
+        generatedYaml.Should().NotContain("build_test");
+        generatedYaml.Should().NotContain("gate_kind: human-review");
+        result.GetProperty("was_corrected").GetBoolean().Should().BeFalse();
+        runner.CallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task GenerateEndpoint_ProviderTimeoutHasCanonicalRetryableFailureAndRetryCompletes()
     {
         await using var factory = new StubWorkflowGeneratorFactory();
@@ -2478,7 +2513,7 @@ public sealed class WorkflowGeneratorTests
     }
 
     /// <summary>Project test factory that swaps in the stub generator for the generate endpoint test.</summary>
-    private sealed class StubWorkflowGeneratorFactory : ApiWebApplicationFactory
+    private class StubWorkflowGeneratorFactory : ApiWebApplicationFactory
     {
         public const string TestApiKey = "wfgen-test-api-key-77001";
         public const string TestUser = "wfgen-test-user";
@@ -2544,6 +2579,22 @@ public sealed class WorkflowGeneratorTests
 
             RemoveService<IWorkflowGenerator>(services);
             services.AddSingleton<IWorkflowGenerator, StubWorkflowGenerator>();
+        }
+    }
+
+    private sealed class ScriptedWorkflowGeneratorFactory : StubWorkflowGeneratorFactory
+    {
+        private readonly IAgentRunner _runner;
+
+        public ScriptedWorkflowGeneratorFactory(IAgentRunner runner) => _runner = runner;
+
+        protected override void ConfigureTestServices(IServiceCollection services)
+        {
+            base.ConfigureTestServices(services);
+            RemoveService<IWorkflowGenerator>(services);
+            RemoveService<IAgentRunner>(services);
+            services.AddSingleton<IAgentRunner>(_runner);
+            services.AddSingleton<IWorkflowGenerator, CopilotWorkflowGenerator>();
         }
     }
 }

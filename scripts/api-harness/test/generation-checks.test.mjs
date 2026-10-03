@@ -276,6 +276,16 @@ test('analyzeConservativeFan accepts ordinary sequential generation', () => {
   assert.equal(result.safe, true);
 });
 
+test('analyzeConservativeFan rejects missing or empty workflow YAML', () => {
+  for (const yaml of [null, undefined, '', ' \n\t']) {
+    const result = analyzeConservativeFan(yaml);
+
+    assert.equal(result.mode, 'invalid');
+    assert.equal(result.safe, false);
+    assert.match(result.errors[0], /empty or missing/);
+  }
+});
+
 for (const [name, transform, expected] of [
   ['unknown scope', (yaml) => yaml.replace(/    declared_output_paths:\n      - reports\/technical-feasibility\.md\n/, ''), 'no declared_output_paths'],
   ['case-normalized overlap', (yaml) => yaml.replace('- reports/technical-feasibility.md', '- REPORTS/CUSTOMER-SIGNALS.MD'), 'overlapping output paths'],
