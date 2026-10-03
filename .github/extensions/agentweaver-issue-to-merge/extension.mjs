@@ -29,25 +29,7 @@ await joinSession({
           labels: { type: "array", items: { type: "string" } },
           repository: { type: "string" },
           baseBranch: { type: "string" },
-          mode: { type: "string", enum: ["rehearse", "deliver", "correct", "admit", "retarget"] },
-          retargetSource: {
-            type: "object",
-            required: ["runId", "parentRunId", "denialCommentId"],
-            properties: {
-              runId: { type: "string" },
-              parentRunId: { type: "string" },
-              denialCommentId: { type: "integer" },
-            },
-          },
-          admissionSource: {
-            type: "object",
-            required: ["runId", "parentRunId", "grantCommentId"],
-            properties: {
-              runId: { type: "string" },
-              parentRunId: { type: "string" },
-              grantCommentId: { type: "integer" },
-            },
-          },
+          mode: { type: "string", enum: ["rehearse", "deliver", "correct"] },
           source: {
             type: "object",
             required: ["runId", "headSha", "treeSha", "branch", "prNumber", "publicationCommentId", "denialCommentId", "paths"],
