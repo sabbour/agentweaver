@@ -374,6 +374,23 @@ logic is added only where the delivery-simplification evidence in
 checks the manifest and source alignment rather than copying the 0.x global-version workflow
 unchanged.
 
+The #1778 candidate provides dependency-free source-bound plan, apply, and pack commands.
+Component records select independent semver intent without manual version edits.
+Apply preserves project mirrors and explicit compatibility declarations.
+Every new dependency version requires a declaration backed by consumer compatibility evidence.
+No patch, minor, or major version receives inferred compatibility.
+
+Draft services can omit image digests until actual publication.
+Preparation uses checked-in .NET lock files and immutable container base-image digests.
+Source-bound provenance describes prepared packages and local image archives.
+A separate manual workflow can publish those artifacts and record registry digests.
+Partial-publication receipts do not prove completed publication.
+Preparation does not carry existing release/deployment evidence across version changes.
+See the [command contract](../../../releases/README.md#release-planning-and-package-preparation).
+
+This candidate does not publish artifacts, release a platform composition, or deploy to Azure.
+The existing released-composition requirement still includes actual immutable images and exact-source API/UI/MCP deployment proof.
+
 The existing 0.x release guidance remains in force for 0.x releases while that line continues. The
 new release model does not imply that 0.x stops shipping or that 1.0 gains data migration tooling.
 Platform versioning describes the tested deployment set; provider compatibility and per-run pinning

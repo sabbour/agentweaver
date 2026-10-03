@@ -1,0 +1,93 @@
+name: v1 release pack
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_source:
+        description: Exact full v1 commit SHA to prepare (and optionally publish)
+        required: true
+        type: string
+      publish:
+        description: Publish packages/images manually after environment approval (never deploy)
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Require the v1 branch
+        if: ${{ github.ref != 'refs/heads/v1' }}
+        run: |
+          echo "::error::v1 release pack must be dispatched from refs/heads/v1 (got $GITHUB_REF); refusing to run off-branch." >&2
+          exit 1
+      - name: Require exact dispatch source
+        env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+        run: |
+          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Dispatch source mismatch"; exit 1; }
+      - uses: actions/setup-dotnet@v4
+        if: ${{ github.ref == 'refs/heads/v1' }}
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        if: ${{ github.ref == 'refs/heads/v1' }}
+        with:
+          node-version: '24'
+      - name: Validate release composition
+        if: ${{ github.ref == 'refs/heads/v1' }}
+        run: npm run release:validate
+      - name: Prepare locked package and image artifacts (no publish)
+        if: ${{ github.ref == 'refs/heads/v1' }}
+        run: npm run release:pack
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.ref == 'refs/heads/v1' && !cancelled() }}
+        with:
+          name: v1-release-pack-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/release/pack/
+          if-no-files-found: error
+          retention-days: 30
+  publish:
+    needs: pack
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    environment: v1-publication
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-release-pack-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/release/pack/
+      - name: Manually publish verified exact-source artifacts
+        env:
+          RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
+          RELEASE_NUGET_API_KEY: ${{ secrets.RELEASE_NUGET_API_KEY }}
+          RELEASE_REGISTRY: ${{ vars.RELEASE_REGISTRY }}
+          RELEASE_REGISTRY_USER: ${{ secrets.RELEASE_REGISTRY_USER }}
+          RELEASE_REGISTRY_PASSWORD: ${{ secrets.RELEASE_REGISTRY_PASSWORD }}
+          DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
+        run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/pack "$GITHUB_SHA" --confirm-publication
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: v1-publication-receipt-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/release/pack/publication.json
+          if-no-files-found: warn
+          retention-days: 30

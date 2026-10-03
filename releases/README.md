@@ -48,6 +48,9 @@ must occur in the list; do not infer compatibility from semver proximity.
 Semantic versions have `major.minor.patch` and optional prerelease/build
 suffixes; a prerelease numeric identifier cannot have a leading zero.
 
+Draft service entries can omit `imageDigest` until publication supplies an actual digest.
+Do not use a placeholder digest to represent an unpublished service.
+
 Future `release` compositions must contain an actual `service` component
 (with a SHA-256 image digest and its independently versioned project), plus
 `evidence` with a lowercase 40-character `sourceSha`, matching AKS
@@ -55,8 +58,8 @@ Future `release` compositions must contain an actual `service` component
 source SHA with an HTTPS evidence URL. This validates evidence *references*,
 not their authenticity or success; a deployment and its test results require
 external verification before publication. `draft` forbids `evidence` so it
-cannot claim unearned exact-SHA validation. Release publishing, chart wiring,
-and deployment gates are future work, not supplied by this validator.
+cannot claim unearned exact-SHA validation. The manual workflow publishes artifacts only.
+Platform release composition, chart wiring, and deployment gates remain future work.
 
 ## Draft release impact
 
@@ -102,7 +105,8 @@ the Azure Blob transport adapter.
   artifacts. #1744 adds the Azure Blob adapter, with streamed reads, create-only
   writes, and missing-object delete semantics. This draft library composition
   is not a platform release or version bump. Changeset records track intent;
-  version application, package publication, and deployment remain future work.
+  source-bound version preparation is described here. No package publication or deployment
+  occurred in this foundation.
 - #1767 adds ordered, layered provider composition: permitted Guardrails and
   Telemetry providers resolve and pin as ordered sets, pinning resource
   generations and order. Network Policy resolves its required L3/L4 and
@@ -113,6 +117,117 @@ the Azure Blob transport adapter.
   the above; it adds no runtime enforcement, egress compilation/application,
   deployable service, or version bump, and the draft composition remains at
   `0.1.0`.
+
+## Release planning and package preparation
+
+Dependency-free Node scripts prepare component versions and locked package/image artifacts.
+The plan, apply, and pack commands do not publish or deploy artifacts.
+The manual workflow has a separate publication choice.
+
+- `npm run release:plan` reads `releases/foundation.json` and every pending
+  `.changeset/*.md` record, computes the highest-severity semver bump per
+  touched component (major beats minor beats patch when more than one
+  changeset touches the same component), and writes a checksummed,
+  HEAD-bound plan to `artifacts/release/plan.json` (gitignored). Planning
+  never modifies source files. Notes must match their exact committed HEAD bytes.
+  Uncommitted notes, missing source notes, and stale source claims fail.
+- `npm run release:apply` consumes that plan and the manifest. It fails
+  closed — writing nothing — on a corrupted or hand-edited plan, a plan
+  computed against a different commit (`stale plan`), a dirty working tree,
+  a version collision, a partially applied plan, or a missing changeset or
+  colliding archive destination; every precondition is checked before any
+  file is touched. On success it bumps each component's manifest entry and
+  checked-in `<Version>` mirror, preserves explicit `compatibility` entries,
+  records a changelog entry in `releases/CHANGELOG.md`, and archives the
+  consumed changesets under `.changeset/archive/`. Reapplying an
+  already-applied plan is a no-op only after exact source-derived receipt verification.
+  Unrelated dirty edits and changed preparation bytes fail.
+  Apply prepares draft compositions only, without published image or deployment claims.
+  A service version bump removes its previous `imageDigest`; the new version is unpublished.
+
+  Every missing dependency version blocks preparation, including patch and minor bumps.
+  Before planning, verify consumer compatibility with the target dependency version.
+  Record the test evidence in the PR.
+  Add that exact version to the source manifest's `compatibility[].versions`.
+  Commit that declaration before planning.
+  A successful package build alone does not prove compatibility.
+
+  Caught write failures restore prior bytes and remove only newly created empty owned directories.
+  Existing empty changelogs and directories survive rollback.
+  Cleanup failures include the original error and require manual recovery.
+  Process crashes and concurrent external writes are outside this rollback guarantee.
+  A byte-preserving checkout is required: Git source bytes are the receipt authority.
+  On Windows, use `core.autocrlf=false` before checkout.
+
+  Each successful apply also writes a tracked (not gitignored) receipt to
+  `releases/receipts/<sourceSha>.json`, naming the exact components bumped and,
+  for every archived changeset, its original path, archived path, and a
+  SHA-256 hash of its content. This receipt is what lets the CI changeset
+  coverage guard (`release:validate -- --base <sha>`) recognize a real,
+  `release:apply`-produced archival as equivalent to a fresh top-level
+  changeset note for exact version-mirror edits only.
+  The receipt includes the manifest path and the source-derived plan checksum.
+  The guard compares archives with genuine Git source notes, then verifies preparation decisions.
+  Extra edits in the same component or another component still require fresh top-level notes.
+  A self-reported archive hash or an empty component list cannot grant coverage.
+- `npm run release:pack` restores and builds each component with locked dependencies.
+  It packs contracts/libraries and prepares service images in a fresh, empty `artifacts/release/pack/` directory.
+  It writes an atomic `provenance.json` receipt after all artifacts succeed.
+  The receipt includes the source commit SHA, manifest hash, each component's ID/kind/version,
+  and a SHA-256 hash of every artifact file it actually produced. It refuses
+  to run on a dirty tree, refuses a non-empty output directory (artifacts
+  from different runs are never mixed), fails if the build step leaves
+  the tree dirty afterward or if HEAD moves mid-run, and verifies the exact
+  expected package or image artifact exists for each component rather
+  than trusting a nonempty output directory. `release:pack` never pushes a
+  package to a feed.
+  Every component requires a checked-in `packages.lock.json`.
+  Services use native .NET `PublishContainer` with an explicit immutable
+  `<ContainerBaseImage>...@sha256:...</ContainerBaseImage>` in their project.
+  Exactly one active declaration is required; XML comments do not supply a pin.
+  Multiple active declarations, including conditional declarations, block preparation.
+  The SDK writes a local `<id>.<version>.tar.gz` image archive without a registry push.
+  Provenance records lock hashes and image archive hashes, not fabricated registry digests.
+  A failed preparation produces no completed provenance.
+  Partial output must not mix with a later run.
+
+The manually dispatched `v1 release pack` GitHub Actions workflow
+(`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.
+Dispatch requires the `v1` branch and an `expected_source` equal to the full dispatch SHA.
+The default `publish: false` uploads artifacts only.
+
+### Manual artifact publication
+
+Publication is a separate manual operation, not authorization to deploy or release the platform.
+The workflow's `publish: true` choice runs the `v1-publication` environment job.
+Repository owners can configure approval on that environment.
+This change does not modify environment policy or branch protection.
+
+Configure `RELEASE_NUGET_SOURCE` and `RELEASE_REGISTRY` as environment variables.
+Configure `RELEASE_NUGET_API_KEY`, `RELEASE_REGISTRY_USER`, and
+`RELEASE_REGISTRY_PASSWORD` as environment secrets.
+Feed URLs must use HTTPS without embedded credentials or query tokens.
+The script suppresses subprocess output and passes the registry password through stdin.
+Credentials do not enter source files, provenance, or receipts.
+The runner uses an isolated Docker configuration under ignored `artifacts/`.
+
+Before publication, the script verifies source HEAD, source manifest, and every artifact hash.
+It pushes packages with native `dotnet nuget push`.
+It loads prepared service images with Docker, then pushes their exact version tags.
+`publication.json` records package hashes and actual immutable registry digests at the source SHA.
+The workflow uploads that receipt separately.
+The script does not modify the draft composition or fabricate deployment evidence.
+
+External publication cannot roll back atomically.
+An error leaves `status: "partial"` and the confirmed publication results in the receipt.
+The script rejects a repeated invocation when a publication receipt exists.
+Before a retry, inspect the feed and registry for uploads without confirmed receipts.
+Do not treat partial receipts as completed publication.
+
+This candidate supplies the manual path but publishes no artifacts.
+Released composition acceptance still requires actual digests and exact-source API/UI/MCP deployment proof.
+See the [release design](../docs/architecture/design/services-and-release.md#fresh-release-tooling)
+for the remaining platform release and deployment gates.
 
 ## Changeset authoring
 
