@@ -25,6 +25,9 @@ durable state through database reads as well as returned results.
 The caller-driven relay integration tests also verify disjoint competing workers,
 expired and replaced leases, and a real transaction/receipt-gated consumer effect
 across restart. They do not provision a broker or exercise a deployed relay service.
+Cancellation regressions verify that a pending publisher which ignores its token
+does not block relay cancellation or cause a late acknowledgment, and that
+cancellation takes precedence over synchronous or asynchronous transport failure.
 The Azure Key Vault adapter tests exercise the real Azure SDK authentication,
 request/response and error pipeline through an in-memory HTTP transport. The
 injected-credential cases use a fake `TokenCredential`; the workload-identity cases
@@ -90,7 +93,8 @@ remain in GitHub Actions for 30 days, with no external analytics upload.
 
 The table retains the measured seven-library foundation snapshot before the
 consumer inbox change, except for Persistence.Postgres, which is updated from the
-current candidate's `npm run coverage:dotnet` report. For current combined and
+published relay candidate's `npm run coverage:dotnet` report, before the
+cancellation corrections. For current combined and
 other-library numbers, read that generated report rather than interpreting the
 historical rows as one contemporaneous run.
 
@@ -99,7 +103,7 @@ historical rows as one contemporaneous run.
 | .NET combined | 669/698 (95.8%) | 351/422 (83.1%) | 131/138 (94.9%) |
 | Abstractions | 133/139 (95.6%) | 68/72 (94.4%) | 68/73 (93.1%) |
 | Providers | 126/144 (87.5%) | 102/148 (68.9%) | 17/18 (94.4%) |
-| Persistence.Postgres (current relay candidate) | 263/268 (98.1%) | 84/94 (89.3%) | 32/33 (96.9%) |
+| Persistence.Postgres (published relay candidate) | 263/268 (98.1%) | 84/94 (89.3%) | 32/33 (96.9%) |
 | Secrets.AzureKeyVault | 99/99 (100%) | 82/86 (95.3%) | 12/12 (100%) |
 | Telemetry | 27/27 (100%) | 6/10 (60%) | 2/2 (100%) |
 | Telemetry.AzureMonitor | 36/36 (100%) | 18/22 (81.8%) | 2/2 (100%) |

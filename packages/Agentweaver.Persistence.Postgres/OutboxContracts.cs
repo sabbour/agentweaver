@@ -49,7 +49,7 @@ public abstract record RelayOutcome(StoredOutboxEvent Event)
     /// The event was published, but the lease token was no longer current by the time
     /// acknowledgment ran: it expired, was replaced by a competing claim, or was already
     /// acknowledged. The relay already published; delivery remains at-least-once and the
-    /// event will be redelivered once its new lease (if any) is reclaimed.
+    /// event remains eligible for redelivery after lease expiration if still undelivered.
     /// </summary>
     public sealed record AcknowledgmentFenced(StoredOutboxEvent Event) : RelayOutcome(Event);
 
