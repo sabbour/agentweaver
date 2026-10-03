@@ -36,7 +36,11 @@ jobs:
         run: dotnet restore Agentweaver.slnx --locked-mode
       - name: Build foundation
         run: dotnet build Agentweaver.slnx --no-restore --configuration Release
-      - name: Test all .NET foundations and Identity broker with coverage
+      - name: Build unpublished Foundation Probe image and source receipt
+        run: node scripts/azure/build-foundation-probe-image.mjs
+      - name: Render Foundation Probe acceptance Job and egress policy
+        run: kubectl kustomize deploy/k8s/acceptance/foundation-probe
+      - name: Test .NET foundations, Identity broker, and Foundation Probe with coverage
         run: npm run coverage:dotnet
       - name: Build unpublished Identity broker image
         run: |

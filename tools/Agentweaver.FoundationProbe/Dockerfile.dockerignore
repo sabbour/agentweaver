@@ -1,0 +1,6 @@
+.git
+**/bin/
+**/obj/
+**/TestResults/
+artifacts/
+node_modules/

@@ -1,0 +1,47 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: foundation-probe-egress
+  namespace: agentweaver-v1-p0
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/probe: foundation-probe
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: login.microsoftonline.com
+              - matchName: CHANGEME-vault-name.vault.azure.net
+              - matchName: CHANGEME-storage-account.blob.core.windows.net
+              - matchName: CHANGEME-monitor-ingestion-host.in.applicationinsights.azure.com
+              - matchName: CHANGEME-postgres-server.postgres.database.azure.com
+    - toFQDNs:
+        - matchName: login.microsoftonline.com
+        - matchName: CHANGEME-vault-name.vault.azure.net
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: CHANGEME-storage-account.blob.core.windows.net
+        - matchName: CHANGEME-monitor-ingestion-host.in.applicationinsights.azure.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: CHANGEME-postgres-server.postgres.database.azure.com
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
