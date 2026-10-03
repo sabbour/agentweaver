@@ -20,14 +20,16 @@ const active = (status) => status === "running" || status === "pending";
 
 function render(data) {
   model = data;
+  const observedRuns = data.sessions.reduce((sum, session) => sum + session.runs.length, 0);
   $("repository").textContent = data.repository;
   $("coverage").textContent = data.coverage;
   $("summary").replaceChildren(
     el("span", `${data.sessions.length} publishing session(s)`, "pill"),
-    el("span", `${data.sessions.reduce((sum, session) => sum + session.runs.length, 0)} observed run(s)`, "pill"),
+    el("span", `${observedRuns} observed run(s)`, "pill"),
   );
   $("notices").replaceChildren();
   if (!data.sessions.length) notice("No sessions have published workflow observations yet. This is not evidence that the repository has no workflows.");
+  else if (!observedRuns) notice("This session has published no workflow runs. Runs active in other sessions cannot appear until those owning sessions load this project extension and reload; this view is incomplete.", true);
   if (data.ownObservation !== "observed") notice(`Current session: ${data.ownObservation}`, true);
   for (const error of data.errors) notice(error, true);
   const rows = data.sessions.flatMap((session) => {
@@ -38,7 +40,7 @@ function render(data) {
   }).filter(({ run }) => $("filter").value === "all" || active(run.status));
   rows.sort((a, b) => (b.run.updatedAt || 0) - (a.run.updatedAt || 0));
   $("runs").replaceChildren();
-  if (!rows.length) $("runs").append(el("p", "No observed runs match this filter. Unpublished sessions are not included.", "muted"));
+  if (!rows.length) $("runs").append(el("p", observedRuns ? "No observed runs match this filter. Unpublished sessions are not included." : "No workflow runs have been published to this canvas yet.", "muted"));
   for (const { session, run } of rows) {
     const card = el("article", undefined, "card");
     card.append(el("h2", `${run.workflowName || "Unnamed workflow"} · ${run.status}`),
