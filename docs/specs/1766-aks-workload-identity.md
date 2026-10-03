@@ -9,8 +9,11 @@ the existing Azure Key Vault Secrets adapter. The adapter uses Azure Identity's
 `WorkloadIdentityCredential` and Azure Key Vault SDK to retrieve the *requested*
 secret version; it never selects a developer credential or a latest version.
 
-The host authorizes the run, purpose, and reference before redemption and when
-refreshing credentials. The projected assertion and returned secret exist only in
+The host can compose `Agentweaver.Identity.AuthorizedSecretRedemption` with the
+adapter to authorize the exact actor, project, run, purpose and secret version
+before redemption and after asynchronous acquisition. An active, unexpired grant
+is required on each refresh; credential expiry is bounded by the grant. The
+projected assertion and returned secret exist only in
 the credential/SDK pipeline and in the short-lived in-memory result, not in provider
 descriptors, bindings, database records, snapshots, source files, or logs. Unsafe
 content-logging options fail at composition. Missing configuration or an unavailable
@@ -20,5 +23,5 @@ does not promise immediate rotation or implement a second cache.
 
 Account-free tests must drive both the real Azure Identity OAuth exchange and
 the real Key Vault SDK request through fake in-memory HTTP transports. A deployed
-AKS identity, Key Vault permissions, Identity authorization, OAuth broker, credential
+AKS identity, Key Vault permissions, a durable Identity grant authority, OAuth broker, credential
 delivery service, Kubernetes provisioning, and cloud acceptance are separate work.

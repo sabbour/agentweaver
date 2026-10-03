@@ -598,10 +598,18 @@ are nonempty, at most 256 ASCII characters, and limited to letters, digits, `.`,
 `_`, `-`, `:`. The value is not a public property and is absent from default JSON,
 `ToString()` and contract validation exceptions. Callers must not serialize the
 string returned by `GetValue`; invalidation drops this object's reference but
-cannot erase copies of an immutable .NET string. Authorization, authenticated
-delivery, purpose policy, secure storage and refresh belong to future trusted
-service implementations; neither these data contracts nor a provider adapter
-grant access on their own.
+cannot erase copies of an immutable .NET string. Authenticated delivery, purpose
+policy, secure storage and refresh belong to future trusted service implementations;
+neither these data contracts nor a provider adapter grant access on their own.
+
+`Agentweaver.Identity` now supplies a trusted authorization wrapper around
+`ISecretRedemption`. The host supplies an authenticated actor/project/run context;
+the authority supplies an immutable active, unexpired grant for the exact
+actor/project/run/purpose and `SecretRef` ID and version. Missing, ambiguous,
+revoked, expired or mismatched grants deny before backend access. The wrapper
+re-reads the authority after asynchronous acquisition, invalidates acquired
+credentials on denial, and clamps credential expiry to the grant. It does not
+implement a grant store, network authentication, or a deployed Identity service.
 
 `Agentweaver.Secrets.AzureKeyVault` implements redemption for the trusted control
 plane with the Azure Key Vault SDK. The configured vault URI is validated; callers
