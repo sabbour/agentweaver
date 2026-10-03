@@ -131,7 +131,8 @@ correctedPreview 5, terminalCompletion 8. Override with repeatable
 An internal `coordinator.assembly_changes_requested` correction receives fresh
 revision-provisioning, implementation, and Build & Test/review phase budgets only
 after the event is paired with new child runs for every redispatched subtask, each
-assigned to the same author as its prior child. The replacement child and current
+assigned to the author selected by the current work plan; eligible-author rotation
+and same-author fallback are both supported. The replacement child and current
 work-plan subtask must both reach `assemble_ready`; stale `awaiting_assembly` or
 `in_review` projections alone are not completion evidence. The review lifecycle allows
 at most three verified internal correction generations and has one fixed overall deadline, computed once

@@ -282,7 +282,8 @@ target files. It obtains recorder-session authentication in memory, preflights
 version/OpenAPI/session once, polls incremental parent/child events, and enforces
 configurable per-phase deadlines. RAI correction retries require both the
 `coordinator.assembly_changes_requested` event and newly dispatched child runs
-for the affected subtasks, assigned to their prior authors. Both the replacement
+for the affected subtasks, assigned to the current work-plan authors; eligible
+author rotation and same-author fallback are both supported. Both the replacement
 child and current subtask status must reach `assemble_ready`; stale `in_review`
 or `awaiting_assembly` projections do not restart a phase.
 The driver re-enters replacement provisioning, implementation, and review under
