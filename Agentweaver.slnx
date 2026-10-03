@@ -2,6 +2,8 @@
   <Project Path="packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
   <Project Path="packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
   <Project Path="packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
+  <Project Path="packages\Agentweaver.ObjectStore.AzureBlob\Agentweaver.ObjectStore.AzureBlob.csproj" />
   <Project Path="tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj" />
   <Project Path="tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj" />
+  <Project Path="tests\Agentweaver.ObjectStore.AzureBlob.Tests\Agentweaver.ObjectStore.AzureBlob.Tests.csproj" />
 </Solution>

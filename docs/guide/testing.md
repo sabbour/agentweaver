@@ -7,6 +7,7 @@ answer different questions. Passing one does not substitute for the others.
 | --- | --- | --- |
 | Unit and provider conformance | Selection, capabilities, immutable bindings, explicit failures | Every affected change |
 | PostgreSQL integration | State/event atomicity, schema migration, idempotency, stream ordering, concurrent claims, lease fencing and restart recovery | Every persistence change; the foundation CI runs the whole small suite |
+| Azure Blob transport fake | SDK HTTP requests, streamed binary data, create-only conditions, missing/conflict responses and failures without a live account | Every Object Store change |
 | Service compatibility | Current and N-1 API/event peers agree during rollout | When real service APIs and consumers exist |
 | Azure-backed service integration | Actual identity, network access, managed dependencies, rollout and recovery | From the first deployable vertical slice |
 | Platform E2E | A user's task completes correctly through the assembled platform | From the end of P1, and for integrated candidates thereafter |
@@ -16,6 +17,9 @@ answer different questions. Passing one does not substitute for the others.
 The provider tests use in-memory descriptors. Persistence tests use a disposable
 PostgreSQL container, not mocks, SQLite, or a shared developer database. They verify
 durable state through database reads as well as returned results.
+Object Store tests inject a fake HTTP transport into the Azure Blob SDK; these
+verify SDK requests and adapter mappings but do not prove cloud credentials,
+Azure permissions, durability, or deployed integration.
 
 Run the commands in the [root README](../../README.md#build-and-check-the-foundation).
 The PostgreSQL suite requires a running Docker-compatible engine and permission to
@@ -39,10 +43,10 @@ npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs
 ```
 
-The .NET command restores the pinned local ReportGenerator tool, runs both
-existing test suites once with Coverlet, and merges their reports using
-ReportGenerator. Its scope is all three current production libraries:
-Abstractions, Providers, and Persistence.Postgres. Shared sources are merged,
+The .NET command restores the pinned local ReportGenerator tool, runs all three
+test suites once with Coverlet, and merges their reports using
+ReportGenerator. Its scope is all four current production libraries:
+Abstractions, Providers, Persistence.Postgres, and ObjectStore.AzureBlob. Shared sources are merged,
 not summed twice. Node uses its built-in test coverage and spec/LCOV reporters
 for the release validator; test files, fixtures, and coverage wrappers are not
 production targets. No external JavaScript coverage dependency is needed.
@@ -52,7 +56,7 @@ Reports are written beneath `artifacts\coverage\` (ignored by Git):
 | Location | Contents |
 | --- | --- |
 | `dotnet\combined\` | HTML (`index.html`), Cobertura XML, JSON/text summaries, and GitHub Markdown summary |
-| `dotnet\providers\`, `dotnet\postgres\` | Individual test-suite Cobertura reports |
+| `dotnet\providers\`, `dotnet\postgres\`, `dotnet\azure-blob\` | Individual test-suite Cobertura reports |
 | `node\` | `lcov.info` and `summary.txt` containing live test output and the native coverage table |
 | `source.json` (CI only) | Tested checkout SHA, PR head SHA, run ID, and run attempt |
 
@@ -63,14 +67,15 @@ twice. Its summary and downloadable artifact are published even after a failed
 step when available; partial reports do not turn a failed run green. Reports
 remain in GitHub Actions for 30 days, with no external analytics upload.
 
-The initial measured foundation baseline is:
+The measured foundation snapshot including the Blob transport tests is:
 
 | Scope | Lines | Branches | Methods/functions |
 | --- | --- | --- | --- |
-| .NET combined | 423/452 (93.5%) | 184/240 (76.6%) | 90/97 (92.7%) |
-| Abstractions | 81/87 (93.1%) | 15/16 (93.7%) | 48/53 (90.5%) |
+| .NET combined | 472/502 (94%) | 213/274 (77.7%) | 101/109 (92.6%) |
+| Abstractions | 98/105 (93.3%) | 36/42 (85.7%) | 54/60 (90%) |
 | Providers | 126/144 (87.5%) | 102/148 (68.9%) | 17/18 (94.4%) |
 | Persistence.Postgres | 216/221 (97.7%) | 67/76 (88.1%) | 25/26 (96.1%) |
+| ObjectStore.AzureBlob | 32/32 (100%) | 8/8 (100%) | 5/5 (100%) |
 | Node release validator | 95.92% | 92.59% | 100% |
 
 These are a starting observation, not a required percentage or a claim of

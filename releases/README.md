@@ -2,8 +2,9 @@
 
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
 It pins the independently versioned .NET foundation libraries
-(`Agentweaver.Abstractions`, `Agentweaver.Providers`, and
-`Agentweaver.Persistence.Postgres`, each currently `0.1.0`).
+(`Agentweaver.Abstractions`, `Agentweaver.Providers`,
+`Agentweaver.Persistence.Postgres`, and `Agentweaver.ObjectStore.AzureBlob`,
+each currently `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
@@ -31,4 +32,11 @@ and deployment gates are future work, not supplied by this validator.
 Run `npm run release:validate` to check the draft against checked-in projects,
 and `npm run test:release` for validator tests. Neither command installs
 dependencies or contacts the cloud. CI also restores the .NET solution with
-checked-in lock files, builds once, and tests the provider contracts.
+checked-in lock files, builds once, and tests the provider contracts and Blob transport adapter.
+
+## Unreleased foundation impact
+
+- #1744 adds the platform-singleton Object Store contract and Azure Blob adapter,
+  with streamed reads, create-only writes, and missing-object delete semantics.
+  This is a draft library composition update, not a platform release or a version
+  bump. No Changesets tool or publishing pipeline exists on v1.

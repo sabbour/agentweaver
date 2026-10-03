@@ -72,6 +72,11 @@ public sealed class ProviderResolverTests
             defaults: [new(ProviderSeam.Policy, "policy")], allowed: []));
         Assert.Equal("policy", policy.Resolve(Request(ProviderSeam.Policy)).Value!.Candidate!.ProviderId);
         Fails(policy.Resolve(Request(ProviderSeam.Policy, "policy")), ProviderErrorCode.OverrideNotPermitted);
+        var objects = new ProviderResolver(Catalog(
+            entries: [Entry("blob", ProviderSeam.ObjectStore)],
+            defaults: [new(ProviderSeam.ObjectStore, "blob")], allowed: []));
+        Assert.Equal("blob", objects.Resolve(Request(ProviderSeam.ObjectStore)).Value!.Candidate!.ProviderId);
+        Fails(objects.Resolve(Request(ProviderSeam.ObjectStore, "blob")), ProviderErrorCode.OverrideNotPermitted);
     }
 
     [Fact]

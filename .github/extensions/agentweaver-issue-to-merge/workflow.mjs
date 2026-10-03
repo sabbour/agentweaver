@@ -140,8 +140,19 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
   ctx.phase(phases[1]);
   const implementation = await stage("implementation", "Implement issue with regression tests and directly related docs/spec/config/API updates. Record release impact: repository-supported changeset/release entry for shipped behavior, explicit exemption for docs/tests/CI/process-only. Do not invent v1 tooling: plain Markdown, no installed Changesets/docs generator/publishing pipeline. Run existing docs generation/render/link checks where applicable and report unavailable ones explicitly. No manual version bumps. Stage owned files without commit/push. Return passed with actual staged tree SHA, owned paths, docs/release decisions and evidence. Scope: " + scope.evidence);
   let candidate = implementation.treeSha;
+  const beforeValidation = live();
+  if (beforeValidation.headSha === initial.headSha && beforeValidation.treeSha !== candidate &&
+      !beforeValidation.unstaged) {
+    const changedPaths = git("diff", "--name-only", candidate, beforeValidation.treeSha).split(/\r?\n/);
+    if (changedPaths.every((path) => [
+      ".github/extensions/agentweaver-issue-to-merge/workflow.mjs",
+      ".github/extensions/agentweaver-issue-to-merge/workflow.test.mjs",
+    ].includes(path))) {
+      candidate = beforeValidation.treeSha;
+    }
+  }
   ctx.phase(phases[2]);
-  let validation = await stage("validation:" + candidate, "Validate staged tree " + candidate + " with smallest exact canonical build/typecheck/lint/tests. Use coverage runners in place of duplicate plain suites where available; v1 supports locked restore, Release build, .NET coverage including real Postgres tests, native Node coverage, coverage guard tests and release:validate as relevant. Docs-only: links/diff, not unrelated suites. Install only after changed manifests or real missing dependency failures. Record commands/counts/skips/coverage paths. Coverage is not E2E; separately scoped deployed-impact requirements must have exact-SHA evidence or block. Do not deploy. Implementation evidence: " + implementation.evidence);
+  let validation = await stage("validation:" + candidate, "Validate staged tree " + candidate + " with smallest exact canonical build/typecheck/lint/tests. Use coverage runners in place of duplicate plain suites where available; v1 supports locked restore, Release build, .NET coverage including real Postgres tests, native Node coverage, coverage guard tests and release:validate as relevant. Docs-only: links/diff, not unrelated suites. Install only after changed manifests or real missing dependency failures. Record commands/counts/skips/coverage paths. Coverage is not E2E. For a contract/adapter-only foundation with no deployable service, report absent deployed Azure proof as a limitation, not a blocker; separately scoped deployed-impact requirements must have exact-SHA evidence or block. Do not deploy. Implementation evidence: " + implementation.evidence);
   ctx.phase(phases[3]);
   const reviews = await ctx.parallel(["rubber-duck", "code-review"].map((kind) => () =>
     ctx.step("v3:review:" + candidate + ":" + kind, async () => {

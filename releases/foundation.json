@@ -20,11 +20,22 @@
       "kind": "library",
       "version": "0.1.0",
       "project": "packages/Agentweaver.Persistence.Postgres/Agentweaver.Persistence.Postgres.csproj"
+    },
+    {
+      "id": "Agentweaver.ObjectStore.AzureBlob",
+      "kind": "library",
+      "version": "0.1.0",
+      "project": "packages/Agentweaver.ObjectStore.AzureBlob/Agentweaver.ObjectStore.AzureBlob.csproj"
     }
   ],
   "compatibility": [
     {
       "consumer": "Agentweaver.Providers",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.1.0"]
+    },
+    {
+      "consumer": "Agentweaver.ObjectStore.AzureBlob",
       "dependency": "Agentweaver.Abstractions",
       "versions": ["0.1.0"]
     }
