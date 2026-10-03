@@ -55,7 +55,10 @@ const exactPath = (path) => typeof path === "string" && path.length > 0 &&
   path.split("/").every((part) => part && part !== "." && part !== "..");
 
 export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
-  execFileSync("gh", args, { cwd, encoding: "utf8", windowsHide: true }).trim()) {
+  execFileSync("gh", args, { cwd, encoding: "utf8", windowsHide: true }).trim(),
+  fetchBase = (branch) => execFileSync("git", ["fetch", "--no-tags", "origin", branch], {
+    cwd, encoding: "utf8", windowsHide: true,
+  })) {
   const a = ctx.args;
   if (!a || typeof a.task !== "string" || !a.task.trim() ||
       !Number.isSafeInteger(a.issueNumber) || a.issueNumber < 1 ||
@@ -82,9 +85,13 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
   if (mode === "correct") {
     const s = a.source;
     if (!s || typeof s.runId !== "string" || !/^[a-zA-Z0-9-]{8,80}$/.test(s.runId) ||
-        !sha(s.headSha) || !sha(s.treeSha) || typeof s.branch !== "string" ||
+        !sha(s.headSha) || !sha(s.treeSha) ||
+        (s.reviewedTreeSha !== undefined && !sha(s.reviewedTreeSha)) ||
+        typeof s.branch !== "string" ||
         !s.branch.trim() || s.branch.startsWith("-") ||
         ![s.prNumber, s.publicationCommentId, s.denialCommentId].every((n) => Number.isSafeInteger(n) && n > 0) ||
+        (s.scopeCommentId !== undefined && (!Number.isSafeInteger(s.scopeCommentId) || s.scopeCommentId < 1 ||
+          [s.publicationCommentId, s.denialCommentId].includes(s.scopeCommentId))) ||
         s.publicationCommentId === s.denialCommentId ||
         !Array.isArray(s.paths) || !s.paths.length ||
         s.paths.some((path) => !exactPath(path)) || new Set(s.paths).size !== s.paths.length) {
@@ -112,6 +119,10 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
   }
 
   const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true }).trim();
+  const patchId = (from, to) => execFileSync("git", ["patch-id", "--verbatim"], {
+    cwd, encoding: "utf8", windowsHide: true,
+    input: git("diff", "--binary", "--unified=0", from, to),
+  }).trim().split(/\s+/)[0];
   const live = () => ({
     branch: git("branch", "--show-current"),
     headSha: git("rev-parse", "HEAD"),
@@ -134,7 +145,13 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
     const value = await ctx.agent(task + "\n\n" + policy, {
       label: "v3:" + key + (fresh ? ":" + crypto.randomUUID() : ""),
       schema,
-      ...(agent ? { agent } : { agent: "general-purpose", model: "gpt-6-sol" }),
+      ...(agent ? { agent } : {
+        agent: "general-purpose",
+        model: key === "implementation" || key.startsWith("corrections:") ?
+          "gpt-6.1-sol" : "gpt-6-sol",
+        ...(key === "implementation" || key.startsWith("corrections:") ?
+          { reasoningEffort: "medium" } : {}),
+      }),
     });
     if (!value || value.status === "blocked") throw new Error("Blocked or invalid agent output at " + key + ": " + JSON.stringify(value));
     return value;
@@ -160,6 +177,88 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
     const source = a.source;
     original = await ctx.step("correct-v1:receipt:" + source.runId, async () => {
       const s = live();
+      const reviewedTree = source.reviewedTreeSha ?? source.treeSha;
+      if (source.runId === ctx.runId ||
+          !ctx.session?.workflow?.getRun || !ctx.session.workflow.getRunDetail) {
+        throw new Error("Corrected candidate requires the originating session's native workflow receipts.");
+      }
+      const detail = await ctx.session.workflow.getRunDetail(source.runId);
+      if (detail.status !== "error" || detail.liveAgentCount !== 0) {
+        throw new Error("Prior native run must be terminal with no active agents.");
+      }
+      const prior = await ctx.session.workflow.getRun(source.runId);
+      const phase = (ordinal) => detail.phases?.find((p) => p.ordinal === ordinal && p.title === phases[ordinal]);
+      const role = (label, kind, ordinal) => detail.agents?.filter((agent) =>
+        agent.runId === source.runId && agent.label === label &&
+        agent.agentType === kind && agent.phaseId === phase(ordinal)?.id &&
+        agent.status === "completed" && agent.agentId && agent.toolCallId);
+      if (prior.runId !== source.runId || prior.status !== "error" ||
+          !/admission-owner:/.test(prior.error ?? "") ||
+          detail.runId !== source.runId || detail.workflowName !== "agentweaver-issue-to-merge" ||
+          detail.status !== "error" ||
+          ![3, 4, 5, 6].every((ordinal) => phase(ordinal)) ||
+          !Array.isArray(prior.snapshot?.journal) ||
+          !["rubber-duck", "code-review"].every((kind) =>
+            role(`v3:review:${reviewedTree}:${kind}`, kind, 3)?.length === 1)) {
+        throw new Error("Prior native run and distinct completed review roles are not verified.");
+      }
+      const reviewerIds = ["rubber-duck", "code-review"].map((kind) =>
+        role(`v3:review:${reviewedTree}:${kind}`, kind, 3)[0]);
+      if (new Set(reviewerIds.map((agent) => agent.agentId)).size !== 2 ||
+          new Set(reviewerIds.map((agent) => agent.toolCallId)).size !== 2) {
+        throw new Error("One native agent cannot stand in for both review roles.");
+      }
+      const journal = prior.snapshot.journal;
+      if (new Set(journal.map((entry) => entry.journalKey)).size !== journal.length ||
+          journal.some((entry) => !/^[a-f0-9]{64}$/.test(entry.journalKey) ||
+            typeof entry.resultJson !== "string")) {
+        throw new Error("Prior native journal is incomplete or malformed.");
+      }
+      const entries = journal.map((entry) => JSON.parse(entry.resultJson));
+      if (!entries.some((entry) => entry?.status === "passed" &&
+          typeof entry.evidence === "string" &&
+          entry.evidence.includes(`#${a.issueNumber}`) &&
+          entry.evidence.includes(repository))) {
+        throw new Error("Prior native scope receipt does not bind this issue and repository.");
+      }
+      const reviews = entries.filter((entry) => entry &&
+        ["approved", "findings", "blocked"].includes(entry.status) &&
+        Array.isArray(entry.findings));
+      if (reviews.length !== 4 || reviews.some((entry) =>
+        entry.treeSha !== reviewedTree ||
+        !["approved", "findings"].includes(entry.status) ||
+        (entry.status === "approved" && entry.findings.length !== 0) ||
+        (entry.status === "findings" && !entry.findings.length) ||
+        entry.findings.some((finding) => typeof finding !== "string" || !finding.trim()))) {
+        throw new Error("The actual old-tree review pair is missing or inconsistent.");
+      }
+      if ([...new Set(reviews.map((entry) => JSON.stringify(entry)))].some((result) =>
+        reviews.filter((entry) => JSON.stringify(entry) === result).length % 2 !== 0)) {
+        throw new Error("Native agent and step review receipts disagree.");
+      }
+      const findings = reviews.some((entry) => entry.status === "findings");
+      if (findings !== (reviewedTree !== source.treeSha) ||
+          (findings && (
+            role(`v3:corrections:${reviewedTree}`, "general-purpose", 4)?.length !== 1 ||
+            entries.filter((entry) => entry?.status === "passed" &&
+              entry.treeSha === source.treeSha && typeof entry.evidence === "string").length < 2
+          ))) {
+        throw new Error("The prior review findings and corrected publication tree are not linked.");
+      }
+      const published = entries.filter((entry) =>
+        entry?.status === "published" && Number.isSafeInteger(entry.prNumber));
+      if (published.length !== 2 || published.some((entry) =>
+        entry.headSha !== source.headSha || entry.treeSha !== source.treeSha ||
+        entry.prNumber !== source.prNumber ||
+        entry.prUrl !== `https://github.com/${repository}/pull/${source.prNumber}` ||
+        entry.commentUrl !== `${entry.prUrl}#issuecomment-${source.publicationCommentId}`) ||
+        JSON.stringify(published[0]) !== JSON.stringify(published[1]) ||
+        !detail.agents?.some((agent) =>
+          agent.runId === source.runId && agent.phaseId === phase(5)?.id &&
+          agent.agentType === "general-purpose" && agent.status === "completed" &&
+          agent.label.startsWith(`v3:publication:${source.treeSha}:`))) {
+        throw new Error("The exact native publication receipt is absent from the prior run.");
+      }
       const origin = git("remote", "get-url", "origin")
         .replace(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)/i, "")
         .replace(/\.git$/i, "");
@@ -170,7 +269,8 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
         throw new Error("Corrected candidate source checkout, origin, or staged-only state does not match receipt.");
       }
       const changed = git("diff", "--cached", "--name-only", "-z").split("\0").filter(Boolean);
-      if (!changed.length || changed.some((path) => !source.paths.includes(path))) {
+      if (!changed.length || changed.length !== source.paths.length ||
+          changed.some((path) => !source.paths.includes(path))) {
         throw new Error("Corrections must be fully staged and limited to selected owned paths.");
       }
       const pr = JSON.parse(gh("pr", "view", String(source.prNumber), "--repo", repository,
@@ -185,44 +285,127 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
       const comment = (id) => JSON.parse(gh("api", `repos/${repository}/issues/comments/${id}`));
       const publication = comment(source.publicationCommentId);
       const denial = comment(source.denialCommentId);
-      const denialComponent = (path) => {
-        const name = path.match(/^(?:packages\/Agentweaver\.|tests\/Agentweaver\.)([A-Za-z0-9.]+?)(?:\.Tests)?\//)?.[1];
-        return name && new RegExp(`\\b${name.replaceAll(".", "\\.")}\\b`, "i").test(denial.body ?? "");
-      };
+      const scope = source.scopeCommentId === undefined ? null : comment(source.scopeCommentId);
+      const publicationAt = Date.parse(publication.created_at);
+      const denialAt = Date.parse(denial.updated_at ?? denial.created_at);
+      const extraPaths = changed.filter((path) => !pr.files.some((file) => file.path === path));
+      const scopePaths = scope?.body?.split(/\r?\n/).map((line) => line.match(/^- `([^`]+)`$/)?.[1])
+        .filter(Boolean) ?? [];
+      if (extraPaths.length && !scope) {
+        throw new Error("New correction paths require a coordinator-confirmed exact staged scope.");
+      }
+      if (scope && (scope.html_url !== `${pr.url}#issuecomment-${source.scopeCommentId}` ||
+          scope.user?.login !== pr.author?.login ||
+          !scope.body?.includes(`Workflow run ${source.runId}`) ||
+          !scope.body.includes(`PR #${source.prNumber}`) ||
+          !scope.body.includes(`issue #${a.issueNumber}`) ||
+          !scope.body.includes(source.headSha) || !scope.body.includes(source.treeSha) ||
+          !scope.body.includes(`Staged correction tree: \`${s.treeSha}\``) ||
+          !scope.body.includes(`issuecomment-${source.denialCommentId}`) ||
+          !/scope confirmation, not admission authorization/i.test(scope.body) ||
+          scopePaths.length !== changed.length || new Set(scopePaths).size !== changed.length ||
+          scopePaths.some((path) => !changed.includes(path)) ||
+          !Number.isFinite(Date.parse(scope.updated_at ?? scope.created_at)) ||
+          Date.parse(scope.updated_at ?? scope.created_at) <= denialAt)) {
+        throw new Error("Coordinator corrective scope is not bound to the exact staged paths and tree.");
+      }
       if (publication.html_url !== `${pr.url}#issuecomment-${source.publicationCommentId}` ||
           denial.html_url !== `${pr.url}#issuecomment-${source.denialCommentId}` ||
-          source.paths.some((path) => !pr.files.some((file) => file.path === path) &&
-            !/^\.changeset\/[^/]+\.md$/.test(path) && !denialComponent(path)) ||
           publication.user?.login !== denial.user?.login ||
           publication.user?.login !== pr.author?.login ||
           !publication.body?.includes(`Workflow run ${source.runId}`) ||
-          !publication.body.includes(`Final HEAD: \`${source.headSha}\``) ||
-          !publication.body.includes(`Final tree: \`${source.treeSha}\``) ||
-          !new RegExp(`Local review 1: [^\\n]*\\b${source.treeSha}\\b`).test(publication.body) ||
-          !new RegExp(`Local review 2: [^\\n]*(?:\\b${source.treeSha}\\b|\\b(?:approved|reviewed) the same tree\\b)`, "i").test(publication.body) ||
-          !denial.body?.includes(`ADMISSION DENIED for head ${source.headSha} / tree ${source.treeSha}`) ||
-          !/Coordinator decision ID: \S+/.test(denial.body)) {
+          !publication.body.includes(source.headSha) ||
+          !publication.body.includes(source.treeSha) ||
+          !publication.body.includes(reviewedTree) ||
+          !denial.body?.includes(source.headSha) || !denial.body.includes(source.treeSha) ||
+          !(denial.body.includes(`ADMISSION DENIED for head ${source.headSha} / tree ${source.treeSha}`) &&
+              /Coordinator decision ID: \S+/.test(denial.body) ||
+            /^WITHDRAWN[^\n]*root-\S+/i.test(denial.body) &&
+              /No merge is authorized|No merge slot/i.test(denial.body)) ||
+          !Number.isFinite(publicationAt) || !Number.isFinite(denialAt) ||
+          denialAt <= publicationAt) {
         throw new Error("Missing or mismatched durable source reviews, publication or exact coordinator denial.");
       }
       return { prUrl: pr.url, author: pr.author.login, publicationUrl: publication.html_url, denialUrl: denial.html_url,
-        sourceTree: source.treeSha, sourceHead: source.headSha, changed,
-        publicationBody: publication.body, denialBody: denial.body };
+        sourceTree: source.treeSha, sourceHead: source.headSha, reviewedTree, changed,
+        stagedScopeTree: s.treeSha, publicationBody: publication.body, denialBody: denial.body,
+        scopeBody: scope?.body ?? null };
     });
     // The receipt is journaled, but the live source and its staged scope are checked on every replay.
+    const baseTip = gh("api", `repos/${repository}/branches/${encodeURIComponent(base)}`, "--jq", ".commit.sha");
+    if (!sha(baseTip)) throw new Error("Cannot verify the target tip before corrective validation.");
+    const selectedBase = await ctx.step(`correct-v2:target-base:${source.runId}`, async () => ({ sha: baseTip }));
+    if (selectedBase.sha !== baseTip) {
+      throw new Error("Current target advanced; prior corrective validation and grant are stale.");
+    }
+    fetchBase(base);
+    if (git("rev-parse", "FETCH_HEAD") !== baseTip) {
+      throw new Error("Target changed during owned fetch; retry with a fresh base.");
+    }
+    const oldBase = git("merge-base", source.headSha, baseTip);
+    if (oldBase === source.headSha) throw new Error("Source feature is already in the target; require a new decision.");
+    const baseMove = oldBase !== baseTip;
+    const prepared = baseMove ? await ctx.step(`correct-v2:base-move:${source.runId}:${baseTip}`, async () => {
+      const before = live();
+      if (git("rev-list", "--merges", `${oldBase}..${source.headSha}`) ||
+          before.unstaged || /(^|\n)\?\? /.test(before.status)) {
+        throw new Error("Owned base move requires linear source history and staged-only corrections.");
+      }
+      if (before.headSha === source.headSha) {
+        const paths = git("diff", "--cached", "--name-only", "-z").split("\0").filter(Boolean);
+        if (!paths.length || paths.some((path) => !source.paths.includes(path))) {
+          throw new Error("Owned base move cannot commit unstaged or unrelated corrections.");
+        }
+        git("commit", "-m", `fix: correct #${a.issueNumber} candidate`, "-m",
+          "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>");
+      }
+      const committed = live();
+      if (committed.status || committed.unstaged) throw new Error("Owned base move requires a clean correction commit.");
+      if (git("merge-base", baseTip, committed.headSha) !== baseTip) {
+        if (git("rev-parse", `${committed.headSha}^`) !== source.headSha ||
+            git("diff", "--name-only", source.headSha, committed.headSha).split(/\r?\n/).filter(Boolean)
+              .some((path) => !source.paths.includes(path))) {
+          throw new Error("Correction commit is not a scoped child of the original published head.");
+        }
+        git("rebase", "--no-autostash", "--onto", baseTip, oldBase);
+      }
+      const after = live();
+      if (after.status || after.unstaged || git("merge-base", baseTip, after.headSha) !== baseTip ||
+          patchId(oldBase, source.headSha) !== patchId(baseTip, `${after.headSha}^`) ||
+          patchId(source.headSha, original.stagedScopeTree) !== patchId(`${after.headSha}^`, after.headSha) ||
+          git("diff", "--name-only", `${after.headSha}^`, after.headSha).split(/\r?\n/).filter(Boolean)
+            .some((path) => !source.paths.includes(path))) {
+        throw new Error("Owned rebase changed the original feature patch or correction scope.");
+      }
+      return { headSha: after.headSha, treeSha: after.treeSha, baseTip };
+    }) : null;
     const current = live();
     const changed = git("diff", "--cached", "--name-only", "-z").split("\0").filter(Boolean);
     const publishedReplay = current.headSha !== source.headSha;
+    if (original.scopeBody && !baseMove && current.headSha === source.headSha &&
+        current.treeSha !== original.stagedScopeTree) {
+      throw new Error("Coordinator-confirmed correction tree changed before validation.");
+    }
     const candidateReceipt = await ctx.step("correct-v1:candidate:" + source.runId + ":" + current.treeSha, async () => {
-      if (publishedReplay || !changed.length) throw new Error("No staged correction candidate to adopt.");
+      if ((publishedReplay && !baseMove) || (!baseMove && !changed.length)) {
+        throw new Error("No scoped staged or owned-rebased correction candidate to adopt.");
+      }
       return { treeSha: current.treeSha };
     });
     if (current.branch !== source.branch || current.unstaged ||
         /(^|\n)\?\? /.test(current.status) || !sha(candidateReceipt.treeSha) ||
         (publishedReplay
-          ? current.status || git("rev-parse", "HEAD^{tree}") !== candidateReceipt.treeSha ||
+          ? current.status ||
+            (baseMove ? current.headSha !== prepared?.headSha :
+              git("rev-parse", "HEAD^") !== source.headSha) ||
+            git("rev-parse", "HEAD^{tree}") !== candidateReceipt.treeSha ||
             git("rev-parse", `${source.headSha}^{tree}`) !== source.treeSha ||
-            git("diff", "--name-only", source.headSha, current.headSha).split(/\r?\n/).filter(Boolean)
-              .some((path) => !source.paths.includes(path))
+            git("merge-base", baseTip, current.headSha) !== baseTip ||
+            (baseMove && patchId(oldBase, source.headSha) !== patchId(baseTip, `${current.headSha}^`)) ||
+            (baseMove && patchId(source.headSha, original.stagedScopeTree) !==
+              patchId(`${current.headSha}^`, current.headSha)) ||
+            git("diff", "--name-only", `${current.headSha}^`, current.headSha)
+              .split(/\r?\n/).filter(Boolean).some((path) => !source.paths.includes(path))
           : current.headSha !== source.headSha || git("rev-parse", "HEAD^{tree}") !== source.treeSha ||
             !changed.length || changed.some((path) => !source.paths.includes(path)) ||
             current.treeSha !== candidateReceipt.treeSha)) {
@@ -240,7 +423,12 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
     }
     const publication = JSON.parse(gh("api", `repos/${repository}/issues/comments/${source.publicationCommentId}`));
     const denial = JSON.parse(gh("api", `repos/${repository}/issues/comments/${source.denialCommentId}`));
-    if (publication.body !== original.publicationBody || denial.body !== original.denialBody) {
+    const scope = source.scopeCommentId === undefined ? null :
+      JSON.parse(gh("api", `repos/${repository}/issues/comments/${source.scopeCommentId}`));
+    if (publication.body !== original.publicationBody || denial.body !== original.denialBody ||
+        (scope?.body ?? null) !== original.scopeBody ||
+        (original.scopeBody && !baseMove && current.headSha === source.headSha &&
+          original.stagedScopeTree !== current.treeSha)) {
       throw new Error("Source receipt or coordinator denial changed on replay.");
     }
     candidate = candidateReceipt.treeSha;
@@ -248,15 +436,22 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
     validation = await stage("correct-validation:" + candidate,
       "Validate ONLY surgical staged corrections at tree " + candidate +
       ". Confirm they address exact coordinator denial " + original.denialUrl +
-      " without material scope/architecture changes; block instead of expanding scope. Run affected tests, release:validate and docs checks as applicable; no commit or push. Original review receipts apply ONLY to old tree " +
-      source.treeSha + ". Paths: " + JSON.stringify(changed));
+      " without material scope/architecture changes; block instead of expanding scope. Run affected tests, release:validate and docs checks as applicable; no push. Original review receipts apply ONLY to reviewed tree " +
+      original.reviewedTree + ". The owning workflow already verified native terminal run " +
+      source.runId + ", its distinct role-bound review pair, corrective transition, exact published head " +
+      source.headSha + " / tree " + source.treeSha + ", PR publication " + original.publicationUrl +
+      ", and denial using this session's SDK. Subagents have separate sessions and cannot re-read that workflow run; " +
+      "do not block solely because a subagent SDK lookup says session not found. Validate this candidate and report its own evidence; " +
+      "never describe the historical pair as approval of this tree. Owned rebase: " +
+      JSON.stringify(prepared) + ". Paths: " + JSON.stringify(source.paths));
     const validated = await ctx.step("correct-v1:validated:" + source.runId, async () => ({ treeSha: candidate }));
     if (validated.treeSha !== candidate) {
       throw new Error("Already validated corrected candidate changed before publication.");
     }
-    reviewEvidence = { reviewedTree: source.treeSha, finalTree: candidate,
+    reviewEvidence = { reviewedTree: original.reviewedTree, finalTree: candidate,
       historicalPublication: original.publicationUrl, coordinatorDenial: original.denialUrl,
-      reviews: "historical old-tree reviews only; no corrected-tree approval", validation };
+      reviews: "historical old-tree reviews only; no corrected-tree approval", validation,
+      preparedBaseTip: baseTip, ownedRebase: prepared };
   } else {
     ctx.phase(phases[0]);
     const scope = await stage("scope", "Read issue and acceptance criteria; verify origin matches repository and current isolated branch belongs to intended target. Apply existing labels/milestone to issue; product work uses product milestone, Squad governance uses Squad. No code edits yet. Return passed with current tree SHA and concrete scope evidence.");
@@ -309,14 +504,21 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
     /(^|\n)\?\? /.test(current.status) ||
     (current.headSha === a.source.headSha
       ? git("diff", "--cached", "--name-only", "-z").split("\0").filter(Boolean)
-      : git("diff", "--name-only", a.source.headSha, current.headSha).split(/\r?\n/).filter(Boolean)
+      : git("diff", "--name-only",
+        reviewEvidence.ownedRebase ? `${current.headSha}^` : a.source.headSha, current.headSha)
+        .split(/\r?\n/).filter(Boolean)
     ).some((path) => !a.source.paths.includes(path)))) {
     throw new Error("Corrected candidate contains unstaged, untracked or out-of-scope files.");
+  }
+  if (mode === "correct" &&
+      gh("api", `repos/${repository}/branches/${encodeURIComponent(base)}`, "--jq", ".commit.sha") !==
+        reviewEvidence.preparedBaseTip) {
+    throw new Error("Target advanced before corrective publication; revalidate on a new base.");
   }
   ctx.phase(phases[5]);
   const publication = await ctx.step("v3:publication:" + candidate, async () => {
     const p = await call("publication:" + candidate,
-      "Verify staged tree equals " + candidate + " before commit/push. Read live target; if rebase changes candidate, block for revalidation. Reconcile an already-owned candidate commit/PR before mutation, never duplicate or amend another commit. Commit owned files with Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>. Push current branch with own-branch upstream. " + (mode === "correct" ? "Reuse ONLY source PR #" + a.source.prNumber + " at exact source head " + a.source.headSha + "; never create another PR. Re-read PR head/base/branch and original denial before push; block if changed. " : "Use create_pull_request TOOL in current caller workspace with explicit base (not gh pr create); reuse matching existing PR and refuse tool head/base mismatch. ") + "Body: linked issue, actual changeset/release intent or a justified docs/tests/CI-only exemption, actual validation. Apply topic/type labels and milestone; changeset:not-required only with rationale. Post/reconcile ONE top-level PR timeline comment marked Workflow run " + ctx.runId + ", containing both actual review results, fixes/rejections, commands, final HEAD SHA/tree. For corrected candidates explicitly describe original pair as old-tree evidence, cite source receipt and denial, and DO NOT imply corrected-tree approval. Never fabricate GitHub approval. Preserve newlines via body-file. Return published with actual PR/comment URLs, PR number, exact HEAD/tree and evidence. Actual review evidence: " + JSON.stringify(reviewEvidence),
+      "Verify current tree equals " + candidate + " before commit/push. Read live target; if base changes, block for revalidation. Reconcile an already-owned candidate commit/PR before mutation, never duplicate or amend another commit. If owned rebase already committed the correction, do not commit again; otherwise commit owned staged files with Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>. Push current branch with own-branch upstream. " + (mode === "correct" ? "Reuse ONLY source PR #" + a.source.prNumber + " at exact source head " + a.source.headSha + "; never create another PR. Re-read PR head/base/branch and original denial before push; block if changed. " : "Use create_pull_request TOOL in current caller workspace with explicit base (not gh pr create); reuse matching existing PR and refuse tool head/base mismatch. ") + "Body: linked issue, actual changeset/release intent or a justified docs/tests/CI-only exemption, actual validation. Apply topic/type labels and milestone; changeset:not-required only with rationale. Post/reconcile ONE top-level PR timeline comment marked Workflow run " + ctx.runId + ", containing both actual review results, fixes/rejections, commands, final HEAD SHA/tree. For corrected candidates explicitly describe original pair as old-tree evidence, cite source receipt and denial, and DO NOT imply corrected-tree approval. Never fabricate GitHub approval. Preserve newlines via body-file. Return published with actual PR/comment URLs, PR number, exact HEAD/tree and evidence. Actual review evidence: " + JSON.stringify(reviewEvidence),
       deliverySchema, undefined, true);
     if (p.status !== "published" || !Number.isSafeInteger(p.prNumber) || p.prNumber < 1 ||
         (mode === "correct" && p.prNumber !== a.source.prNumber) ||
@@ -334,11 +536,21 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
     throw new Error("Published caller candidate changed or worktree is not clean.");
   }
   if (mode === "correct") {
-    if (git("rev-list", "--count", `${a.source.headSha}..HEAD`) !== "1" ||
-        git("rev-parse", "HEAD^") !== a.source.headSha ||
-        git("diff", "--name-only", a.source.headSha, "HEAD").split(/\r?\n/).filter(Boolean)
-          .some((path) => !a.source.paths.includes(path))) {
-      throw new Error("Corrected publication is not a scoped direct descendant of the original head.");
+    const moved = reviewEvidence.ownedRebase;
+    const previous = git("rev-parse", "HEAD^");
+    if (moved
+      ? (publication.headSha !== moved.headSha ||
+          git("merge-base", moved.baseTip, publication.headSha) !== moved.baseTip ||
+          patchId(git("merge-base", a.source.headSha, moved.baseTip), a.source.headSha) !==
+            patchId(moved.baseTip, previous) ||
+          patchId(a.source.headSha, original.stagedScopeTree) !== patchId(previous, publication.headSha))
+      : (git("rev-list", "--count", `${a.source.headSha}..HEAD`) !== "1" ||
+          previous !== a.source.headSha)) {
+      throw new Error("Corrected publication changed the previously reviewed feature patch.");
+    }
+    if (git("diff", "--name-only", previous, "HEAD").split(/\r?\n/).filter(Boolean)
+      .some((path) => !a.source.paths.includes(path))) {
+      throw new Error("Corrected publication includes out-of-scope changes.");
     }
     const pr = JSON.parse(gh("pr", "view", String(publication.prNumber), "--repo", repository,
       "--json", "state,headRefOid,headRefName,baseRefName,url,statusCheckRollup"));
@@ -364,7 +576,9 @@ export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
       throw new Error("Fresh corrected publication comment does not bind source and new candidate.");
     }
     const baseTip = gh("api", `repos/${repository}/branches/${encodeURIComponent(base)}`, "--jq", ".commit.sha");
-    if (!sha(baseTip)) throw new Error("Cannot verify current target tip for corrected admission.");
+    if (!sha(baseTip) || baseTip !== reviewEvidence.preparedBaseTip) {
+      throw new Error("Corrected publication is stale against the current target.");
+    }
     reviewEvidence.admissionBaseTip = baseTip;
   }
   ctx.phase(phases[6]);
