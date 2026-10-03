@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { writeFileSync, existsSync } from 'node:fs';
 import { checkBlobRoundtrip, checkDeployedSha, checkKeyVaultSecretVersion, checkMonitorTrace,
   checkServiceDigests, checkWorkloadIdentity, runAcceptance } from '../verify-acceptance.mjs';
-import { fixture, source, fakeAzure, ids } from './fixtures/target.mjs';
+import { fixture, source, fakeAzure, ids, deploymentOutputs } from './fixtures/target.mjs';
 
 test('deployment reader requires exact successful Bicep output receipt, not fictitious deployment tags', () => {
-  const config = { ...fixture, sourceHash: source.sourceHash };
+  const config = { ...fixture, sourceTree: source.sourceTree, sourceHash: source.sourceHash };
   assert.equal(checkDeployedSha(config, fakeAzure()).status, 'passed');
   for (const create of [
     { status: 0, stdout: JSON.stringify({ tags: { sourceSha: source.sha } }) },
@@ -14,6 +14,24 @@ test('deployment reader requires exact successful Bicep output receipt, not fict
     { status: 1, stdout: '' },
     { status: 0, stdout: '{"properties":{"provisioningState":"Failed"}}' },
   ]) assert.equal(checkDeployedSha(config, fakeAzure({ create })).status, 'blocked');
+});
+
+test('acceptance receipt reader rejects missing tree, wrong deployment ID and cross-target output substitutions', () => {
+  const valid = { id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
+    properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } };
+  for (const change of [
+    { sourceTree: { value: source.sourceHash } }, { sourceTree: undefined },
+    { foundationProbeIdentity: undefined }, { monitorWorkspaceId: { value: fixture.groupId } },
+    { foundationResources: { value: { ...deploymentOutputs.foundationResources.value,
+      vaultUri: 'https://shared.vault.azure.net/' } } },
+  ]) {
+    const create = { status: 0, stdout: JSON.stringify({
+      ...valid, properties: { ...valid.properties, outputs: { ...deploymentOutputs, ...change } },
+    }) };
+    assert.equal(checkDeployedSha({ ...fixture, ...source }, fakeAzure({ create })).status, 'blocked');
+  }
+  const create = { status: 0, stdout: JSON.stringify({ ...valid, id: `${valid.id}-other` }) };
+  assert.equal(checkDeployedSha({ ...fixture, ...source }, fakeAzure({ create })).status, 'blocked');
 });
 
 test('issuer and exact subject/issuer/audience configuration never imply verified token exchange', () => {
@@ -49,19 +67,31 @@ test('latest KV, exact operator KV and caller image strings are not runtime evid
   assert.equal(checkServiceDigests({ services: { identity: `sha256:${'a'.repeat(64)}` } }).status, 'blocked');
 });
 
-const nonce = '11111111-2222-3333-4444-555555555555';
+const nonce = '11111111222233334444555555555555';
 const startedAt = '2026-10-03T12:00:00.000Z';
-const monitorConfig = { workspaceId: 'workspace', runId: nonce, expectedSha: source.sha, startedAt };
+const monitorConfig = { workspaceId: deploymentOutputs.monitorWorkspaceId.value,
+  runId: nonce, expectedSha: source.sha, sourceTree: source.sourceTree,
+  traceId: 'd'.repeat(32), spanId: 'e'.repeat(16), startedAt };
+const monitorRow = { TimeGenerated: startedAt, Name: 'foundation-probe',
+  OperationId: monitorConfig.traceId, Id: monitorConfig.spanId,
+  Properties: { 'probe.source_sha': source.sha, 'probe.source_tree': source.sourceTree, 'probe.nonce': nonce } };
 const clock = { now: () => Date.parse('2026-10-03T12:01:00.000Z') };
 test('Monitor rejects custom/historical/malformed/injected evidence and missing SHA/nonce', () => {
   const called = () => { throw new Error('must not query'); };
   for (const config of [
     { ...monitorConfig, query: 'AppTraces | take 1' }, { ...monitorConfig, runId: '" | take 1' },
     { ...monitorConfig, expectedSha: undefined }, { ...monitorConfig, runId: undefined },
+    { ...monitorConfig, runId: '11111111-2222-3333-4444-555555555555' },
+    { ...monitorConfig, sourceTree: source.sourceHash }, { ...monitorConfig, traceId: '0'.repeat(32) },
+    { ...monitorConfig, spanId: '0'.repeat(16) }, { ...monitorConfig, workspaceId: fixture.groupId },
     { ...monitorConfig, startedAt: '2025-01-01' },
   ]) assert.equal(checkMonitorTrace(config, called, clock).status, 'blocked');
-  for (const row of [{ Message: 'old' }, { TimeGenerated: '2025-01-01', Properties: { sourceSha: source.sha, nonce } },
-    { TimeGenerated: startedAt, Properties: { sourceSha: source.sha, nonce: 'other' } }]) {
+  for (const row of [{ Message: 'old' }, { ...monitorRow, TimeGenerated: '2025-01-01' },
+    { ...monitorRow, TimeGenerated: '2026-10-03T12:02:00.000Z' },
+    { ...monitorRow, Name: 'other' }, { ...monitorRow, OperationId: 'f'.repeat(32) },
+    { ...monitorRow, Id: 'f'.repeat(16) }, { ...monitorRow, Properties: { sourceSha: source.sha, nonce } },
+    { ...monitorRow, Properties: { ...monitorRow.Properties, 'probe.source_tree': 'f'.repeat(40) } },
+    { ...monitorRow, Properties: { ...monitorRow.Properties, 'probe.nonce': 'other' } }]) {
     assert.equal(checkMonitorTrace(monitorConfig, () => ({ status: 0, stdout: JSON.stringify([row]) }), clock).status, 'blocked');
   }
 });
@@ -70,12 +100,14 @@ test('Monitor fixes query to fresh SHA plus nonce and validates returned row cor
   let query;
   const result = checkMonitorTrace(monitorConfig, args => {
     query = args[args.indexOf('--analytics-query') + 1];
-    return { status: 0, stdout: JSON.stringify([{ TimeGenerated: startedAt,
-      Properties: { sourceSha: source.sha, nonce } }]) };
+    return { status: 0, stdout: JSON.stringify([monitorRow]) };
   }, clock);
   assert.equal(result.status, 'passed');
   assert.ok(query.includes(source.sha) && query.includes(nonce) && query.includes('TimeGenerated'));
   assert.ok(!query.includes('take 1'));
+  assert.ok(query.startsWith('union AppDependencies, AppRequests'));
+  assert.ok(query.includes('probe.source_tree') && query.includes(monitorConfig.traceId) && query.includes(monitorConfig.spanId));
+  assert.doesNotMatch(query, /AppTraces|Properties\.sourceSha/);
 });
 
 function blobFake({ upload = 'ok', cleanup = 'ok', generation = nonce } = {}, calls = []) {
@@ -136,7 +168,7 @@ test('Blob default performs no write effects', () => {
 test('FULL REPORT regression: original false full success remains BLOCKED, even with plausible caller evidence', () => {
   const calls = [];
   const azure = fakeAzure({}, calls);
-  const config = { ...fixture, deploymentName: 'candidate', clusterName: 'aw-v1-p0-aks',
+  const config = { ...fixture, clusterName: 'aw-v1-p0-aks',
     secretVersion: undefined, services: { broker: `sha256:${'a'.repeat(64)}` }, executeProbes: true,
     query: 'AppTraces | take 1', monitorQuery: 'AppTraces | take 1',
     runtimeEvidence: { verified: true, status: 'passed', sourceSha: source.sha } };

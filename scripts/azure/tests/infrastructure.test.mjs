@@ -7,11 +7,18 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   const bicep = runAz(['bicep', 'build', '--file', 'infra/bicep/main.bicep', '--stdout']);
   const template = JSON.parse(bicep.stdout);
   assert.equal(template.parameters.sourceSha.type, 'string');
+  assert.equal(template.parameters.sourceTree.type, 'string');
   assert.equal(template.parameters.sourceHash.type, 'string');
   assert.ok(template.outputs.sourceSha && template.outputs.sourceHash);
   const aksDeployment = template.resources.find(resource =>
     resource.name === "[format('{0}-aks', parameters('namePrefix'))]");
   const aks = aksDeployment.properties.template;
+  const cluster = aks.resources.find(resource => resource.type === 'Microsoft.ContainerService/managedClusters');
+  assert.equal(cluster.properties.disableLocalAccounts, true);
+  assert.deepEqual(cluster.properties.aadProfile, {
+    managed: true, enableAzureRBAC: true, tenantID: "[parameters('tenantId')]",
+  });
+  assert.equal(aksDeployment.properties.parameters.tenantId.value, "[parameters('tenantId')]");
   const assignment = aks.resources.find(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
   const principal = "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), '2024-02-01', 'full').identity.principalId]";
   assert.equal(aks.outputs.controlPlanePrincipalId.value, principal);
@@ -27,6 +34,23 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     dependency.includes("{0}-network")));
   assert.equal(assignment.name,
     "[guid(parameters('nodeSubnetId'), resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), variables('networkContributorRoleId'))]");
+  const identities = template.resources.find(resource =>
+    resource.name === "[format('{0}-identity', parameters('namePrefix'))]").properties.template;
+  for (const [name, roleId, scope] of [
+    ['monitorQueryRoleAssignments', '73c42c96-874c-492b-b04d-ab87d138a893',
+      "[resourceId('Microsoft.OperationalInsights/workspaces', last(split(parameters('monitorWorkspaceResourceId'), '/')))]"],
+    ['monitorIngestionRoleAssignments', '3913510d-42f4-4e42-8a64-420c390055eb',
+      "[resourceId('Microsoft.Insights/components', last(split(parameters('appInsightsResourceId'), '/')))]"],
+  ]) {
+    const role = identities.resources.find(resource => resource.copy?.name === name);
+    assert.ok(role);
+    assert.equal(role.scope, scope);
+    assert.equal(role.properties.principalType, 'ServicePrincipal');
+    assert.ok(Object.values(identities.variables).includes(roleId));
+    assert.match(role.properties.principalId, /userAssignedIdentities/);
+    assert.doesNotMatch(role.properties.principalId, /clientId/);
+  }
+  for (const field of ['foundationProbeIdentity', 'foundationResources', 'sourceTree']) assert.ok(template.outputs[field]);
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/base']).stdout;
   assert.match(rendered, /kind: ServiceAccount/);
   assert.match(rendered, /foundation-probe/);

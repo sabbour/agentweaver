@@ -38,6 +38,8 @@ export function resolveCleanHead(cwd, { execGit = runGit } = {}) {
 export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, tenantId },
   { execGit = runGit, readFile = readFileSync, realpath = realpathSync, validateRelease = validateFile } = {}) {
   const { sha, branch } = resolveCleanHead(repoRoot, { execGit });
+  const sourceTree = execGit(['rev-parse', `${sha}^{tree}`], { cwd: repoRoot }).stdout.trim();
+  if (!isFullSha(sourceTree)) throw new Error('Source tree did not resolve to a full Git tree SHA.');
   const ancestor = execGit(['merge-base', '--is-ancestor', 'origin/v1', sha], { cwd: repoRoot, check: false });
   if (ancestor.status !== 0) throw new Error('Source must contain the locally fetched current origin/v1 ancestry.');
   const admittedSha = execGit(['rev-parse', 'origin/v1'], { cwd: repoRoot }).stdout.trim();
@@ -84,7 +86,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     throw new Error('Parameters do not bind the exact dedicated target or contain placeholders.');
   }
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
-  return { sha, branch, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
+  return { sha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner: values.owner.value, costCenter: values.costCenter.value,
     postgresEntraAdminObjectId: values.postgresEntraAdminObjectId?.value,
     scope: 'infrastructure-only' };

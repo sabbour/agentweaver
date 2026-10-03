@@ -7,8 +7,9 @@ import {
   assertTenant,
   assertDedicatedResourceGroupOwnership,
   guardAzureTarget,
+  readFoundationOutputs,
 } from '../lib/guardrails.mjs';
-import { fixture, source, tags, fakeAzure } from './fixtures/target.mjs';
+import { fixture, source, tags, fakeAzure, deploymentOutputs } from './fixtures/target.mjs';
 import { postDeploymentAzure, postDeploymentInventory, postDeploymentDetails } from './fixtures/post-deployment.mjs';
 import { plan } from '../plan.mjs';
 import { deploy } from '../deploy.mjs';
@@ -175,9 +176,36 @@ test('module deployment names are exact and historical deployment names require 
 });
 
 test('role assignments must have the exact reviewed parent scope and ARM GUID', () => {
-  const role = postDeploymentInventory.find(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
-  for (const resource of [
-    { ...role, id: role.id.replace('aw-v1-p0-kv', 'other-kv') },
-    { ...role, id: role.id.replace(role.name, fixture.tenantId), name: fixture.tenantId },
-  ]) assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [resource] })), /unexpected/);
+  for (const role of postDeploymentInventory.filter(resource => resource.type === 'Microsoft.Authorization/roleAssignments')) {
+    assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure({ resources: [role] })));
+    for (const resource of [
+      { ...role, id: role.id.replace(fixture.groupId, `${fixture.groupId}-other`) },
+      { ...role, id: role.id.replace(role.name, fixture.tenantId), name: fixture.tenantId },
+    ]) assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [resource] })), /unexpected|outside/);
+  }
+});
+
+test('deployment configuration requires exact resource IDs/endpoints and a named probe identity, not parallel array order', () => {
+  const result = readFoundationOutputs(deploymentOutputs, fixture);
+  assert.equal(result.foundationProbeIdentity.name, 'foundation-probe');
+  assert.notEqual(result.resources.monitorWorkspaceId, result.resources.monitorWorkspaceResourceId);
+  for (const key of Object.keys(deploymentOutputs.foundationResources.value)) {
+    const outputs = structuredClone(deploymentOutputs);
+    outputs.foundationResources.value[key] = 'unreviewed';
+    assert.throws(() => readFoundationOutputs(outputs, fixture));
+  }
+  for (const key of Object.keys(deploymentOutputs.foundationProbeIdentity.value)) {
+    const outputs = structuredClone(deploymentOutputs);
+    outputs.foundationProbeIdentity.value[key] = 'unreviewed';
+    assert.throws(() => readFoundationOutputs(outputs, fixture));
+  }
+  for (const outputs of [
+    {},
+    { ...deploymentOutputs, foundationProbeIdentity: { value: deploymentOutputs.foundationProbeIdentity.value.clientId } },
+    { ...deploymentOutputs, serviceIdentityClientIds: { value: [fixture.tenantId] }, foundationProbeIdentity: undefined },
+    { ...deploymentOutputs, monitorWorkspaceId: { value: fixture.groupId } },
+    { ...deploymentOutputs, foundationProbeIdentity: { value: {
+      ...deploymentOutputs.foundationProbeIdentity.value, principalObjectId: deploymentOutputs.foundationProbeIdentity.value.clientId,
+    } } },
+  ]) assert.throws(() => readFoundationOutputs(outputs, fixture));
 });

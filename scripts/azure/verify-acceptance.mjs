@@ -5,33 +5,36 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { runAz } from './lib/exec.mjs';
-import { guardAzureTarget } from './lib/guardrails.mjs';
+import { guardAzureTarget, readFoundationOutputs } from './lib/guardrails.mjs';
 import { resolveSource, isFullSha } from './lib/git.mjs';
 import { cliConfig, cliOptions } from './deploy.mjs';
 
 const blocked = (name, reason, evidence) => ({ name, scope: 'configuration', status: 'blocked', reason, evidence });
 const configured = (name, evidence) => ({ name, scope: 'configuration', status: 'passed', evidence });
 
-export function checkDeployedSha({ resourceGroup, deploymentName, expectedSha, sourceHash }, execAz) {
+export function checkDeployedSha({ resourceGroup, subscriptionId, deploymentName, expectedSha, sourceTree, sourceHash }, execAz) {
   const name = 'deployed-sha';
-  if (!isFullSha(expectedSha) || !/^[0-9a-f]{64}$/.test(sourceHash ?? '')) {
-    return blocked(name, 'A full SHA and reviewed input hash are required.');
+  if (!isFullSha(expectedSha) || !isFullSha(sourceTree) || !/^[0-9a-f]{64}$/.test(sourceHash ?? '') ||
+      deploymentName !== `${resourceGroup}-${expectedSha.slice(0, 12)}`) {
+    return blocked(name, 'Exact source SHA, Git tree, input hash and SHA-derived deployment name are required.');
   }
   const result = execAz(['deployment', 'group', 'show', '--resource-group', resourceGroup,
     '--name', deploymentName, '-o', 'json'], { check: false });
   try {
     const deployment = JSON.parse(result.stdout);
     const outputs = deployment.properties?.outputs;
+    const deploymentId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Resources/deployments/${deploymentName}`;
     if (result.status !== 0 || deployment.properties?.provisioningState !== 'Succeeded' ||
-        outputs?.sourceSha?.value !== expectedSha || outputs?.sourceHash?.value !== sourceHash) {
+        deployment.id?.toLowerCase() !== deploymentId.toLowerCase() ||
+        outputs?.sourceSha?.value !== expectedSha || outputs?.sourceTree?.value !== sourceTree ||
+        outputs?.sourceHash?.value !== sourceHash) {
       return blocked(name, 'No successful deployment with matching Bicep source outputs.');
     }
-    return configured(name, { deployedSha: expectedSha, sourceHash, deploymentId: deployment.id,
+    return configured(name, { deployedSha: expectedSha, sourceTree, sourceHash, deploymentId: deployment.id,
       scope: 'infrastructure-only', servicesDeployed: false,
-      resources: { clusterName: outputs.aksClusterName?.value, storageAccountName: outputs.storageAccountName?.value,
-        workspaceId: outputs.monitorWorkspaceId?.value } });
-  } catch {
-    return blocked(name, 'Deployment evidence is missing or malformed.');
+      ...readFoundationOutputs(outputs, { resourceGroup, subscriptionId }) });
+  } catch (error) {
+    return blocked(name, `Deployment evidence is missing, malformed or mismatched: ${error.message}`);
   }
 }
 
@@ -136,17 +139,24 @@ export function checkBlobRoundtrip({ accountName, container, executeProbes = fal
     { blobName, generation, cleanupFailed: false, operatorOnly: true });
 }
 
-export function checkMonitorTrace({ workspaceId, query, runId, expectedSha, startedAt }, execAz, { now = Date.now } = {}) {
+export function checkMonitorTrace({ workspaceId, query, runId, expectedSha, sourceTree, traceId, spanId, startedAt },
+  execAz, { now = Date.now } = {}) {
   const name = 'monitor-trace';
   const start = Date.parse(startedAt);
   const current = now();
-  if (query || !/^[0-9a-f-]{36}$/i.test(runId ?? '') || !isFullSha(expectedSha) ||
+  if (query || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(workspaceId ?? '') ||
+      !/^[0-9a-f]{32}$/.test(runId ?? '') || !isFullSha(expectedSha) || !isFullSha(sourceTree) ||
+      !/^[0-9a-f]{32}$/.test(traceId ?? '') || /^0+$/.test(traceId) ||
+      !/^[0-9a-f]{16}$/.test(spanId ?? '') || /^0+$/.test(spanId) ||
       !Number.isFinite(start) || start > current || current - start > 15 * 60 * 1000) {
-    return blocked(name, 'A fresh start time, source SHA and generated run nonce are required. Custom queries are not acceptance evidence.');
+    return blocked(name, 'Exact workspace GUID, fresh start time, SHA/tree, 32-hex nonce, trace and span are required. Custom queries are not evidence.');
   }
-  const effectiveQuery = `AppTraces | where TimeGenerated >= datetime(${new Date(start).toISOString()}) ` +
-    `| where tostring(Properties.sourceSha) == "${expectedSha}" and tostring(Properties.nonce) == "${runId}" ` +
-    '| project TimeGenerated, Properties';
+  const effectiveQuery = `union AppDependencies, AppRequests | where TimeGenerated >= datetime(${new Date(start).toISOString()}) ` +
+    `and TimeGenerated <= datetime(${new Date(current).toISOString()}) | where Name == "foundation-probe" ` +
+    `and OperationId == "${traceId}" and Id == "${spanId}" ` +
+    `| where tostring(Properties["probe.source_sha"]) == "${expectedSha}" ` +
+    `and tostring(Properties["probe.source_tree"]) == "${sourceTree}" and tostring(Properties["probe.nonce"]) == "${runId}" ` +
+    '| project TimeGenerated, Name, OperationId, Id, Properties';
   const result = execAz(['monitor', 'log-analytics', 'query', '--workspace', workspaceId,
     '--analytics-query', effectiveQuery, '-o', 'json'], { check: false });
   try {
@@ -154,10 +164,12 @@ export function checkMonitorTrace({ workspaceId, query, runId, expectedSha, star
     const matched = result.status === 0 && Array.isArray(rows) && rows.some(row => {
       const properties = typeof row.Properties === 'string' ? JSON.parse(row.Properties) : row.Properties;
       const timestamp = Date.parse(row.TimeGenerated);
-      return properties?.sourceSha === expectedSha && properties?.nonce === runId && timestamp >= start && timestamp <= current;
+      return row.Name === 'foundation-probe' && row.OperationId === traceId && row.Id === spanId &&
+        properties?.['probe.source_sha'] === expectedSha && properties?.['probe.source_tree'] === sourceTree &&
+        properties?.['probe.nonce'] === runId && timestamp >= start && timestamp <= current;
     });
     if (!matched) return blocked(name, 'No fresh exact-SHA/nonce telemetry from the Logs data-plane API.');
-    return configured(name, { sourceSha: expectedSha, nonce: runId, startedAt, query: effectiveQuery,
+    return configured(name, { sourceSha: expectedSha, sourceTree, nonce: runId, traceId, spanId, startedAt, query: effectiveQuery,
       note: 'Correlated row only; pod identity and exporter receipt remain #1784 evidence.' });
   } catch {
     return blocked(name, 'Monitor result is malformed or has no correlated evidence.');
@@ -169,7 +181,7 @@ export function runAcceptance(config, { execAz = runAz, sourceResolver = resolve
   let candidate;
   try {
     const source = sourceResolver(config);
-    candidate = { sourceSha: source.sha, sourceHash: source.sourceHash, scope: source.scope };
+    candidate = { sourceSha: source.sha, sourceTree: source.sourceTree, sourceHash: source.sourceHash, scope: source.scope };
     if (config.expectedSha !== source.sha) throw new Error('Expected deployment SHA differs from reviewed HEAD.');
     const { execAz: boundAz, group } = guardAzureTarget({ ...config, ...source }, execAz);
     if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
@@ -178,21 +190,22 @@ export function runAcceptance(config, { execAz = runAz, sourceResolver = resolve
     const check = (name, operation) => {
       try { checks.push(operation()); } catch (error) { checks.push(blocked(name, error.message)); }
     };
-    check('deployed-sha', () => checkDeployedSha({ ...config, sourceHash: source.sourceHash }, boundAz));
+    check('deployed-sha', () => checkDeployedSha({ ...config, sourceTree: source.sourceTree, sourceHash: source.sourceHash }, boundAz));
     const receipt = checks.find(item => item.name === 'deployed-sha' && item.status === 'passed')?.evidence;
     const clusterName = `${config.resourceGroup}-aks`;
     const accountName = `${config.resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
     check('workload-identity-oidc', () => checkWorkloadIdentity({ ...config, clusterName }, boundAz));
     check('key-vault-secret-version', () => checkKeyVaultSecretVersion(config));
-    check('blob-roundtrip', () => receipt?.resources.storageAccountName === accountName ?
+    check('blob-roundtrip', () => receipt?.resources.storageAccountId?.toLowerCase() ===
+      `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.Storage/storageAccounts/${accountName}`.toLowerCase() ?
       checkBlobRoundtrip({ ...config, accountName }, boundAz, { uuid }) :
       blocked('blob-roundtrip', 'The successful source-bound receipt must name the exact dedicated storage account before a diagnostic.'));
     check('monitor-trace', () => {
-      const workspaceId = receipt?.resources.workspaceId;
+      const workspaceId = receipt?.resources.monitorWorkspaceId;
       if (!/^[0-9a-f-]{36}$/i.test(workspaceId ?? '') || (config.workspaceId && config.workspaceId !== workspaceId)) {
         return blocked('monitor-trace', 'The exact workspace GUID must come from the successful source-bound deployment receipt.');
       }
-      return checkMonitorTrace({ ...config, workspaceId }, boundAz);
+      return checkMonitorTrace({ ...config, sourceTree: source.sourceTree, workspaceId }, boundAz);
     });
     checks.push(checkServiceDigests(config));
   } catch (error) {
@@ -207,11 +220,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     const { values } = parseArgs({ options: { ...cliOptions, 'expected-sha': { type: 'string' },
       'deployment-name': { type: 'string' }, 'cluster-name': { type: 'string' }, 'secret-version': { type: 'string' },
-      'workspace-id': { type: 'string' }, 'run-id': { type: 'string' }, 'started-at': { type: 'string' } } });
+      'workspace-id': { type: 'string' }, 'run-id': { type: 'string' }, 'trace-id': { type: 'string' },
+      'span-id': { type: 'string' }, 'started-at': { type: 'string' } } });
     const report = runAcceptance({ ...cliConfig(values), expectedSha: values['expected-sha'],
       deploymentName: values['deployment-name'], clusterName: values['cluster-name'],
       secretVersion: values['secret-version'], workspaceId: values['workspace-id'], runId: values['run-id'],
-      startedAt: values['started-at'] });
+      traceId: values['trace-id'], spanId: values['span-id'], startedAt: values['started-at'] });
     console.log(JSON.stringify(report, null, 2));
     process.exitCode = 1;
   } catch (error) {

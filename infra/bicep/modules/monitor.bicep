@@ -159,3 +159,4 @@ resource privateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneG
 output workspaceId string = workspace.id
 output workspaceCustomerId string = workspace.properties.customerId
 output appInsightsConnectionString string = appInsights.properties.ConnectionString
+output appInsightsId string = appInsights.id

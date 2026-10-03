@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDeployArgs, deploy } from '../deploy.mjs';
-import { fixture, source, fakeAzure, ids, tags } from './fixtures/target.mjs';
+import { fixture, source, fakeAzure, ids, tags, deploymentOutputs } from './fixtures/target.mjs';
 
 test('deployment uses supported source parameters, explicit subscription and incremental mode, never tags', () => {
   const args = buildDeployArgs({ ...source, resourceGroup: fixture.resourceGroup, sourceSha: source.sha,
@@ -9,6 +9,7 @@ test('deployment uses supported source parameters, explicit subscription and inc
   assert.ok(!args.includes('--tags'));
   assert.ok(args.includes(`sourceSha=${source.sha}`));
   assert.ok(args.includes(`sourceHash=${source.sourceHash}`));
+  assert.ok(args.includes(`sourceTree=${source.sourceTree}`));
   assert.ok(args.includes('Incremental'));
   assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
 });
@@ -24,6 +25,9 @@ test('deployment checks real account, group and resources, then what-if before c
   const result = deploy({ ...fixture, execute: true }, { sourceResolver: () => source, execAz: fakeAzure({}, calls) });
   assert.equal(result.executed, true);
   assert.equal(result.receipt.sourceHash, source.sourceHash);
+  assert.equal(result.receipt.sourceTree, source.sourceTree);
+  assert.equal(result.receipt.foundationProbeIdentity.principalObjectId,
+    deploymentOutputs.foundationProbeIdentity.value.principalObjectId);
   assert.deepEqual(calls.map(args => args.slice(0, 3)), [
     ['account', 'show', '-o'], ['group', 'show', '--name'], ['resource', 'list', '--resource-group'],
     ['deployment', 'group', 'what-if'], ['deployment', 'group', 'create'],
@@ -58,11 +62,40 @@ test('source/account/ownership/plan/deployment failures never report a deploymen
 });
 
 test('changed inputs after what-if never reach create', () => {
-  let resolves = 0;
-  const calls = [];
-  assert.throws(() => deploy({ ...fixture, execute: true }, {
-    sourceResolver: () => (++resolves === 1 ? source : { ...source, sourceHash: 'c'.repeat(64) }),
-    execAz: fakeAzure({}, calls),
-  }), /changed after what-if/);
-  assert.ok(!calls.some(args => args[2] === 'create'));
+  for (const change of [{ sourceHash: 'c'.repeat(64) }, { sourceTree: 'd'.repeat(40) }]) {
+    let resolves = 0;
+    const calls = [];
+    assert.throws(() => deploy({ ...fixture, execute: true }, {
+      sourceResolver: () => (++resolves === 1 ? source : { ...source, ...change }),
+      execAz: fakeAzure({}, calls),
+    }), /changed after what-if/);
+    assert.ok(!calls.some(args => args[2] === 'create'));
+  }
+});
+
+test('deployment cannot publish a source-bound receipt with missing or substituted Git tree', () => {
+  for (const value of [undefined, source.sourceHash, 'd'.repeat(40)]) {
+    assert.throws(() => deploy({ ...fixture, execute: true }, { sourceResolver: () => source,
+      execAz: fakeAzure({ create: { status: 0, stdout: JSON.stringify({
+        id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
+        properties: { provisioningState: 'Succeeded', outputs: {
+          ...deploymentOutputs, sourceTree: { value },
+        } },
+      }) } }),
+    }), /source-bound/);
+  }
+});
+
+test('deployment receipt rejects substituted resources, identity, workspace and deployment scope', () => {
+  const valid = { id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
+    properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } };
+  const variants = [
+    { ...valid, id: valid.id.replace(fixture.groupId, `${fixture.groupId}-other`) },
+    { ...valid, properties: { ...valid.properties, outputs: { ...deploymentOutputs, foundationProbeIdentity: undefined } } },
+    { ...valid, properties: { ...valid.properties, outputs: { ...deploymentOutputs, monitorWorkspaceId: { value: fixture.groupId } } } },
+  ];
+  for (const response of variants) {
+    const execAz = fakeAzure({ create: { status: 0, stdout: JSON.stringify(response) } });
+    assert.throws(() => deploy({ ...fixture, execute: true }, { sourceResolver: () => source, execAz }));
+  }
 });

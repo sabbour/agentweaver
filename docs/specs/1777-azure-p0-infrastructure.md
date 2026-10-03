@@ -51,18 +51,38 @@ Operators must fetch the current reviewed target before a future deployment.
 Caller-supplied allow-list strings select the target. They do not constitute
 approval or replace the actual account, ownership, and source checks.
 
-The deployment uses supported Bicep `sourceSha` and `sourceHash` parameters
+The deployment uses supported Bicep `sourceSha`, `sourceTree`, and `sourceHash` parameters
 and outputs. It never uses unsupported `az deployment group create --tags`.
 A guarded what-if precedes Incremental deployment.
 The tooling revalidates source inputs after what-if and before create.
 The returned receipt binds the successful deployment ID, subscription,
-tenant, resource group, source SHA, and input hash.
+tenant, resource group, source SHA, Git tree SHA, and input hash.
+The Git tree SHA has 40 hexadecimal characters.
+It is not the 64-character SHA-256 infrastructure input hash.
+
+The `foundationProbeIdentity` output selects the principal by service name, not parallel-array order.
+It contains `name`, `resourceId`, `clientId`, `principalObjectId`, `namespace`, and `serviceAccount`.
+The client ID and principal object ID are distinct.
+The `foundationResources` output contains exact cluster, vault, storage, container, PostgreSQL, workspace, and Application Insights resource IDs.
+It also contains `vaultUri`, `blobContainerUri`, `postgresHost`, and the workspace GUID.
+The producer does not invent database roles, secret fixtures, registry publication, or successful probe effects.
+The tooling rejects mismatched resource IDs, endpoints, identity fields, and workspace GUIDs.
+
+These outputs are deployment configuration, not a new #1784 target schema.
+The strict #1784 target DTO rejects unknown fields.
+Its owner must explicitly map or add fields before the executable probe can consume this configuration.
 
 This receipt proves **infrastructure only**. No resource consumes a service
 image, and no service rollout or immutable image proof occurs here.
 Digest format checks alone cannot prove a running pod.
 
 ## Network definitions
+
+AKS disables local accounts and uses managed Entra authentication with Azure RBAC.
+The tenant comes from the exact reviewed parameters.
+Operator access requires separately approved cluster-user access and scoped Kubernetes permissions.
+The private API requires an approved network path.
+This template defines no operator grants and provides no local administrator fallback.
 
 Key Vault and Blob retain Private Endpoints and private DNS.
 PostgreSQL uses its dedicated delegated subnet and private DNS.
@@ -85,6 +105,17 @@ correct private DNS. The Logs data-plane API supports Private Link.
 An ARM query does not. The default-deny base permits DNS only.
 `CHANGEME` identity annotations are not deploy-ready configuration.
 The #1784 overlay must supply the pod workload-identity label and explicit egress.
+
+The `foundation-probe` principal receives two additional built-in role definitions:
+
+- Log Analytics Reader (`73c42c96-874c-492b-b04d-ab87d138a893`) on the exact workspace
+- Monitoring Metrics Publisher (`3913510d-42f4-4e42-8a64-420c390055eb`) on the exact Application Insights resource.
+
+The inventory guard admits only these exact role scopes and ARM-generated assignment IDs.
+It uses the principal object ID, not the client ID.
+These definitions support private Logs queries and authenticated telemetry ingestion.
+They do not prove actual role propagation, token exchange, private connectivity, or complete executable permission coverage.
+No live grant occurred.
 
 ## PostgreSQL bootstrap prerequisite
 
@@ -149,7 +180,28 @@ The operator CLI is not workload-identity proof.
 Caller digest strings or caller JSON that says `verified: true` cannot satisfy the gate.
 The Monitor query has no custom-query override. It requires a fresh start time,
 SHA, nonce, and matching returned row fields.
-`AppTraces | take 1` and historical telemetry cannot pass.
+The query uses `AppDependencies` and `AppRequests` with `Name == "foundation-probe"`.
+`OperationId` matches the trace ID, and `Id` matches the span ID.
+The properties are `probe.source_sha`, `probe.source_tree`, and `probe.nonce`.
+The nonce has 32 lowercase hexadecimal characters.
+The returned timestamp must fall within the fresh observation window.
+`AppTraces | take 1`, dashed UUID nonces, and historical telemetry cannot pass.
+
+Key Vault Secrets User permits exact-version redemption, not fixture creation, deletion, or purge.
+The fixture requires separate approved preparation.
+The executable probe must use that read-only fixture.
+This slice does not broaden Key Vault RBAC or disable purge protection.
+
+The final runtime receipt uses camelCase and has no `kind` or `schemaVersion`.
+Only the image receipt uses `kind: "foundation-probe-image"` and `schemaVersion: 1`.
+A local image config digest is not a registry manifest digest.
+Empty repository digests prove no registry publication.
+Live acceptance requires registry provenance and exact-cluster observations after the Job exits.
+The consumer must match Job/pod UIDs, immutable manifest digest, completion, exit code, nonce, source, and workload identity.
+The Job requires `backoffLimit: 0` and a deadline of 360 to 420 seconds.
+The in-process receipt cannot prove external cluster identity or post-exit completion.
+Owned PostgreSQL effects, conditional Blob cleanup, and correlated workload telemetry also remain mandatory.
+The current CLI does not implement that final consumer.
 
 The optional operator Blob diagnostic is not runtime acceptance.
 It requires separate authorization for write effects.
@@ -177,6 +229,8 @@ No manual version bump or publishing pipeline occurs.
 - [Private Link design](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/private-link-design)
 - [Private Link security](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/private-link-security)
 - [OpenTelemetry exporter configuration](https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-configuration)
+- [Azure Monitor Entra authentication](https://learn.microsoft.com/en-us/azure/azure-monitor/app/azure-ad-authentication)
+- [Log Analytics access](https://learn.microsoft.com/en-us/azure/azure-monitor/logs/manage-access)
 - [PostgreSQL Entra principal management](https://learn.microsoft.com/en-us/azure/postgresql/security/security-manage-entra-users)
 - [PostgreSQL managed-identity connection](https://learn.microsoft.com/en-us/azure/postgresql/security/security-connect-with-managed-identity)
 - [PostgreSQL access control](https://learn.microsoft.com/en-us/azure/postgresql/security/security-access-control)

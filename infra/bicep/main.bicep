@@ -40,6 +40,11 @@ param costCenter string
 @description('Exact reviewed source commit supplied by deployment tooling.')
 param sourceSha string
 
+@minLength(40)
+@maxLength(40)
+@description('Git tree identity for the exact reviewed source commit. Not the infrastructure input hash.')
+param sourceTree string
+
 @minLength(64)
 @maxLength(64)
 @description('SHA-256 receipt of tracked infrastructure inputs supplied by deployment tooling.')
@@ -69,6 +74,7 @@ module aks 'modules/aks.bicep' = {
     namePrefix: namePrefix
     tags: tags
     nodeSubnetId: network.outputs.aksSubnetId
+    tenantId: tenantId
   }
 }
 
@@ -269,6 +275,8 @@ module identity 'modules/identity.bicep' = {
     oidcIssuerUrl: aks.outputs.oidcIssuerUrl
     keyVaultId: keyVault.outputs.vaultId
     storageAccountId: storage.outputs.storageAccountId
+    monitorWorkspaceResourceId: monitor.outputs.workspaceId
+    appInsightsResourceId: monitor.outputs.appInsightsId
   }
 }
 
@@ -283,3 +291,18 @@ output serviceIdentityClientIds array = identity.outputs.identityClientIds
 output serviceIdentityPrincipalIds array = identity.outputs.identityPrincipalIds
 output sourceSha string = sourceSha
 output sourceHash string = sourceHash
+output sourceTree string = sourceTree
+output foundationProbeIdentity object = identity.outputs.foundationProbeIdentity
+output foundationResources object = {
+  clusterId: aks.outputs.clusterId
+  keyVaultId: keyVault.outputs.vaultId
+  vaultUri: keyVault.outputs.vaultUri
+  storageAccountId: storage.outputs.storageAccountId
+  blobContainerId: storage.outputs.platformArtifactsContainerId
+  blobContainerUri: '${storage.outputs.blobEndpoint}platform-artifacts'
+  postgresServerId: postgres.outputs.serverId
+  postgresHost: postgres.outputs.fullyQualifiedDomainName
+  monitorWorkspaceResourceId: monitor.outputs.workspaceId
+  monitorWorkspaceId: monitor.outputs.workspaceCustomerId
+  appInsightsResourceId: monitor.outputs.appInsightsId
+}

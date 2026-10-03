@@ -47,6 +47,8 @@ under `infra/bicep/parameters` are supported.
 The checked-in examples contain placeholders and cannot run.
 The selected JSON parameters must bind prefix, tenant, owner, and cost center.
 The input hash covers all tracked infrastructure files.
+`sourceTree` is the 40-character Git tree SHA for the source commit.
+`sourceHash` is the separate SHA-256 infrastructure input hash.
 
 After separate approval, the operator command shape is:
 
@@ -66,15 +68,47 @@ No unsupported deployment tags occur.
 `verify-acceptance.mjs` accepts the same source/target arguments, plus
 `--expected-sha`, `--deployment-name`, and `--cluster-name`.
 Monitor configuration evidence additionally requires `--workspace-id`,
-`--run-id` (a generated UUID), and `--started-at` (a fresh ISO timestamp).
+`--run-id` (the probe's 32-character lowercase hexadecimal nonce),
+`--trace-id`, `--span-id`, and `--started-at` (a fresh ISO timestamp).
 It uses the Logs data-plane API from an approved private-network path.
 Custom query overrides are not supported.
+The query uses `AppDependencies` and `AppRequests`, not `AppTraces`.
+It matches `foundation-probe`, the trace/span IDs, and the exact `probe.source_sha`, `probe.source_tree`, and `probe.nonce` properties.
+The returned timestamp must fall within the fresh observation window.
+
+Successful deployment outputs include `foundationProbeIdentity` and `foundationResources`.
+The tooling checks their exact dedicated resource IDs, endpoints, namespace, ServiceAccount, and workspace GUID.
+The named identity contains distinct `clientId` and `principalObjectId` fields.
+Parallel identity arrays do not select the probe principal.
+The workspace GUID is not its ARM resource ID.
 
 The report always blocks full P0 acceptance in this definition-only slice.
 It distinguishes infrastructure configuration from actual workload evidence.
 The admitted #1784 Job must prove pod/image provenance, token exchange,
 exact KV redemption, owned PG effects, owned Blob cleanup, and SHA/nonce telemetry.
 The CLI does not read secret values or treat its own credentials as pod proof.
+It does not consume or certify the final #1784 runtime receipt.
+New deployment fields cannot enter the strict #1784 target DTO without its explicit schema update.
+
+## Authentication prerequisites
+
+AKS uses managed Entra authentication and Azure RBAC, with local accounts disabled.
+There is no local administrator credential route.
+Operator access requires separately approved cluster-user credential access and scoped Kubernetes permissions.
+The private API also requires an approved network path.
+These definitions grant no operator access.
+
+The probe identity has Log Analytics Reader on the exact workspace.
+It has Monitoring Metrics Publisher on the exact Application Insights resource.
+These roles support Logs queries and authenticated exporter ingestion.
+They do not prove token exchange, private connectivity, role propagation, or complete probe permissions.
+No role assignment occurred during offline validation.
+
+Key Vault Secrets User remains read-only.
+The probe requires a separately approved fixture with an exact secret name and version.
+Probe secret creation, deletion, and purge are not permitted by this contract.
+Purge protection remains enabled.
+The executable #1784 probe must adopt this read-only fixture before cloud acceptance.
 
 The exported Blob diagnostic is operator-only and requires separate write approval.
 It creates a local fixture under `artifacts\azure`, uses a generated owned blob,

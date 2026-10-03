@@ -78,6 +78,47 @@ function jsonResult(result, label) {
   }
 }
 
+// Deployment outputs select configuration, never prove a workload ran.
+export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId }) {
+  const groupId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}`;
+  const id = (type, name) => `${groupId}/providers/${type}/${name}`;
+  const storageName = `${resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
+  const resources = outputs?.foundationResources?.value;
+  const identity = outputs?.foundationProbeIdentity?.value;
+  const expected = {
+    clusterId: id('Microsoft.ContainerService/managedClusters', `${resourceGroup}-aks`),
+    keyVaultId: id('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`),
+    vaultUri: `https://${resourceGroup}-kv.vault.azure.net/`,
+    storageAccountId: id('Microsoft.Storage/storageAccounts', storageName),
+    blobContainerId: id('Microsoft.Storage/storageAccounts', `${storageName}/blobServices/default/containers/platform-artifacts`),
+    blobContainerUri: `https://${storageName}.blob.core.windows.net/platform-artifacts`,
+    postgresServerId: id('Microsoft.DBforPostgreSQL/flexibleServers', `${resourceGroup}-pg`),
+    postgresHost: `${resourceGroup}-pg.postgres.database.azure.com`,
+    monitorWorkspaceResourceId: id('Microsoft.OperationalInsights/workspaces', `${resourceGroup}-law`),
+    appInsightsResourceId: id('Microsoft.Insights/components', `${resourceGroup}-appi`),
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    const actual = resources?.[key];
+    const matches = key.endsWith('Id') ? typeof actual === 'string' && actual.toLowerCase() === value.toLowerCase() :
+      actual === value;
+    if (!matches) throw new Error(`Deployment output ${key} is not the exact dedicated target.`);
+  }
+  const guid = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  if (!guid.test(resources?.monitorWorkspaceId ?? '') ||
+      outputs.monitorWorkspaceId?.value !== resources.monitorWorkspaceId ||
+      outputs.aksClusterName?.value !== `${resourceGroup}-aks` ||
+      outputs.storageAccountName?.value !== storageName ||
+      identity?.resourceId?.toLowerCase() !== id('Microsoft.ManagedIdentity/userAssignedIdentities',
+        `${resourceGroup}-id-foundation-probe`).toLowerCase() ||
+      identity?.name !== 'foundation-probe' || identity?.namespace !== 'agentweaver-v1-p0' ||
+      identity?.serviceAccount !== 'foundation-probe' ||
+      !guid.test(identity?.clientId ?? '') || !guid.test(identity?.principalObjectId ?? '') ||
+      identity.clientId.toLowerCase() === identity.principalObjectId.toLowerCase()) {
+    throw new Error('Deployment outputs lack the exact named probe principal or workspace GUID.');
+  }
+  return { resources, foundationProbeIdentity: identity };
+}
+
 // ARM guid() uses UUID v5 with this namespace and hyphen-joined arguments.
 function armGuid(...values) {
   const namespace = Buffer.from('11fb06fb712d4ddd98c7e71bbd588830', 'hex');
@@ -179,6 +220,8 @@ export function guardAzureTarget(config, execAz) {
   for (const [scope, principalResource, role] of [
     [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), identityId, '4633458b-17de-408a-b874-0445c86b69e6'],
     [resourceId('Microsoft.Storage/storageAccounts', storageName), identityId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'],
+    [resourceId('Microsoft.OperationalInsights/workspaces', `${resourceGroup}-law`), identityId, '73c42c96-874c-492b-b04d-ab87d138a893'],
+    [resourceId('Microsoft.Insights/components', `${resourceGroup}-appi`), identityId, '3913510d-42f4-4e42-8a64-420c390055eb'],
     [subnetId, aksId, '4d97b98b-1d4f-4787-a291-c67834d212e7'],
   ]) {
     const name = armGuid(scope, principalResource, role);

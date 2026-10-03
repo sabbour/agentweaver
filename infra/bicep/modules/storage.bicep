@@ -101,3 +101,4 @@ resource privateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneG
 output storageAccountId string = storage.id
 output storageAccountName string = storage.name
 output blobEndpoint string = storage.properties.primaryEndpoints.blob
+output platformArtifactsContainerId string = containers[indexOf(containerNames, 'platform-artifacts')].id
