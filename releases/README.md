@@ -73,3 +73,10 @@ the Azure Blob transport adapter.
   artifacts. #1744 adds the Azure Blob adapter, with streamed reads, create-only
   writes, and missing-object delete semantics. This draft library composition
   is not a platform release or version bump. No Changesets pipeline exists on v1.
+- #1767 adds ordered, layered provider composition: permitted Guardrails and
+  Telemetry providers resolve and pin as ordered sets, and Network Policy
+  resolves as a platform-owned layer, all with confirmed intent generation.
+  Exclusive and singleton provider cardinalities are preserved and other
+  cardinalities are explicitly deferred. This is a pinned, confirmed-intent
+  composition only; it adds no runtime enforcement, deployable service, or
+  version bump, and the draft composition remains at `0.1.0`.
