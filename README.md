@@ -145,8 +145,9 @@ pair, surgical corrections, exact-head PR and review evidence, fresh CI and
 serialized admission, then a scoped cleanup handoff. Admission blocks if
 exclusive ownership or exact candidate evidence cannot be verified; it does not
 provide a global lock. The running session cannot archive itself or delete its
-checked-out branch. This process-only extension has a Changeset exemption on
-v1 (which has no installed Changesets pipeline); it does not release or deploy
+checked-out branch. This process-only extension has a version-neutral changeset;
+product changes require fresh component changesets on v1 even without an npm
+Changesets CLI. The extension does not release or deploy
 the product and does not change branch protection. Its rehearsal does not prove
 live CI or merge behavior.
 

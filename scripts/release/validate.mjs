@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { diffChanges, validateChangesets } from './changesets.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -186,9 +187,14 @@ export function validateFile(file, options = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const file = process.argv[2];
-    if (!file || process.argv.length !== 3) fail('usage', 'node scripts/release/validate.mjs <manifest.json>');
-    validateFile(file);
-    console.log(`Validated ${file}`);
+    if (!file || ![3, 5].includes(process.argv.length) ||
+        (process.argv.length === 5 && process.argv[3] !== '--base')) {
+      fail('usage', 'node scripts/release/validate.mjs <manifest.json> [--base <full-git-sha>]');
+    }
+    const manifest = validateFile(file);
+    const changes = process.argv.length === 5 ? diffChanges(repositoryRoot, process.argv[4]) : undefined;
+    const records = validateChangesets(manifest, { root: repositoryRoot, changes });
+    console.log(`Validated ${file} and ${records.size} changesets${changes ? ' with diff coverage' : ''}`);
   } catch (error) {
     console.error(`Release manifest validation failed: ${error.message}`);
     process.exitCode = 1;

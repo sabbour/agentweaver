@@ -32,6 +32,11 @@ is added to the draft manifest.
 The component-scoped Changeset records future minor release intent, not an
 immediate package version bump or a release of the draft platform.
 
+Each merged foundation change has a record under `.changeset/` with its actual
+component ID and unreleased semver intent. Tooling-only records use empty
+frontmatter; neither kind is a release, version bump, deployed-service claim, or
+substitute for independently verified publication.
+
 `manifest.schema.json` describes the strict wire shape. The dependency-free
 validator additionally checks unique component IDs and projects, safe project
 paths, each component's explicit `<Version>` in its checked-in `.csproj`, actual
@@ -63,11 +68,16 @@ and deployment gates are future work, not supplied by this validator.
   with explicit connection string and optional injected `TokenCredential`.
   Other exporters can be composed through the lower-layer callbacks.
 - No version bump or publication is implied by this draft entry. Documentation,
-  tests, and CI wiring are exempt from a separate release entry. v1 uses plain Markdown
-  and this validated manifest, not an installed Changesets or publishing pipeline.
+  tests, and CI-only changes do not require a component changeset; product component
+  changes require a fresh changeset even when the release prose describes them.
 
-Run `npm run release:validate` to check the draft against checked-in projects,
-and `npm run test:release` for validator tests. Neither command installs
+Run `npm run release:validate` to check the draft against checked-in projects
+and validate all `.changeset/*.md` records. Run
+`npm run release:validate -- --base <full-base-commit-sha>` to additionally require
+an added or modified changeset in that diff for every changed product component.
+CI supplies the PR base SHA (or the previous push SHA) and checks their common
+ancestor against HEAD. An absent or unavailable base is an error, not an
+exemption. Run `npm run test:release` for validator tests. Neither command installs
 dependencies or contacts the cloud. CI also restores the .NET solution with
 checked-in lock files, builds once, and tests all foundation libraries, including
 the Azure Blob transport adapter.
@@ -81,7 +91,8 @@ the Azure Blob transport adapter.
 - #1750 supplies the platform-singleton Object Store contract for opaque platform
   artifacts. #1744 adds the Azure Blob adapter, with streamed reads, create-only
   writes, and missing-object delete semantics. This draft library composition
-  is not a platform release or version bump. No Changesets pipeline exists on v1.
+  is not a platform release or version bump. Changeset records track intent;
+  version application, package publication, and deployment remain future work.
 - #1767 adds ordered, layered provider composition: permitted Guardrails and
   Telemetry providers resolve and pin as ordered sets, pinning resource
   generations and order. Network Policy resolves its required L3/L4 and
@@ -92,3 +103,27 @@ the Azure Blob transport adapter.
   the above; it adds no runtime enforcement, egress compilation/application,
   deployable service, or version bump, and the draft composition remains at
   `0.1.0`.
+
+## Changeset authoring
+
+For each PR that changes a versioned library or service, add a **new or modified**
+`.changeset/<descriptive-name>.md` covering every affected component ID from
+`foundation.json` (or the current composition manifest). Use quoted IDs and
+`patch`, `minor`, or `major`, followed by a blank line and a human summary:
+
+```markdown
+---
+"Agentweaver.Providers": minor
+---
+
+Describe the change and its unreleased impact.
+```
+
+Additive capabilities use `minor`; select `patch` or `major` based on actual
+compatibility. Tooling-only work may use a version-neutral record with empty
+frontmatter (`---`, then `---`, then a blank line and a summary), without
+inventing a product package. Documentation, tests, and CI-only edits are exempt;
+changing product code, project files, schema, or package configuration is not.
+Existing historical records do not satisfy a new diff. The validator checks
+records against the actual manifest and changed component paths, not npm
+workspaces or a global `agentweaver` package.
