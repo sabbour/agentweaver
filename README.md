@@ -49,6 +49,11 @@ resource's negotiated capabilities only after provisioning.
 The release manifest describes the independently versioned foundation libraries.
 It is a draft composition, not evidence of deployment or a released platform.
 
+The provider-neutral Secrets foundation defines opaque, versioned references and
+purpose/run-bound requests for trusted Identity redemption. Short-lived credential
+values remain outside descriptors, bindings and durable state. This is a contract
+only: it does not authorize callers, connect to Key Vault or deploy a service.
+
 The next P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
 acknowledgment. Real PostgreSQL tests cover atomicity, duplicate handling, concurrency,
