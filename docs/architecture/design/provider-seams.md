@@ -590,6 +590,19 @@ Kubernetes Secrets are not the credential store. This generalizes 0.x Key Vault-
 references (`apps/Agentweaver.Api/Auth/UserModelProviderSettingsService.cs`,
 `apps/Agentweaver.Api/Auth/GitHubConnectionsCredentialVault.cs`).
 
+The current `Agentweaver.Abstractions` contract supplies `SecretRef` (opaque ID
+and explicit version), `SecretRedemptionRequest` (purpose and run ID),
+`ISecretRedemption` (trusted Identity/control-plane implementation with cancellation),
+and `SecretCredential` (explicit value access, expiry and invalidation). Identifiers
+are nonempty, at most 256 ASCII characters, and limited to letters, digits, `.`,
+`_`, `-`, `:`. The value is not a public property and is absent from default JSON,
+`ToString()` and contract validation exceptions. Callers must not serialize the
+string returned by `GetValue`; invalidation drops this object's reference but
+cannot erase copies of an immutable .NET string. Authorization, authenticated
+delivery, purpose policy, secure storage and refresh belong to future trusted
+service implementations; neither these data contracts nor a provider adapter
+grant access on their own.
+
 ## Source Control
 
 **Owner:** Source Control & Merge. **Cardinality:** exclusive. The GitHub adapter owns repository identity

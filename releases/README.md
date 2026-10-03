@@ -8,6 +8,15 @@ There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
 
+### Unreleased v1.0.0 impact
+
+The Abstractions foundation now exposes a provider-neutral, versioned Secrets
+reference and purpose/run-bound trusted redemption contract. Credential results
+have explicit expiry and invalidation and avoid default diagnostic/JSON value
+disclosure. This contract-only change adds no Key Vault adapter, authorization
+gate, deployable service or released version; the draft composition remains at
+`0.1.0` without a manual version bump.
+
 `manifest.schema.json` describes the strict wire shape. The dependency-free
 validator additionally checks unique component IDs and projects, safe project
 paths, each component's explicit `<Version>` in its checked-in `.csproj`, actual
