@@ -26,6 +26,12 @@
       "kind": "library",
       "version": "0.1.0",
       "project": "packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVault.csproj"
+    },
+    {
+      "id": "Agentweaver.Telemetry",
+      "kind": "library",
+      "version": "0.1.0",
+      "project": "packages/Agentweaver.Telemetry/Agentweaver.Telemetry.csproj"
     }
   ],
   "compatibility": [

@@ -3,8 +3,8 @@
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
 It pins the independently versioned .NET foundation libraries
 (`Agentweaver.Abstractions`, `Agentweaver.Providers`,
-`Agentweaver.Persistence.Postgres`, and `Agentweaver.Secrets.AzureKeyVault`,
-each currently `0.1.0`).
+`Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, and
+`Agentweaver.Telemetry`, each currently `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
@@ -40,6 +40,16 @@ not their authenticity or success; a deployment and its test results require
 external verification before publication. `draft` forbids `evidence` so it
 cannot claim unearned exact-SHA validation. Release publishing, chart wiring,
 and deployment gates are future work, not supplied by this validator.
+
+## Draft release impact
+
+- Added `Agentweaver.Telemetry` 0.1.0 to the draft foundation composition:
+  native OpenTelemetry traces, metrics, and logs with per-service resource identity
+  and caller-configured in-process/exporter integration. No Azure Monitor or OTLP
+  export is configured by this lower layer.
+- No version bump or publication is implied by this draft entry. Documentation,
+  tests, and CI wiring have no separate release entry. v1 uses plain Markdown
+  and this validated manifest, not an installed Changesets or publishing pipeline.
 
 Run `npm run release:validate` to check the draft against checked-in projects,
 and `npm run test:release` for validator tests. Neither command installs
