@@ -3,10 +3,14 @@
 This branch (`v1`) is where Agentweaver 1.0 is built. It starts from an empty history on
 purpose: 1.0 is a rebuild, not a refactor of 0.x.
 
-- **0.x keeps shipping** on [`dev`](https://github.com/sabbour/agentweaver/tree/dev). It is the reference for behavior, not
-  a source of code to copy.
-- **1.0 ports behavior, not code.** Each 0.x capability is tracked in a parity map and
-  rebuilt behind the 1.0 contracts.
+- **0.x keeps shipping** on [`dev`](https://github.com/sabbour/agentweaver/tree/dev).
+  It is the behavior reference and a source of compatible, reviewed code for
+  selective reuse.
+- **1.0 preserves behavior behind new contracts.** Each 0.x capability is tracked
+  in a parity map; compatible, reviewed code may be reused selectively.
+- **Retain the existing UI.** Future P1 frontend work keeps most of the existing
+  Agentweaver UI and adapts its API wiring to the new services. Redesign requires
+  an explicit user request; no UI work is included in P0.
 - **Status:** P0 foundations are under development. The architecture remains Proposed;
   the first implementation slice supplies libraries and validation tooling, not a
   deployable platform. [Phase progress](docs/architecture/decisions/0001-platform-architecture.md#phases)
@@ -69,10 +73,12 @@ adds an opt-in exporter for all three signals; neither library starts a service,
 provisions an Azure resource, or proves cloud delivery.
 
 The [Identity authorization library](packages/Agentweaver.Identity/README.md)
-wraps trusted secret redemption with server-owned, exact run grants. It rechecks
-authorization after asynchronous acquisition and bounds credential lifetime to
-the grant; it does not provide a grant store, authenticate network callers, or
-deploy an Identity service.
+is an **implemented CANDIDATE** for #1776: it wraps trusted secret redemption with
+server-owned, exact run grants. It compares grant identity, revision, expiry and
+bindings after asynchronous acquisition, narrows lifetime metadata on the original
+credential without reading its value, and invalidates acquired credentials on
+every subsequent error or cancellation. It does not provide a grant store,
+authenticate network callers, or deploy an Identity service.
 
 The Postgres P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced

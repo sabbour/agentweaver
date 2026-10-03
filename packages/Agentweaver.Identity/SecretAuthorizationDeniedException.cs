@@ -21,6 +21,7 @@ public enum SecretAuthorizationDenialReason
     VersionMismatch,
     Revoked,
     Expired,
+    GrantChanged,
 }
 
 // Thrown whenever a redemption is denied. The message carries only the

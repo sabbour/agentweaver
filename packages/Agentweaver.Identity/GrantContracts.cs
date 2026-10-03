@@ -30,7 +30,7 @@ public enum GrantState
 // project, run, purpose and SecretRef (identifier and exact version); there is
 // no wildcard or admin-scope form. A grant never mutates in place: revoking or
 // otherwise changing what it authorizes must produce a different grant (a new
-// GrantId or a replacement entry in the authority's store), never a setter on
+// GrantId or revision in the authority's store), never a setter on
 // this instance.
 public sealed class SecretRedemptionGrant
 {
@@ -43,10 +43,12 @@ public sealed class SecretRedemptionGrant
         SecretRef secret,
         GrantState state,
         DateTimeOffset expiresAt,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        string revision = "1")
     {
         var time = timeProvider ?? TimeProvider.System;
         GrantId = GrantIdentifier.Validate(grantId, nameof(grantId));
+        Revision = GrantIdentifier.Validate(revision, nameof(revision));
         ActorId = GrantIdentifier.Validate(actorId, nameof(actorId));
         ProjectId = GrantIdentifier.Validate(projectId, nameof(projectId));
         RunId = GrantIdentifier.Validate(runId, nameof(runId));
@@ -61,6 +63,7 @@ public sealed class SecretRedemptionGrant
     }
 
     public string GrantId { get; }
+    public string Revision { get; }
     public string ActorId { get; }
     public string ProjectId { get; }
     public string RunId { get; }
@@ -75,7 +78,7 @@ public sealed class SecretRedemptionGrant
 // this contract only shapes the lookup so callers never cache a grant across
 // calls. Returning more than one candidate for a lookup is treated as
 // ambiguous and denied; implementations should not rely on the caller to
-// de-duplicate.
+// de-duplicate. Advance Revision on every change, including revoke/reactivate.
 public interface IGrantAuthority
 {
     Task<IReadOnlyList<SecretRedemptionGrant>> FindGrantsAsync(

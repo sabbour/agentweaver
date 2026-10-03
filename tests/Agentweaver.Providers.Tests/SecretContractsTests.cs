@@ -78,6 +78,36 @@ public sealed class SecretContractsTests
             new SecretRedemptionRequest(new SecretRef("opaque", "v1"), "purpose", "run"), cancellation.Token));
     }
 
+    [Fact]
+    public async Task LifetimeLimitIsMetadataOnlyMonotonicAndThreadSafe()
+    {
+        var credential = new SecretCredential(Placeholder, Now.AddMinutes(10), _clock);
+        await Task.WhenAll(Enumerable.Range(1, 64).Select(seconds =>
+            Task.Run(() => credential.LimitLifetime(Now.AddSeconds(seconds)))));
+        Assert.Equal(Now.AddSeconds(1), credential.ExpiresAt);
+        credential.LimitLifetime(Now.AddHours(1));
+        Assert.Equal(Now.AddSeconds(1), credential.ExpiresAt);
+        Assert.Equal(Placeholder, credential.GetValue());
+        Assert.DoesNotContain(Placeholder, JsonSerializer.Serialize(credential), StringComparison.Ordinal);
+        credential.Invalidate();
+        Assert.Throws<InvalidOperationException>(() => credential.LimitLifetime(Now.AddMinutes(1)));
+        Assert.Throws<InvalidOperationException>(() => credential.GetValue());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExpiredLifetimeLimitInvalidatesWithoutRestoringValue(bool backendExpired)
+    {
+        var credential = new SecretCredential(Placeholder, Now.AddSeconds(1), _clock);
+        if (backendExpired) _clock.UtcNow = Now.AddSeconds(1);
+        Assert.Throws<InvalidOperationException>(() =>
+            credential.LimitLifetime(backendExpired ? Now.AddMinutes(10) : Now));
+        _clock.UtcNow = Now;
+        Assert.Throws<InvalidOperationException>(() => credential.GetValue());
+        Assert.Throws<InvalidOperationException>(() => credential.LimitLifetime(Now.AddMinutes(1)));
+    }
+
     private sealed class TestRedemption : ISecretRedemption
     {
         public Task<SecretCredential> RedeemAsync(SecretRedemptionRequest request, CancellationToken cancellationToken)

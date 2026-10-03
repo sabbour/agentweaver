@@ -7,8 +7,8 @@
 Agentweaver 0.x ties its GitHub Copilot SDK runtime, agent-sandbox execution,
 Azure Files workspace, Postgres memory, Agent Governance Toolkit (AGT) policy,
 and GitHub integration to one API-centered deployment and a repository-wide
-`VERSION`. Agentweaver 1.0 is a breaking, blank-slate rebuild: it ports behavior,
-not code, while 0.x continues to ship on `dev`.
+`VERSION`. Agentweaver 1.0 is a breaking rebuild behind new contracts with
+selective compatible code reuse, while 0.x continues to ship on `dev`.
 
 Paths cited here and in the parity map refer to 0.x code on the `dev` branch.
 The coupling preventing a straightforward service split is concrete:
@@ -62,7 +62,7 @@ than moving those cross-module dependencies between processes.
 
 | Topic | Decision |
 | --- | --- |
-| Delivery | Build on an orphan `v1` branch; use `dev` as a behavior reference. Port behavior, not code. |
+| Delivery | Build on an orphan `v1` branch; use `dev` as a behavior reference and selectively reuse compatible, reviewed code. |
 | 0.x | Keep releases active; track each post-fork change in the parity map without blocking 0.x releases. |
 | Runtime | Run on Azure Kubernetes Service (AKS) with Azure-first services. Use fakes and Testcontainers Postgres for tests, then exact-SHA AKS deployments and persona harnesses for integration. |
 | Contracts | Version canonical .NET dependency-injection contracts in `Agentweaver.Abstractions`; keep adapters in-repo, wrapping HTTP, gRPC, or Kubernetes custom resources where needed. |
@@ -214,11 +214,11 @@ cardinality, contracts, pinning, conformance, and enforcement in detail.
 
 ## Delivery strategy
 
-### Port behavior, not code
+### Preserve behavior with selective reuse
 
 For each capability, start with its 0.x specification and observable behavior,
-then define a 1.0 contract, conformance tests, and an implementation. Copy
-only small, reviewed pieces when warranted; do not add shims, dual paths,
+then define a 1.0 contract, conformance tests, and an implementation. Reuse
+compatible, reviewed code selectively when warranted; do not add shims, dual paths,
 or 0.x implementation names to new contracts. The parity map tracks each
 0.x capability and open roadmap item, its 1.0 owner, disposition (rebuild,
 redesign, drop, or defer), and evidence.
@@ -301,6 +301,13 @@ from [#1771](https://github.com/sabbour/agentweaver/pull/1771) (issue
 [#1766](https://github.com/sabbour/agentweaver/issues/1766)) is merged, but
 deployed AKS workload identity and Identity authorization remain unverified.
 The phase descriptions below remain the scope authority.
+
+**Candidate, not merged:** [#1776](https://github.com/sabbour/agentweaver/issues/1776)
+adds trusted Identity run-grant authorization as a library. It compares exact
+bindings and immutable grant ID/revision/expiry before and after acquisition,
+narrows credential metadata without value access and invalidates on all
+post-acquisition errors/cancellation. This does not complete the remaining
+Identity broker, durable authority, service or Azure acceptance work.
 
 | Phase | Status and evidence | Remaining before phase completion |
 | --- | --- | --- |

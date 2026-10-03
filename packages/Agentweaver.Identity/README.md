@@ -1,5 +1,7 @@
 # Identity authorization boundary (1.0.0)
 
+**Status: implemented CANDIDATE for #1776, not admitted or released.**
+
 `Agentweaver.Identity` implements the trusted Identity authorization boundary
 around the provider-neutral `ISecretRedemption` contract from
 `Agentweaver.Abstractions`. It composes an existing redemption backend (for
@@ -25,8 +27,10 @@ var credential = await redemption.RedeemAsync(request, cancellationToken);
   one actor, project, run, purpose, and SecretRef identifier/version, with an
   `Active`/`Revoked` state and a strictly future expiry. There is no
   wildcard or admin-scope grant shape. Changing what a grant authorizes
-  requires a different grant (a new `GrantId` or a replacement entry in the
-  authority's store); this type exposes no setters.
+  requires a new `GrantId` or a changed immutable `Revision`; this type exposes
+  no setters. The optional constructor `revision` follows `timeProvider` and
+  defaults to `"1"` for a new grant. The authority must advance it on every
+  replacement, revocation or renewal, including revoke/reactivate cycles.
 - `IGrantAuthority.FindGrantsAsync` is the only way to look one up. Returning
   zero candidates denies as `NoGrant`; returning more than one denies as
   `Ambiguous` rather than guessing. Implementations own revocation and expiry
@@ -42,15 +46,14 @@ var credential = await redemption.RedeemAsync(request, cancellationToken);
    run, purpose, exact secret ID and version), and the grant's `Active` state
    and future expiry. A denial here never calls the backend.
 3. Only then calls the backend's `RedeemAsync` to acquire the credential.
-4. Re-reads the authority again after that `await` returns. A grant revoked,
-   expired, or replaced with a binding that no longer matches this exact
-   request during the backend call invalidates the just-acquired credential
-   and throws instead of returning it.
-5. Clamps the returned credential's expiry to the grant's expiry when the
-   backend would otherwise issue a longer-lived one, by invalidating the
-   original and issuing a new `SecretCredential` carrying the same opaque
-   value. The clamp reads `GetValue()` only to repackage it; the value is
-   never logged, serialized, or exposed beyond that reassignment.
+4. Re-reads the authority after acquisition and compares the entire immutable
+   snapshot, including grant ID, revision and expiry. A replaced or revised
+   grant is denied even if every request binding still matches. Revocation,
+   expiry, missing or ambiguous authority results also deny.
+5. Calls `SecretCredential.LimitLifetime` to narrow metadata on the same
+   object to the earlier backend/grant expiry. It never reads `GetValue()` or
+   copies a credential. Backend invalidation still reaches the returned object.
+   A null, invalidated or expired backend result fails explicitly.
 
 Every denial throws `SecretAuthorizationDeniedException` with a
 `SecretAuthorizationDenialReason` and no other detail; its message never
@@ -58,9 +61,18 @@ contains a secret value, grant identifier, or request payload. Cancellation
 is honored before the first authority read, between the authority read and
 the backend call, and after the backend call returns (invalidating an already
 acquired credential); a cancelled backend call propagates without authorizing
-again. Backend/authority operational
+again. Every failure after a credential is acquired, including lifetime limiting,
+authority errors and cancellation after the second await or final expiry check,
+invalidates it before propagating. Backend/authority operational
 failures (for example a Key Vault service error) propagate unchanged; they
 are not swallowed or reinterpreted as a denial.
+
+Authority implementations must return coherent immutable snapshots, with a
+revision that changes for every state change; byte-identical snapshots without
+a new revision cannot reveal a revoke/reactivate cycle between reads. Rechecks
+are not an atomic transaction with a backend, and revocation after return does
+not retroactively revoke a delivered credential. Refresh always reauthorizes.
+Invalidation cannot erase value strings a consumer has already copied.
 
 ## What this does not do
 

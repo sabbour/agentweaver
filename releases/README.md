@@ -5,8 +5,9 @@ It pins the independently versioned .NET foundation libraries
 (`Agentweaver.Abstractions`, `Agentweaver.Providers`,
 `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`,
 `Agentweaver.Telemetry`, `Agentweaver.Telemetry.AzureMonitor`, and
-`Agentweaver.ObjectStore.AzureBlob`; Persistence.Postgres is `0.2.0` and
-the other libraries are `0.1.0`).
+`Agentweaver.ObjectStore.AzureBlob`, and `Agentweaver.Identity`;
+Persistence.Postgres is `0.2.0`, the Identity candidate is `1.0.0`, and the
+other libraries remain `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
@@ -84,6 +85,15 @@ the Azure Blob transport adapter.
 
 ## Unreleased foundation impact
 
+- #1776 is an **implemented CANDIDATE**, not merged or published:
+  `Agentweaver.Identity` 1.0.0 authorizes exact run grants and compares immutable
+  pre/post grant identity, revision, expiry and bindings. Abstractions adds a
+  metadata-only, thread-safe `SecretCredential.LimitLifetime` on the original
+  credential, preserving backend invalidation without reading or copying a
+  value. The fresh quoted-ID changeset covers both components with minor
+  intent; no existing version is manually bumped. Draft compatibility pins
+  Identity's Abstractions dependency to 0.1.0. No broker/store/service/Azure
+  deployment or new-tree approval from historical review receipts is implied.
 - #1768 adds consumer-scoped transactional inbox receipts to
   `Agentweaver.Persistence.Postgres` 0.2.0. Migration 2 upgrades existing
   service-owned version-1 schemas without changing their outbox records. This
