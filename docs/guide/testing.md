@@ -22,10 +22,12 @@ They do not apply or verify a real egress policy. Persistence tests use a dispos
 PostgreSQL container, not mocks, SQLite, or a shared developer database. They verify
 durable state through database reads as well as returned results.
 The Azure Key Vault adapter tests exercise the real Azure SDK authentication,
-request/response and error pipeline through an in-memory HTTP transport and fake
-`TokenCredential`; they require no Azure account, outbound network or provisioned
-vault. They prove adapter transport behavior, not live workload identity, RBAC or
-an Azure deployment.
+request/response and error pipeline through an in-memory HTTP transport. The
+injected-credential cases use a fake `TokenCredential`; the workload-identity cases
+use the real Azure Identity OAuth token exchange with generated, nonsensitive
+projected token files and fake OAuth and Key Vault transports. They require no
+Azure account, outbound network, real credentials or provisioned vault. They prove
+the composition pipeline, not live workload identity, RBAC or an Azure deployment.
 Object Store tests inject a fake HTTP transport into the Azure Blob SDK; these
 verify SDK requests and adapter mappings but do not prove cloud credentials,
 Azure permissions, durability, or deployed integration.

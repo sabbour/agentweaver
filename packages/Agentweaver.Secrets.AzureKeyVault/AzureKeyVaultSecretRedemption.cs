@@ -1,7 +1,11 @@
+using System.Text;
 using Agentweaver.Abstractions;
 using Azure;
 using Azure.Core;
+using Azure.Core.Pipeline;
+using Azure.Identity;
 using Azure.Security.KeyVault.Secrets;
+using Microsoft.Identity.Client;
 
 namespace Agentweaver.Secrets.AzureKeyVault;
 
@@ -55,11 +59,31 @@ public sealed class AzureKeyVaultSecretException : Exception
     public int Status { get; }
 }
 
+public enum AzureKeyVaultWorkloadIdentityFailure
+{
+    TokenFileUnavailable,
+    ExchangeRejected,
+}
+
+public sealed class AzureKeyVaultWorkloadIdentityException : Exception
+{
+    internal AzureKeyVaultWorkloadIdentityException(AzureKeyVaultWorkloadIdentityFailure failure, int status = 0)
+        : base($"Azure Key Vault workload identity failed ({failure}).")
+    {
+        Failure = failure;
+        Status = status;
+    }
+
+    public AzureKeyVaultWorkloadIdentityFailure Failure { get; }
+    public int Status { get; }
+}
+
 // Register only in the trusted control plane. The caller authorizes run and purpose.
 public sealed class AzureKeyVaultSecretRedemption : ISecretRedemption, IDisposable
 {
     private static readonly TimeSpan CredentialLifetime = TimeSpan.FromMinutes(5);
     private readonly SecretClient _client;
+    private readonly bool _usesWorkloadIdentity;
     private readonly TimeProvider _timeProvider;
     private readonly HashSet<SecretCredential> _issued = [];
     private readonly object _sync = new();
@@ -86,6 +110,42 @@ public sealed class AzureKeyVaultSecretRedemption : ISecretRedemption, IDisposab
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    private AzureKeyVaultSecretRedemption(
+        AzureKeyVaultConfiguration configuration,
+        WorkloadIdentityCredential credential,
+        SecretClientOptions? clientOptions,
+        TimeProvider? timeProvider)
+        : this(configuration, (TokenCredential)credential, clientOptions, timeProvider)
+    {
+        _usesWorkloadIdentity = true;
+    }
+
+    public static AzureKeyVaultSecretRedemption CreateWithWorkloadIdentity(
+        AzureKeyVaultConfiguration configuration,
+        WorkloadIdentityCredentialOptions identityOptions,
+        SecretClientOptions? clientOptions = null,
+        TimeProvider? timeProvider = null)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(identityOptions);
+        if (string.IsNullOrWhiteSpace(identityOptions.TenantId))
+            throw new ArgumentException("An explicit workload identity tenant is required.", nameof(identityOptions));
+        if (string.IsNullOrWhiteSpace(identityOptions.ClientId))
+            throw new ArgumentException("An explicit workload identity client is required.", nameof(identityOptions));
+        if (string.IsNullOrWhiteSpace(identityOptions.TokenFilePath) ||
+            !Path.IsPathFullyQualified(identityOptions.TokenFilePath))
+            throw new ArgumentException("An absolute projected token file path is required.", nameof(identityOptions));
+        if (identityOptions.Diagnostics.IsLoggingContentEnabled)
+            throw new ArgumentException("Identity assertion content logging must be disabled.", nameof(identityOptions));
+        if (clientOptions?.Diagnostics.IsLoggingContentEnabled == true)
+            throw new ArgumentException("Secret response content logging must be disabled.", nameof(clientOptions));
+
+        identityOptions.Transport = new RedactingIdentityTransport(
+            identityOptions.Transport ?? HttpClientTransport.Shared);
+        return new AzureKeyVaultSecretRedemption(
+            configuration, new WorkloadIdentityCredential(identityOptions), clientOptions, timeProvider);
+    }
+
     public async Task<SecretCredential> RedeemAsync(
         SecretRedemptionRequest request, CancellationToken cancellationToken)
     {
@@ -105,6 +165,24 @@ public sealed class AzureKeyVaultSecretRedemption : ISecretRedemption, IDisposab
         {
             secret = (await _client.GetSecretAsync(
                 request.Secret.Id, request.Secret.Version, cancellationToken).ConfigureAwait(false)).Value;
+        }
+        catch (CredentialUnavailableException) when (_usesWorkloadIdentity)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            throw new AzureKeyVaultWorkloadIdentityException(
+                AzureKeyVaultWorkloadIdentityFailure.TokenFileUnavailable);
+        }
+        catch (AuthenticationFailedException error) when (_usesWorkloadIdentity)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var cause = error as Exception;
+            while (cause is not null && cause is not MsalServiceException)
+                cause = cause.InnerException;
+            throw new AzureKeyVaultWorkloadIdentityException(
+                error.GetBaseException() is IOException or UnauthorizedAccessException
+                    ? AzureKeyVaultWorkloadIdentityFailure.TokenFileUnavailable
+                    : AzureKeyVaultWorkloadIdentityFailure.ExchangeRejected,
+                (cause as MsalServiceException)?.StatusCode ?? 0);
         }
         catch (RequestFailedException error)
         {
@@ -168,5 +246,35 @@ public sealed class AzureKeyVaultSecretRedemption : ISecretRedemption, IDisposab
         if (options?.Diagnostics.IsLoggingContentEnabled == true)
             throw new ArgumentException("Secret response content logging must be disabled.", nameof(options));
         return new SecretClient(configuration.VaultUri, credential, options);
+    }
+
+    private sealed class RedactingIdentityTransport(HttpPipelineTransport inner) : HttpPipelineTransport
+    {
+        private static readonly byte[] SafeError = Encoding.UTF8.GetBytes(
+            """{"error":"invalid_client","error_description":"Workload identity exchange rejected."}""");
+
+        public override Request CreateRequest() => inner.CreateRequest();
+
+        public override void Process(HttpMessage message)
+        {
+            inner.Process(message);
+            Redact(message);
+        }
+
+        public override async ValueTask ProcessAsync(HttpMessage message)
+        {
+            await inner.ProcessAsync(message).ConfigureAwait(false);
+            Redact(message);
+        }
+
+        private void Redact(HttpMessage message)
+        {
+            if (message.Response.Status < 400 || message.Request.Method != RequestMethod.Post)
+                return;
+
+            var raw = message.Response.ContentStream;
+            message.Response.ContentStream = new MemoryStream(SafeError, writable: false);
+            raw?.Dispose();
+        }
     }
 }

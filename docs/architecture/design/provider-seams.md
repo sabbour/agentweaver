@@ -606,10 +606,14 @@ grant access on their own.
 `Agentweaver.Secrets.AzureKeyVault` implements redemption for the trusted control
 plane with the Azure Key Vault SDK. The configured vault URI is validated; callers
 inject a workload-identity-capable `TokenCredential` or an already configured
-`SecretClient`. The adapter fetches the exact referenced version and returns a
-credential that expires within five minutes (sooner if the vault secret expires).
-SDK transport tests cover its contract without contacting Azure. This does not
-implement Identity authorization or prove an AKS deployment.
+`SecretClient`, or explicitly compose Azure Identity's
+`WorkloadIdentityCredential` from a tenant, client, and projected token-file path
+inside the adapter library. The adapter fetches the exact referenced version and
+returns a credential that expires within five minutes (sooner if the vault secret
+expires). Azure Identity manages token caching and projected-file refresh; the
+adapter has no file watcher or immediate-rotation guarantee. SDK transport tests
+cover both OAuth exchange and Key Vault requests without contacting Azure. This
+does not implement Identity authorization or prove an AKS deployment.
 
 ## Source Control
 
