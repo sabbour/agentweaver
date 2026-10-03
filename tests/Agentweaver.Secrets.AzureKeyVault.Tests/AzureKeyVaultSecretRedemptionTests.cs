@@ -40,6 +40,7 @@ public sealed class AzureKeyVaultSecretRedemptionTests
     }
 
     [Theory]
+    [InlineData("https://unit.vault.azure.net")]
     [InlineData("https://unit.vault.azure.net/")]
     [InlineData("https://unit.vault.usgovcloudapi.net/")]
     [InlineData("https://unit.vault.azure.cn/")]

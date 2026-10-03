@@ -94,8 +94,16 @@ The [Identity broker candidate](docs/specs/1779-identity-broker.md) adds a nativ
 .NET 10/OpenIddict service with owned PostgreSQL stores, external OIDC login,
 authenticated consent, S256 PKCE, resource audiences, and refresh replay rejection.
 It requires explicit host credentials and has no ambient user-secrets or development-certificate fallback.
-Its draft service entry has no image digest because it remains unpublished.
-Run-grant redemption composition (#1783) and Azure publication/proof (#1790) remain separate dependencies.
+Its P0 redemption composition (#1783) validates bearer issuer, signature, lifetime,
+and configured audience before using token subject/project/run claims; append-only
+grant revisions are changed with PostgreSQL compare-and-swap and durable idempotency.
+The broker issues project/run claims only after matching authorize selectors to
+an active Identity-owned grant for the authenticated subject, and rechecks that
+binding at token exchange.
+The endpoint composes `AuthorizedSecretRedemption` with the existing exact-version
+Key Vault adapter and explicit workload identity. The draft service entry has no
+image digest because it remains unpublished. Azure publication/proof (#1790) is
+still separate.
 
 The Postgres P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
@@ -112,9 +120,11 @@ and an injected Azure SDK adapter for platform artifacts. It does not expose
 agent workspace storage or provision an Azure account; see the
 [Object Store guide](packages/Agentweaver.ObjectStore.AzureBlob/README.md).
 
-Remaining P0 work includes wiring these primitives into real services, a durable
-Identity grant authority, deployed workload identity, and the dedicated Azure
-integration environment.
+The Identity broker now composes the admitted authorization boundary with an
+Identity-owned PostgreSQL run-grant authority and the exact-version Key Vault
+workload-identity adapter. It remains an unpublished P0 candidate; deployed
+workload identity and the dedicated Azure integration environment are still
+separate acceptance work.
 
 ## Build and check the foundation
 

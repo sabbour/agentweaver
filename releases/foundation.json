@@ -83,6 +83,16 @@
       "consumer": "Agentweaver.ObjectStore.AzureBlob",
       "dependency": "Agentweaver.Abstractions",
       "versions": ["0.1.0"]
+    },
+    {
+      "consumer": "Agentweaver.Identity.Broker",
+      "dependency": "Agentweaver.Identity",
+      "versions": ["1.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Identity.Broker",
+      "dependency": "Agentweaver.Secrets.AzureKeyVault",
+      "versions": ["0.1.0"]
     }
   ]
 }

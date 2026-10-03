@@ -254,15 +254,29 @@ credentials on every post-acquisition failure. Immutable grant identity,
 revision and expiry must agree between reads even when request bindings match.
 Credential lifetime is narrowed in place without reading its value, preserving
 backend invalidation. Hosts supply coherent snapshots with a new revision on
-every authority change; this library does not make those reads transactional.
-The durable grant authority and authenticated delivery remain future service work.
+every authority change; this library does not make those reads transactional or
+provide a durable authority.
 
 The [#1779 broker candidate](../../specs/1779-identity-broker.md) supplies native
 .NET/OpenIddict authentication, owned PostgreSQL stores, authenticated consent,
 code/PKCE, permanent grants, resource audiences, and refresh-token handling.
-It remains unpublished and undeployed.
-Revisioned run-grant and exact-version Key Vault redemption composition remain dependent on #1783.
-The broker does not expose a secret-redemption or run-token API.
+The #1783 P0 composition adds `POST /secrets/redeem`, which requires an
+OpenIddict-validated bearer for the configured audience and exactly one `sub`,
+`project_id`, and `run_id` claim. Request data contains only a run-bound
+purpose and exact SecretRef; caller identity is never accepted from a body or
+header. The broker's own `identity_broker` schema stores immutable grant
+snapshots and an atomically advanced revision head; compare-and-swap updates,
+durable idempotency receipts, and revocation all run in PostgreSQL transactions.
+Optional authorize project/run selectors persist through login and consent, then
+must match an active, unexpired grant for the authenticated local subject before
+they enter access-token claims. Token exchange and refresh repeat that binding
+check; redemption separately re-reads the current grant for its exact purpose
+and SecretRef.
+The endpoint composes `AuthorizedSecretRedemption` with the existing exact-version
+Key Vault adapter configured for workload identity. Secret values are returned
+only on successful redemption and are never persisted or logged. The candidate
+remains unpublished and undeployed; local integration tests do not prove
+workload identity, Key Vault RBAC, or Azure acceptance.
 
 The configure, refresh, and A2A contracts are versioned internal APIs, not unstructured side
 channels. The AgentHost image is pinned for the run, so a service rollout cannot silently replace it

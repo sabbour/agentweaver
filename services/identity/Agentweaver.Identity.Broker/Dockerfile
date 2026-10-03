@@ -11,9 +11,18 @@ WORKDIR /src
 COPY Directory.Build.props ./
 COPY services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj services/identity/Agentweaver.Identity.Broker/
 COPY services/identity/Agentweaver.Identity.Broker/packages.lock.json services/identity/Agentweaver.Identity.Broker/
+COPY packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj packages/Agentweaver.Abstractions/
+COPY packages/Agentweaver.Abstractions/packages.lock.json packages/Agentweaver.Abstractions/
+COPY packages/Agentweaver.Identity/Agentweaver.Identity.csproj packages/Agentweaver.Identity/
+COPY packages/Agentweaver.Identity/packages.lock.json packages/Agentweaver.Identity/
+COPY packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVault.csproj packages/Agentweaver.Secrets.AzureKeyVault/
+COPY packages/Agentweaver.Secrets.AzureKeyVault/packages.lock.json packages/Agentweaver.Secrets.AzureKeyVault/
 RUN dotnet restore services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj --locked-mode
 
 COPY services/identity/Agentweaver.Identity.Broker/ services/identity/Agentweaver.Identity.Broker/
+COPY packages/Agentweaver.Abstractions/ packages/Agentweaver.Abstractions/
+COPY packages/Agentweaver.Identity/ packages/Agentweaver.Identity/
+COPY packages/Agentweaver.Secrets.AzureKeyVault/ packages/Agentweaver.Secrets.AzureKeyVault/
 RUN dotnet build services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj \
     --configuration Release --no-restore
 RUN dotnet publish services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj \

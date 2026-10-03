@@ -1,7 +1,12 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Identity.Broker;
+using Agentweaver.Secrets.AzureKeyVault;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -28,11 +33,30 @@ var identityOptions = builder.Configuration
 Validator.ValidateObject(identityOptions, new ValidationContext(identityOptions), validateAllProperties: true);
 Validator.ValidateObject(identityOptions.Signing, new ValidationContext(identityOptions.Signing), validateAllProperties: true);
 Validator.ValidateObject(identityOptions.ExternalProvider, new ValidationContext(identityOptions.ExternalProvider), validateAllProperties: true);
+Validator.ValidateObject(identityOptions.SecretRedemption, new ValidationContext(identityOptions.SecretRedemption), validateAllProperties: true);
 foreach (var client in identityOptions.Clients)
     Validator.ValidateObject(client, new ValidationContext(client), validateAllProperties: true);
 foreach (var uri in new[] { identityOptions.Issuer, identityOptions.ExternalProvider.Authority })
     if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || parsed.Scheme != Uri.UriSchemeHttps)
         throw new InvalidOperationException("Identity issuer and external authority must be absolute HTTPS URIs.");
+if (!Uri.TryCreate(identityOptions.SecretRedemption.Audience, UriKind.Absolute, out var redemptionAudience) ||
+    redemptionAudience.Scheme != Uri.UriSchemeHttps ||
+    !identityOptions.Clients.SelectMany(client => client.Resources)
+        .Contains(identityOptions.SecretRedemption.Audience, StringComparer.Ordinal))
+    throw new InvalidOperationException("Secret redemption requires an HTTPS audience registered on an Identity client.");
+if (!Path.IsPathFullyQualified(identityOptions.SecretRedemption.WorkloadIdentityTokenFilePath))
+    throw new InvalidOperationException("Secret redemption requires an absolute workload-identity token file path.");
+
+// Validate the vault URI and workload-identity settings before opening the database or
+// starting the host. The projected token file is read only when Key Vault is contacted.
+var vaultConfiguration = new AzureKeyVaultConfiguration(new Uri(identityOptions.SecretRedemption.VaultUri));
+var workloadIdentityOptions = new WorkloadIdentityCredentialOptions
+{
+    TenantId = identityOptions.SecretRedemption.WorkloadIdentityTenantId,
+    ClientId = identityOptions.SecretRedemption.WorkloadIdentityClientId,
+    TokenFilePath = identityOptions.SecretRedemption.WorkloadIdentityTokenFilePath,
+};
+var secretClientOptions = new SecretClientOptions();
 
 builder.Services.AddSingleton(identityOptions);
 
@@ -69,7 +93,21 @@ builder.Services.AddScoped<BrokerUserProvisioner>();
 builder.Services.AddScoped<BrokerClientSeeder>();
 builder.Services.AddScoped<BrokerScopeSeeder>();
 builder.Services.AddScoped<RefreshTokenFamilyRevoker>();
+builder.Services.AddScoped<IdentityGrantAuthority>();
+builder.Services.AddScoped<IGrantAuthority>(provider => provider.GetRequiredService<IdentityGrantAuthority>());
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(vaultConfiguration);
+builder.Services.AddSingleton(workloadIdentityOptions);
+builder.Services.AddSingleton(secretClientOptions);
+builder.Services.AddSingleton<AzureKeyVaultSecretRedemption>(provider =>
+    AzureKeyVaultSecretRedemption.CreateWithWorkloadIdentity(
+        provider.GetRequiredService<AzureKeyVaultConfiguration>(),
+        provider.GetRequiredService<WorkloadIdentityCredentialOptions>(),
+        provider.GetRequiredService<SecretClientOptions>(),
+        provider.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton<ISecretRedemption>(provider =>
+    provider.GetRequiredService<AzureKeyVaultSecretRedemption>());
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
 
 // The broker's own signing/encryption credential. Production composition mounts a real
@@ -187,6 +225,7 @@ builder.Services.AddOpenIddict()
     .AddValidation(options =>
     {
         options.UseLocalServer();
+        options.AddAudiences(identityOptions.SecretRedemption.Audience);
         options.UseAspNetCore();
     });
 
@@ -208,6 +247,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapIdentityBrokerEndpoints();
+app.MapIdentitySecretRedemptionEndpoints();
 
 app.Run();
 
