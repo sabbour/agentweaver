@@ -142,6 +142,18 @@ export function applyPlan(plan, manifestPath, {
   }
 
   if (plan.components.length === 0) {
+    const sourcePaths = git('ls-tree', '-r', '--name-only', plan.sourceSha).split(/\r?\n/);
+    const readSource = (file) => execFileSync('git', ['show', `${plan.sourceSha}:${file}`],
+      { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const sourceManifest = JSON.parse(readSource(path.relative(root, manifestPath).replaceAll('\\', '/')));
+    const recomputed = createPlan(sourceManifest, {
+      root, git: () => plan.sourceSha,
+      readdirSync: () => sourcePaths.filter((file) => /^\.changeset\/[^/]+$/.test(file)).map((file) => path.posix.basename(file)),
+      readFileSync: (file) => readSource(path.relative(root, file).replaceAll('\\', '/')),
+    });
+    if (recomputed.components.length !== 0) {
+      fail('plan', 'empty plan does not match genuine committed source intent; re-run release:plan');
+    }
     return { applied: [], skipped: [], message: 'nothing to apply' };
   }
 

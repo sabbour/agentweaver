@@ -114,15 +114,18 @@ export function packComponents(manifest, {
 
   for (const component of components) {
     const project = path.resolve(root, component.project);
+    const image = [...expectedArtifacts.values()].find((artifact) => artifact.componentId === component.id && artifact.kind === 'image');
+    const baseImageArgs = image ? [`-p:ContainerBaseImage=${image.baseImage}`] : [];
     dotnet(['restore', project, '--locked-mode']);
     dotnet(['build', project, '--configuration', 'Release', '--no-restore',
-      '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`]);
+      '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`, ...baseImageArgs]);
     const projectStem = path.basename(component.project, '.csproj');
     const expectedFile = component.kind === 'service'
       ? `${component.id}.${component.version}.tar.gz` : `${projectStem}.${component.version}.nupkg`;
     if (component.kind === 'service') {
       dotnet(['publish', project, '--configuration', 'Release', '--no-restore', '-t:PublishContainer',
         '-p:EnableSdkContainerSupport=true', '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`,
+        ...baseImageArgs,
         `-p:ContainerRepository=${component.id.toLowerCase()}`, `-p:ContainerImageTag=${component.version}`,
         `-p:ContainerArchiveOutputPath=${path.join(resolvedOutDir, expectedFile)}`]);
     } else {

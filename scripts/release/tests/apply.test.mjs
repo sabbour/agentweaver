@@ -119,6 +119,23 @@ test('reports nothing to apply for a plan with no pending changesets', (t) => {
   assert.deepEqual(result, { applied: [], skipped: [], message: 'nothing to apply' });
 });
 
+test('rejects a checksum-recomputed empty plan without writes, even if source notes are missing locally', (t) => {
+  const dir = initRepo(t);
+  const plan = createPlan(readManifest(dir), { root: dir });
+  plan.components = [];
+  plan.checksum = planChecksum(plan);
+  for (const removeNote of [false, true]) {
+    if (removeNote) unlinkSync(path.join(dir, '.changeset', 'add-feature.md'));
+    let writes = 0;
+    assert.throws(() => applyPlan(plan, manifestPath(dir), {
+      root: dir, writeFileSync: () => { writes++; }, renameSync: () => { writes++; }, mkdirSync: () => { writes++; },
+    }), /empty plan does not match genuine committed source intent/);
+    assert.equal(writes, 0);
+    assert.equal(readManifest(dir).components[0].version, '0.1.0');
+    assert.equal(existsSync(path.join(dir, 'releases', 'receipts')), false);
+  }
+});
+
 test('rejects an unknown component ID in a changeset during planning', (t) => {
   const dir = initRepo(t, { changeset: false });
   writeFileSync(path.join(dir, '.changeset', 'bad.md'), '---\n"Pkg.Ghost": minor\n---\n\nTypo.\n');

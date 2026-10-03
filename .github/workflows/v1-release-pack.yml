@@ -51,7 +51,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ github.ref == 'refs/heads/v1' && !cancelled() }}
         with:
-          name: v1-release-pack-${{ github.sha }}-${{ github.run_attempt }}
+          name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
+          overwrite: true
           path: artifacts/release/pack/
           if-no-files-found: error
           retention-days: 30
@@ -59,6 +60,8 @@ jobs:
     needs: pack
     if: ${{ inputs.publish }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     environment: v1-publication
     steps:
       - uses: actions/checkout@v4
@@ -73,10 +76,11 @@ jobs:
           node-version: '24'
       - uses: actions/download-artifact@v4
         with:
-          name: v1-release-pack-${{ github.sha }}-${{ github.run_attempt }}
+          name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
           path: artifacts/release/pack/
       - name: Manually publish verified exact-source artifacts
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
           RELEASE_NUGET_API_KEY: ${{ secrets.RELEASE_NUGET_API_KEY }}
           RELEASE_REGISTRY: ${{ vars.RELEASE_REGISTRY }}

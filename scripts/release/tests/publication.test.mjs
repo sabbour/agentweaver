@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
@@ -45,18 +46,49 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
     ...override,
   });
   const env = {
+    GITHUB_REPOSITORY: 'test/release', GH_TOKEN: 'test-github-secret',
     RELEASE_NUGET_SOURCE: 'https://feed.example.invalid/v3/index.json', RELEASE_NUGET_API_KEY: 'test-secret',
     RELEASE_REGISTRY: 'registry.example.invalid', RELEASE_REGISTRY_USER: 'test-user',
     RELEASE_REGISTRY_PASSWORD: 'test-password', DOCKER_CONFIG: path.join(root, 'artifacts', 'docker-config'),
   };
   const sourceSha = git('rev-parse', 'HEAD');
-  const publish = (options = {}) => publishArtifacts('releases/foundation.json', outDir, sourceSha, {
-    root, confirmed: true, env, run: (bin, args) => {
+  const tags = new Map();
+  const refs = new Map();
+  const remoteCalls = [];
+  const github = (args, input) => {
+    remoteCalls.push({ args, input });
+    const method = args[args.indexOf('--method') + 1];
+    const endpoint = args[3];
+    const body = input ? JSON.parse(input) : undefined;
+    if (method === 'GET' && endpoint.includes('/git/matching-refs/')) {
+      const prefix = `refs/${endpoint.split('/git/matching-refs/')[1]}`;
+      return JSON.stringify([...refs.values()].filter(({ ref }) => ref.startsWith(prefix)));
+    }
+    if (method === 'POST' && endpoint.endsWith('/git/tags')) {
+      const sha = createHash('sha1').update(input).digest('hex');
+      const tag = { sha, tag: body.tag, message: body.message, object: { type: body.type, sha: body.object } };
+      tags.set(sha, tag);
+      return JSON.stringify(tag);
+    }
+    if (method === 'POST' && endpoint.endsWith('/git/refs')) {
+      if (refs.has(body.ref)) throw new Error('ref already exists (atomic race lost)');
+      const ref = { ref: body.ref, object: { type: 'tag', sha: body.sha } };
+      refs.set(body.ref, ref);
+      return JSON.stringify(ref);
+    }
+    throw new Error(`unexpected injected GitHub request: ${method} ${endpoint}`);
+  };
+  const publish = (options = {}) => {
+    const external = options.run ?? ((bin, args) => {
       if (bin === 'docker' && args[0] === 'inspect') return JSON.stringify([`registry.example.invalid/svc@sha256:${'b'.repeat(64)}`]);
       return '';
-    }, ...options,
-  });
-  return { root, outDir, prepare, publish, calls, sourceSha };
+    });
+    return publishArtifacts('releases/foundation.json', outDir, sourceSha, {
+      root, confirmed: true, env, ...options,
+      run: (bin, args, input) => bin === 'gh' ? (options.github ?? github)(args, input) : external(bin, args, input),
+    });
+  };
+  return { root, outDir, prepare, publish, calls, sourceSha, github, tags, refs, remoteCalls, env };
 }
 
 test('prepares locked packages and unpublished service images without a registry push or fake digest', (t) => {
@@ -102,6 +134,26 @@ test('base-image provenance records only the single active pin, ignoring XML com
   assert.equal(f.prepare().artifacts.find(({ kind }) => kind === 'image').baseImage, immutableBase);
 });
 
+test('a Debug-only pin is forced into the actual Release build and container publication', (t) => {
+  const f = fixture(t, { baseImageXml: `<ContainerBaseImage Condition="'$(Configuration)' == 'Debug'">${immutableBase}</ContainerBaseImage>` });
+  const image = f.prepare().artifacts.find(({ kind }) => kind === 'image');
+  assert.equal(image.baseImage, immutableBase);
+  const serviceCommands = f.calls.filter((args) => ['build', 'publish'].includes(args[0]) && args[1].endsWith('Svc.csproj'));
+  assert.equal(serviceCommands.length, 2);
+  for (const args of serviceCommands) {
+    assert.ok(args.includes('Release'));
+    assert.equal(args.filter((arg) => arg.startsWith('-p:ContainerBaseImage=')).length, 1);
+    assert.ok(args.includes(`-p:ContainerBaseImage=${image.baseImage}`));
+  }
+});
+
+test('pack upload and download use the same attempt-independent source/run identity', () => {
+  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
+  assert.equal((workflow.match(/name: v1-release-pack-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/g) ?? []).length, 2);
+  assert.doesNotMatch(workflow, /name: v1-release-pack-.*github\.run_attempt/);
+  assert.match(workflow, /name: v1-release-pack-[^\n]+\n\s+overwrite: true/);
+});
+
 test('failed image preparation emits no complete provenance and rejects reuse of partial output', (t) => {
   const f = fixture(t);
   assert.throws(() => f.prepare({ dotnet: (args) => {
@@ -132,7 +184,17 @@ test('manual publication records actual immutable registry digests and never cha
   assert.equal(receipt.published[1].image, `registry.example.invalid/svc@sha256:${'b'.repeat(64)}`);
   assert.deepEqual(readFileSync(path.join(f.root, 'releases', 'foundation.json')), before);
   const text = readFileSync(path.join(f.outDir, 'publication.json'), 'utf8');
-  assert.doesNotMatch(text, /test-secret|test-password|test-user/);
+  assert.doesNotMatch(text, /test-secret|test-password|test-user|test-github-secret/);
+  const claim = [...f.tags.values()].find(({ tag }) => tag.endsWith('/claim'));
+  const result = [...f.tags.values()].find(({ tag }) => tag.endsWith('/result'));
+  const claimRecord = JSON.parse(claim.message);
+  assert.equal(claimRecord.status, 'claimed');
+  assert.equal(claimRecord.sourceSha, f.sourceSha);
+  assert.equal(claimRecord.provenanceSha256, receipt.provenanceSha256);
+  assert.deepEqual(claimRecord.planned, receipt.planned);
+  assert.equal(receipt.claimSha, claim.sha);
+  assert.deepEqual(JSON.parse(result.message), receipt);
+  assert.doesNotMatch(JSON.stringify([...f.tags.values()]), /test-secret|test-password|test-user|test-github-secret/);
   assert.throws(() => f.publish(), /receipt already exists/);
 });
 
@@ -155,4 +217,137 @@ test('image publication without an actual returned immutable digest is never suc
   f.prepare();
   assert.throws(() => f.publish({ run: (bin, args) => bin === 'docker' && args[0] === 'inspect' ? '[]' : '' }), /immutable digest/);
   assert.equal(JSON.parse(readFileSync(path.join(f.outDir, 'publication.json'), 'utf8')).status, 'partial');
+});
+
+for (const priorStatus of ['claimed', 'partial', 'published', 'malformed', 'result-without-claim']) {
+  test(`a durable ${priorStatus} record blocks a fresh workspace/redispatch before external commands`, (t) => {
+    const f = fixture(t);
+    f.prepare();
+    const suffix = priorStatus === 'result-without-claim' ? 'result' : 'claim';
+    const ref = `refs/tags/agentweaver-publication/${f.sourceSha}/${suffix}`;
+    f.refs.set(ref, { ref, object: { type: 'tag', sha: 'c'.repeat(40) }, status: priorStatus });
+    assert.equal(existsSync(path.join(f.outDir, 'publication.json')), false);
+    const calls = [];
+    assert.throws(() => f.publish({ run: (...args) => calls.push(args) }), /claim\/result already exists or is ambiguous/);
+    assert.deepEqual(calls, []);
+  });
+}
+
+test('full workflow retry cannot republish when only the permanent claim survives', (t) => {
+  const f = fixture(t);
+  f.prepare();
+  f.publish();
+  const fresh = path.join(f.root, 'artifacts', 'fresh-pack');
+  // A redispatch/full rerun has a new artifact and no previous local publication.json.
+  mkdirSync(fresh, { recursive: true });
+  for (const file of ['provenance.json', 'Pkg.0.1.0.nupkg', 'Svc.0.1.0.tar.gz']) {
+    writeFileSync(path.join(fresh, file), readFileSync(path.join(f.outDir, file)));
+  }
+  const resultRef = `refs/tags/agentweaver-publication/${f.sourceSha}/result`;
+  f.refs.delete(resultRef);
+  const calls = [];
+  assert.throws(() => publishArtifacts('releases/foundation.json', fresh, f.sourceSha, {
+    root: f.root, confirmed: true, env: f.env,
+    run: (bin, args, input) => bin === 'gh' ? f.github(args, input) : calls.push([bin, args]),
+  }), /claim\/result already exists or is ambiguous/);
+  assert.deepEqual(calls, []);
+});
+
+test('atomic duplicate-claim race loses before any external operation and never retries the ref', (t) => {
+  const f = fixture(t);
+  f.prepare();
+  const calls = [];
+  assert.throws(() => f.publish({ run: (...args) => calls.push(args), github: (args, input) => {
+    if (args[3].endsWith('/git/refs') && JSON.parse(input).ref.endsWith('/claim')) {
+      f.github(args, input); // A concurrent publisher wins this exact source claim first.
+    }
+    return f.github(args, input);
+  } }), /atomic race lost/);
+  assert.deepEqual(calls, []);
+  assert.equal([...f.refs.keys()].filter((ref) => ref.endsWith('/claim')).length, 1);
+  assert.equal(existsSync(path.join(f.outDir, 'publication.json')), false);
+});
+
+for (const failure of ['query-error', 'query-malformed', 'tag-source', 'tag-message', 'tag-missing', 'ref-object', 'ref-missing']) {
+  test(`durable claim ${failure} fails closed before external operations`, (t) => {
+    const f = fixture(t);
+    f.prepare();
+    const calls = [];
+    assert.throws(() => f.publish({ run: (...args) => calls.push(args), github: (args, input) => {
+      if (args[args.indexOf('--method') + 1] === 'GET') {
+        if (failure === 'query-error') throw new Error('GitHub unavailable');
+        if (failure === 'query-malformed') return '{}';
+      }
+      const result = JSON.parse(f.github(args, input));
+      if (args[3].endsWith('/git/tags')) {
+        if (failure === 'tag-source') result.object.sha = 'f'.repeat(40);
+        if (failure === 'tag-message') result.message = '{}';
+        if (failure === 'tag-missing') return '{}';
+      }
+      if (args[3].endsWith('/git/refs')) {
+        if (failure === 'ref-object') result.object.sha = 'f'.repeat(40);
+        if (failure === 'ref-missing') return '{}';
+      }
+      return JSON.stringify(result);
+    } }), /GitHub unavailable|claim\/result already exists|does not match/);
+    assert.deepEqual(calls, []);
+  });
+}
+
+for (const externalFailure of [false, true]) {
+  test(`terminal receipt failure preserves permanent claim${externalFailure ? ' and original publication failure' : ''}`, (t) => {
+    const f = fixture(t, { service: false });
+    f.prepare();
+    assert.throws(() => f.publish({
+      run: () => { if (externalFailure) throw new Error('package publication failed'); return ''; },
+      github: (args, input) => {
+        if (args[3].endsWith('/git/refs') && JSON.parse(input).ref.endsWith('/result')) {
+          throw new Error('terminal ref persistence failed');
+        }
+        return f.github(args, input);
+      },
+    }), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.match(error.message, /permanent claim blocks retry/);
+      if (externalFailure) assert.match(error.errors[0].message, /package publication failed/);
+      assert.match(error.errors.at(-1).message, /terminal ref persistence failed/);
+      return true;
+    });
+    const receipt = JSON.parse(readFileSync(path.join(f.outDir, 'publication.json'), 'utf8'));
+    assert.equal(receipt.status, externalFailure ? 'partial' : 'published');
+    assert.ok(f.refs.has(`refs/tags/agentweaver-publication/${f.sourceSha}/claim`));
+    assert.equal(f.refs.has(`refs/tags/agentweaver-publication/${f.sourceSha}/result`), false);
+  });
+}
+
+test('publish alone has write permission and its token never goes into pack or Git source', () => {
+  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
+  const [pack, publish] = workflow.split('\n  publish:');
+  assert.match(pack, /permissions:\n  contents: read/);
+  assert.doesNotMatch(pack, /contents: write|GH_TOKEN/);
+  assert.match(publish, /permissions:\n      contents: write/);
+  assert.match(publish, /GH_TOKEN: \$\{\{ github.token \}\}/);
+});
+
+test('local receipt failure surfaces after a durable result and cannot permit automatic repeat', (t) => {
+  const f = fixture(t, { service: false });
+  f.prepare();
+  assert.throws(() => f.publish({ writeFileSync: () => { throw new Error('local receipt disk failure'); } }),
+    (error) => error instanceof AggregateError && /local receipt disk failure/.test(error.message));
+  const result = [...f.tags.values()].find(({ tag }) => tag.endsWith('/result'));
+  assert.equal(JSON.parse(result.message).status, 'published');
+  assert.equal(existsSync(path.join(f.outDir, 'publication.json')), false);
+  assert.throws(() => f.publish(), /claim\/result already exists or is ambiguous/);
+});
+
+test('a feed fragment cannot leak a token into durable destination records', (t) => {
+  const f = fixture(t, { service: false });
+  f.prepare();
+  const calls = [];
+  assert.throws(() => f.publish({
+    env: { ...f.env, RELEASE_NUGET_SOURCE: 'https://feed.example.invalid/#test-secret' },
+    run: (...args) => calls.push(args),
+  }), /credential-free HTTPS feed/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(f.remoteCalls, []);
 });

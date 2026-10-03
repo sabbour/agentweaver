@@ -18,6 +18,7 @@ function command(bin, args, input) {
 
 export function publishArtifacts(manifestPath, outDir, sourceSha, {
   root = process.cwd(), confirmed = false, env = process.env, run = command,
+  writeFileSync: writeReceipt = writeFileSync,
 } = {}) {
   if (!confirmed || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) fail('explicit confirmation and exact source SHA are required');
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -49,7 +50,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   if (hasPackages) {
     let feed;
     try { feed = new URL(env.RELEASE_NUGET_SOURCE); } catch { fail('configure an HTTPS NuGet feed and API key'); }
-    if (feed.protocol !== 'https:' || feed.username || feed.password || feed.search || !env.RELEASE_NUGET_API_KEY) {
+    if (feed.protocol !== 'https:' || feed.username || feed.password || feed.search || feed.hash || !env.RELEASE_NUGET_API_KEY) {
       fail('configure a credential-free HTTPS feed URL and a separate secret API key');
     }
   }
@@ -57,7 +58,45 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       !env.RELEASE_REGISTRY_USER || !env.RELEASE_REGISTRY_PASSWORD || !env.DOCKER_CONFIG)) {
     fail('configure a registry host, separate secret credentials, and an isolated Docker configuration directory');
   }
-  const receipt = { schemaVersion: 1, sourceSha, provenanceSha256: hash(readFileSync(path.join(directory, 'provenance.json'))), status: 'partial', published: [] };
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY ?? '') || !env.GH_TOKEN) {
+    fail('configure the GitHub repository and scoped publication token for durable claims');
+  }
+  const namespace = `agentweaver-publication/${sourceSha}`;
+  const repository = `repos/${env.GITHUB_REPOSITORY}`;
+  const api = (method, endpoint, body) => {
+    const args = ['api', '--method', method, `${repository}/${endpoint}`];
+    if (body) args.push('--input', '-');
+    return JSON.parse(run('gh', args, body ? JSON.stringify(body) : undefined));
+  };
+  const prior = api('GET', `git/matching-refs/tags/${namespace}/`);
+  if (!Array.isArray(prior) || prior.length !== 0) {
+    fail('durable publication claim/result already exists or is ambiguous; inspect remote state before any retry');
+  }
+  const planned = selected.map(({ component, artifact }) => ({
+    id: component.id, version: component.version, kind: artifact.kind, sha256: artifact.sha256,
+    destination: artifact.kind === 'package' ? env.RELEASE_NUGET_SOURCE
+      : `${env.RELEASE_REGISTRY}/${component.id.toLowerCase()}:${component.version}`,
+  }));
+  const receipt = {
+    schemaVersion: 1, sourceSha, provenanceSha256: hash(readFileSync(path.join(directory, 'provenance.json'))),
+    planned, status: 'partial', published: [],
+  };
+  const createRecord = (name, record) => {
+    const tag = `${namespace}/${name}`;
+    const message = JSON.stringify(record);
+    const object = api('POST', 'git/tags', { tag, message, object: sourceSha, type: 'commit' });
+    if (!/^[a-f0-9]{40}$/.test(object?.sha ?? '') || object.tag !== tag || object.message !== message ||
+        object.object?.sha !== sourceSha || object.object?.type !== 'commit') {
+      fail(`durable ${name} tag response does not match exact source record`);
+    }
+    const ref = `refs/tags/${tag}`;
+    const created = api('POST', 'git/refs', { ref, sha: object.sha });
+    if (created?.ref !== ref || created.object?.type !== 'tag' || created.object?.sha !== object.sha) {
+      fail(`durable ${name} ref response does not match the created tag; inspect remote state`);
+    }
+    return object.sha;
+  };
+  receipt.claimSha = createRecord('claim', { ...receipt, status: 'claimed' });
   let publicationError;
   try {
     if (hasImages) run('docker', ['login', env.RELEASE_REGISTRY, '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'], env.RELEASE_REGISTRY_PASSWORD);
@@ -83,12 +122,21 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     publicationError = error;
     throw error;
   } finally {
+    const failures = [];
     try {
-      writeFileSync(path.join(directory, 'publication.json'), JSON.stringify(receipt, null, 2) + '\n');
+      createRecord('result', receipt);
     } catch (receiptError) {
-      if (publicationError) throw new AggregateError([publicationError, receiptError],
-        `publication failed (${publicationError.message}); receipt write also failed: ${receiptError.message}; inspect remote state before retrying`);
-      throw receiptError;
+      failures.push(receiptError);
+    }
+    try {
+      writeReceipt(path.join(directory, 'publication.json'), JSON.stringify(receipt, null, 2) + '\n');
+    } catch (receiptError) {
+      failures.push(receiptError);
+    }
+    if (failures.length) {
+      throw new AggregateError([...(publicationError ? [publicationError] : []), ...failures],
+        `publication receipt persistence failed: ${failures.map(({ message }) => message).join('; ')}; permanent claim blocks retry; inspect remote state`,
+        { cause: publicationError ?? failures[0] });
     }
   }
 }
