@@ -36,8 +36,13 @@ jobs:
         run: dotnet restore Agentweaver.slnx --locked-mode
       - name: Build foundation
         run: dotnet build Agentweaver.slnx --no-restore --configuration Release
-      - name: Test all .NET foundations including Identity with coverage
+      - name: Test all .NET foundations and Identity broker with coverage
         run: npm run coverage:dotnet
+      - name: Build unpublished Identity broker image
+        run: |
+          mkdir -p artifacts/images
+          docker build --file services/identity/Agentweaver.Identity.Broker/Dockerfile --tag agentweaver-identity-broker:ci --label org.opencontainers.image.revision="$GITHUB_SHA" .
+          docker image inspect agentweaver-identity-broker:ci > artifacts/images/identity-broker.json
       - name: Test release validator with coverage
         if: ${{ !cancelled() }}
         run: npm run coverage:node
@@ -67,6 +72,13 @@ jobs:
               echo "Node coverage report was not produced; inspect the preceding steps."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: v1-local-image-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/images/
+          if-no-files-found: warn
+          retention-days: 30
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

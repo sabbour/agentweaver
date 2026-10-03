@@ -53,7 +53,7 @@ fallback. Resolving a descriptor produces a candidate, not a provisioned resourc
 A run binding pins negotiated capabilities only after provisioning; layered pinning
 also requires the confirmed applied egress-intent generation.
 
-The release manifest describes the independently versioned foundation libraries.
+The release manifest describes independently versioned libraries and the unpublished Identity broker candidate.
 It is a draft composition, not evidence of deployment or a released platform.
 
 The [P0 Azure infrastructure story](docs/specs/1777-azure-p0-infrastructure.md) adds
@@ -90,6 +90,13 @@ credential without reading its value, and invalidates acquired credentials on
 every subsequent error or cancellation. It does not provide a grant store,
 authenticate network callers, or deploy an Identity service.
 
+The [Identity broker candidate](docs/specs/1779-identity-broker.md) adds a native
+.NET 10/OpenIddict service with owned PostgreSQL stores, external OIDC login,
+authenticated consent, S256 PKCE, resource audiences, and refresh replay rejection.
+It requires explicit host credentials and has no ambient user-secrets or development-certificate fallback.
+Its draft service entry has no image digest because it remains unpublished.
+Run-grant redemption composition (#1783) and Azure publication/proof (#1790) remain separate dependencies.
+
 The Postgres P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
 acknowledgment. Consumer-scoped inbox receipts admit a stable message identity in the
@@ -122,6 +129,7 @@ dotnet build Agentweaver.slnx --no-restore --configuration Release
 dotnet test tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Telemetry.Tests\Agentweaver.Telemetry.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Telemetry.AzureMonitor.Tests\Agentweaver.Telemetry.AzureMonitor.Tests.csproj --no-build --no-restore --configuration Release

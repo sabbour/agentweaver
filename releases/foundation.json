@@ -50,6 +50,12 @@
       "kind": "library",
       "version": "0.1.0",
       "project": "packages/Agentweaver.ObjectStore.AzureBlob/Agentweaver.ObjectStore.AzureBlob.csproj"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "kind": "service",
+      "version": "0.1.0",
+      "project": "services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj"
     }
   ],
   "compatibility": [

@@ -49,6 +49,9 @@ Semantic versions have `major.minor.patch` and optional prerelease/build
 suffixes; a prerelease numeric identifier cannot have a leading zero.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
+The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
+Its initial manifest/project version is `0.1.0`, with a fresh component-scoped minor changeset.
+The record is release intent, not a version bump, registry artifact, or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 
 Future `release` compositions must contain an actual `service` component
