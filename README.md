@@ -63,14 +63,18 @@ identity. The dependent
 adds an opt-in exporter for all three signals; neither library starts a service,
 provisions an Azure resource, or proves cloud delivery.
 
-The next P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
+The Postgres P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
 acknowledgment. Real PostgreSQL tests cover atomicity, duplicate handling, concurrency,
 and recovery. This is a persistence library, not a running relay or a deployed service.
 
+The Blob Object Store foundation adds provider-neutral opaque-object operations
+and an injected Azure SDK adapter for platform artifacts. It does not expose
+agent workspace storage or provision an Azure account; see the
+[Object Store guide](packages/Agentweaver.ObjectStore.AzureBlob/README.md).
+
 Remaining P0 work includes wiring these primitives into real services, Identity
-authorization and workload identity, Blob storage, and the dedicated Azure
-integration environment.
+authorization and workload identity, and the dedicated Azure integration environment.
 
 ## Build and check the foundation
 
@@ -87,6 +91,7 @@ dotnet test tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.Az
 dotnet test tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Telemetry.Tests\Agentweaver.Telemetry.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Telemetry.AzureMonitor.Tests\Agentweaver.Telemetry.AzureMonitor.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.ObjectStore.AzureBlob.Tests\Agentweaver.ObjectStore.AzureBlob.Tests.csproj --no-build --no-restore --configuration Release
 npm run release:validate
 npm run test:release
 ```

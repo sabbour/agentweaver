@@ -32,7 +32,7 @@ jobs:
         run: dotnet restore Agentweaver.slnx --locked-mode
       - name: Build foundation
         run: dotnet build Agentweaver.slnx --no-restore --configuration Release
-      - name: Test .NET foundation with coverage
+      - name: Test .NET foundations with coverage
         run: npm run coverage:dotnet
       - name: Test release validator with coverage
         if: ${{ !cancelled() }}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -78,7 +78,8 @@ function deliveryAgent({ cwd, git }, options = {}) {
   let reviewedTree;
   let admissionCount = 0;
   let publicationCount = 0;
-  const agent = async (_prompt, { label }) => {
+  let validationCount = 0;
+  const agent = async (prompt, { label }) => {
     if (label === "v3:scope") return { status: "passed", treeSha: tree(), evidence: "issue scoped" };
     if (label === "v3:implementation") {
       writeFileSync(join(cwd, "sample.txt"), "implemented\n");
@@ -86,7 +87,18 @@ function deliveryAgent({ cwd, git }, options = {}) {
       reviewedTree = tree();
       return { status: "passed", treeSha: tree(), evidence: "implementation staged" };
     }
-    if (label.startsWith("v3:validation:")) return { status: "passed", treeSha: tree(), evidence: "targeted tests passed" };
+    if (label.startsWith("v3:validation:")) {
+      validationCount++;
+      if (options.blockValidationOnce && validationCount === 1) {
+        return { status: "blocked", treeSha: tree(), evidence: "deployed proof requested for library" };
+      }
+      if (options.requireFoundationPolicy) {
+        assert.match(prompt, /contract\/adapter-only foundation with no deployable service/);
+        assert.match(prompt, /report absent deployed Azure proof as a limitation, not a blocker/);
+      }
+      reviewedTree = tree();
+      return { status: "passed", treeSha: tree(), evidence: "targeted tests passed" };
+    }
     if (label.includes("review:")) {
       if (options.review === "null" && label.includes("code-review")) return null;
       if (options.review === "blocked" && label.includes("code-review")) {
@@ -164,6 +176,27 @@ test("null, blocked and inconsistent review cannot authorize publication", async
       assert.equal(calls.some((c) => c.label.startsWith("v3:publication:")), false);
     });
   }
+});
+
+test("non-deployable foundation validation resumes after a staged workflow policy fix", async (t) => {
+  const repo = fixture(t);
+  const handler = deliveryAgent(repo, { blockValidationOnce: true, requireFoundationPolicy: true, ownerBlocked: true });
+  const { ctx, calls, journal } = context({ args: { mode: "deliver" }, agent: handler.agent });
+  await assert.rejects(runIssueToMerge(ctx, repo.cwd), /Blocked/);
+  const originalTree = journal.get("v3:implementation").treeSha;
+  const extensionDir = join(repo.cwd, ".github", "extensions", "agentweaver-issue-to-merge");
+  mkdirSync(extensionDir, { recursive: true });
+  writeFileSync(join(extensionDir, "workflow.mjs"), "validation policy correction\n");
+  writeFileSync(join(extensionDir, "workflow.test.mjs"), "regression test\n");
+  repo.git("add", ".github/extensions/agentweaver-issue-to-merge");
+  const correctedTree = repo.git("write-tree");
+  assert.notEqual(correctedTree, originalTree);
+  await assert.rejects(runIssueToMerge(ctx, repo.cwd), /Blocked/);
+  assert.equal(calls.filter((c) => c.label === "v3:implementation").length, 1);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:validation:")).length, 2);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:review:")).length, 2);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:publication:")).length, 1);
+  assert.equal(repo.git("rev-parse", "HEAD^{tree}"), correctedTree);
 });
 
 test("resume after correction and commit reuses historical trees but refreshes admission", async (t) => {

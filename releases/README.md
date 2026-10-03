@@ -3,9 +3,10 @@
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
 It pins the independently versioned .NET foundation libraries
 (`Agentweaver.Abstractions`, `Agentweaver.Providers`,
-`Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, and
-`Agentweaver.Telemetry`, and `Agentweaver.Telemetry.AzureMonitor`, each
-currently `0.1.0`).
+`Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`,
+`Agentweaver.Telemetry`, `Agentweaver.Telemetry.AzureMonitor`, and
+`Agentweaver.ObjectStore.AzureBlob`,
+each currently `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
@@ -59,11 +60,12 @@ and deployment gates are future work, not supplied by this validator.
 Run `npm run release:validate` to check the draft against checked-in projects,
 and `npm run test:release` for validator tests. Neither command installs
 dependencies or contacts the cloud. CI also restores the .NET solution with
-checked-in lock files, builds once, and tests the provider contracts.
+checked-in lock files, builds once, and tests all foundation libraries, including
+the Azure Blob transport adapter.
 
 ## Unreleased foundation impact
 
-- #1750 adds the platform-singleton Object Store contract for opaque platform
-  artifacts, with create-only writes, streamed reads, and missing-object delete
-  semantics. This contract-only layer does not include an adapter or a deployed
-  service; the draft composition has no new library or version bump.
+- #1750 supplies the platform-singleton Object Store contract for opaque platform
+  artifacts. #1744 adds the Azure Blob adapter, with streamed reads, create-only
+  writes, and missing-object delete semantics. This draft library composition
+  is not a platform release or version bump. No Changesets pipeline exists on v1.

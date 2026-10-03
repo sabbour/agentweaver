@@ -14,7 +14,7 @@ const azureMonitor = '<Project><PropertyGroup><Version>0.1.0</Version></Property
 const projects = new Map(fixture.components.map((component) => [
   component.project,
   component.id === 'Agentweaver.Telemetry.AzureMonitor' ? azureMonitor :
-    ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault'].includes(component.id)
+    ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault', 'Agentweaver.ObjectStore.AzureBlob'].includes(component.id)
       ? provider : abstraction,
 ]));
 const readProject = (file) => {
