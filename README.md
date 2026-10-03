@@ -56,6 +56,16 @@ also requires the confirmed applied egress-intent generation.
 The release manifest describes the independently versioned foundation libraries.
 It is a draft composition, not evidence of deployment or a released platform.
 
+The [P0 Azure infrastructure story](docs/specs/1777-azure-p0-infrastructure.md) adds
+a dedicated-environment layout: native Bicep modules under `infra/bicep/`
+(private AKS with OIDC/workload identity, Entra-only PostgreSQL, RBAC-only Key
+Vault, Blob storage, Azure Monitor, least-privilege per-service identities), a
+Kustomize base under `deploy/k8s/base/`, and dependency-free Node CLI tooling
+under `scripts/azure/` for read-only plan, confirmed exact-SHA deploy, and a
+blocking acceptance entrypoint. None of it has been applied to a real
+subscription; see [Azure infrastructure tooling](scripts/azure/README.md) for
+the guardrail contract.
+
 The provider-neutral Secrets foundation defines opaque, versioned references and
 purpose/run-bound requests for trusted Identity redemption. Short-lived credential
 values remain outside descriptors, bindings and durable state. This is a contract
@@ -118,8 +128,10 @@ dotnet test tests\Agentweaver.Telemetry.AzureMonitor.Tests\Agentweaver.Telemetry
 dotnet test tests\Agentweaver.ObjectStore.AzureBlob.Tests\Agentweaver.ObjectStore.AzureBlob.Tests.csproj --no-build --no-restore --configuration Release
 npm run release:validate
 npm run test:release
+npm run test:azure
+az bicep build --file infra\bicep\main.bicep --stdout
+kubectl kustomize deploy\k8s\base
 ```
-
 The Node tooling has no external dependencies; no npm installation is required.
 `npm run release:plan`, `npm run release:apply`, and `npm run release:pack`
 compute deterministic version bumps, apply them to the manifest and checked-in

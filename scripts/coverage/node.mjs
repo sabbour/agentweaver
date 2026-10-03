@@ -31,6 +31,7 @@ async function main() {
     '--test-reporter=lcov',
     `--test-reporter-destination=${lcov}`,
     'scripts/release/tests/*.test.mjs',
+    'scripts/azure/tests/*.test.mjs',
   ];
   const chunks = [];
   const child = spawn(process.execPath, args, { cwd: root, stdio: ['inherit', 'pipe', 'inherit'] });

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: foundation-probe
+  namespace: agentweaver-v1-p0
+  annotations:
+    # Supplied by the environment overlay from the identity module's
+    # `identityClientIds` output. Never hardcode a real client ID in this
+    # base layout.
+    azure.workload.identity/client-id: CHANGEME-foundation-probe-client-id
+    azure.workload.identity/tenant-id: CHANGEME-tenant-id
+  labels:
+    azure.workload.identity/use: "true"
+    agentweaver.io/service: foundation-probe
+automountServiceAccountToken: true

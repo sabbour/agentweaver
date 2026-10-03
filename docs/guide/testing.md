@@ -11,6 +11,7 @@ answer different questions. Passing one does not substitute for the others.
 | Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
 | Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
 | Azure Blob transport fake | SDK HTTP requests, streamed binary data, create-only conditions, missing/conflict responses and failures without a live account | Every Object Store change |
+| Azure P0 infrastructure tooling | Dedicated-target/digest/clean-tree guardrails, plan/deploy command construction, and acceptance-check blocking logic, all through an injected fake `az`/`git`; no live call | Every `scripts/azure` or `infra/bicep` change |
 | Service compatibility | Current and N-1 API/event peers agree during rollout | When real service APIs and consumers exist |
 | Azure-backed service integration | Actual identity, network access, managed dependencies, rollout and recovery | From the first deployable vertical slice |
 | Platform E2E | A user's task completes correctly through the assembled platform | From the end of P1, and for integrated candidates thereafter |
@@ -38,6 +39,18 @@ the composition pipeline, not live workload identity, RBAC or an Azure deploymen
 Object Store tests inject a fake HTTP transport into the Azure Blob SDK; these
 verify SDK requests and adapter mappings but do not prove cloud credentials,
 Azure permissions, durability, or deployed integration.
+
+The [Azure P0 infrastructure tooling](../specs/1777-azure-p0-infrastructure.md)
+tests inject a fake `az`/`git` executor into every guardrail, plan, deploy, and
+acceptance-check function. They prove dedicated-target naming is enforced,
+deploy stays dry-run unless `--execute` and every guardrail passes, and that
+the acceptance entrypoint returns an explicit `blocked` result (never a
+placeholder `passed`) when evidence or a dependent service is missing. They do
+not call a live target. Local version/argv tests exercise the actual CLI wrapper.
+They do not prove a deployed AKS cluster, Key Vault, Blob, PostgreSQL, or Monitor resource exists.
+`infra/bicep/main.bicep` and its modules are validated with `az bicep build`
+(offline compilation, no Azure login); `deploy/k8s/base/` is validated with
+`kubectl kustomize` (offline rendering, no cluster connection).
 
 Run the commands in the [root README](../../README.md#build-and-check-the-foundation).
 The PostgreSQL suite requires a running Docker-compatible engine and permission to
@@ -133,6 +146,10 @@ does not prove integration correctness, Azure connectivity, or platform E2E
 acceptance; the distinct test layers above still apply.
 
 ## When Azure is added
+
+The existing Node CI collector also runs the Azure tooling regressions and
+offline Bicep/Kustomize checks. Its coverage report still measures release tooling.
+The Azure checks require no login, secrets, subscription, or cluster connection.
 
 Create a dedicated **v1 integration environment during P0 when the first deployable
 service exists**, before accepting its cloud integration. Do not reuse or mutate
