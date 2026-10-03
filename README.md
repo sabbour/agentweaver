@@ -40,11 +40,13 @@ The initial P0 delivery contains provider descriptor and binding contracts, a pu
 catalog/resolver, conformance-focused tests, and build/release validation. It does not
 start any product services or provision Azure resources.
 
-Provider selection initially covers exclusive and platform-singleton seams. Composite,
-layered, meter-keyed, and application-scoped selection remain subsequent work; callers
-receive an explicit error for unsupported selection rather than a fallback. Resolving a
-descriptor produces a candidate, not a provisioned resource. A run binding pins the
-resource's negotiated capabilities only after provisioning.
+Provider selection covers exclusive and platform-singleton seams, ordered Guardrails/
+Telemetry sets, and layered Network Policy (required L3/L4, optional L7). Cost
+meter-keyed and Application Hosting per-app selection remain subsequent work; callers
+receive an explicit error for unsupported single-provider resolution rather than a
+fallback. Resolving a descriptor produces a candidate, not a provisioned resource.
+A run binding pins negotiated capabilities only after provisioning; layered pinning
+also requires the confirmed applied egress-intent generation.
 
 The release manifest describes the independently versioned foundation libraries.
 It is a draft composition, not evidence of deployment or a released platform.
