@@ -69,6 +69,13 @@ other streams already claimed in that batch. Cancellation before or during
 publish, or after publish but before acknowledgment, never acknowledges an
 unconfirmed event; cancellation propagates rather than returning a partial
 outcome list, although earlier items in the batch may have completed.
+Cancellation stops waiting even when a publisher ignores its token; it cannot
+stop that transport's external work, which may still complete later, but this
+relay will not acknowledge it. Cancellation also takes precedence over a
+concurrent publisher failure. A late transport completion may deliver a duplicate
+after another worker reclaims the lease; consumers still need stable-identity
+deduplication and sequence handling. A fenced event remains eligible for redelivery
+after lease expiration only if another worker has not already acknowledged it.
 
 This bounded primitive is **not** a background loop, daemon, heartbeat, broker
 provisioning, or an exactly-once guarantee. The relay opens no separate network

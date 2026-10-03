@@ -29,7 +29,9 @@ public sealed class OutboxRelay
     /// unrelated stream's delivery in the same batch, so the loop continues. An expired,
     /// replaced, or already-settled lease at acknowledgment time is reported as
     /// <see cref="RelayOutcome.AcknowledgmentFenced"/> rather than treated as an error; the
-    /// publish already happened and delivery remains at-least-once. Cancellation is checked
+    /// publish already happened and delivery remains at-least-once. Cancellation stops waiting
+    /// even if the publisher ignores its token; publication may still complete externally but
+    /// this relay will not acknowledge it. Cancellation is checked
     /// before the claim, before each publish, and again before each acknowledgment; once
     /// requested it propagates immediately and the method returns no outcome list. Earlier
     /// items in the same batch may already have been published and/or acknowledged by that
@@ -47,7 +49,7 @@ public sealed class OutboxRelay
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                await _publisher.PublishAsync(delivery.Event, cancellationToken);
+                await _publisher.PublishAsync(delivery.Event, cancellationToken).WaitAsync(cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -59,6 +61,7 @@ public sealed class OutboxRelay
             }
             catch (Exception ex)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 outcomes.Add(new RelayOutcome.PublishFailed(delivery.Event, ex));
                 continue;
             }

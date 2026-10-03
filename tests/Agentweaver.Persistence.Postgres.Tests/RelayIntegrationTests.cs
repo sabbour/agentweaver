@@ -187,6 +187,65 @@ public sealed class RelayIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CancellationDuringUncooperativePublishStopsWaitingWithoutAcknowledgment()
+    {
+        await EnqueueAsync(Message());
+        using var source = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var publication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var relay = new OutboxRelay(_outbox, new Publisher((_, token) =>
+        {
+            Assert.Equal(source.Token, token);
+            entered.SetResult();
+            return publication.Task;
+        }));
+        var pending = relay.RelayOnceAsync("worker", 1, TimeSpan.FromMinutes(1), source.Token);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            source.Cancel();
+            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                async () => await pending.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(source.Token, exception.CancellationToken);
+            Assert.False(publication.Task.IsCompleted);
+            Assert.Equal(0, await DeliveredAsync());
+            Assert.Equal(1, await ScalarAsync(
+                $"SELECT count(*) FROM \"{_schema}\".outbox_events WHERE lease_token IS NOT NULL"));
+        }
+        finally
+        {
+            publication.TrySetResult();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                async () => await pending.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        Assert.Equal(0, await DeliveredAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationDuringPublisherFailurePropagatesInsteadOfReturningOutcome(bool synchronous)
+    {
+        await EnqueueAsync(Message());
+        using var source = new CancellationTokenSource();
+        var relay = new OutboxRelay(_outbox, new Publisher((_, token) =>
+        {
+            Assert.Equal(source.Token, token);
+            source.Cancel();
+            var failure = new IOException("transport failed after cancellation");
+            if (synchronous) throw failure;
+            return Task.FromException(failure);
+        }));
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => relay.RelayOnceAsync("worker", 1, TimeSpan.FromMinutes(1), source.Token));
+        Assert.Equal(source.Token, exception.CancellationToken);
+        Assert.Equal(0, await DeliveredAsync());
+        Assert.Equal(1, await ScalarAsync(
+            $"SELECT count(*) FROM \"{_schema}\".outbox_events WHERE lease_token IS NOT NULL"));
+    }
+
+    [Fact]
     public async Task CancellationAfterPublishStopsBeforeAcknowledgment()
     {
         await EnqueueAsync(Message());
