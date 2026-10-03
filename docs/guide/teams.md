@@ -123,14 +123,21 @@ Click any agent card to open a drawer:
 
 Agents accumulate **memories** and **decisions** across runs. Navigate to **Team Memory** from a project sidebar.
 
-The **Addressed messages** tab shows the latest project messages, their sender and recipient
-runs, thread and reply links, optional backlog/work-plan references, and delivery status
-or error. Refresh it to reconcile pending messages against retired recipients and ended
-runs. This is currently an inspection surface: a run-bound agent can send and acknowledge
-through REST, MCP or native tools, but the operator cannot impersonate an agent run.
-Automatic turn-boundary delivery and idle wake are not yet connected; an accepted message
-does not promise that the recipient has seen it. Acknowledged means receipt only, not task
-completion or decision approval.
+The **Addressed messages** tab shows project messages, sender and recipient runs, thread
+and reply links, optional backlog/work-plan references, and delivery status or error.
+Operators can send to an active teammate run using its agent name and run ID, reply to
+their acknowledged messages, and retry an expired or undeliverable message with an
+optional replacement active run ID. If a request fails after persistence, submitting
+the unchanged form again reuses its idempotency key. Refresh to reconcile pending
+messages against retired recipients and ended runs. REST, MCP, and native tools expose
+the same correlation and receipt states; only the recipient run can acknowledge receipt.
+
+Busy worker runs pick up pending messages at a model-turn boundary (up to eight per
+turn), preserving the message ID on crash/replay. Delivery is recorded only after
+the turn returns; presentation can repeat after a crash before the receipt is written,
+but it remains the same logical message. **Idle wake is not yet available:** sending to
+an idle run does not schedule an extra turn, and `accepted` does not mean seen.
+Acknowledged means receipt only, not task completion or decision approval.
 
 ### The four memory layers
 
