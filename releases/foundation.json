@@ -32,6 +32,12 @@
       "kind": "library",
       "version": "0.1.0",
       "project": "packages/Agentweaver.Telemetry/Agentweaver.Telemetry.csproj"
+    },
+    {
+      "id": "Agentweaver.Telemetry.AzureMonitor",
+      "kind": "library",
+      "version": "0.1.0",
+      "project": "packages/Agentweaver.Telemetry.AzureMonitor/Agentweaver.Telemetry.AzureMonitor.csproj"
     }
   ],
   "compatibility": [
@@ -43,6 +49,11 @@
     {
       "consumer": "Agentweaver.Secrets.AzureKeyVault",
       "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.1.0"]
+    },
+    {
+      "consumer": "Agentweaver.Telemetry.AzureMonitor",
+      "dependency": "Agentweaver.Telemetry",
       "versions": ["0.1.0"]
     }
   ]

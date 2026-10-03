@@ -636,9 +636,12 @@ never decide whether a turn is authorized or accounted for.
 
 The lower-layer [OpenTelemetry foundation](../../../packages/Agentweaver.Telemetry/README.md)
 registers native .NET ActivitySource, Meter, and logging providers with a service
-resource identity. It has no built-in exporter or network call. Azure Monitor,
-optional OTLP sinks, and transport-specific context propagation remain integration
-work; neither successful export nor exporter availability changes durable state.
+resource identity. It has no built-in exporter or network call. The dependent
+[Azure Monitor integration](../../../packages/Agentweaver.Telemetry.AzureMonitor/README.md)
+composes the three supported signal exporters through the Azure SDK with explicit
+configuration and an optional injected credential. OTLP sinks remain caller
+composition; transport-specific context propagation remains service integration
+work. Neither successful export nor exporter availability changes durable state.
 
 ## Messaging
 

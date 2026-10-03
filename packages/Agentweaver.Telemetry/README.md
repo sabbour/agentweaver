@@ -12,8 +12,8 @@ The registration listens to `TelemetrySignals.Activities` and
 `TelemetrySignals.Metrics` and sets `service.name` on all three signals.
 Consumers can add exporters using the optional tracing, metrics, and logging
 builder callbacks. No exporter or network destination is registered by this
-library; the Azure Monitor default and optional OTLP sinks belong to the
-dependent integration layer. Dispose the service provider to shut down its
+library; the [Azure Monitor integration](../Agentweaver.Telemetry.AzureMonitor/README.md)
+and optional OTLP sinks compose on these callbacks. Dispose the service provider to shut down its
 processors. A telemetry export failure must never govern request success.
 
 Use low-cardinality, non-sensitive tags such as a provider seam or a bounded

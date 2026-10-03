@@ -8,6 +8,7 @@ answer different questions. Passing one does not substitute for the others.
 | Unit and provider conformance | Selection, capabilities, immutable bindings, explicit failures | Every affected change |
 | PostgreSQL integration | State/event atomicity, schema migration, idempotency, stream ordering, concurrent claims, lease fencing and restart recovery | Every persistence change; the foundation CI runs the whole small suite |
 | Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
+| Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
 | Service compatibility | Current and N-1 API/event peers agree during rollout | When real service APIs and consumers exist |
 | Azure-backed service integration | Actual identity, network access, managed dependencies, rollout and recovery | From the first deployable vertical slice |
 | Platform E2E | A user's task completes correctly through the assembled platform | From the end of P1, and for integrated candidates thereafter |
@@ -45,11 +46,12 @@ npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs
 ```
 
-The .NET command restores the pinned local ReportGenerator tool, runs all four
+The .NET command restores the pinned local ReportGenerator tool, runs all five
 test suites once with Coverlet, and merges their reports using ReportGenerator.
-Its scope is all five current production libraries: Abstractions, Providers,
-Persistence.Postgres, Secrets.AzureKeyVault, and Telemetry. Shared sources are
-merged, not summed twice. Node uses its built-in test coverage and spec/LCOV reporters
+Its scope is all six current production libraries: Abstractions, Providers,
+Persistence.Postgres, Secrets.AzureKeyVault, Telemetry, and
+Telemetry.AzureMonitor. Shared sources are merged, not summed twice. Node uses
+its built-in test coverage and spec/LCOV reporters
 for the release validator; test files, fixtures, and coverage wrappers are not
 production targets. No external JavaScript coverage dependency is needed.
 
@@ -61,6 +63,7 @@ Reports are written beneath `artifacts\coverage\` (ignored by Git):
 | `dotnet\providers\`, `dotnet\postgres\` | Individual test-suite Cobertura reports |
 | `dotnet\keyvault\` | Azure Key Vault adapter Cobertura report |
 | `dotnet\telemetry\` | Telemetry foundation Cobertura report |
+| `dotnet\azure-monitor\` | Azure Monitor adapter Cobertura report |
 | `node\` | `lcov.info` and `summary.txt` containing live test output and the native coverage table |
 | `source.json` (CI only) | Tested checkout SHA, PR head SHA, run ID, and run attempt |
 
