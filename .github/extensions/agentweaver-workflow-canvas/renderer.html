@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Repository workflows</title>
+  <style>
+    body { margin: 0; padding: 24px; background: var(--background-color-default, #fff); color: var(--text-color-default, #24292f); font: var(--text-body-medium, 14px)/var(--leading-body-medium, 1.5) var(--font-sans, system-ui, sans-serif); }
+    header, .toolbar, .summary, .nodes { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+    header { justify-content: space-between; } h1 { font-size: var(--text-title-large, 24px); margin: 0; }
+    button, select { color: inherit; background: var(--background-color-default, #fff); border: 1px solid var(--border-color-default, #d0d7de); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+    button:focus-visible, select:focus-visible { outline: 2px solid var(--color-focus-outline, #0969da); }
+    .muted, small { color: var(--text-color-muted, #57606a); } .notice { margin: 16px 0; padding: 10px; border: 1px solid var(--border-color-default, #d0d7de); border-radius: 6px; }
+    .error { border-color: var(--true-color-red, #cf222e); } .summary { margin: 16px 0; }
+    .card { border: 1px solid var(--border-color-default, #d0d7de); border-radius: 8px; margin: 12px 0; padding: 16px; }
+    .card h2 { margin: 0 0 8px; font-size: 16px; overflow-wrap: anywhere; }
+    .nodes { align-items: stretch; margin-top: 12px; }
+    .node { border: 1px solid var(--border-color-default, #d0d7de); border-radius: 6px; padding: 8px 10px; max-width: 280px; overflow-wrap: anywhere; }
+    .arrow { align-self: center; color: var(--text-color-muted, #57606a); } .pill { border-radius: 12px; padding: 2px 8px; background: var(--true-color-blue-muted, #ddf4ff); }
+    .stale { background: var(--true-color-red-muted, #ffebe9); } ul { margin: 8px 0; padding-left: 20px; }
+    code { font-family: var(--font-mono, monospace); font-size: var(--text-code-inline, 12px); }
+  </style>
+</head>
+<body>
+  <header><div><h1>Repository workflows</h1><div id="repository" class="muted"></div></div>
+    <div class="toolbar"><label for="filter">Show</label><select id="filter"><option value="active">Active</option><option value="all">Active and history</option></select><button id="refresh" type="button">Refresh</button></div>
+  </header>
+  <p class="muted" id="coverage"></p><div class="summary" id="summary"></div><div id="notices"></div><main id="runs"></main>
+  <script src="/renderer.js"></script>
+</body>
+</html>

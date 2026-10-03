@@ -120,6 +120,10 @@ live CI or merge behavior.
 
 Run focused native tests with
 `node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs`.
+The [repository workflow canvas](.github/extensions/agentweaver-workflow-canvas/README.md)
+offers a read-only view of native dynamic workflow runs published cooperatively
+by sessions that have loaded its project extension; it does not discover runs
+from unobserved sessions.
 The `v1 foundation CI` workflow runs the same suites with coverage for PRs targeting
 `v1` and pushes to `v1`. After restore and build, use `npm run coverage:dotnet`
 and `npm run coverage:node` instead of the test commands above to reproduce its
