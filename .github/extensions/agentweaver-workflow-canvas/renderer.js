@@ -37,13 +37,16 @@ function render(data) {
     if (session.freshness !== "observed") notice(`${session.sessionId}: stale; last observed ${date(session.observedAt)}.`, true);
     if (session.truncated) notice(`${session.sessionId}: only a bounded recent selection is shown; older runs are omitted.`);
     return session.runs.map((run) => ({ session, run }));
-  }).filter(({ run }) => $("filter").value === "all" || active(run.status));
+  }).filter(({ session, run }) => $("filter").value === "all" ||
+    session.freshness === "observed" && !session.error && active(run.status));
   rows.sort((a, b) => (b.run.updatedAt || 0) - (a.run.updatedAt || 0));
   $("runs").replaceChildren();
   if (!rows.length) $("runs").append(el("p", observedRuns ? "No observed runs match this filter. Unpublished sessions are not included." : "No workflow runs have been published to this canvas yet.", "muted"));
   for (const { session, run } of rows) {
     const card = el("article", undefined, "card");
-    card.append(el("h2", `${run.workflowName || "Unnamed workflow"} · ${run.status}`),
+    const observedStatus = session.freshness === "observed" && !session.error
+      ? run.status : `${run.status} (last observed; not live)`;
+    card.append(el("h2", `${run.workflowName || "Unnamed workflow"} · ${observedStatus}`),
       el("div", `Run ${run.runId} · Phase ${run.phase || "not observed"} · Updated ${date(run.updatedAt)}`, "muted"));
     const graph = el("div", undefined, "nodes");
     graph.append(node("Workflow run", run.runId));

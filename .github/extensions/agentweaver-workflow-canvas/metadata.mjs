@@ -138,16 +138,27 @@ export async function readRepository(context, now = Date.now()) {
   return { sessions, errors };
 }
 
-export async function githubReference(repository, kind, number, fetcher = fetch) {
+export async function githubReference(repository, kind, number, fetcher) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !["issues", "pulls"].includes(kind) || !positive(number)) {
     throw new Error("Invalid GitHub reference");
   }
-  const response = await fetcher(`https://api.github.com/repos/${repository}/${kind}/${number}`, {
-    headers: { Accept: "application/vnd.github+json" },
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!response.ok) throw new Error(`GitHub ${kind} #${number}: HTTP ${response.status}`);
-  const item = await response.json();
+  const path = `repos/${repository}/${kind}/${number}`;
+  let item;
+  if (fetcher) {
+    const response = await fetcher(`https://api.github.com/${path}`, {
+      headers: { Accept: "application/vnd.github+json" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`GitHub ${kind} #${number}: HTTP ${response.status}`);
+    item = await response.json();
+  } else {
+    try {
+      const { stdout } = await exec("gh", ["api", path], { timeout: 8000, maxBuffer: 250_000, windowsHide: true });
+      item = JSON.parse(stdout);
+    } catch (error) {
+      throw new Error(`GitHub ${kind} #${number}: CLI lookup failed (${error.code || error.name || "unknown"})`);
+    }
+  }
   if (kind === "issues" && item.pull_request) throw new Error(`GitHub #${number} is a pull request, not an issue`);
   return {
     number,

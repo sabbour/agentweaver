@@ -23,9 +23,11 @@ For an active run whose input has not reached a public result, an agent in the
 **owning session** may call the `associate` canvas action with `{ "runId": "...",
 "issueNumber": 1751, "prNumber": 123 }`. That validates ownership and resolves
 any supplied issue or PR with GitHub's public read-only API before publishing
-the reference; it never changes the workflow or GitHub objects. For private
-repositories or API failures, lookups report errors rather than inventing links.
-Titles, milestone, state, and labels are fetched at view time, not persisted.
+the reference; it never changes the workflow or GitHub objects. GitHub lookups
+use the locally authenticated `gh api` CLI (no token is requested by or stored
+in the extension). Unavailable authentication or API failures are reported,
+not turned into invented links. Titles, milestone, state, and labels are
+fetched at view time, not persisted.
 
 The canvas reports unpublished sessions as **unknown**, old publications as
 **stale** after 90 seconds, and observation/lookup failures explicitly. It
