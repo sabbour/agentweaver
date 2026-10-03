@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -14,7 +13,9 @@ const record = (id = 'Agentweaver.Providers', bump = 'minor') =>
   `---\n"${id}": ${bump}\n---\n\nAdd provider functionality.\n`;
 
 function fixture(t, records = { 'provider.md': record() }) {
-  const directory = mkdtempSync(path.join(tmpdir(), 'v1-changesets-'));
+  const fixtureRoot = path.resolve('artifacts', 'release-tests');
+  mkdirSync(fixtureRoot, { recursive: true });
+  const directory = mkdtempSync(path.join(fixtureRoot, 'v1-changesets-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   mkdirSync(path.join(directory, '.changeset'));
   for (const [name, content] of Object.entries(records)) {

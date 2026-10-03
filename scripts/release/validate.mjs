@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { diffChanges, validateChangesets } from './changesets.mjs';
+import { diffChanges, resolveMergeBase, validateChangesets } from './changesets.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -82,7 +82,9 @@ export function validateManifest(manifest, { root = repositoryRoot, readProject 
     if (projects.has(component.project)) fail(`${location}.project`, 'duplicate project path');
     projects.add(component.project);
     if (component.kind === 'service') {
-      if (typeof component.imageDigest !== 'string' || !digest.test(component.imageDigest)) {
+      // A draft composition may represent an unpublished service honestly, with no digest yet.
+      // When present (draft or release), it must still be a well-formed sha256 digest.
+      if (component.imageDigest !== undefined && (typeof component.imageDigest !== 'string' || !digest.test(component.imageDigest))) {
         fail(`${location}.imageDigest`, 'service requires a sha256 image digest');
       }
     } else if (component.imageDigest !== undefined) {
@@ -138,8 +140,14 @@ export function validateManifest(manifest, { root = repositoryRoot, readProject 
   if (manifest.stage === 'draft') {
     if (manifest.evidence !== undefined) fail('manifest.evidence', 'draft must not claim deployment or persona evidence');
   } else {
-    if (![...components.values()].some((component) => component.kind === 'service')) {
+    const services = [...components.values()].filter((component) => component.kind === 'service');
+    if (services.length === 0) {
       fail('manifest.components', 'release requires an actual deployable service');
+    }
+    for (const service of services) {
+      if (typeof service.imageDigest !== 'string' || !digest.test(service.imageDigest)) {
+        fail(`manifest.components[${service.id}].imageDigest`, 'release requires a published sha256 image digest for each service');
+      }
     }
     object(manifest.evidence, 'manifest.evidence', ['sourceSha', 'deploymentSha', 'personaRuns']);
     const evidence = manifest.evidence;
@@ -193,7 +201,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     const manifest = validateFile(file);
     const changes = process.argv.length === 5 ? diffChanges(repositoryRoot, process.argv[4]) : undefined;
-    const records = validateChangesets(manifest, { root: repositoryRoot, changes });
+    const ancestorSha = process.argv.length === 5 ? resolveMergeBase(repositoryRoot, process.argv[4]) : undefined;
+    const records = validateChangesets(manifest, { root: repositoryRoot, changes, ancestorSha });
     console.log(`Validated ${file} and ${records.size} changesets${changes ? ' with diff coverage' : ''}`);
   } catch (error) {
     console.error(`Release manifest validation failed: ${error.message}`);

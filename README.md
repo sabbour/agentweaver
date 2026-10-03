@@ -121,6 +121,13 @@ npm run test:release
 ```
 
 The Node tooling has no external dependencies; no npm installation is required.
+`npm run release:plan`, `npm run release:apply`, and `npm run release:pack`
+compute deterministic version bumps, apply them to the manifest and checked-in
+project mirrors, and prepare locked package and service-image artifacts with
+source-bound provenance. None of these commands publishes or deploys artifacts.
+The manual publication workflow requires a separate explicit choice.
+See [release planning and package preparation](releases/README.md#release-planning-and-package-preparation)
+for the full command contract and failure-mode guarantees.
 
 ## Project issue-to-merge workflow
 

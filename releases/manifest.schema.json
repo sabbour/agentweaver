@@ -24,7 +24,7 @@
           "imageDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
         },
         "allOf": [
-          { "if": { "properties": { "kind": { "const": "service" } }, "required": ["kind"] }, "then": { "required": ["imageDigest"] }, "else": { "not": { "required": ["imageDigest"] } } }
+          { "if": { "not": { "properties": { "kind": { "const": "service" } }, "required": ["kind"] } }, "then": { "not": { "required": ["imageDigest"] } } }
         ]
       }
     },
@@ -68,7 +68,21 @@
   },
   "allOf": [
     { "if": { "properties": { "stage": { "const": "draft" } }, "required": ["stage"] }, "then": { "not": { "required": ["evidence"] } } },
-    { "if": { "properties": { "stage": { "const": "release" } }, "required": ["stage"] }, "then": { "required": ["evidence"] } }
+    { "if": { "properties": { "stage": { "const": "release" } }, "required": ["stage"] }, "then": { "required": ["evidence"] } },
+    {
+      "$comment": "A draft service may honestly omit imageDigest (unpublished); a release stage must pin an actual published digest for every service component.",
+      "if": { "properties": { "stage": { "const": "release" } }, "required": ["stage"] },
+      "then": {
+        "properties": {
+          "components": {
+            "items": {
+              "if": { "properties": { "kind": { "const": "service" } }, "required": ["kind"] },
+              "then": { "required": ["imageDigest"] }
+            }
+          }
+        }
+      }
+    }
   ],
   "$defs": {
     "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },

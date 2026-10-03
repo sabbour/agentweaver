@@ -51,6 +51,22 @@ containers or contacts production resources.
 These tests are **not platform E2E**. There is no deployable v1 service yet, and
 this slice does not create an Azure environment.
 
+## Release tooling regressions
+
+Run `npm run test:release` after a release-tooling change.
+The suite uses real isolated Git repositories under ignored `artifacts/release-tests/`.
+It covers source notes, receipt forgery, extra product edits, independent version intent,
+explicit compatibility, exact rollback, cleanup errors, and verified reruns.
+One fixture runs actual locked .NET restore, build, and pack for an offline library.
+Image preparation and publication tests inject command results and never push artifacts.
+Those tests prove command and receipt guards, not registry access or a published service.
+
+Run `npm run release:validate` to validate the manifest and current records.
+For committed candidate coverage, add `-- --base <full-base-commit-sha>`.
+The guard only credits source-derived version mirrors from consumed records.
+Other product edits still require fresh component records.
+No standalone documentation checker exists in this branch's package commands or CI.
+
 ## Code coverage
 
 After the locked restore and Release build documented in the root README, run:

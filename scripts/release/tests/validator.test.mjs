@@ -184,3 +184,37 @@ function editRelease(change) {
   change(manifest);
   return manifest;
 }
+
+test('draft services may honestly omit an image digest, but release services may not', () => {
+  const draftWithService = edit((m) => {
+    m.components.push({
+      id: 'Agentweaver.Example',
+      kind: 'service',
+      version: '1.0.0',
+      project: 'services/Agentweaver.Example/Agentweaver.Example.csproj',
+    });
+  });
+  assert.equal(check(draftWithService, { readProject: releaseProject }).stage, 'draft');
+  const draftWithDigest = edit((m) => {
+    m.components.push({
+      id: 'Agentweaver.Example',
+      kind: 'service',
+      version: '1.0.0',
+      project: 'services/Agentweaver.Example/Agentweaver.Example.csproj',
+      imageDigest: `sha256:${'b'.repeat(64)}`,
+    });
+  });
+  assert.equal(check(draftWithDigest, { readProject: releaseProject }).stage, 'draft');
+  const draftWithBadDigest = edit((m) => {
+    m.components.push({
+      id: 'Agentweaver.Example',
+      kind: 'service',
+      version: '1.0.0',
+      project: 'services/Agentweaver.Example/Agentweaver.Example.csproj',
+      imageDigest: 'sha256:not-a-digest',
+    });
+  });
+  assert.throws(() => check(draftWithBadDigest, { readProject: releaseProject }), /sha256 image digest/);
+  assert.throws(() => checkRelease(editRelease((m) => { delete m.components.at(-1).imageDigest; })),
+    /requires a published sha256 image digest/);
+});
