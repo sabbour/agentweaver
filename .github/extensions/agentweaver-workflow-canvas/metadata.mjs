@@ -67,16 +67,19 @@ export function projectRun(summary, detail, outcome, refs = {}) {
 
 function sanitizePublishedRun(run) {
   if (!run || typeof run !== "object" || !text(run.runId, 80)) throw new Error("invalid run");
+  const sources = Object.fromEntries(["issue", "pr", "head"].map((key) => [
+    key, ["owner-associated", "completed-result"].includes(run.referenceSources?.[key])
+      ? run.referenceSources[key] : "not-observed",
+  ]));
   return {
     runId: text(run.runId, 80), workflowName: text(run.workflowName, 100),
     status: text(run.status, 20), phase: text(run.phase, 100),
     updatedAt: stamp(run.updatedAt), createdAt: stamp(run.createdAt),
-    issueNumber: positive(run.issueNumber), prNumber: positive(run.prNumber),
-    headSha: sha(run.headSha), totalSpawnedAgentCount: positive(run.totalSpawnedAgentCount) ?? 0,
-    referenceSources: Object.fromEntries(["issue", "pr", "head"].map((key) => [
-      key, ["owner-associated", "completed-result"].includes(run.referenceSources?.[key])
-        ? run.referenceSources[key] : "not-observed",
-    ])),
+    issueNumber: sources.issue === "not-observed" ? null : positive(run.issueNumber),
+    prNumber: sources.pr === "not-observed" ? null : positive(run.prNumber),
+    headSha: sources.head === "not-observed" ? null : sha(run.headSha),
+    totalSpawnedAgentCount: positive(run.totalSpawnedAgentCount) ?? 0,
+    referenceSources: sources,
     directAgentsObserved: run.directAgentsObserved === true,
     agents: (Array.isArray(run.agents) ? run.agents : []).slice(0, 60).map((agent) => ({
       agentId: text(agent.agentId, 80), label: text(agent.label, 80),
