@@ -39,7 +39,8 @@ public sealed class AuthorizedSecretRedemption : ISecretRedemption
 
         // Fresh authority read before ever touching the backend. A denial here
         // never calls it.
-        await AuthorizeAsync(request, cancellationToken).ConfigureAwait(false);
+        var initialGrant = await AuthorizeAsync(request, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var credential = await _backend.RedeemAsync(request, cancellationToken).ConfigureAwait(false);
 
@@ -47,20 +48,25 @@ public sealed class AuthorizedSecretRedemption : ISecretRedemption
         // revoked, expired, or replaced with a binding that no longer matches
         // this exact request during that await invalidates the credential we
         // just acquired instead of returning it.
-        SecretRedemptionGrant grant;
         try
         {
+            if (credential is null)
+                throw new InvalidOperationException("The credential backend returned no credential.");
             cancellationToken.ThrowIfCancellationRequested();
-            grant = await AuthorizeAsync(request, cancellationToken).ConfigureAwait(false);
+            var grant = await AuthorizeAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!SameGrant(initialGrant, grant))
+                throw new SecretAuthorizationDeniedException(SecretAuthorizationDenialReason.GrantChanged);
+            credential.LimitLifetime(grant.ExpiresAt);
+            if (grant.ExpiresAt <= _timeProvider.GetUtcNow())
+                throw new SecretAuthorizationDeniedException(SecretAuthorizationDenialReason.Expired);
             cancellationToken.ThrowIfCancellationRequested();
+            return credential;
         }
         catch
         {
-            credential.Invalidate();
+            credential?.Invalidate();
             throw;
         }
-
-        return ClampToGrantExpiry(credential, grant);
     }
 
     private async Task<SecretRedemptionGrant> AuthorizeAsync(
@@ -103,28 +109,14 @@ public sealed class AuthorizedSecretRedemption : ISecretRedemption
         return grant;
     }
 
-    // A returned credential's lifetime can never exceed the authorizing grant's
-    // expiry, even when the backend would otherwise issue a longer-lived one.
-    // Repackaging reads GetValue() internally only to carry the same opaque
-    // value into a new credential; it is never logged, serialized or exposed
-    // beyond this reassignment.
-    private SecretCredential ClampToGrantExpiry(SecretCredential credential, SecretRedemptionGrant grant)
-    {
-        if (credential.ExpiresAt <= grant.ExpiresAt)
-            return credential;
-
-        var value = credential.GetValue();
-        credential.Invalidate();
-        try
-        {
-            return new SecretCredential(value, grant.ExpiresAt, _timeProvider);
-        }
-        catch (ArgumentOutOfRangeException)
-        {
-            // The grant's expiry advanced into the past in the narrow window
-            // between the authorization recheck and this clamp: fail closed
-            // instead of throwing a constructor validation error outward.
-            throw new SecretAuthorizationDeniedException(SecretAuthorizationDenialReason.Expired);
-        }
-    }
+    private static bool SameGrant(SecretRedemptionGrant initial, SecretRedemptionGrant current) =>
+        string.Equals(initial.GrantId, current.GrantId, StringComparison.Ordinal) &&
+        string.Equals(initial.Revision, current.Revision, StringComparison.Ordinal) &&
+        string.Equals(initial.ActorId, current.ActorId, StringComparison.Ordinal) &&
+        string.Equals(initial.ProjectId, current.ProjectId, StringComparison.Ordinal) &&
+        string.Equals(initial.RunId, current.RunId, StringComparison.Ordinal) &&
+        string.Equals(initial.Purpose, current.Purpose, StringComparison.Ordinal) &&
+        string.Equals(initial.Secret.Id, current.Secret.Id, StringComparison.Ordinal) &&
+        string.Equals(initial.Secret.Version, current.Secret.Version, StringComparison.Ordinal) &&
+        initial.State == current.State && initial.ExpiresAt == current.ExpiresAt;
 }

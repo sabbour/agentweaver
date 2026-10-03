@@ -420,11 +420,12 @@ public sealed class AuthorizedSecretRedemptionTests
 
         var credential = await redemption.RedeemAsync(Request(), CancellationToken.None);
 
-        Assert.NotSame(issued, credential);
+        Assert.Same(issued, credential);
         Assert.Equal(grant.ExpiresAt, credential.ExpiresAt);
         Assert.Equal(SensitiveValue, credential.GetValue());
-        Assert.Throws<InvalidOperationException>(() => issued.GetValue());
         Assert.Equal(nameof(SecretCredential) + " [REDACTED]", credential.ToString());
+        credential.Invalidate();
+        Assert.Throws<InvalidOperationException>(() => issued.GetValue());
     }
 
     [Fact]
@@ -444,31 +445,24 @@ public sealed class AuthorizedSecretRedemptionTests
     }
 
     [Fact]
-    public async Task ClampDeniesInsteadOfThrowingWhenGrantExpiryElapsesBeforeRepackaging()
+    public async Task ClampFailureAfterAuthorizationInvalidatesAcquiredCredential()
     {
-        // The grant passes its recheck with a razor-thin remaining lifetime;
-        // simulate the clamp window itself elapsing past that expiry.
         var clock = new TestClock(Now);
-        var grant = Grant(clock, expiresAt: Now.AddSeconds(1));
+        var credentialClock = new TestClock(Now);
+        var grant = Grant(clock);
         var authority = new FakeGrantAuthority(FakeGrantAuthority.Return(grant), FakeGrantAuthority.Return(grant));
-        var issued = new SecretCredential(SensitiveValue, Now.AddMinutes(10), clock);
+        var issued = new SecretCredential(SensitiveValue, Now.AddSeconds(1), credentialClock);
         var backend = new FakeSecretRedemption((_, _) =>
         {
+            credentialClock.UtcNow = Now.AddSeconds(1);
             return Task.FromResult(issued);
         });
         var redemption = new AuthorizedSecretRedemption(Actor(), authority, backend, clock);
 
-        // Advance the clock only after the recheck would have observed the
-        // grant as valid is not directly reachable from the test; instead
-        // confirm the normal clamp path to the same instant succeeds, and
-        // that an already-elapsed grant denies instead of returning a
-        // construction error. Simulate elapse by setting the grant to expire
-        // immediately before the clamp would run is covered by
-        // ExpiryDuringAcquisitionInvalidatesCredentialInsteadOfReturningIt;
-        // here we assert the clamp itself never throws ArgumentOutOfRangeException
-        // outward when it does run with a still-valid grant.
-        var credential = await redemption.RedeemAsync(Request(), CancellationToken.None);
-        Assert.Equal(grant.ExpiresAt, credential.ExpiresAt);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => redemption.RedeemAsync(Request(), CancellationToken.None));
+        credentialClock.UtcNow = Now;
+        Assert.Throws<InvalidOperationException>(() => issued.GetValue());
     }
 
     [Fact]

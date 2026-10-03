@@ -246,11 +246,15 @@ credentials in memory; descriptors, run bindings, and journal records carry refe
 secret values. The Tool & MCP gateway can inject scoped credentials for outbound destinations
 without handing a registry key or unrelated credential to the sandbox.
 
-The `Agentweaver.Identity` library implements the redemption authorization boundary,
+The `Agentweaver.Identity` library is an **implemented CANDIDATE** redemption authorization boundary,
 not the running broker: a host-established actor context and server-owned grant bind
 actor, project, run, purpose and exact secret version. Every redemption checks the
 grant before backend access and again after asynchronous acquisition, invalidating
-credentials if authorization changes and bounding their expiry to the grant.
+credentials on every post-acquisition failure. Immutable grant identity,
+revision and expiry must agree between reads even when request bindings match.
+Credential lifetime is narrowed in place without reading its value, preserving
+backend invalidation. Hosts supply coherent snapshots with a new revision on
+every authority change; this library does not make those reads transactional.
 The durable grant authority and authenticated delivery remain future service work.
 
 The configure, refresh, and A2A contracts are versioned internal APIs, not unstructured side

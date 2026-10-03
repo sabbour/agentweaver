@@ -6,6 +6,7 @@ answer different questions. Passing one does not substitute for the others.
 | Layer | What it proves | When it runs |
 | --- | --- | --- |
 | Unit and provider conformance | Selection, capabilities, immutable bindings, explicit failures | Every affected change |
+| Identity authorization candidate | Exact trusted actor/project/run/purpose/SecretRef bindings, immutable grant identity/revision/expiry races, metadata-only credential lifetime narrowing, cancellation and error invalidation | Every Identity or credential contract change |
 | PostgreSQL integration | State/event/consumer-receipt atomicity, version-1 schema upgrade, consumer-scoped duplicate admission and concurrent retry, stream ordering, concurrent claims, lease fencing and restart recovery | Every persistence change; the foundation CI runs the whole small suite |
 | Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
 | Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
@@ -54,11 +55,11 @@ npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs
 ```
 
-The .NET command restores the pinned local ReportGenerator tool, runs all six
+The .NET command restores the pinned local ReportGenerator tool, runs all seven
 test suites once with Coverlet, and merges their reports using ReportGenerator.
-Its scope is all seven current production libraries: Abstractions, Providers,
+Its scope is all eight current production libraries: Abstractions, Providers,
 Persistence.Postgres, Secrets.AzureKeyVault, Telemetry, Telemetry.AzureMonitor,
-and ObjectStore.AzureBlob. Shared sources are merged, not summed twice. Node
+ObjectStore.AzureBlob and Identity. Shared sources are merged, not summed twice. Node
 uses its built-in test coverage and spec/LCOV reporters
 for the release validator; test files, fixtures, and coverage wrappers are not
 production targets. No external JavaScript coverage dependency is needed.
@@ -70,6 +71,7 @@ Reports are written beneath `artifacts\coverage\` (ignored by Git):
 | `dotnet\combined\` | HTML (`index.html`), Cobertura XML, JSON/text summaries, and GitHub Markdown summary |
 | `dotnet\providers\`, `dotnet\postgres\` | Individual test-suite Cobertura reports |
 | `dotnet\keyvault\` | Azure Key Vault adapter Cobertura report |
+| `dotnet\identity\` | Identity authorization candidate Cobertura report |
 | `dotnet\telemetry\` | Telemetry foundation Cobertura report |
 | `dotnet\azure-monitor\` | Azure Monitor adapter Cobertura report |
 | `dotnet\azure-blob\` | Azure Blob Object Store adapter Cobertura report |

@@ -602,13 +602,16 @@ cannot erase copies of an immutable .NET string. Authenticated delivery, purpose
 policy, secure storage and refresh belong to future trusted service implementations;
 neither these data contracts nor a provider adapter grant access on their own.
 
-`Agentweaver.Identity` now supplies a trusted authorization wrapper around
+`Agentweaver.Identity` is an **implemented CANDIDATE** authorization wrapper around
 `ISecretRedemption`. The host supplies an authenticated actor/project/run context;
 the authority supplies an immutable active, unexpired grant for the exact
 actor/project/run/purpose and `SecretRef` ID and version. Missing, ambiguous,
 revoked, expired or mismatched grants deny before backend access. The wrapper
 re-reads the authority after asynchronous acquisition, invalidates acquired
-credentials on denial, and clamps credential expiry to the grant. It does not
+credentials on every post-acquisition failure, and compares the original grant
+ID, revision and expiry as well as its bindings. It limits expiry metadata on
+the original credential through `SecretCredential.LimitLifetime`, without
+reading or copying a value; backend invalidation remains effective. It does not
 implement a grant store, network authentication, or a deployed Identity service.
 
 `Agentweaver.Secrets.AzureKeyVault` implements redemption for the trusted control

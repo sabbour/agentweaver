@@ -38,6 +38,8 @@ public interface ISecretRedemption
 public sealed class SecretCredential
 {
     private string? _value;
+    private DateTimeOffset _expiresAt;
+    private readonly object _sync = new();
     private readonly TimeProvider _timeProvider;
 
     public SecretCredential(string value, DateTimeOffset expiresAt, TimeProvider? timeProvider = null)
@@ -49,20 +51,46 @@ public sealed class SecretCredential
             throw new ArgumentOutOfRangeException(nameof(expiresAt), "Credential must have a future expiry.");
 
         _value = value;
-        ExpiresAt = expiresAt;
+        _expiresAt = expiresAt;
     }
 
-    public DateTimeOffset ExpiresAt { get; }
+    public DateTimeOffset ExpiresAt
+    {
+        get { lock (_sync) return _expiresAt; }
+    }
+
+    // Narrow metadata on the same credential so backend invalidation still applies.
+    public void LimitLifetime(DateTimeOffset expiresAt)
+    {
+        lock (_sync)
+        {
+            if (_value is null)
+                throw new InvalidOperationException("Credential has been invalidated.");
+            var limit = expiresAt < _expiresAt ? expiresAt : _expiresAt;
+            if (limit <= _timeProvider.GetUtcNow())
+            {
+                _value = null;
+                throw new InvalidOperationException("Credential has expired.");
+            }
+            _expiresAt = limit;
+        }
+    }
 
     // Explicit access only: no public value property for default JSON or diagnostic walkers.
     public string GetValue()
     {
-        if (_timeProvider.GetUtcNow() >= ExpiresAt)
-            throw new InvalidOperationException("Credential has expired.");
-        return Volatile.Read(ref _value) ?? throw new InvalidOperationException("Credential has been invalidated.");
+        lock (_sync)
+        {
+            if (_timeProvider.GetUtcNow() >= _expiresAt)
+                throw new InvalidOperationException("Credential has expired.");
+            return _value ?? throw new InvalidOperationException("Credential has been invalidated.");
+        }
     }
 
-    public void Invalidate() => Interlocked.Exchange(ref _value, null);
+    public void Invalidate()
+    {
+        lock (_sync) _value = null;
+    }
 
     public override string ToString() => nameof(SecretCredential) + " [REDACTED]";
 }
