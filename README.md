@@ -34,7 +34,7 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
   Agentweaver's own UI next to a **surface panel**.
 - 1.0 runs **in the cloud only** (AKS and Azure first). There is no local runtime mode.
 
-## First foundation slice
+## Implemented foundations
 
 The initial P0 delivery contains provider descriptor and binding contracts, a pure
 catalog/resolver, conformance-focused tests, and build/release validation. It does not
@@ -49,18 +49,26 @@ resource's negotiated capabilities only after provisioning.
 The release manifest describes the independently versioned foundation libraries.
 It is a draft composition, not evidence of deployment or a released platform.
 
-Remaining P0 work includes service-owned Postgres schemas and the transactional outbox,
-Identity/Key Vault, Blob storage, telemetry, and deployable control-plane services.
+The next P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
+transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
+acknowledgment. Real PostgreSQL tests cover atomicity, duplicate handling, concurrency,
+and recovery. This is a persistence library, not a running relay or a deployed service.
+
+Remaining P0 work includes wiring these primitives into real services, Identity/Key
+Vault, Blob storage, telemetry, and the dedicated Azure integration environment.
 
 ## Build and check the foundation
 
-Use the .NET 10 SDK selected by `global.json` and Node.js 24. Run these commands from
-the repository root; tests do not start local product services or contact Azure.
+Use the .NET 10 SDK selected by `global.json`, Node.js 24, and a running
+Docker-compatible engine. PostgreSQL tests start and dispose their own Testcontainers
+database; they do not use a shared database or start local product services.
+Run these commands from the repository root:
 
 ```powershell
 dotnet restore Agentweaver.slnx --locked-mode
 dotnet build Agentweaver.slnx --no-restore --configuration Release
 dotnet test tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj --no-build --no-restore --configuration Release
 npm run release:validate
 npm run test:release
 ```
@@ -69,4 +77,5 @@ The Node tooling has no external dependencies; no npm installation is required.
 The `v1 foundation CI` workflow runs these same checks for PRs targeting `v1` and
 pushes to `v1`. See [provider foundation](packages/Agentweaver.Providers/README.md)
 for supported resolution behavior and [release composition](releases/README.md)
-for manifest constraints.
+for manifest constraints. [Testing and Azure acceptance](docs/guide/testing.md)
+distinguishes current integration coverage from future deployed E2E tests.

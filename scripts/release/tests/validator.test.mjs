@@ -10,10 +10,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const fixture = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
 const abstraction = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup></Project>';
 const provider = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
-const projects = new Map([
-  [fixture.components[0].project, abstraction],
-  [fixture.components[1].project, provider],
-]);
+const projects = new Map(fixture.components.map((component) => [
+  component.project,
+  component.id === 'Agentweaver.Providers' ? provider : abstraction,
+]));
 const readProject = (file) => {
   const relative = path.relative(root, file).replaceAll('\\', '/');
   if (!projects.has(relative)) throw new Error(`missing ${relative}`);
@@ -163,9 +163,9 @@ test('release requires exact-SHA matching AKS and distinct API/UI/MCP evidence',
   assert.throws(() => checkRelease(editRelease((m) => { m.evidence.personaRuns[1].surface = 'api'; })), /each of api, ui, and mcp/);
   assert.throws(() => checkRelease(editRelease((m) => { m.evidence.personaRuns[1].runUrl = 'http://example.org'; })), /HTTPS evidence URL/);
   assert.throws(() => checkRelease(editRelease((m) => { m.evidence.personaRuns[1].unknown = true; })), /unknown field "unknown"/);
-  assert.throws(() => checkRelease(editRelease((m) => { m.components[2].imageDigest = 'bad'; })), /sha256 image digest/);
+  assert.throws(() => checkRelease(editRelease((m) => { m.components.at(-1).imageDigest = 'bad'; })), /sha256 image digest/);
   assert.throws(() => checkRelease(editRelease((m) => {
-    m.components[2].imageDigest = [`sha256:${'b'.repeat(64)}`];
+    m.components.at(-1).imageDigest = [`sha256:${'b'.repeat(64)}`];
   })), /sha256 image digest/);
 });
 
