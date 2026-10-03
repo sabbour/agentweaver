@@ -20,15 +20,50 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Record coverage candidate
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p artifacts/coverage
+          node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("artifacts/coverage/source.json", JSON.stringify({ testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT }, null, 2) + "\n");'
       - name: Validate release composition
         run: npm run release:validate
-      - name: Test release validator
-        run: npm run test:release
       - name: Restore locked dependencies
         run: dotnet restore Agentweaver.slnx --locked-mode
       - name: Build foundation
         run: dotnet build Agentweaver.slnx --no-restore --configuration Release
-      - name: Test provider contracts
-        run: dotnet test tests/Agentweaver.Providers.Tests/Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
-      - name: Test PostgreSQL persistence
-        run: dotnet test tests/Agentweaver.Persistence.Postgres.Tests/Agentweaver.Persistence.Postgres.Tests.csproj --no-build --no-restore --configuration Release
+      - name: Test .NET foundation with coverage
+        run: npm run coverage:dotnet
+      - name: Test release validator with coverage
+        if: ${{ !cancelled() }}
+        run: npm run coverage:node
+      - name: Test coverage report guards
+        if: ${{ !cancelled() }}
+        run: node --test scripts/coverage/tests/*.test.mjs
+      - name: Publish coverage summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo "## Coverage for tested candidate \`$GITHUB_SHA\`"
+            echo "Reports measure exercised code, not behavioral or E2E completeness."
+            if [ -f artifacts/coverage/dotnet/combined/SummaryGithub.md ]; then
+              cat artifacts/coverage/dotnet/combined/SummaryGithub.md
+            else
+              echo ".NET coverage report was not produced; inspect the preceding steps."
+            fi
+            echo "### Node release validator"
+            if [ -f artifacts/coverage/node/summary.txt ]; then
+              echo '```text'
+              cat artifacts/coverage/node/summary.txt
+              echo '```'
+            else
+              echo "Node coverage report was not produced; inspect the preceding steps."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: v1-coverage-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/coverage/
+          if-no-files-found: error
+          retention-days: 30
