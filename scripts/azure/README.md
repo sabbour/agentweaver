@@ -36,6 +36,9 @@ The inventory guard checks exact resource IDs, types, and names.
 Declared child resources and module deployments do not require ownership tags.
 The PostgreSQL administrator ID comes from the reviewed JSON parameters.
 Historical outer deployments require matching SHA-derived names and source outputs.
+Historical receipts also require a lowercase, 40-character `sourceTree`.
+Missing or invalid tree outputs block plan and redeploy, including prior receipts without that field.
+The tooling never deletes or repairs those receipts automatically.
 Generated NICs require reciprocal links to an approved, tagged Private Endpoint.
 Both the endpoint and all NIC IP configurations must use the dedicated private-endpoints subnet.
 Other NICs, child names, scopes, and resource types block.
@@ -87,6 +90,9 @@ It distinguishes infrastructure configuration from actual workload evidence.
 The admitted #1784 Job must prove pod/image provenance, token exchange,
 exact KV redemption, owned PG effects, owned Blob cleanup, and SHA/nonce telemetry.
 The CLI does not read secret values or treat its own credentials as pod proof.
+It checks the fixed `foundation-probe` federation name, subject, issuer, and audience.
+Caller configuration cannot replace that identity check.
+Exact federation configuration still does not prove token exchange.
 It does not consume or certify the final #1784 runtime receipt.
 New deployment fields cannot enter the strict #1784 target DTO without its explicit schema update.
 
