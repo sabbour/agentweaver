@@ -164,6 +164,29 @@ Changesets CLI. The extension does not release or deploy
 the product and does not change branch protection. Its rehearsal does not prove
 live CI or merge behavior.
 
+If the coordinator denies admission after publication, ordinary delivery and
+rehearsal remain unchanged. An explicitly selected `mode: "correct"` instead
+adopts fully staged, surgical corrections on the **same source branch and PR**.
+Pass the original issue's task, labels and milestone, plus a `source` object with
+`runId`, original `headSha` and `treeSha`, `branch`, `prNumber`, original
+`publicationCommentId`, exact-head `denialCommentId`, and the selected `paths`
+owned by that PR (or a component explicitly named in the denial, or a related
+changeset). The workflow verifies
+the live PR, original publication/review receipt, denial, origin, scope and
+staged-only state before validation. It runs affected checks and publishes a new
+head/tree comment on that PR; historical reviews remain evidence **only for the
+old tree**. New CI, current target base and an explicit exclusive coordinator
+grant for the corrected head remain mandatory for admission. A changed source,
+unrelated/unstaged files, material scope changes or failed checks block rather
+than authorize merge. Corrections cannot be inferred from an old rehearsal or
+from the worker's own claimed coordinator approval.
+On replay the live PR must still link the source issue, and the fresh publication
+comment must be on that PR by the source receipt's author. A failed pre-publication
+validation can be retried with a newly staged owned tree; successful validation
+pins the candidate, and publication cannot be silently replaced. If the target
+tip advances after the coordinator grant, admission blocks and requires a fresh
+grant on retry.
+
 Run focused native tests with
 `node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs`.
 The [repository workflow canvas](.github/extensions/agentweaver-workflow-canvas/README.md)

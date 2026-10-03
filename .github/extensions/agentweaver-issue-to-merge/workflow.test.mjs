@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runIssueToMerge } from "./workflow.mjs";
@@ -15,10 +14,13 @@ const args = {
 };
 
 function fixture(t) {
-  const cwd = mkdtempSync(join(tmpdir(), "agentweaver-workflow-"));
+  const root = join(process.cwd(), ".workflow-test-fixtures");
+  mkdirSync(root, { recursive: true });
+  const cwd = mkdtempSync(join(root, "agentweaver-workflow-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const git = (...parts) => execFileSync("git", parts, { cwd, encoding: "utf8", windowsHide: true }).trim();
   git("init", "-b", "feature");
+  git("config", "core.autocrlf", "false");
   git("config", "user.email", "workflow@example.invalid");
   git("config", "user.name", "Workflow Test");
   writeFileSync(join(cwd, "sample.txt"), "start\n");
@@ -265,4 +267,229 @@ test("external tree changes after publication block resumed admission", async (t
   repo.git("add", "sample.txt");
   await assert.rejects(runIssueToMerge(ctx, repo.cwd, mergedGh(repo)), /Current tree differs/);
   assert.equal(handler.admissionCount(), 1);
+});
+
+function correctedFixture(t, overrides = {}) {
+  const repo = fixture(t);
+  repo.git("remote", "add", "origin", "https://github.com/sabbour/agentweaver.git");
+  const sourceHead = repo.git("rev-parse", "HEAD");
+  const sourceTree = repo.git("rev-parse", "HEAD^{tree}");
+  writeFileSync(join(repo.cwd, "sample.txt"), "corrected\n");
+  repo.git("add", "sample.txt");
+  let candidateTree = repo.git("write-tree");
+  const source = {
+    runId: "old-run-id", headSha: sourceHead, treeSha: sourceTree,
+    branch: "feature", prNumber: 42, publicationCommentId: 101, denialCommentId: 102,
+    paths: ["sample.txt"], ...overrides.source,
+  };
+  let publishedHead;
+  let publicationCount = 0;
+  let admissions = 0;
+  let validations = 0;
+  let baseTip = "e".repeat(40);
+  const oldBody = `Workflow run ${source.runId}\nLocal review 1: approved tree ${sourceTree}\nLocal review 2: ${overrides.reviewSameTree ? "approved the same tree; findings: none" : `approved tree ${sourceTree}`}\nFinal HEAD: \`${sourceHead}\`\nFinal tree: \`${sourceTree}\``;
+  const deniedBody = `ADMISSION DENIED for head ${sourceHead} / tree ${sourceTree}. Coordinator decision ID: parent-denied. ${overrides.denialDetail ?? ""}`;
+  const prUrl = "https://github.com/sabbour/agentweaver/pull/42";
+  const gh = (...parts) => {
+    if (parts[0] === "pr") {
+      const merged = parts.some((part) => part.includes("mergeCommit"));
+      return JSON.stringify({
+        number: 42, state: merged ? "MERGED" : "OPEN",
+        headRefOid: overrides.wrongLiveHead ? "f".repeat(40) : publishedHead ?? sourceHead,
+        headRefName: overrides.wrongBranch ? "elsewhere" : "feature",
+        baseRefName: overrides.wrongBase ? "dev" : "v1",
+        url: prUrl, body: overrides.wrongIssue ? "Closes #9999" : "Closes #1742", author: { login: "owner" },
+        files: [{ path: "sample.txt" }], mergeCommit: { oid: publishedHead },
+        statusCheckRollup: overrides.badCi ? [{ conclusion: "FAILURE" }] : [{ conclusion: "SUCCESS" }],
+      });
+    }
+    if (parts[0] === "api" && parts[1].startsWith("repos/")) {
+      if (parts[1].includes("/branches/")) return baseTip;
+      if (parts[1].includes("/git/commits/")) return candidateTree;
+      const id = Number(parts[1].split("/").at(-1));
+      return JSON.stringify({
+        html_url: `${id === 103 && overrides.wrongCommentPr ? "https://github.com/sabbour/agentweaver/pull/99" : prUrl}#issuecomment-${id}`,
+        user: { login: overrides.wrongAuthor || (id === 103 && overrides.wrongCommentAuthor) ? "other" : "owner" },
+        body: id === 101 ? (overrides.spoofReceipt ?? oldBody) :
+          id === 102 ? (overrides.spoofDenial ?? deniedBody) :
+            `Workflow run test-run\nOld tree ${sourceTree}; denial #issuecomment-102\nFinal HEAD: \`${publishedHead}\`\nFinal tree: \`${candidateTree}\``,
+      });
+    }
+    throw new Error("unexpected gh " + parts.join(" "));
+  };
+  const agent = async (_prompt, { label }) => {
+    if (label.startsWith("v3:correct-validation:")) {
+      validations++;
+      candidateTree = repo.git("write-tree");
+      return overrides.badValidation || (overrides.failValidationOnce && validations === 1)
+        ? { status: "blocked", treeSha: candidateTree, evidence: "failed" }
+        : { status: "passed", treeSha: candidateTree, evidence: "affected tests passed" };
+    }
+    if (label.startsWith("v3:publication:")) {
+      publicationCount++;
+      if (overrides.blockPublicationOnce && publicationCount === 1)
+        return { status: "blocked", treeSha: candidateTree, evidence: "publication unavailable" };
+      if (!publishedHead) {
+        repo.git("commit", "-qm", "corrected");
+        publishedHead = repo.git("rev-parse", "HEAD");
+      }
+      return {
+        status: "published", headSha: publishedHead, treeSha: candidateTree,
+        prNumber: overrides.wrongPublishedPr ? 43 : 42, prUrl,
+        commentUrl: `${prUrl}#issuecomment-103`, evidence: "corrected publication",
+      };
+    }
+    if (label.startsWith("v3:admission-owner:")) {
+      admissions++;
+      if (overrides.blockOwner && admissions === 1)
+        return { status: "blocked", treeSha: candidateTree };
+      if (overrides.advanceBaseAfterOwner && admissions === 1) baseTip = "d".repeat(40);
+      return { status: "approved", treeSha: candidateTree, coordinatorSessionId: "parent",
+        authorizationId: "new-grant", evidence: "exclusive grant for corrected head" };
+    }
+    if (label.startsWith("v3:live-admission:"))
+      return { status: "merged", headSha: publishedHead, treeSha: candidateTree,
+        prNumber: 42, evidence: "fresh CI, base and corrected exclusive merge verified" };
+    if (label === `v3:cleanup:${publishedHead}`)
+      return { status: "passed", treeSha: candidateTree, evidence: "cleanup handoff" };
+    throw new Error(`Unexpected corrected agent: ${label}`);
+  };
+  return { repo, source, candidateTree, gh, agent, options: overrides, admissions: () => admissions,
+    publications: () => publicationCount, head: () => publishedHead, baseTip: () => baseTip };
+}
+
+test("corrected route adopts staged scope, retains old-tree review and refreshes admission on replay", async (t) => {
+  const f = correctedFixture(t, { blockOwner: true,
+    source: { paths: ["sample.txt", "packages/Agentweaver.Abstractions/Lifetime.cs"] },
+    denialDetail: "Abstractions needs metadata-only lifetime limiting." });
+  const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Blocked/);
+  assert.equal(f.publications(), 1);
+  assert.equal(calls.filter((c) => c.label.includes("review:")).length, 0);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:live-admission:")).length, 0);
+  const result = await runIssueToMerge(ctx, f.repo.cwd, f.gh);
+  assert.equal(result.status, "merged");
+  assert.equal(result.reviewEvidence.reviewedTree, f.source.treeSha);
+  assert.equal(result.reviewEvidence.finalTree, f.candidateTree);
+  assert.equal(f.publications(), 1);
+  assert.equal(f.admissions(), 2);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:correct-validation:")).length, 1);
+});
+
+test("source review two may explicitly approve the same exact tree as review one", async (t) => {
+  const f = correctedFixture(t, { reviewSameTree: true, blockOwner: true });
+  const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Blocked/);
+  assert.equal(f.publications(), 1);
+  assert.equal(calls.some((c) => c.label.startsWith("v3:correct-validation:")), true);
+});
+
+test("failed corrected validation can adopt a newly staged scoped tree before publication", async (t) => {
+  const f = correctedFixture(t, { failValidationOnce: true, blockOwner: true });
+  const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Blocked/);
+  writeFileSync(join(f.repo.cwd, "sample.txt"), "corrected again\n");
+  f.repo.git("add", "sample.txt");
+  const nextTree = f.repo.git("write-tree");
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Blocked/);
+  assert.notEqual(nextTree, f.candidateTree);
+  assert.equal(f.repo.git("rev-parse", "HEAD^{tree}"), nextTree);
+  assert.equal(f.publications(), 1);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:correct-validation:")).length, 2);
+});
+
+test("validated corrected tree cannot change before publication", async (t) => {
+  const f = correctedFixture(t, { blockPublicationOnce: true });
+  const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Blocked/);
+  assert.equal(f.publications(), 1);
+  writeFileSync(join(f.repo.cwd, "sample.txt"), "later\n");
+  f.repo.git("add", "sample.txt");
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Already validated corrected candidate changed/);
+  assert.equal(f.publications(), 1);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:live-admission:")).length, 0);
+});
+
+test("replay refuses a PR body relinked to another issue after publication", async (t) => {
+  const f = correctedFixture(t, { blockOwner: true });
+  const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Blocked/);
+  f.options.wrongIssue = true;
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Published correction replay is not bound/);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:live-admission:")).length, 0);
+});
+
+test("fresh corrected comment must belong to the source PR and its trusted author", async (t) => {
+  for (const flag of ["wrongCommentPr", "wrongCommentAuthor"]) {
+    await t.test(flag, async (subtest) => {
+      const f = correctedFixture(subtest, { [flag]: true });
+      const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+      await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Fresh corrected publication comment/);
+      assert.equal(calls.some((c) => c.label.startsWith("v3:admission-owner:")), false);
+    });
+  }
+});
+
+test("base advance after ownership blocks admission until a fresh grant", async (t) => {
+  const f = correctedFixture(t, { advanceBaseAfterOwner: true });
+  const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Target tip changed after coordinator grant/);
+  assert.equal(calls.filter((c) => c.label.startsWith("v3:live-admission:")).length, 0);
+  assert.equal(f.admissions(), 1);
+  const result = await runIssueToMerge(ctx, f.repo.cwd, f.gh);
+  assert.equal(result.status, "merged");
+  assert.equal(f.admissions(), 2);
+});
+
+test("corrected route rejects spoofed receipts, scope and failed validation before publication", async (t) => {
+  for (const [name, options, mutate] of [
+    ["source head", { source: { headSha: "a".repeat(40) } }],
+    ["source tree", { source: { treeSha: "b".repeat(40) } }],
+    ["wrong PR", { source: { prNumber: 43 } }],
+    ["source run", { source: { runId: "wrong-run" }, spoofReceipt: "Workflow run old-run-id\nNo matching reviews" }],
+    ["publication receipt", { spoofReceipt: "unrelated comment" }],
+    ["denial", { spoofDenial: "approved" }],
+    ["author", { wrongAuthor: true }],
+    ["branch", { wrongBranch: true }],
+    ["base", { wrongBase: true }],
+    ["head", { wrongLiveHead: true }],
+    ["issue", { wrongIssue: true }],
+    ["unowned path", { source: { paths: ["unrelated.txt"] } }],
+    ["unrelated component", { source: { paths: ["sample.txt", "packages/Agentweaver.Unrelated/Extra.cs"] } }],
+    ["wrong origin", {}, (r) => r.git("remote", "set-url", "origin", "https://evil.example/sabbour/agentweaver.git")],
+    ["unstaged", {}, (r) => writeFileSync(join(r.cwd, "sample.txt"), "unstaged\n")],
+    ["untracked", {}, (r) => writeFileSync(join(r.cwd, "other.txt"), "untracked\n")],
+    ["validation", { badValidation: true }],
+  ]) {
+    await t.test(name, async (subtest) => {
+      const f = correctedFixture(subtest, options);
+      mutate?.(f.repo);
+      const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+      await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh));
+      assert.equal(calls.some((c) => c.label.startsWith("v3:publication:")), false);
+    });
+
+  }
+});
+
+test("corrected route requires green current-head CI before coordinator admission", async (t) => {
+  const f = correctedFixture(t, { badCi: true });
+  const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /CI is not green/);
+  assert.equal(calls.some((c) => c.label.startsWith("v3:admission-owner:")), false);
+});
+
+test("corrected publication cannot redirect to another PR", async (t) => {
+  const f = correctedFixture(t, { wrongPublishedPr: true });
+  const { ctx, calls } = context({ args: { mode: "correct", source: f.source }, agent: f.agent });
+  await assert.rejects(runIssueToMerge(ctx, f.repo.cwd, f.gh), /Publication is not bound/);
+  assert.equal(calls.some((c) => c.label.startsWith("v3:admission-owner:")), false);
+});
+
+test("source receipt cannot be supplied to rehearsal or ordinary delivery", async () => {
+  for (const mode of ["rehearse", "deliver"]) {
+    const { ctx, calls } = context({ args: { mode, source: {} } });
+    await assert.rejects(runIssueToMerge(ctx, "unused"), /Source receipt requires/);
+    assert.equal(calls.length, 0);
+  }
 });
