@@ -276,6 +276,7 @@ public sealed partial class PostgresAppBootTests : IClassFixture<PostgresAppBoot
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.UseTestSandboxExecutor();
             // Database:Provider is read SYNCHRONOUSLY during service registration in Program.cs,
             // before ConfigureAppConfiguration sources are layered in. UseSetting writes to host
             // configuration, which IS visible to builder.Configuration at registration time — this
