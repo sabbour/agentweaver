@@ -20,7 +20,7 @@ RUN dotnet publish services/identity/Agentweaver.Identity.Broker/Agentweaver.Ide
     --configuration Release --no-build --no-restore \
     --output /app/publish
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4 AS final
 WORKDIR /app
 
 # Run as a non-root, unprivileged user. The aspnet runtime image does not include
