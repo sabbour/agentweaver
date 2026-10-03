@@ -29,7 +29,25 @@ await joinSession({
           labels: { type: "array", items: { type: "string" } },
           repository: { type: "string" },
           baseBranch: { type: "string" },
-          mode: { type: "string", enum: ["rehearse", "deliver", "correct"] },
+          mode: { type: "string", enum: ["rehearse", "deliver", "correct", "admit", "retarget"] },
+          retargetSource: {
+            type: "object",
+            required: ["runId", "parentRunId", "denialCommentId"],
+            properties: {
+              runId: { type: "string" },
+              parentRunId: { type: "string" },
+              denialCommentId: { type: "integer" },
+            },
+          },
+          admissionSource: {
+            type: "object",
+            required: ["runId", "parentRunId", "grantCommentId"],
+            properties: {
+              runId: { type: "string" },
+              parentRunId: { type: "string" },
+              grantCommentId: { type: "integer" },
+            },
+          },
           source: {
             type: "object",
             required: ["runId", "headSha", "treeSha", "branch", "prNumber", "publicationCommentId", "denialCommentId", "paths"],
@@ -44,6 +62,16 @@ await joinSession({
               denialCommentId: { type: "integer" },
               scopeCommentId: { type: "integer" },
               paths: { type: "array", items: { type: "string" } },
+            },
+          },
+          sourceChain: {
+            type: "object",
+            required: ["runId", "parentRunId", "denialCommentId"],
+            properties: {
+              runId: { type: "string" },
+              parentRunId: { type: "string" },
+              denialCommentId: { type: "integer" },
+              scopeCommentId: { type: "integer" },
             },
           },
         },

@@ -182,9 +182,53 @@ the actual review pair, any corrective transition, publication, and issue
 scope. A GitHub timeline claim by itself is never sufficient; missing or
 ambiguous native evidence blocks. The owning workflow verifies this SDK
 receipt before delegating affected validation; a subagent's separate session
-cannot independently read the originating run.
+cannot independently read the originating run. The same owner-verified source
+receipt is forwarded to the corrected publisher, which must still check live
+Git and GitHub state before committing or pushing; a child-session SDK lookup
+failure is not a reason to discard the owner's native proof.
+
+If a corrected publication itself stops **after** publishing (for example, a
+publication-receipt format check rejects an otherwise valid comment), do not
+alter the native journal, edit its timeline comment, or reuse the original
+source arguments for a different staged tree. In the same originating session,
+`mode: "correct"` also accepts `sourceChain` **instead of** `source`, with only
+`runId` (the stopped corrective run), `parentRunId` (its original normal
+delivery run), and `denialCommentId` (a fresh coordinator denial of the
+corrective run's exact published head/tree). The owning workflow derives the
+PR, head, tree, comment and allowed paths from both runs' terminal SDK
+receipts, their typed agents, Git, and live GitHub; it accepts only a single
+normal parent followed by a single failed post-publication correction, not an
+arbitrary chain. An additional `scopeCommentId` is required if newly staged
+paths extend beyond the prior owned correction and PR diff. The old review
+pair remains historical findings, never approval of the revision. Publication
+reuses the same PR and still requires fresh CI and a new exclusive exact-head
+coordinator grant before admission.
 
 The original remote PR/head/tree and denial remain bound to that stopped run.
+When a published, denied corrected candidate must be moved onto an advanced
+`v1`, use the separate `mode: "retarget"` with `retargetSource` containing
+only the stopped correction `runId`, its normal delivery `parentRunId`, and
+the coordinator's `denialCommentId`. The originating session must own both
+terminal native runs; this route accepts only the pinned correction run
+`agentweaver-issue-to-merge-pinned-5b8`. It derives the clean initial base,
+two published commits, scope, reviews, validation, publication and denials
+from native receipts and the live PR. It rebases exactly those two commits
+onto the freshly fetched target, checks each owned slice by zero-context
+verbatim patch ID and paths, then runs affected validation. A conflict
+blocks in place without discarding work. Only after validation may the owner
+update the same PR with `--force-with-lease` against the original published
+head; an unexpected remote head blocks. A replay reconciles the exact
+rebased/pushed head and a uniquely marked publication comment rather than
+repeating a push or comment. The selected target is journaled before rebase;
+a premerge target drift blocks. If cleanup is interrupted after merge, replay
+requires this run's distinct native owner and executor, the exact committed
+merge tree and its original nonwithdrawn grant, then finishes cleanup without
+repeating admission or requiring the deleted remote branch. Fresh exact-head
+CI and a new exclusive
+coordinator grant are still required before admission. This route never
+reruns the writer or local review pair and does not treat old reviews as
+approval of the rebased tree.
+
 If `v1` advanced, the route commits only the staged owned corrections, rebases
 the owned branch without stashing or discarding changes, and verifies the
 original feature and correction deltas with zero-context verbatim patch IDs
@@ -205,6 +249,39 @@ validation can be retried with a newly staged owned tree; successful validation
 pins the candidate, and publication cannot be silently replaced. If the target
 tip advances after the coordinator grant, admission blocks and requires a fresh
 grant on retry.
+The admission owner may use a live, coordinator-authored top-level comment on
+the same PR as the actual coordinator response when a child-session reply is
+unavailable. Its comment ID/URL is the stable response ID, not a fabricated
+message ID. Approval must be explicit on the first line, nonwithdrawn, and
+bound to the coordinator session and decision ID, exact PR/head/tree/current
+target base, and sole admission slot. A quoted or self-authored grant cannot
+authorize admission; the separate merge executor still rechecks head, base,
+CI and withdrawal before merging.
+
+For an already-published, validated correction that stopped **at admission
+ownership**, `mode: "admit"` is a separate, admission-only continuation. Supply
+`admissionSource` with the stopped `runId`, original normal `parentRunId`, and
+the live coordinator `grantCommentId`, in the same originating session. This
+bounded route accepts only the known `agentweaver-issue-to-merge-pinned-d201`
+registration: its original handler was independently verified against Git
+blob `413f70136aed7a7c0a93477ddef3f757ee9a02ee` before the run; the SDK
+does **not** expose a handler hash. It derives the published PR/head/tree,
+original reviews, source correction, validation and publication from the two
+terminal native runs, then checks the unchanged local commit, current PR,
+exact-head CI, target tip and live Root grant. Only the existing volatile
+admission-owner, merge executor and cleanup stages run. It never repeats a
+writer, review, validation or publication, and does not modify either prior
+run's arguments or journal. A run stopped before publication is **not**
+eligible; use the ordinary corrected-candidate route from its original source
+instead. The grant must be on the same PR, explicitly authorize the exact
+head/tree/current base and sole slot, identify the expected coordinator
+session and decision, and remain unedited and unwithdrawn.
+If that same admission run is interrupted after GitHub has already merged,
+resuming it requires its own completed native owner and executor agents,
+the unchanged published head, the exact GitHub merge commit/tree, and the
+original grant valid at merge time. It reconciles the existing merge and
+cleanup without attempting another merge; a different or unproven merged
+PR is not an admission shortcut.
 
 Run focused native tests with
 `node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs`.
