@@ -54,7 +54,11 @@ export function fakeAzure(overrides = {}, calls = []) {
     if (args[0] === 'deployment') return overrides.create ?? ok({
       id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
       properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } });
-    if (args[0] === 'aks') return { status: 0, stdout: 'https://issuer.example/', stderr: '' };
+    if (args[0] === 'aks') return overrides.issuerResult ?? { status: 0, stdout: 'https://issuer.example/', stderr: '' };
+    if (args[0] === 'identity') return overrides.federationResult ?? ok({
+      issuer: 'https://issuer.example/', subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
+      audiences: ['api://AzureADTokenExchange'],
+    });
     if (args[0] === 'monitor') return ok([{ Message: 'historical' }]);
     throw new Error(`Unexpected Azure command: ${args.join(' ')}`);
   };

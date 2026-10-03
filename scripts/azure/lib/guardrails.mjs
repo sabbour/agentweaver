@@ -271,6 +271,7 @@ export function guardAzureTarget(config, execAz) {
         '--name', resource.name, '-o', 'json'], { check: false }), 'Deployment inventory receipt');
       const outputs = deployment.properties?.outputs;
       if (!sameId(deployment.id, resource.id) || !/^[0-9a-f]{40}$/.test(outputs?.sourceSha?.value ?? '') ||
+          !/^[0-9a-f]{40}$/.test(outputs?.sourceTree?.value ?? '') ||
           resource.name !== `${resourceGroup}-${outputs.sourceSha.value.slice(0, 12)}` ||
           !/^[0-9a-f]{64}$/.test(outputs?.sourceHash?.value ?? '')) {
         throw new Error('Deployment inventory entry has no matching source-bound receipt.');

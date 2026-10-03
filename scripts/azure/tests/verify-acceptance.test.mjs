@@ -181,10 +181,56 @@ test('FULL REPORT regression: original false full success remains BLOCKED, even 
   assert.equal(report.candidate.sourceSha, source.sha);
   assert.equal(report.checks.find(check => check.name === 'blob-roundtrip').evidence.cleanupFailed, true);
   assert.match(report.checks.find(check => check.name === 'blob-roundtrip').evidence.cleanupFailure, /Conditional cleanup failed/);
-  assert.equal(report.checks.find(check => check.name === 'workload-identity-oidc').evidence.exact, false);
+  const identity = report.checks.find(check => check.name === 'workload-identity-oidc');
+  assert.equal(identity.evidence.exact, true);
+  assert.equal(identity.evidence.tokenExchangeVerified, false);
+  assert.equal(identity.status, 'blocked');
   for (const name of ['key-vault-secret-version', 'service-image-digests', 'blob-roundtrip',
     'monitor-trace', 'runtime-workload-evidence']) assert.equal(report.checks.find(check => check.name === name).status, 'blocked');
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
+});
+
+test('full report overrides caller federation checks with exact bound foundation-probe configuration', () => {
+  const valid = { issuer: 'https://issuer.example/',
+    subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe', audiences: ['api://AzureADTokenExchange'] };
+  const json = value => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
+  for (const overrides of [
+    {},
+    { federationResult: json({ ...valid, issuer: 'https://wrong.example/' }) },
+    { federationResult: json({ ...valid, issuer: undefined }) },
+    { federationResult: json({ ...valid, subject: 'system:serviceaccount:wrong:other' }) },
+    { federationResult: json({ ...valid, subject: undefined }) },
+    { federationResult: json({ ...valid, audiences: ['wrong'] }) },
+    { federationResult: json({ ...valid, audiences: ['api://AzureADTokenExchange', 'wrong'] }) },
+    { federationResult: json({ ...valid, audiences: undefined }) },
+    { federationResult: { status: 1, stdout: JSON.stringify(valid), stderr: 'AuthorizationFailed' } },
+    { federationResult: { status: 0, stdout: 'malformed', stderr: '' } },
+    { issuerResult: { status: 1, stdout: valid.issuer, stderr: 'AuthorizationFailed' } },
+    { issuerResult: { status: 0, stdout: '', stderr: '' } },
+  ]) {
+    const calls = [];
+    const report = runAcceptance({ ...fixture, identityChecks: [{ identityName: 'wrong', expectedSubject: 'wrong' }] },
+      { sourceResolver: () => source, execAz: fakeAzure(overrides, calls) });
+    const identity = report.checks.find(check => check.name === 'workload-identity-oidc');
+    assert.equal(report.overall, 'blocked');
+    assert.equal(report.deployedAcceptance, false);
+    assert.equal(identity.status, 'blocked');
+    if (Object.keys(overrides).length === 0) {
+      assert.equal(identity.evidence.exact, true);
+      assert.equal(identity.evidence.tokenExchangeVerified, false);
+    } else assert.notEqual(identity.evidence?.exact, true);
+    const queries = calls.filter(args => args[0] === 'identity');
+    if (overrides.issuerResult) assert.equal(queries.length, 0);
+    else {
+      assert.equal(queries.length, 1);
+      const args = queries[0];
+      assert.deepEqual(args.slice(0, 3), ['identity', 'federated-credential', 'show']);
+      for (const [flag, value] of [['--identity-name', 'aw-v1-p0-id-foundation-probe'],
+        ['--name', 'foundation-probe-workload-identity'], ['--resource-group', fixture.resourceGroup],
+        ['--subscription', ids.subscriptionId]]) assert.equal(args[args.indexOf(flag) + 1], value);
+    }
+    assert.ok(!calls.some(args => args.includes('create') || args.includes('delete')));
+  }
 });
 
 test('acceptance account/source failure prevents probes and returns a structured block', () => {

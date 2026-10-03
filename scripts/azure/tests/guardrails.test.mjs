@@ -161,7 +161,7 @@ test('generated NIC admission requires reciprocal approved endpoint and exact su
   ]) assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [endpointResource, nic], detailResult })));
 });
 
-test('module deployment names are exact and historical deployment names require matching SHA/hash outputs', () => {
+test('module deployment names are exact and historical deployment names require matching SHA/tree/hash outputs', () => {
   const outer = postDeploymentInventory.find(resource => resource.name === `aw-v1-p0-${source.sha.slice(0, 12)}`);
   const module = postDeploymentInventory.find(resource => resource.name === 'aw-v1-p0-network');
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({
@@ -172,6 +172,30 @@ test('module deployment names are exact and historical deployment names require 
     assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [outer], create: {
       status: 0, stderr: '', stdout: JSON.stringify({ id: outer.id, properties: { outputs } }),
     } })), /source-bound receipt/);
+  }
+});
+
+test('historical receipt requires lowercase Git tree SHA before plan or redeploy, without repair fallback', () => {
+  const outer = postDeploymentInventory.find(resource => resource.name === `aw-v1-p0-${source.sha.slice(0, 12)}`);
+  const receipt = tree => ({ resources: [outer], create: {
+    status: 0, stderr: '', stdout: JSON.stringify({ id: outer.id, properties: { outputs: {
+      sourceSha: { value: source.sha }, sourceTree: { value: tree }, sourceHash: { value: source.sourceHash },
+    } } }),
+  } });
+  assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure(receipt(source.sourceTree))));
+  for (const tree of [undefined, '', 'malformed', source.sourceHash, source.sourceTree.toUpperCase()]) {
+    for (const operation of [plan, deploy]) {
+      const calls = [];
+      assert.throws(() => operation({ ...fixture, execute: true },
+        { sourceResolver: () => source, execAz: fakeAzure(receipt(tree), calls) }), /source-bound receipt/);
+      assert.ok(!calls.some(args => args.includes('what-if') || args.includes('create') || args.includes('delete')));
+    }
+    const calls = [];
+    const report = runAcceptance(fixture, { sourceResolver: () => source, execAz: fakeAzure(receipt(tree), calls) });
+    assert.equal(report.overall, 'blocked');
+    assert.equal(report.deployedAcceptance, false);
+    assert.equal(report.checks[0].name, 'target-and-source');
+    assert.ok(!calls.some(args => args[0] === 'identity' || args[0] === 'storage'));
   }
 });
 

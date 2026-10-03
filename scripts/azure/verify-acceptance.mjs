@@ -194,7 +194,11 @@ export function runAcceptance(config, { execAz = runAz, sourceResolver = resolve
     const receipt = checks.find(item => item.name === 'deployed-sha' && item.status === 'passed')?.evidence;
     const clusterName = `${config.resourceGroup}-aks`;
     const accountName = `${config.resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
-    check('workload-identity-oidc', () => checkWorkloadIdentity({ ...config, clusterName }, boundAz));
+    check('workload-identity-oidc', () => checkWorkloadIdentity({ ...config, clusterName, identityChecks: [{
+      identityName: `${config.resourceGroup}-id-foundation-probe`,
+      federatedCredentialName: 'foundation-probe-workload-identity',
+      expectedSubject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
+    }] }, boundAz));
     check('key-vault-secret-version', () => checkKeyVaultSecretVersion(config));
     check('blob-roundtrip', () => receipt?.resources.storageAccountId?.toLowerCase() ===
       `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.Storage/storageAccounts/${accountName}`.toLowerCase() ?
