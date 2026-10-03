@@ -41,7 +41,7 @@ jobs:
       - name: Build unpublished Identity broker image
         run: |
           mkdir -p artifacts/images
-          docker build --file services/identity/Agentweaver.Identity.Broker/Dockerfile --tag agentweaver-identity-broker:ci --label org.opencontainers.image.revision="$GITHUB_SHA" .
+          docker build --platform linux/amd64 --file services/identity/Agentweaver.Identity.Broker/Dockerfile --tag agentweaver-identity-broker:ci --label org.opencontainers.image.revision="$GITHUB_SHA" .
           docker image inspect agentweaver-identity-broker:ci > artifacts/images/identity-broker.json
       - name: Test release validator with coverage
         if: ${{ !cancelled() }}
