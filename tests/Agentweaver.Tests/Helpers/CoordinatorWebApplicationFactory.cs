@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -44,28 +45,36 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
     private readonly string _agentExecutionMode;
     private readonly int? _memoryContextMaxTokens;
     private readonly bool _useFakeWorkflowAgents;
+    private readonly bool _pauseTerminalProjection;
 
-    public CoordinatorWebApplicationFactory() : this("in-api", null, false)
+    public CoordinatorWebApplicationFactory() : this("in-api", null, false, false)
     {
     }
 
-    public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run", null, false);
+    public static CoordinatorWebApplicationFactory CreatePodPerRun() => new("pod-per-run", null, false, false);
 
     public static CoordinatorWebApplicationFactory CreateWithMemoryContextMaxTokens(int memoryContextMaxTokens) =>
-        new("in-api", memoryContextMaxTokens, false);
+        new("in-api", memoryContextMaxTokens, false, false);
 
     public static CoordinatorWebApplicationFactory CreateWithFakeWorkflowAgents() =>
-        new("in-api", null, true);
+        new("in-api", null, true, false);
+
+    public static CoordinatorWebApplicationFactory CreateWithPausedTerminalProjection() =>
+        new("in-api", null, false, true);
+
+    internal PausingTerminalEventStream? TerminalEventStream { get; private set; }
 
     private CoordinatorWebApplicationFactory(
         string agentExecutionMode,
         int? memoryContextMaxTokens,
-        bool useFakeWorkflowAgents)
+        bool useFakeWorkflowAgents,
+        bool pauseTerminalProjection)
         : base("agentweaver-coord", createWorkspaceRoot: true)
     {
         _agentExecutionMode         = agentExecutionMode;
         _memoryContextMaxTokens = memoryContextMaxTokens;
         _useFakeWorkflowAgents = useFakeWorkflowAgents;
+        _pauseTerminalProjection = pauseTerminalProjection;
     }
 
     public HttpClient CreateOwnerClient() => CreateClientWithKey(OwnerApiKey);
@@ -192,6 +201,13 @@ public sealed class CoordinatorWebApplicationFactory : ApiWebApplicationFactory
 
     protected override void ConfigureTestServices(IServiceCollection services)
     {
+            if (_pauseTerminalProjection)
+            {
+                RemoveService<IRunEventStream>(services);
+                services.AddSingleton<IRunEventStream>(sp =>
+                    TerminalEventStream = new PausingTerminalEventStream(
+                        new SqliteRunEventStream(sp.GetRequiredService<IConfiguration>())));
+            }
             if (LeaseStoreOverride is not null)
             {
                 RemoveService<IRunLeaseStore>(services);

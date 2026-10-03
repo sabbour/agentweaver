@@ -108,6 +108,9 @@ public sealed class RunFailureExplanationServiceTests
             new SqliteRunStore(sqlite.Db));
         var service = new RunFailureExplanationService(
             new RunTerminalDiagnosticReader(memory),
+            new TerminalOutcomeProjector(new SqliteRunStore(sqlite.Db), eventStream,
+                NullLogger<TerminalOutcomeProjector>.Instance),
+            new SqliteRunStore(sqlite.Db),
             identityReader,
             eventStream,
             NullLogger<RunFailureExplanationService>.Instance);
@@ -266,6 +269,9 @@ public sealed class RunFailureExplanationServiceTests
             new SqliteRunStore(sqlite.Db));
         var service = new RunFailureExplanationService(
             new RunTerminalDiagnosticReader(memory),
+            new TerminalOutcomeProjector(new SqliteRunStore(sqlite.Db), stream,
+                NullLogger<TerminalOutcomeProjector>.Instance),
+            new SqliteRunStore(sqlite.Db),
             identityReader,
             stream,
             NullLogger<RunFailureExplanationService>.Instance);
