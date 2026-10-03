@@ -40,6 +40,9 @@ jobs:
       - name: Test coverage report guards
         if: ${{ !cancelled() }}
         run: node --test scripts/coverage/tests/*.test.mjs
+      - name: Test project issue-to-merge workflow
+        if: ${{ !cancelled() }}
+        run: node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs
       - name: Publish coverage summary
         if: ${{ !cancelled() }}
         run: |

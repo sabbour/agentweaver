@@ -74,6 +74,52 @@ npm run test:release
 ```
 
 The Node tooling has no external dependencies; no npm installation is required.
+
+## Project issue-to-merge workflow
+
+Agentweaver project sessions discover the executable Copilot SDK extension in
+`.github/extensions/agentweaver-issue-to-merge/extension.mjs`. Reload extensions
+after checking out a branch containing it. This is a project extension, not a
+GitHub Actions workflow or a global user installation. Discovery only registers
+the workflow; it does not automatically start it. [Project routing instructions](.github/copilot-instructions.md)
+identify when an agent may offer it.
+
+With explicit user workflow authorization (or a matching skill/slash command),
+invoke `run_dynamic_workflow` by name with arguments such as:
+
+```json
+{
+  "name": "agentweaver-issue-to-merge",
+  "args": {
+    "task": "Implement the linked issue with focused tests and documentation",
+    "issueNumber": 1742,
+    "milestone": "Squad",
+    "labels": ["type:chore", "area:workflows"],
+    "baseBranch": "v1"
+  }
+}
+```
+
+The default `mode: "rehearse"` traverses eight phases with zero agents and no
+mutations. Add `"mode": "deliver"` only for authorized work in a clean isolated
+feature worktree. Optional `repository` defaults to `sabbour/agentweaver`;
+`baseBranch` defaults to `v1`. Type and area labels and a milestone are required.
+Do not guess workflow resource limits; native approval precedes invocation.
+Inspect the run's durable status and resume its run ID when appropriate. Journals
+are scoped to the initiating session even though the extension is project-wide.
+
+Delivery stages implementation, targeted validation, one parallel local review
+pair, surgical corrections, exact-head PR and review evidence, fresh CI and
+serialized admission, then a scoped cleanup handoff. Admission blocks if
+exclusive ownership or exact candidate evidence cannot be verified; it does not
+provide a global lock. The running session cannot archive itself or delete its
+checked-out branch. This process-only extension has a Changeset exemption on
+v1 (which has no installed Changesets pipeline); it does not release or deploy
+the product and does not change branch protection. Its rehearsal does not prove
+live CI or merge behavior.
+
+Run focused native tests with
+`node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs`.
 The `v1 foundation CI` workflow runs the same suites with coverage for PRs targeting
 `v1` and pushes to `v1`. After restore and build, use `npm run coverage:dotnet`
 and `npm run coverage:node` instead of the test commands above to reproduce its
