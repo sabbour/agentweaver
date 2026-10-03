@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentweaver.dev/schemas/release-manifest-v1",
+  "title": "Agentweaver foundation composition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "stage", "components", "compatibility"],
+  "properties": {
+    "$schema": { "const": "./manifest.schema.json" },
+    "schemaVersion": { "const": 1 },
+    "stage": { "enum": ["draft", "release"] },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "version", "project"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9.-]*$" },
+          "kind": { "enum": ["contract", "library", "service"] },
+          "version": { "$ref": "#/$defs/version" },
+          "project": { "type": "string", "pattern": "^(packages|services)/[A-Za-z0-9./-]+\\.csproj$" },
+          "imageDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+        },
+        "allOf": [
+          { "if": { "properties": { "kind": { "const": "service" } }, "required": ["kind"] }, "then": { "required": ["imageDigest"] }, "else": { "not": { "required": ["imageDigest"] } } }
+        ]
+      }
+    },
+    "compatibility": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["consumer", "dependency", "versions"],
+        "properties": {
+          "consumer": { "type": "string" },
+          "dependency": { "type": "string" },
+          "versions": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/version" } }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceSha", "deploymentSha", "personaRuns"],
+      "properties": {
+        "sourceSha": { "$ref": "#/$defs/sha" },
+        "deploymentSha": { "$ref": "#/$defs/sha" },
+        "personaRuns": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["surface", "sourceSha", "runUrl"],
+            "properties": {
+              "surface": { "enum": ["api", "ui", "mcp"] },
+              "sourceSha": { "$ref": "#/$defs/sha" },
+              "runUrl": { "type": "string", "pattern": "^https://[^\\s]+$" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "stage": { "const": "draft" } }, "required": ["stage"] }, "then": { "not": { "required": ["evidence"] } } },
+    { "if": { "properties": { "stage": { "const": "release" } }, "required": ["stage"] }, "then": { "required": ["evidence"] } }
+  ],
+  "$defs": {
+    "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+    "sha": { "type": "string", "pattern": "^[a-f0-9]{40}$" }
+  }
+}

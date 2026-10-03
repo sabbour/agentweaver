@@ -1,0 +1,8 @@
+{
+  "name": "agentweaver-v1-tooling",
+  "private": true,
+  "scripts": {
+    "release:validate": "node scripts/release/validate.mjs releases/foundation.json",
+    "test:release": "node --test scripts/release/tests/*.test.mjs"
+  }
+}
