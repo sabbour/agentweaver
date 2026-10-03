@@ -1,0 +1,101 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { isFullSha, resolveCleanHead, resolveSource } from '../lib/git.mjs';
+import { resolve, relative } from 'node:path';
+import { fixture, source, ids } from './fixtures/target.mjs';
+
+test('isFullSha accepts exactly 40 lowercase hex characters', () => {
+  assert.ok(isFullSha('abcdef0123456789abcdef0123456789abcdef01'.slice(0, 40)));
+  assert.ok(!isFullSha('e5093cd'));
+  assert.ok(!isFullSha('ABCDEF0123456789ABCDEF0123456789ABCDEF01'));
+  assert.ok(!isFullSha(''));
+  assert.ok(!isFullSha(undefined));
+});
+
+function sourceFixture(overrides = {}) {
+  const root = process.cwd();
+  const template = 'infra/bicep/main.bicep';
+  const parameterPath = 'infra/bicep/parameters/approved.json';
+  const parameters = JSON.stringify({ parameters: { namePrefix: { value: 'aw-v1-p0' },
+    tenantId: { value: ids.tenantId }, owner: { value: 'team' }, costCenter: { value: 'p0' },
+    postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId } } });
+  const files = { [template]: 'targetScope = \'resourceGroup\'\n', [parameterPath]: parameters };
+  const config = { ...fixture, repoRoot: root, template, parametersFile: parameterPath, ...overrides.config };
+  const deps = {
+    realpath: path => resolve(path),
+    readFile: path => files[relative(root, path).replaceAll('\\', '/')],
+    validateRelease: () => ({}),
+    execGit: args => {
+      if (args[0] === 'status') return { status: 0, stdout: overrides.dirty ?? '' };
+      if (args[0] === 'rev-parse') return { status: 0, stdout: args[1] === 'HEAD' ? source.sha :
+        args[1] === 'origin/v1' ? overrides.unadmitted ? 'f'.repeat(40) : source.sha : 'candidate' };
+      if (args[0] === 'merge-base') {
+        assert.equal(args[2], 'origin/v1');
+        return { status: overrides.wrongAncestry ? 1 : 0, stdout: '' };
+      }
+      if (args[0] === 'ls-files' && args.includes('--error-unmatch')) return {
+        status: overrides.untracked ? 1 : 0, stdout: args.at(-1),
+      };
+      if (args[0] === 'ls-files' && args.includes('--others')) return { status: 0, stdout: overrides.ignored ?? '' };
+      if (args[0] === 'ls-files') return { status: 0, stdout: Object.keys(files).join('\n') };
+      if (args[0] === 'show') return { status: 0, stdout: overrides.changed ? 'changed' : files[args[1].slice(41)] };
+      throw new Error(`Unexpected git command ${args.join(' ')}`);
+    },
+    ...overrides.deps,
+  };
+  return { config, deps };
+}
+
+test('exact source hashes tracked reviewed inputs and binds JSON parameters to target', () => {
+  const { config, deps } = sourceFixture();
+  const receipt = resolveSource(config, deps);
+  assert.equal(receipt.sha, source.sha);
+  assert.match(receipt.sourceHash, /^[0-9a-f]{64}$/);
+  assert.equal(receipt.scope, 'infrastructure-only');
+  assert.equal(receipt.owner, 'team');
+  assert.equal(receipt.postgresEntraAdminObjectId, source.postgresEntraAdminObjectId);
+});
+
+test('clean full HEAD alone cannot authorize untracked/outside/0.x/changed/ignored inputs', () => {
+  for (const overrides of [
+    { dirty: '?? infra/bicep/parameters/untracked.json' }, { untracked: true }, { wrongAncestry: true },
+    { changed: true }, { unadmitted: true }, { ignored: 'infra/bicep/hidden.bicep' },
+    { config: { template: '..\\external.bicep' } }, { config: { template: 'infra/bicep/other.bicep' } },
+    { config: { parametersFile: 'infra/bicep/parameters/unreviewed.bicepparam' } },
+    { config: { tenantId: 'other' } },
+    { deps: { validateRelease: () => { throw new Error('incompatible manifest'); } } },
+  ]) {
+    const { config, deps } = sourceFixture(overrides);
+    assert.throws(() => resolveSource(config, deps));
+  }
+});
+
+test('resolveCleanHead throws when the tree is dirty', () => {
+  const execGit = (args) => {
+    if (args[0] === 'status') return { stdout: ' M some/file.cs\n', stderr: '' };
+    return { stdout: '', stderr: '' };
+  };
+  assert.throws(() => resolveCleanHead('/repo', { execGit }), /not clean/);
+});
+
+test('resolveCleanHead throws when HEAD is not a full SHA', () => {
+  const execGit = (args) => {
+    if (args[0] === 'status') return { stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: 'short123\n', stderr: '' };
+    return { stdout: '', stderr: '' };
+  };
+  assert.throws(() => resolveCleanHead('/repo', { execGit }), /full 40-character SHA/);
+});
+
+test('resolveCleanHead returns sha and branch for a clean tree', () => {
+  const fullSha = 'e5093cd81e6302c6812ec866a8f3a62bd77b6e8a';
+  const execGit = (args) => {
+    if (args[0] === 'status') return { stdout: '', stderr: '' };
+    if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: `${fullSha}\n`, stderr: '' };
+    if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return { stdout: 'sabbour-automatic-fiesta\n', stderr: '' };
+    throw new Error(`unexpected git args ${JSON.stringify(args)}`);
+  };
+  const { sha, branch } = resolveCleanHead('/repo', { execGit });
+  assert.equal(sha, fullSha);
+  assert.equal(branch, 'sabbour-automatic-fiesta');
+});

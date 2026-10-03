@@ -307,7 +307,10 @@ it applies source-bound component intent and prepares locked packages and servic
 A separate manual workflow can publish verified artifacts and record receipts.
 No artifact publication, released platform composition, registry push, or deployment
 occurred in this candidate.
-The phase descriptions below remain the scope authority.
+Azure foundation tooling for issue [#1777](https://github.com/sabbour/agentweaver/issues/1777)
+(Bicep modules, a guardrail-enforced plan/deploy/verify-acceptance CLI, and the
+Kustomize service-account layout) is staged on a branch, not reviewed, merged,
+or deployed. The phase descriptions below remain the scope authority.
 
 **Candidate, not merged:** [#1776](https://github.com/sabbour/agentweaver/issues/1776)
 adds trusted Identity run-grant authorization as a library. It compares exact

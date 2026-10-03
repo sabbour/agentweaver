@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentweaver-v1-p0
+resources:
+  - namespace.yaml
+  - resourcequota.yaml
+  - limitrange.yaml
+  - networkpolicy-default-deny.yaml
+  - serviceaccounts/foundation-probe-sa.yaml
+labels:
+  - pairs:
+      agentweaver.io/environment: v1-p0
+    includeSelectors: false

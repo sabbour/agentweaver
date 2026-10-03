@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus2" },
+    "namePrefix": { "value": "aw-v1-p0" },
+    "tenantId": { "value": "00000000-0000-0000-0000-000000000000" },
+    "postgresEntraAdminObjectId": { "value": "00000000-0000-0000-0000-000000000000" },
+    "postgresEntraAdminPrincipalName": { "value": "CHANGEME-admin-group" },
+    "owner": { "value": "CHANGEME-owner" },
+    "costCenter": { "value": "unassigned" }
+  }
+}
