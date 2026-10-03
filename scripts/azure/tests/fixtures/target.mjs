@@ -6,13 +6,37 @@ export const ids = {
 };
 export const tags = { 'agentweaver:environment': 'v1-p0', 'agentweaver:managed-by': 'bicep',
   'agentweaver:owner': 'team', 'agentweaver:cost-center': 'p0' };
-export const source = { sha: 'a'.repeat(40), sourceHash: 'b'.repeat(64), branch: 'candidate',
+export const source = { sha: 'a'.repeat(40), sourceTree: 'c'.repeat(40), sourceHash: 'b'.repeat(64), branch: 'candidate',
   template: 'infra/bicep/main.bicep', parametersFile: 'infra/bicep/parameters/approved.json',
   owner: 'team', costCenter: 'p0', scope: 'infrastructure-only',
   postgresEntraAdminObjectId: '33333333-3333-3333-3333-333333333333' };
 export const fixture = { ...ids, resourceGroup: 'aw-v1-p0', repoRoot: process.cwd(),
   template: source.template, parametersFile: source.parametersFile, expectedSha: source.sha,
+  deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}`,
   groupId: `/subscriptions/${ids.subscriptionId}/resourceGroups/aw-v1-p0` };
+export const deploymentOutputs = {
+  sourceSha: { value: source.sha }, sourceTree: { value: source.sourceTree }, sourceHash: { value: source.sourceHash },
+  aksClusterName: { value: 'aw-v1-p0-aks' }, storageAccountName: { value: 'awv1p0blob' },
+  monitorWorkspaceId: { value: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
+  foundationProbeIdentity: { value: {
+    name: 'foundation-probe', resourceId: `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-foundation-probe`,
+    clientId: '44444444-4444-4444-4444-444444444444', principalObjectId: '55555555-5555-5555-5555-555555555555',
+    namespace: 'agentweaver-v1-p0', serviceAccount: 'foundation-probe',
+  } },
+  foundationResources: { value: {
+    clusterId: `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`,
+    keyVaultId: `${fixture.groupId}/providers/Microsoft.KeyVault/vaults/aw-v1-p0-kv`,
+    vaultUri: 'https://aw-v1-p0-kv.vault.azure.net/',
+    storageAccountId: `${fixture.groupId}/providers/Microsoft.Storage/storageAccounts/awv1p0blob`,
+    blobContainerId: `${fixture.groupId}/providers/Microsoft.Storage/storageAccounts/awv1p0blob/blobServices/default/containers/platform-artifacts`,
+    blobContainerUri: 'https://awv1p0blob.blob.core.windows.net/platform-artifacts',
+    postgresServerId: `${fixture.groupId}/providers/Microsoft.DBforPostgreSQL/flexibleServers/aw-v1-p0-pg`,
+    postgresHost: 'aw-v1-p0-pg.postgres.database.azure.com',
+    monitorWorkspaceResourceId: `${fixture.groupId}/providers/Microsoft.OperationalInsights/workspaces/aw-v1-p0-law`,
+    monitorWorkspaceId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    appInsightsResourceId: `${fixture.groupId}/providers/Microsoft.Insights/components/aw-v1-p0-appi`,
+  } },
+};
 const ok = value => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
 export function fakeAzure(overrides = {}, calls = []) {
   return args => {
@@ -27,12 +51,9 @@ export function fakeAzure(overrides = {}, calls = []) {
     }
     if (args[0] === 'resource') return overrides.resourceResult ?? ok(overrides.resources ?? []);
     if (args[2] === 'what-if') return overrides.whatIf ?? ok({ changes: [] });
-    if (args[0] === 'deployment') return overrides.create ?? ok({ id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/candidate`,
-      properties: { provisioningState: 'Succeeded', outputs: {
-        sourceSha: { value: source.sha }, sourceHash: { value: source.sourceHash },
-        aksClusterName: { value: 'aw-v1-p0-aks' }, storageAccountName: { value: 'awv1p0blob' },
-        monitorWorkspaceId: { value: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
-      } } });
+    if (args[0] === 'deployment') return overrides.create ?? ok({
+      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
+      properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } });
     if (args[0] === 'aks') return { status: 0, stdout: 'https://issuer.example/', stderr: '' };
     if (args[0] === 'monitor') return ok([{ Message: 'historical' }]);
     throw new Error(`Unexpected Azure command: ${args.join(' ')}`);

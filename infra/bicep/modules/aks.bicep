@@ -14,6 +14,9 @@ param tags object
 @description('Subnet resource ID the node pool attaches to.')
 param nodeSubnetId string
 
+@description('Microsoft Entra tenant for managed authentication. Operator access requires separate approved Azure RBAC assignments.')
+param tenantId string
+
 @description('Kubernetes version. Leave empty to use the AKS default supported version.')
 param kubernetesVersion string = ''
 
@@ -48,6 +51,12 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
   properties: {
     kubernetesVersion: empty(kubernetesVersion) ? null : kubernetesVersion
     dnsPrefix: clusterName
+    disableLocalAccounts: true
+    aadProfile: {
+      managed: true
+      enableAzureRBAC: true
+      tenantID: tenantId
+    }
     oidcIssuerProfile: {
       enabled: true
     }

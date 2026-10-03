@@ -3,15 +3,16 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
-import { assertDedicatedTarget, assertSubscription, assertTenant, guardAzureTarget } from './lib/guardrails.mjs';
+import { assertDedicatedTarget, assertSubscription, assertTenant, guardAzureTarget, readFoundationOutputs } from './lib/guardrails.mjs';
 
-export function buildDeployArgs({ resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceHash }) {
+export function buildDeployArgs({ resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceTree, sourceHash }) {
   assertDedicatedTarget(resourceGroup);
-  if (!subscription || !/^[0-9a-f]{40}$/.test(sourceSha ?? '') || !/^[0-9a-f]{64}$/.test(sourceHash ?? '')) {
+  if (!subscription || !/^[0-9a-f]{40}$/.test(sourceSha ?? '') || !/^[0-9a-f]{40}$/.test(sourceTree ?? '') ||
+      !/^[0-9a-f]{64}$/.test(sourceHash ?? '')) {
     throw new Error('Exact source receipt and explicit subscription are required.');
   }
   return ['deployment', 'group', 'create', '--resource-group', resourceGroup, '--template-file', template,
-    '--parameters', `@${parametersFile}`, `sourceSha=${sourceSha}`, `sourceHash=${sourceHash}`,
+    '--parameters', `@${parametersFile}`, `sourceSha=${sourceSha}`, `sourceTree=${sourceTree}`, `sourceHash=${sourceHash}`,
     '--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json'];
 }
 
@@ -32,10 +33,10 @@ export function deploy(config, { execAz = runAz, sourceResolver = resolveSource 
   // A guarded what-if precedes create. Failure never admits a mutation.
   const whatIf = boundAz(['deployment', 'group', 'what-if', '--resource-group', config.resourceGroup,
     '--template-file', source.template, '--parameters', `@${source.parametersFile}`,
-    `sourceSha=${source.sha}`, `sourceHash=${source.sourceHash}`, '--no-pretty-print'], { check: false });
+    `sourceSha=${source.sha}`, `sourceTree=${source.sourceTree}`, `sourceHash=${source.sourceHash}`, '--no-pretty-print'], { check: false });
   if (whatIf.status !== 0) throw new Error(`What-if failed: ${whatIf.stderr}`);
   const confirmedSource = sourceResolver(config);
-  if (confirmedSource.sha !== source.sha || confirmedSource.sourceHash !== source.sourceHash ||
+  if (confirmedSource.sha !== source.sha || confirmedSource.sourceTree !== source.sourceTree || confirmedSource.sourceHash !== source.sourceHash ||
       confirmedSource.template !== source.template || confirmedSource.parametersFile !== source.parametersFile) {
     throw new Error('Source inputs changed after what-if; refusing deployment.');
   }
@@ -43,13 +44,17 @@ export function deploy(config, { execAz = runAz, sourceResolver = resolveSource 
   if (result.status !== 0) throw new Error(`Infrastructure deployment failed: ${result.stderr}`);
   const deployment = JSON.parse(result.stdout);
   const outputs = deployment.properties?.outputs;
+  const deploymentId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.Resources/deployments/${deploymentName}`;
   if (deployment.properties?.provisioningState !== 'Succeeded' ||
-      outputs?.sourceSha?.value !== source.sha || outputs?.sourceHash?.value !== source.sourceHash) {
+      deployment.id?.toLowerCase() !== deploymentId.toLowerCase() ||
+      outputs?.sourceSha?.value !== source.sha || outputs?.sourceTree?.value !== source.sourceTree ||
+      outputs?.sourceHash?.value !== source.sourceHash) {
     throw new Error('Deployment did not return a successful source-bound infrastructure receipt.');
   }
   return { ...summary, executed: true, receipt: { scope: source.scope, sourceSha: source.sha,
-    sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,
-    resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id } };
+    sourceTree: source.sourceTree, sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,
+    resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id,
+    ...readFoundationOutputs(outputs, config) } };
 }
 
 export function cliConfig(values) {

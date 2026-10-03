@@ -1,4 +1,4 @@
-import { fixture, source, tags } from './target.mjs';
+import { fixture, source, tags, deploymentOutputs } from './target.mjs';
 
 // GenericResource inventory shape: roots have tags, children and generated NICs do not.
 const prefix = `${fixture.groupId}/providers/`;
@@ -55,6 +55,8 @@ export const postDeploymentInventory = [
     ['Microsoft.KeyVault/vaults/aw-v1-p0-kv', '8db7f890-33c1-5cde-af9b-c73bef44f133'],
     ['Microsoft.Storage/storageAccounts/awv1p0blob', '74bad0fd-31fc-564b-a825-826ac0cf822c'],
     ['Microsoft.Network/virtualNetworks/aw-v1-p0-vnet/subnets/aks', '31529a81-ec1c-5107-ae70-ffea10ee05af'],
+    ['Microsoft.OperationalInsights/workspaces/aw-v1-p0-law', '034a4a0c-024d-5d7e-b880-d9cfeff88669'],
+    ['Microsoft.Insights/components/aw-v1-p0-appi', '8f0580d4-e64d-5e45-97c5-831beb65c29d'],
   ].map(([scope, name]) => item(`${scope}/providers/Microsoft.Authorization/roleAssignments/${name}`,
     'Microsoft.Authorization/roleAssignments', name)),
 ];
@@ -75,10 +77,6 @@ export const postDeploymentAzure = {
   resources: postDeploymentInventory, details: postDeploymentDetails,
   create: { status: 0, stderr: '', stdout: JSON.stringify({
     id: `${prefix}Microsoft.Resources/deployments/aw-v1-p0-${source.sha.slice(0, 12)}`,
-    properties: { provisioningState: 'Succeeded', outputs: {
-      sourceSha: { value: source.sha }, sourceHash: { value: source.sourceHash },
-      aksClusterName: { value: 'aw-v1-p0-aks' }, storageAccountName: { value: 'awv1p0blob' },
-      monitorWorkspaceId: { value: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
-    } },
+    properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs },
   }) },
 };

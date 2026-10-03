@@ -27,7 +27,8 @@ function sourceFixture(overrides = {}) {
     validateRelease: () => ({}),
     execGit: args => {
       if (args[0] === 'status') return { status: 0, stdout: overrides.dirty ?? '' };
-      if (args[0] === 'rev-parse') return { status: 0, stdout: args[1] === 'HEAD' ? source.sha :
+      if (args[0] === 'rev-parse') return { status: 0, stdout: args[1].endsWith('^{tree}') ? overrides.sourceTree ?? source.sourceTree :
+        args[1] === 'HEAD' ? source.sha :
         args[1] === 'origin/v1' ? overrides.unadmitted ? 'f'.repeat(40) : source.sha : 'candidate' };
       if (args[0] === 'merge-base') {
         assert.equal(args[2], 'origin/v1');
@@ -50,6 +51,8 @@ test('exact source hashes tracked reviewed inputs and binds JSON parameters to t
   const { config, deps } = sourceFixture();
   const receipt = resolveSource(config, deps);
   assert.equal(receipt.sha, source.sha);
+  assert.equal(receipt.sourceTree, source.sourceTree);
+  assert.notEqual(receipt.sourceTree, receipt.sourceHash);
   assert.match(receipt.sourceHash, /^[0-9a-f]{64}$/);
   assert.equal(receipt.scope, 'infrastructure-only');
   assert.equal(receipt.owner, 'team');
@@ -60,6 +63,7 @@ test('clean full HEAD alone cannot authorize untracked/outside/0.x/changed/ignor
   for (const overrides of [
     { dirty: '?? infra/bicep/parameters/untracked.json' }, { untracked: true }, { wrongAncestry: true },
     { changed: true }, { unadmitted: true }, { ignored: 'infra/bicep/hidden.bicep' },
+    { sourceTree: source.sourceHash }, { sourceTree: 'HEAD' },
     { config: { template: '..\\external.bicep' } }, { config: { template: 'infra/bicep/other.bicep' } },
     { config: { parametersFile: 'infra/bicep/parameters/unreviewed.bicepparam' } },
     { config: { tenantId: 'other' } },
