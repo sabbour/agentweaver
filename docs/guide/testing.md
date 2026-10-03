@@ -7,7 +7,7 @@ answer different questions. Passing one does not substitute for the others.
 | --- | --- | --- |
 | Unit and provider conformance | Selection, capabilities, immutable bindings, explicit failures | Every affected change |
 | Identity authorization candidate | Exact trusted actor/project/run/purpose/SecretRef bindings, immutable grant identity/revision/expiry races, metadata-only credential lifetime narrowing, cancellation and error invalidation | Every Identity or credential contract change |
-| PostgreSQL integration | State/event/consumer-receipt atomicity, version-1 schema upgrade, consumer-scoped duplicate admission and concurrent retry, stream ordering, concurrent claims, lease fencing and restart recovery | Every persistence change; the foundation CI runs the whole small suite |
+| PostgreSQL integration | State/event/consumer-receipt atomicity, version-1 schema upgrade, consumer-scoped duplicate admission and concurrent retry, stream ordering, concurrent claims, bounded relay publish-before-fenced-ack outcomes, cancellation at publish/ack and real lock waits, restart redelivery with inbox-gated effects | Every persistence change; the foundation CI runs the whole small suite |
 | Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
 | Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
 | Azure Blob transport fake | SDK HTTP requests, streamed binary data, create-only conditions, missing/conflict responses and failures without a live account | Every Object Store change |
@@ -22,6 +22,9 @@ ordered Guardrails/Telemetry, and layered Network Policy selection and pinning.
 They do not apply or verify a real egress policy. Persistence tests use a disposable
 PostgreSQL container, not mocks, SQLite, or a shared developer database. They verify
 durable state through database reads as well as returned results.
+The caller-driven relay integration tests also verify disjoint competing workers,
+expired and replaced leases, and a real transaction/receipt-gated consumer effect
+across restart. They do not provision a broker or exercise a deployed relay service.
 The Azure Key Vault adapter tests exercise the real Azure SDK authentication,
 request/response and error pipeline through an in-memory HTTP transport. The
 injected-credential cases use a fake `TokenCredential`; the workload-identity cases
@@ -85,14 +88,18 @@ twice. Its summary and downloadable artifact are published even after a failed
 step when available; partial reports do not turn a failed run green. Reports
 remain in GitHub Actions for 30 days, with no external analytics upload.
 
-The measured seven-library foundation snapshot before the consumer inbox change was:
+The table retains the measured seven-library foundation snapshot before the
+consumer inbox change, except for Persistence.Postgres, which is updated from the
+current candidate's `npm run coverage:dotnet` report. For current combined and
+other-library numbers, read that generated report rather than interpreting the
+historical rows as one contemporaneous run.
 
 | Scope | Lines | Branches | Methods/functions |
 | --- | --- | --- | --- |
 | .NET combined | 669/698 (95.8%) | 351/422 (83.1%) | 131/138 (94.9%) |
 | Abstractions | 133/139 (95.6%) | 68/72 (94.4%) | 68/73 (93.1%) |
 | Providers | 126/144 (87.5%) | 102/148 (68.9%) | 17/18 (94.4%) |
-| Persistence.Postgres | 216/221 (97.7%) | 67/76 (88.1%) | 25/26 (96.1%) |
+| Persistence.Postgres (current relay candidate) | 263/268 (98.1%) | 84/94 (89.3%) | 32/33 (96.9%) |
 | Secrets.AzureKeyVault | 99/99 (100%) | 82/86 (95.3%) | 12/12 (100%) |
 | Telemetry | 27/27 (100%) | 6/10 (60%) | 2/2 (100%) |
 | Telemetry.AzureMonitor | 36/36 (100%) | 18/22 (81.8%) | 2/2 (100%) |

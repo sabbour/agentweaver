@@ -667,6 +667,11 @@ preserve addressed-message ordering without promising exactly-once transport
 ([R9](../decisions/0001-platform-architecture.md#risk-register)). Azure Service Bus may later carry
 delivery, but the transaction, acknowledgment, and session message semantics stay in core. A transport
 acknowledgment means receipt, not approval or completed work.
+The Postgres foundation now includes a bounded, caller-invoked `OutboxRelay`:
+it publishes through an injected `IOutboxPublisher` before fenced acknowledgment
+and reports publish failure or a stale acknowledgment explicitly. This library
+primitive does not run a relay service, provision a broker, or guarantee exactly-once
+delivery.
 
 ## Object Store
 

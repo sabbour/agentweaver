@@ -299,6 +299,11 @@ and commits receipt, domain work and any outgoing event together in one service-
 schema transaction. A duplicate skips local effects. This is a foundation, not a
 cross-service transaction or exactly-once transport guarantee; external effects and
 transport acknowledgment remain outside the local commit.
+The same persistence library includes a bounded, caller-driven outbox relay
+primitive: it claims, publishes through an injected publisher, and acknowledges
+only with the still-valid lease. Failed publication and fenced acknowledgment
+have distinct outcomes; the primitive does not start a service, background
+loop, or broker.
 
 Snapshots and storage generations enter the run's consistency manifest. A sandbox move or resume
 re-verifies egress generation, volume binding, and the active writer before dispatch. Optional

@@ -86,7 +86,9 @@ acknowledgment. Consumer-scoped inbox receipts admit a stable message identity i
 same caller-owned transaction as domain changes and optional outbox enqueue, returning
 an explicit duplicate outcome. Real PostgreSQL tests cover atomicity, duplicate handling,
 concurrency, and recovery. Delivery remains at least once; this is a persistence
-library, not a running relay or consumer service.
+library, not a running relay or consumer service. A bounded, caller-driven
+`OutboxRelay` publishes through an injected transport before fenced acknowledgment;
+it does not start a daemon or guarantee exactly-once delivery.
 
 The Blob Object Store foundation adds provider-neutral opaque-object operations
 and an injected Azure SDK adapter for platform artifacts. It does not expose
