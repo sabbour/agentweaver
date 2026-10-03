@@ -319,6 +319,11 @@ narrows credential metadata without value access and invalidates on all
 post-acquisition errors/cancellation. This does not complete the remaining
 Identity broker, durable authority, service or Azure acceptance work.
 
+The [#1779 broker candidate](../../specs/1779-identity-broker.md) adds the native
+.NET/OpenIddict Identity service, owned PostgreSQL stores, and authenticated OAuth flows.
+It includes locked image builds, but no publication or deployed Azure evidence.
+Run-grant redemption composition (#1783) and Azure proof (#1790) remain separate dependencies.
+
 | Phase | Status and evidence | Remaining before phase completion |
 | --- | --- | --- |
 | P0 — Foundation | **In progress.** Merged provider descriptors/resolution/pinning [#1735](https://github.com/sabbour/agentweaver/pull/1735), Postgres schemas/outbox [#1738](https://github.com/sabbour/agentweaver/pull/1738), coverage [#1741](https://github.com/sabbour/agentweaver/pull/1741), Secrets/Key Vault [#1752](https://github.com/sabbour/agentweaver/pull/1752)/[#1756](https://github.com/sabbour/agentweaver/pull/1756), OpenTelemetry/Azure Monitor [#1753](https://github.com/sabbour/agentweaver/pull/1753)/[#1758](https://github.com/sabbour/agentweaver/pull/1758), Blob [#1760](https://github.com/sabbour/agentweaver/pull/1760)/[#1763](https://github.com/sabbour/agentweaver/pull/1763), consumer inbox [#1772](https://github.com/sabbour/agentweaver/pull/1772) (issue [#1768](https://github.com/sabbour/agentweaver/issues/1768)), ordered/layered provider composition [#1770](https://github.com/sabbour/agentweaver/pull/1770) (issue [#1767](https://github.com/sabbour/agentweaver/issues/1767)), and AKS workload-identity host composition [#1771](https://github.com/sabbour/agentweaver/pull/1771) (issue [#1766](https://github.com/sabbour/agentweaver/issues/1766)). | Identity service authorization/redemption and broker; service wiring/runtime/cloud layout; deployment and per-service compatibility proof; dedicated Azure integration environment with exact-SHA evidence. Component records and intent validation are implemented by [#1773](https://github.com/sabbour/agentweaver/issues/1773). The #1778 candidate supplies version preparation and manual artifact publication tooling, not actual publication or deployed acceptance. The manifest is still a draft. |

@@ -1,0 +1,10 @@
+**/bin
+**/obj
+**/TestResults
+**/.env*
+**/*.pfx
+**/*.key
+.git
+.vs
+node_modules
+artifacts

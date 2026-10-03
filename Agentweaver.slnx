@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="services\identity\Agentweaver.Identity.Broker\Agentweaver.Identity.Broker.csproj" />
+  <Project Path="tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj" />
   <Project Path="packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
   <Project Path="packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
   <Project Path="packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />

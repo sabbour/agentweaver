@@ -7,6 +7,7 @@ answer different questions. Passing one does not substitute for the others.
 | --- | --- | --- |
 | Unit and provider conformance | Selection, capabilities, immutable bindings, explicit failures | Every affected change |
 | Identity authorization candidate | Exact trusted actor/project/run/purpose/SecretRef bindings, immutable grant identity/revision/expiry races, metadata-only credential lifetime narrowing, cancellation and error invalidation | Every Identity or credential contract change |
+| Identity broker candidate | Native OIDC/cookie/OpenIddict protocol, authenticated consent/CSRF, S256 PKCE, configured resource audiences, permanent PostgreSQL grants, restart, refresh replay, cancellation, and Trace-level log redaction | Every broker change |
 | PostgreSQL integration | State/event/consumer-receipt atomicity, version-1 schema upgrade, consumer-scoped duplicate admission and concurrent retry, stream ordering, concurrent claims, bounded relay publish-before-fenced-ack outcomes, cancellation at publish/ack and real lock waits, restart redelivery with inbox-gated effects | Every persistence change; the foundation CI runs the whole small suite |
 | Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
 | Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
@@ -61,8 +62,9 @@ Testcontainers is a test dependency, not a supported local product deployment.
 The suite disposes only its own database/container. It never cleans up unrelated
 containers or contacts production resources.
 
-These tests are **not platform E2E**. There is no deployable v1 service yet, and
-this slice does not create an Azure environment.
+The [Identity broker candidate](../specs/1779-identity-broker.md) supplies a service host and Docker build contract.
+Its tests use generated credentials and isolated PostgreSQL, not a deployed Identity provider or resource server.
+These tests are **not platform E2E**. They do not create an Azure environment or prove publication.
 
 ## Release tooling regressions
 
@@ -90,11 +92,11 @@ npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs
 ```
 
-The .NET command restores the pinned local ReportGenerator tool, runs all seven
+The .NET command restores the pinned local ReportGenerator tool, runs all eight
 test suites once with Coverlet, and merges their reports using ReportGenerator.
-Its scope is all eight current production libraries: Abstractions, Providers,
+Its scope is eight production libraries and the Identity broker service: Abstractions, Providers,
 Persistence.Postgres, Secrets.AzureKeyVault, Telemetry, Telemetry.AzureMonitor,
-ObjectStore.AzureBlob and Identity. Shared sources are merged, not summed twice. Node
+ObjectStore.AzureBlob, Identity, and Identity.Broker. Shared sources are merged, not summed twice. Node
 uses its built-in test coverage and spec/LCOV reporters
 for the release validator; test files, fixtures, and coverage wrappers are not
 production targets. No external JavaScript coverage dependency is needed.
@@ -107,6 +109,7 @@ Reports are written beneath `artifacts\coverage\` (ignored by Git):
 | `dotnet\providers\`, `dotnet\postgres\` | Individual test-suite Cobertura reports |
 | `dotnet\keyvault\` | Azure Key Vault adapter Cobertura report |
 | `dotnet\identity\` | Identity authorization candidate Cobertura report |
+| `dotnet\identity-broker\` | Native broker and real-PostgreSQL regression Cobertura report |
 | `dotnet\telemetry\` | Telemetry foundation Cobertura report |
 | `dotnet\azure-monitor\` | Azure Monitor adapter Cobertura report |
 | `dotnet\azure-blob\` | Azure Blob Object Store adapter Cobertura report |

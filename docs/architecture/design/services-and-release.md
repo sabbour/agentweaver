@@ -257,6 +257,13 @@ backend invalidation. Hosts supply coherent snapshots with a new revision on
 every authority change; this library does not make those reads transactional.
 The durable grant authority and authenticated delivery remain future service work.
 
+The [#1779 broker candidate](../../specs/1779-identity-broker.md) supplies native
+.NET/OpenIddict authentication, owned PostgreSQL stores, authenticated consent,
+code/PKCE, permanent grants, resource audiences, and refresh-token handling.
+It remains unpublished and undeployed.
+Revisioned run-grant and exact-version Key Vault redemption composition remain dependent on #1783.
+The broker does not expose a secret-redemption or run-token API.
+
 The configure, refresh, and A2A contracts are versioned internal APIs, not unstructured side
 channels. The AgentHost image is pinned for the run, so a service rollout cannot silently replace it
 mid-flight. Trace context passes through AgentHost, provider routing hops, and the outbound gateway;

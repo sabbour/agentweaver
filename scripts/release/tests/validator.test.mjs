@@ -141,7 +141,10 @@ test('schema and executable agree on semantic version identifiers', () => {
 
 test('drafts cannot carry deployment evidence, and releases need actual services', () => {
   assert.throws(() => check(edit((m) => { m.evidence = {}; })), /draft must not claim/);
-  assert.throws(() => check(edit((m) => { m.stage = 'release'; })), /actual deployable service/);
+  assert.throws(() => check(edit((m) => {
+    m.stage = 'release';
+    m.components = m.components.filter((component) => component.kind !== 'service');
+  })), /actual deployable service/);
 });
 
 const sourceSha = 'a'.repeat(40);
@@ -152,6 +155,9 @@ const validEvidence = {
 };
 const release = () => edit((m) => {
   m.stage = 'release';
+  for (const component of m.components) {
+    if (component.kind === 'service') component.imageDigest = `sha256:${'b'.repeat(64)}`;
+  }
   m.components.push({
     id: 'Agentweaver.Example',
     kind: 'service',
