@@ -66,6 +66,12 @@ blocking acceptance entrypoint. None of it has been applied to a real
 subscription; see [Azure infrastructure tooling](scripts/azure/README.md) for
 the guardrail contract.
 
+The [P0 Foundation Probe story](docs/specs/1784-foundation-probe.md) adds an
+acceptance-only .NET workload Job, source-bound image receipt, and ownership-safe
+Key Vault, Blob, PostgreSQL, and Azure Monitor checks. Its default CLI plan is
+non-mutating; no cloud resource, secret fixture, or image is created or published
+by CI.
+
 The provider-neutral Secrets foundation defines opaque, versioned references and
 purpose/run-bound requests for trusted Identity redemption. Short-lived credential
 values remain outside descriptors, bindings and durable state. This is a contract
@@ -144,11 +150,13 @@ dotnet test tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence
 dotnet test tests\Agentweaver.Telemetry.Tests\Agentweaver.Telemetry.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Telemetry.AzureMonitor.Tests\Agentweaver.Telemetry.AzureMonitor.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.ObjectStore.AzureBlob.Tests\Agentweaver.ObjectStore.AzureBlob.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.FoundationProbe.Tests\Agentweaver.FoundationProbe.Tests.csproj --no-build --no-restore --configuration Release
 npm run release:validate
 npm run test:release
 npm run test:azure
 az bicep build --file infra\bicep\main.bicep --stdout
 kubectl kustomize deploy\k8s\base
+kubectl kustomize deploy\k8s\acceptance\foundation-probe
 ```
 The Node tooling has no external dependencies; no npm installation is required.
 `npm run release:plan`, `npm run release:apply`, and `npm run release:pack`

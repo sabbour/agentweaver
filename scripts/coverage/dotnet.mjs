@@ -15,6 +15,7 @@ const suites = [
   ['telemetry', 'Agentweaver.Telemetry.Tests'],
   ['azure-monitor', 'Agentweaver.Telemetry.AzureMonitor.Tests'],
   ['azure-blob', 'Agentweaver.ObjectStore.AzureBlob.Tests'],
+  ['foundation-probe', 'Agentweaver.FoundationProbe.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
@@ -26,6 +27,7 @@ const expectedAssemblies = [
   'Agentweaver.Telemetry',
   'Agentweaver.Telemetry.AzureMonitor',
   'Agentweaver.ObjectStore.AzureBlob',
+  'Agentweaver.FoundationProbe',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Version>0.0.0</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <ProbeSourceSha Condition="'$(ProbeSourceSha)' == ''">unbound</ProbeSourceSha>
+    <ProbeSourceTree Condition="'$(ProbeSourceTree)' == ''">unbound</ProbeSourceTree>
+    <ProbeInfrastructureHash Condition="'$(ProbeInfrastructureHash)' == ''">unbound</ProbeInfrastructureHash>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="Agentweaver.SourceSha" Value="$(ProbeSourceSha)" />
+    <AssemblyMetadata Include="Agentweaver.SourceTree" Value="$(ProbeSourceTree)" />
+    <AssemblyMetadata Include="Agentweaver.SourceHash" Value="$(ProbeInfrastructureHash)" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.26.0" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <ProjectReference Include="..\..\packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
+    <ProjectReference Include="..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+    <ProjectReference Include="..\..\packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
+    <ProjectReference Include="..\..\packages\Agentweaver.Secrets.AzureKeyVault\Agentweaver.Secrets.AzureKeyVault.csproj" />
+    <ProjectReference Include="..\..\packages\Agentweaver.ObjectStore.AzureBlob\Agentweaver.ObjectStore.AzureBlob.csproj" />
+    <ProjectReference Include="..\..\packages\Agentweaver.Telemetry.AzureMonitor\Agentweaver.Telemetry.AzureMonitor.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,65 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: foundation-probe
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: foundation-probe
+spec:
+  activeDeadlineSeconds: 420
+  backoffLimit: 0
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        agentweaver.io/probe: foundation-probe
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: foundation-probe
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: foundation-probe
+          image: registry.invalid/agentweaver-foundation-probe@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          args:
+            - --execute
+            - --target
+            - /run/foundation-probe/target.json
+          env:
+            - name: APPLICATIONINSIGHTS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: foundation-probe-monitor
+                  key: APPLICATIONINSIGHTS_CONNECTION_STRING
+          volumeMounts:
+            - name: target
+              mountPath: /run/foundation-probe
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: target
+          configMap:
+            name: foundation-probe-target
+            items:
+              - key: target.json
+                path: target.json

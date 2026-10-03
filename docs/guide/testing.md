@@ -13,6 +13,7 @@ answer different questions. Passing one does not substitute for the others.
 | Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
 | Azure Blob transport fake | SDK HTTP requests, streamed binary data, create-only conditions, missing/conflict responses and failures without a live account | Every Object Store change |
 | Azure P0 infrastructure tooling | Dedicated-target/digest/clean-tree guardrails, plan/deploy command construction, and acceptance-check blocking logic, all through an injected fake `az`/`git`; no live call | Every `scripts/azure` or `infra/bicep` change |
+| Foundation Probe acceptance executable | Exact target/source and projected-token checks, sanitized Monitor configuration evidence, provider pins, read-only exact-version Key Vault redemption, owned Blob cleanup, transactional PostgreSQL effects, and receipt/trace correlation; PostgreSQL uses a disposable local container | Every probe change; no Azure account or deployed cluster |
 | Service compatibility | Current and N-1 API/event peers agree during rollout | When real service APIs and consumers exist |
 | Azure-backed service integration | Actual identity, network access, managed dependencies, rollout and recovery | From the first deployable vertical slice |
 | Platform E2E | A user's task completes correctly through the assembled platform | From the end of P1, and for integrated candidates thereafter |
@@ -64,6 +65,13 @@ They do not prove a deployed AKS cluster, Key Vault, Blob, PostgreSQL, or Monito
 `infra/bicep/main.bicep` and its modules are validated with `az bicep build`
 (offline compilation, no Azure login); `deploy/k8s/base/` is validated with
 `kubectl kustomize` (offline rendering, no cluster connection).
+The [#1784 Foundation Probe](../specs/1784-foundation-probe.md) adds a
+non-packable .NET acceptance executable and a disposable-PostgreSQL integration
+suite. `npm run coverage:dotnet` includes that suite and its production assembly;
+CI also builds the source-bound image locally and renders the Job/egress overlay.
+The image build does not push, and its local image config digest is not a
+registry manifest digest. The overlay intentionally retains deployment-specific
+digest, target, secret, and egress placeholders; rendering is not deployment proof.
 
 Run the commands in the [root README](../../README.md#build-and-check-the-foundation).
 The PostgreSQL suite requires a running Docker-compatible engine and permission to

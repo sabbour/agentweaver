@@ -70,6 +70,25 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.match(dnsPolicy, /port: 53\s+protocol: UDP/);
   assert.match(dnsPolicy, /port: 53\s+protocol: TCP/);
   assert.doesNotMatch(dnsPolicy, /namespaceSelector: \{\}/);
+
+  const probeOverlay = run('kubectl', ['kustomize', 'deploy/k8s/acceptance/foundation-probe']).stdout;
+  const probeEgress = probeOverlay.split('---').find(document =>
+    document.includes('name: foundation-probe-egress'));
+  assert.ok(probeEgress);
+  assert.match(probeEgress, /rules:\s+dns:/);
+  for (const host of [
+    'login.microsoftonline.com',
+    'CHANGEME-vault-name.vault.azure.net',
+    'CHANGEME-storage-account.blob.core.windows.net',
+    'CHANGEME-monitor-ingestion-host.in.applicationinsights.azure.com',
+    'CHANGEME-postgres-server.postgres.database.azure.com',
+  ]) assert.ok(probeEgress.includes(host));
+  const probeJob = probeOverlay.split('---').find(document =>
+    document.includes('kind: Job') && document.includes('name: foundation-probe'));
+  assert.ok(probeJob);
+  assert.match(probeJob, /runAsNonRoot: true/);
+  assert.match(probeJob, /runAsUser: 10001/);
+  assert.match(probeJob, /runAsGroup: 10001/);
 });
 
 test('Monitor defines five DNS zones and PE depends on both associations; KV/Blob PEs remain', () => {
