@@ -80,6 +80,9 @@ The Dockerfile uses repository-root context and root build properties.
 The image pins SDK `10.0.302-noble` independently of the host SDK in `global.json`.
 Restore uses `--locked-mode`. Build uses `--no-restore`.
 Publish uses both `--no-build` and `--no-restore`.
+The Docker runtime and project `ContainerBaseImage` use the same public ASP.NET 10 manifest digest.
+The project pin supports native SDK service preparation through the existing release pack helper.
+The runtime pin identifies a registry manifest, not a prepared image archive or its configuration.
 The runtime uses a non-root account and exposes port 8080.
 The deployment supplies an HTTPS Kestrel endpoint and mounted TLS certificate through native Kestrel configuration.
 OAuth traffic must reach Kestrel over HTTPS, including traffic from a TLS-terminating ingress.
