@@ -4,6 +4,8 @@ using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Domain;
+using Agentweaver.SandboxExec;
+using Agentweaver.Tests.Helpers;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using FluentAssertions;
@@ -45,6 +47,8 @@ public sealed class StartupRecoveryServiceTests
             bypassInitializationGate: true);
         using var client = factory.CreateClient();
 
+        factory.Services.GetRequiredService<ISandboxExecutor>()
+            .Should().BeOfType<PassthroughExecutor>();
         factory.Services.GetRequiredService<OAuthStaticClientReconciler>().IsInitialized.Should().BeFalse();
         (await client.GetAsync("/api/ping")).StatusCode.Should().Be(HttpStatusCode.OK);
         (await client.GetAsync("/api/health")).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -255,6 +259,7 @@ public sealed class StartupRecoveryServiceTests
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.UseTestSandboxExecutor();
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {

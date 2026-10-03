@@ -1,8 +1,8 @@
+using Agentweaver.Api.Infrastructure;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Agentweaver.Api.Infrastructure;
 
 namespace Agentweaver.Tests.Helpers;
 
@@ -60,6 +60,7 @@ public abstract class ApiWebApplicationFactory : WebApplicationFactory<Program>
             configuration.AddInMemoryCollection(values);
         });
         builder.ConfigureServices(ConfigureTestServices);
+        builder.UseTestSandboxExecutor();
     }
 
     protected virtual void ConfigureTestConfiguration(IDictionary<string, string?> configuration)
