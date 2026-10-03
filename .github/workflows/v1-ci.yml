@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -27,7 +29,9 @@ jobs:
           mkdir -p artifacts/coverage
           node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("artifacts/coverage/source.json", JSON.stringify({ testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT }, null, 2) + "\n");'
       - name: Validate release composition
-        run: npm run release:validate
+        env:
+          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: npm run release:validate -- --base "$RELEASE_BASE_SHA"
       - name: Restore locked dependencies
         run: dotnet restore Agentweaver.slnx --locked-mode
       - name: Build foundation
