@@ -48,9 +48,12 @@ test("per-session atomic publication is isolated, durable and strips unknown sto
   const path = join(context.directory, "owner-a.json");
   const persisted = JSON.parse(await readFile(path, "utf8"));
   persisted.runs[0].secret = "never return";
+  persisted.runs[0].issueNumber = 999;
+  persisted.runs[0].referenceSources.issue = "not-observed";
   await writeFile(path, JSON.stringify(persisted));
   state = await readRepository(context);
   assert.doesNotMatch(JSON.stringify(state), /never return/);
+  assert.equal(state.sessions.find((s) => s.sessionId === "owner-a").runs[0].issueNumber, null);
   assert.equal((await readRepository({ ...context, directory: join(temp, "other") })).sessions.length, 0);
   assert.equal((await readRepository(context, Date.now() + 100_000)).sessions[0].freshness, "stale");
 });
