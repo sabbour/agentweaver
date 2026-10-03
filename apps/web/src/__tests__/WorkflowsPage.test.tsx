@@ -359,7 +359,7 @@ trigger:
     const actionSelect = await screen.findByRole('combobox', { name: 'Issue action' });
     expect((actionSelect as HTMLSelectElement).value).toBe('opened');
     fireEvent.change(actionSelect, { target: { value: 'labeled' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save event' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save event' }));
 
     await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
     expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2])
