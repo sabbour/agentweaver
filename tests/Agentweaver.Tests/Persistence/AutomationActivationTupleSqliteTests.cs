@@ -61,6 +61,7 @@ internal static class AutomationActivationTupleTestData
         var installationId = hasInstallation ? unique : (long?)null;
         var repositoryId = hasRepository ? unique : (long?)null;
         db.Projects.Add(new ProjectRecord { ProjectId = projectId });
+        await db.SaveChangesAsync();
         if (installationId is not null)
         {
             db.GitHubInstallations.Add(new GitHubInstallationRecord
