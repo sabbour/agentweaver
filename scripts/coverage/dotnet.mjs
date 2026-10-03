@@ -11,6 +11,7 @@ const suites = [
   ['postgres', 'Agentweaver.Persistence.Postgres.Tests'],
   ['keyvault', 'Agentweaver.Secrets.AzureKeyVault.Tests'],
   ['telemetry', 'Agentweaver.Telemetry.Tests'],
+  ['azure-monitor', 'Agentweaver.Telemetry.AzureMonitor.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
@@ -18,6 +19,7 @@ const expectedAssemblies = [
   'Agentweaver.Persistence.Postgres',
   'Agentweaver.Secrets.AzureKeyVault',
   'Agentweaver.Telemetry',
+  'Agentweaver.Telemetry.AzureMonitor',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 

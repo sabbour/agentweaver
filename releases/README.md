@@ -4,7 +4,8 @@
 It pins the independently versioned .NET foundation libraries
 (`Agentweaver.Abstractions`, `Agentweaver.Providers`,
 `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, and
-`Agentweaver.Telemetry`, each currently `0.1.0`).
+`Agentweaver.Telemetry`, and `Agentweaver.Telemetry.AzureMonitor`, each
+currently `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
@@ -45,10 +46,14 @@ and deployment gates are future work, not supplied by this validator.
 
 - Added `Agentweaver.Telemetry` 0.1.0 to the draft foundation composition:
   native OpenTelemetry traces, metrics, and logs with per-service resource identity
-  and caller-configured in-process/exporter integration. No Azure Monitor or OTLP
-  export is configured by this lower layer.
+  and caller-configured in-process/exporter integration. No exporter is configured
+  by this lower layer.
+- Added `Agentweaver.Telemetry.AzureMonitor` 0.1.0 to the draft composition:
+  opt-in Azure Monitor traces, metrics, and logs via the supported exporter SDK,
+  with explicit connection string and optional injected `TokenCredential`.
+  Other exporters can be composed through the lower-layer callbacks.
 - No version bump or publication is implied by this draft entry. Documentation,
-  tests, and CI wiring have no separate release entry. v1 uses plain Markdown
+  tests, and CI wiring are exempt from a separate release entry. v1 uses plain Markdown
   and this validated manifest, not an installed Changesets or publishing pipeline.
 
 Run `npm run release:validate` to check the draft against checked-in projects,

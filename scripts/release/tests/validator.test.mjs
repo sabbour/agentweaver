@@ -10,10 +10,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const fixture = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
 const abstraction = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup></Project>';
 const provider = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
+const azureMonitor = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj" /></ItemGroup></Project>';
 const projects = new Map(fixture.components.map((component) => [
   component.project,
-  ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault'].includes(component.id)
-    ? provider : abstraction,
+  component.id === 'Agentweaver.Telemetry.AzureMonitor' ? azureMonitor :
+    ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault'].includes(component.id)
+      ? provider : abstraction,
 ]));
 const readProject = (file) => {
   const relative = path.relative(root, file).replaceAll('\\', '/');
