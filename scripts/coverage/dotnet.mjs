@@ -10,12 +10,14 @@ const suites = [
   ['providers', 'Agentweaver.Providers.Tests'],
   ['postgres', 'Agentweaver.Persistence.Postgres.Tests'],
   ['keyvault', 'Agentweaver.Secrets.AzureKeyVault.Tests'],
+  ['telemetry', 'Agentweaver.Telemetry.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
   'Agentweaver.Providers',
   'Agentweaver.Persistence.Postgres',
   'Agentweaver.Secrets.AzureKeyVault',
+  'Agentweaver.Telemetry',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 

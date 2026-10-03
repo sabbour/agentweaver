@@ -56,14 +56,18 @@ and an Azure Key Vault adapter library: the adapter resolves exact versions thro
 an injected Azure SDK client or workload-identity-ready credential. It does not
 authorize callers, provision a vault or deploy a service.
 
+The OpenTelemetry foundation now supplies native in-process trace, metric, and
+log composition with service resource identity. It does not install an exporter
+or start a service. See [telemetry foundation](packages/Agentweaver.Telemetry/README.md).
+
 The next P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
 acknowledgment. Real PostgreSQL tests cover atomicity, duplicate handling, concurrency,
 and recovery. This is a persistence library, not a running relay or a deployed service.
 
 Remaining P0 work includes wiring these primitives into real services, Identity
-authorization and workload identity, Blob storage, telemetry, and the dedicated
-Azure integration environment.
+authorization and workload identity, Blob storage, Azure Monitor export, and
+the dedicated Azure integration environment.
 
 ## Build and check the foundation
 
@@ -78,6 +82,7 @@ dotnet build Agentweaver.slnx --no-restore --configuration Release
 dotnet test tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.Telemetry.Tests\Agentweaver.Telemetry.Tests.csproj --no-build --no-restore --configuration Release
 npm run release:validate
 npm run test:release
 ```

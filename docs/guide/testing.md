@@ -7,6 +7,7 @@ answer different questions. Passing one does not substitute for the others.
 | --- | --- | --- |
 | Unit and provider conformance | Selection, capabilities, immutable bindings, explicit failures | Every affected change |
 | PostgreSQL integration | State/event atomicity, schema migration, idempotency, stream ordering, concurrent claims, lease fencing and restart recovery | Every persistence change; the foundation CI runs the whole small suite |
+| Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
 | Service compatibility | Current and N-1 API/event peers agree during rollout | When real service APIs and consumers exist |
 | Azure-backed service integration | Actual identity, network access, managed dependencies, rollout and recovery | From the first deployable vertical slice |
 | Platform E2E | A user's task completes correctly through the assembled platform | From the end of P1, and for integrated candidates thereafter |
@@ -44,11 +45,11 @@ npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs
 ```
 
-The .NET command restores the pinned local ReportGenerator tool, runs all three
-test suites once with Coverlet, and merges their reports using
-ReportGenerator. Its scope is all four current production libraries:
-Abstractions, Providers, Persistence.Postgres and Secrets.AzureKeyVault. Shared sources are merged,
-not summed twice. Node uses its built-in test coverage and spec/LCOV reporters
+The .NET command restores the pinned local ReportGenerator tool, runs all four
+test suites once with Coverlet, and merges their reports using ReportGenerator.
+Its scope is all five current production libraries: Abstractions, Providers,
+Persistence.Postgres, Secrets.AzureKeyVault, and Telemetry. Shared sources are
+merged, not summed twice. Node uses its built-in test coverage and spec/LCOV reporters
 for the release validator; test files, fixtures, and coverage wrappers are not
 production targets. No external JavaScript coverage dependency is needed.
 
@@ -59,6 +60,7 @@ Reports are written beneath `artifacts\coverage\` (ignored by Git):
 | `dotnet\combined\` | HTML (`index.html`), Cobertura XML, JSON/text summaries, and GitHub Markdown summary |
 | `dotnet\providers\`, `dotnet\postgres\` | Individual test-suite Cobertura reports |
 | `dotnet\keyvault\` | Azure Key Vault adapter Cobertura report |
+| `dotnet\telemetry\` | Telemetry foundation Cobertura report |
 | `node\` | `lcov.info` and `summary.txt` containing live test output and the native coverage table |
 | `source.json` (CI only) | Tested checkout SHA, PR head SHA, run ID, and run attempt |
 
@@ -69,7 +71,7 @@ twice. Its summary and downloadable artifact are published even after a failed
 step when available; partial reports do not turn a failed run green. Reports
 remain in GitHub Actions for 30 days, with no external analytics upload.
 
-The initial measured foundation baseline is:
+The initial measured foundation baseline (before the Secrets and Telemetry additions) is:
 
 | Scope | Lines | Branches | Methods/functions |
 | --- | --- | --- | --- |
@@ -84,9 +86,9 @@ behavioral completeness. Read the report for the exact tested candidate as
 source and tests change. Instrumented line, branch, and method/function coverage
 does not prove integration correctness, Azure connectivity, or platform E2E
 acceptance; the distinct test layers above still apply.
-The table predates the Azure Key Vault adapter; use the new combined report for
-the current four-library measurement rather than interpreting the old baseline
-as a threshold.
+The table predates the Azure Key Vault adapter and Telemetry library; use the
+new combined report for the current five-library measurement rather than
+interpreting the old baseline as a threshold.
 
 ## When Azure is added
 

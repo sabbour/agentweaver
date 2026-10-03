@@ -634,6 +634,12 @@ optionally other OTLP sinks. Trace context propagates through provider routing h
 state, and usage ledger remain durable domain records even when exporters are down. Telemetry exporters
 never decide whether a turn is authorized or accounted for.
 
+The lower-layer [OpenTelemetry foundation](../../../packages/Agentweaver.Telemetry/README.md)
+registers native .NET ActivitySource, Meter, and logging providers with a service
+resource identity. It has no built-in exporter or network call. Azure Monitor,
+optional OTLP sinks, and transport-specific context propagation remain integration
+work; neither successful export nor exporter availability changes durable state.
+
 ## Messaging
 
 **Owner:** Events & Sessions for message delivery state; each originating service owns its outbox.

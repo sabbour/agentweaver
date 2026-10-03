@@ -3,7 +3,9 @@
   <Project Path="packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
   <Project Path="packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
   <Project Path="packages\Agentweaver.Secrets.AzureKeyVault\Agentweaver.Secrets.AzureKeyVault.csproj" />
+  <Project Path="packages\Agentweaver.Telemetry\Agentweaver.Telemetry.csproj" />
   <Project Path="tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj" />
   <Project Path="tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj" />
   <Project Path="tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj" />
+  <Project Path="tests\Agentweaver.Telemetry.Tests\Agentweaver.Telemetry.Tests.csproj" />
 </Solution>
