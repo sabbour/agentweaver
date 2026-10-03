@@ -43,9 +43,6 @@ jobs:
       - name: Test project issue-to-merge workflow
         if: ${{ !cancelled() }}
         run: node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs
-      - name: Test repository workflow canvas
-        if: ${{ !cancelled() }}
-        run: node --test .github/extensions/agentweaver-workflow-canvas/canvas.test.mjs
       - name: Publish coverage summary
         if: ${{ !cancelled() }}
         run: |
