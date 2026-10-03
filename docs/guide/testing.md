@@ -16,7 +16,9 @@ answer different questions. Passing one does not substitute for the others.
 
 ## What works now
 
-The provider tests use in-memory descriptors. Persistence tests use a disposable
+The provider tests use in-memory descriptors and cover exclusive, singleton,
+ordered Guardrails/Telemetry, and layered Network Policy selection and pinning.
+They do not apply or verify a real egress policy. Persistence tests use a disposable
 PostgreSQL container, not mocks, SQLite, or a shared developer database. They verify
 durable state through database reads as well as returned results.
 The Azure Key Vault adapter tests exercise the real Azure SDK authentication,

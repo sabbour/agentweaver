@@ -85,6 +85,25 @@ public sealed record ProviderSelection(ProviderSeam Seam, string ProviderId);
 
 public sealed record ProviderOverridePermission(ProviderSeam Seam, string ProviderId);
 
+public sealed record ProviderOrderedSelection(ProviderSeam Seam, ImmutableArray<string> ProviderIds);
+
+public enum NetworkPolicyLayer { L3L4, L7 }
+
+public sealed record ProviderLayerSelection(NetworkPolicyLayer Layer, string ProviderId);
+
+public sealed record OrderedProviderResolutionRequest(
+    ProviderSeam Seam,
+    ImmutableArray<string>? ProjectProviderIds,
+    Version RequiredAdapterVersion,
+    int RequiredOptionsSchemaVersion,
+    ImmutableHashSet<string> RequiredCapabilities);
+
+public sealed record NetworkPolicyResolutionRequest(
+    Version RequiredAdapterVersion,
+    int RequiredOptionsSchemaVersion,
+    ImmutableHashSet<string> RequiredL3L4Capabilities,
+    ImmutableHashSet<string> RequiredL7Capabilities);
+
 public sealed record ProviderResolutionRequest(
     ProviderSeam Seam,
     string? ProjectOverrideId,
@@ -126,12 +145,30 @@ public sealed class ProviderResolution
     internal static ProviderResolution Selected(ProviderCandidate candidate) => new(candidate);
 }
 
+public sealed record NetworkPolicyCandidate(NetworkPolicyLayer Layer, ProviderCandidate Candidate);
+
+public sealed class OrderedProviderResolution
+{
+    internal OrderedProviderResolution(ProviderSeam seam, ImmutableArray<ProviderCandidate> candidates) =>
+        (Seam, Candidates) = (seam, candidates);
+    public ProviderSeam Seam { get; }
+    public ImmutableArray<ProviderCandidate> Candidates { get; }
+}
+
+public sealed class NetworkPolicyResolution
+{
+    internal NetworkPolicyResolution(ImmutableArray<NetworkPolicyCandidate> layers) => Layers = layers;
+    public ImmutableArray<NetworkPolicyCandidate> Layers { get; }
+}
+
 // A provisioned resource's identity and generation are opaque to the provider-neutral core.
 public sealed record ProviderResourceRef(ProviderSeam Seam, string ProviderId, string ResourceId, long Generation);
 
 public sealed record ResourceNegotiation(
     ProviderResourceRef Resource,
     ImmutableHashSet<string> Capabilities);
+
+public sealed record ProviderPinInput(string ExpectedResourceId, ResourceNegotiation Negotiation);
 
 public sealed class PinnedProviderBinding
 {
@@ -158,6 +195,28 @@ public sealed class PinnedProviderBinding
     public ProviderHostingPattern Hosting { get; }
     public ProviderResourceRef Resource { get; }
     public ImmutableHashSet<string> NegotiatedCapabilities { get; }
+}
+
+public sealed class PinnedOrderedProviderBinding
+{
+    internal PinnedOrderedProviderBinding(string runId, ProviderSeam seam,
+        ImmutableArray<PinnedProviderBinding> bindings) =>
+        (RunId, Seam, Bindings) = (runId, seam, bindings);
+    public string RunId { get; }
+    public ProviderSeam Seam { get; }
+    public ImmutableArray<PinnedProviderBinding> Bindings { get; }
+}
+
+public sealed record PinnedNetworkPolicyLayer(NetworkPolicyLayer Layer, PinnedProviderBinding Binding);
+
+public sealed class PinnedNetworkPolicyBinding
+{
+    internal PinnedNetworkPolicyBinding(string runId, long appliedIntentGeneration,
+        ImmutableArray<PinnedNetworkPolicyLayer> layers) =>
+        (RunId, AppliedIntentGeneration, Layers) = (runId, appliedIntentGeneration, layers);
+    public string RunId { get; }
+    public long AppliedIntentGeneration { get; }
+    public ImmutableArray<PinnedNetworkPolicyLayer> Layers { get; }
 }
 
 public sealed class PinnedSnapshotNoneBinding
