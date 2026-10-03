@@ -10,10 +10,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const fixture = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
 const abstraction = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup></Project>';
 const provider = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
+const identity = '<Project><PropertyGroup><Version>1.0.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
 const azureMonitor = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj" /></ItemGroup></Project>';
 const projects = new Map(fixture.components.map((component) => [
   component.project,
   component.id === 'Agentweaver.Telemetry.AzureMonitor' ? azureMonitor :
+    component.id === 'Agentweaver.Identity' ? identity :
     component.id === 'Agentweaver.Persistence.Postgres'
       ? '<Project><PropertyGroup><Version>0.2.0</Version></PropertyGroup></Project>' :
     ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault', 'Agentweaver.ObjectStore.AzureBlob'].includes(component.id)
@@ -116,7 +118,9 @@ test('scans both XML quote forms and ignores commented-out versions and referenc
     "<!-- <Version>9.0.0</Version><ProjectReference Include='Unpinned.csproj' /> --></Project>");
   assert.equal(check(edit((m) => { m.compatibility = []; }), {
     readProject: (file) => file.includes('Persistence.Postgres.csproj')
-      ? commented.replace('<Version>0.1.0</Version>', '<Version>0.2.0</Version>') : commented,
+      ? commented.replace('<Version>0.1.0</Version>', '<Version>0.2.0</Version>')
+      : file.includes('Agentweaver.Identity.csproj')
+        ? commented.replace('<Version>0.1.0</Version>', '<Version>1.0.0</Version>') : commented,
   }).stage, 'draft');
 });
 

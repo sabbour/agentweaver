@@ -28,6 +28,12 @@
       "project": "packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVault.csproj"
     },
     {
+      "id": "Agentweaver.Identity",
+      "kind": "library",
+      "version": "1.0.0",
+      "project": "packages/Agentweaver.Identity/Agentweaver.Identity.csproj"
+    },
+    {
       "id": "Agentweaver.Telemetry",
       "kind": "library",
       "version": "0.1.0",
@@ -54,6 +60,11 @@
     },
     {
       "consumer": "Agentweaver.Secrets.AzureKeyVault",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.1.0"]
+    },
+    {
+      "consumer": "Agentweaver.Identity",
       "dependency": "Agentweaver.Abstractions",
       "versions": ["0.1.0"]
     },
