@@ -1,5 +1,5 @@
 # Build context MUST be the repository root (not this directory), e.g.:
-#   docker build -f services/identity/Agentweaver.Identity.Broker/Dockerfile .
+#   docker build --platform linux/amd64 -f services/identity/Agentweaver.Identity.Broker/Dockerfile .
 # This is required because the project relies on root-level build configuration
 # (Directory.Build.props) outside this service's folder and its own packages.lock.json.
 

@@ -83,6 +83,8 @@ Publish uses both `--no-build` and `--no-restore`.
 The Docker runtime and project `ContainerBaseImage` use the same public ASP.NET 10 manifest digest.
 The project pin supports native SDK service preparation through the existing release pack helper.
 The runtime pin identifies a registry manifest, not a prepared image archive or its configuration.
+The project selects `ContainerRuntimeIdentifier=linux-x64` for the default x64 AKS node pool.
+Docker builds use `--platform linux/amd64` for the same deployment architecture, independent of the build host.
 The runtime uses a non-root account and exposes port 8080.
 The deployment supplies an HTTPS Kestrel endpoint and mounted TLS certificate through native Kestrel configuration.
 OAuth traffic must reach Kestrel over HTTPS, including traffic from a TLS-terminating ingress.
