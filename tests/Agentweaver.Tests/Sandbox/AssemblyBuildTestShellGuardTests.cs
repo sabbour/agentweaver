@@ -1058,7 +1058,7 @@ public sealed class AssemblyBuildTestShellGuardTests : IDisposable
     {
         File.WriteAllText(
             executable,
-            $"#!/bin/sh{Environment.NewLine}printenv > {PosixQuote(ToGitShellPath(outputPath))}{Environment.NewLine}");
+            $"#!/bin/sh{Environment.NewLine}export -p > {PosixQuote(ToGitShellPath(outputPath))}{Environment.NewLine}");
         if (!OperatingSystem.IsWindows())
         {
             File.SetUnixFileMode(
