@@ -128,6 +128,16 @@ and child. Default budgets in minutes are: planning 6, claimProvisioning 6,
 implementation 18, initialPreview 5, buildTestReview 10, revisionProvisioning 12,
 correctedPreview 5, terminalCompletion 8. Override with repeatable
 `--budget phase=minutes`; `--poll-ms` defaults to 5000.
+An internal `coordinator.assembly_changes_requested` correction receives fresh
+revision-provisioning, implementation, and Build & Test/review phase budgets only
+after the event is paired with new child runs for every redispatched subtask, each
+assigned to the same author as its prior child. The replacement child and current
+work-plan subtask must both reach `assemble_ready`; stale `awaiting_assembly` or
+`in_review` projections alone are not completion evidence. The review lifecycle allows
+at most three verified internal correction generations and has one fixed overall deadline, computed once
+from the configured `buildTestReview`, `revisionProvisioning`, and `implementation`
+budgets (130 minutes with the defaults). A correction event without a new child
+dispatch does not reset any deadline.
 Idempotent GET polling retries at most two times after transient transport
 responses, thrown request timeouts or transport errors, or HTTP 502, 503, or
 504, within the same phase deadline. Expired phase budgets and cancellations
@@ -175,8 +185,9 @@ independent subjective Judge verdict. Cleanup deletes and confirms **only**
 manual preview session IDs actually created by this invocation (none in the
 automatic-only flow), including on failure; an unconfirmed cleanup changes
 the verdict to fail. A ready event or listed route alone is not proof of a
-working app. This fixture-only contract does not establish live release
-acceptance; a deployed run needs its own browser and terminal evidence.
+working app. Failure results include per-attempt phase timings and the latest
+workplan/subtask/child statuses. This fixture-only contract does not establish
+live release acceptance; a deployed run needs its own browser and terminal evidence.
 
 Before choosing a persona for a dynamic API run, check
 `scripts/persona-briefs/catalog.json` through

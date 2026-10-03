@@ -280,7 +280,15 @@ disposable project and a running coordinator ID (or a goal to start one),
 original and corrected visible application evidence, grounded feedback and
 target files. It obtains recorder-session authentication in memory, preflights
 version/OpenAPI/session once, polls incremental parent/child events, and enforces
-configurable per-phase deadlines. The product currently performs Build & Test
+configurable per-phase deadlines. RAI correction retries require both the
+`coordinator.assembly_changes_requested` event and newly dispatched child runs
+for the affected subtasks, assigned to their prior authors. Both the replacement
+child and current subtask status must reach `assemble_ready`; stale `in_review`
+or `awaiting_assembly` projections do not restart a phase.
+The driver re-enters replacement provisioning, implementation, and review under
+one fixed overall deadline, with at most three verified internal correction
+generations. Failure results retain per-attempt timings and the latest workplan
+and child statuses. The product currently performs Build & Test
 before the human assembly review, so the first browser preview runs when that
 gate is reached. It checks preview registration, HTTP 200, browser render,
 visible content, and fatal errors; after one request_changes it verifies changed
