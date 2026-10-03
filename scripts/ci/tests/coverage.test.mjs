@@ -27,6 +27,21 @@ function fixtureDirectory(t) {
   return directory;
 }
 
+function c8Environment(parentEnvironment) {
+  const environment = { ...parentEnvironment };
+  delete environment.NODE_TEST_CONTEXT;
+  // c8 defaults its temp directory to NODE_V8_COVERAGE and cleans it at startup.
+  // Never let this nested self-test remove the outer coverage run's live .tmp.
+  delete environment.NODE_V8_COVERAGE;
+  return environment;
+}
+
+test('nested c8 does not inherit the outer coverage temp directory', () => {
+  const parent = { NODE_V8_COVERAGE: 'coverage/node/.tmp', NODE_TEST_CONTEXT: 'child-v8', PATH: 'keep' };
+  assert.deepEqual(c8Environment(parent), { PATH: 'keep' });
+  assert.equal(parent.NODE_V8_COVERAGE, 'coverage/node/.tmp');
+});
+
 function cobertura() {
   return '<?xml version="1.0"?><coverage line-rate="1"><packages></packages></coverage>';
 }
@@ -172,8 +187,7 @@ test('c8 --all includes untouched matching product source', {
     path.join(root, 'tests', 'used.test.mjs'),
     "import { used } from '../src/used.mjs';\nimport assert from 'node:assert/strict';\nimport test from 'node:test';\ntest('used product source executes', () => assert.equal(used, true));\n",
   );
-  const environment = { ...process.env };
-  delete environment.NODE_TEST_CONTEXT;
+  const environment = c8Environment(process.env);
   run(process.execPath, [
     path.resolve('node_modules/c8/bin/c8.js'), '--all', '--extension=.mjs',
     '--include=src/**/*.mjs', '--exclude=**/tests/**',
