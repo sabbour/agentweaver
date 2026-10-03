@@ -65,7 +65,7 @@ the Azure Blob transport adapter.
 
 ## Unreleased foundation impact
 
-- #1767 adds consumer-scoped transactional inbox receipts to
+- #1768 adds consumer-scoped transactional inbox receipts to
   `Agentweaver.Persistence.Postgres` 0.2.0. Migration 2 upgrades existing
   service-owned version-1 schemas without changing their outbox records. This
   remains a draft library, not a consumer service or exactly-once delivery.
