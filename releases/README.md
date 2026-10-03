@@ -60,3 +60,10 @@ Run `npm run release:validate` to check the draft against checked-in projects,
 and `npm run test:release` for validator tests. Neither command installs
 dependencies or contacts the cloud. CI also restores the .NET solution with
 checked-in lock files, builds once, and tests the provider contracts.
+
+## Unreleased foundation impact
+
+- #1750 adds the platform-singleton Object Store contract for opaque platform
+  artifacts, with create-only writes, streamed reads, and missing-object delete
+  semantics. This contract-only layer does not include an adapter or a deployed
+  service; the draft composition has no new library or version bump.

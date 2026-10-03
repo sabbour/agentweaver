@@ -662,6 +662,12 @@ identities, journal positions, references, and retention decisions. The sandbox 
 container as its workspace. Storage is for agent-visible files and mount bindings; Object Store is for
 records the agent must not edit. A future agent filesystem implementation may also use Azure Blob
 internally, but that does not collapse the two authorization boundaries.
+The P0 `IObjectStore` contract uses validated relative opaque keys and caller-owned input
+streams; reads return caller-disposable streams and content lengths. Writes create
+only when a key is absent, reads return null for missing objects, and deletes return
+false only when an object is missing. The platform-owned adapter enforces these
+semantics; Postgres still owns references and retention decisions. This contract
+does not schedule deletion or grant agents access to platform objects.
 
 ## Not ported (cloud-only)
 
