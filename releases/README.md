@@ -170,6 +170,8 @@ The manual workflow has a separate publication choice.
   The guard compares archives with genuine Git source notes, then verifies preparation decisions.
   Extra edits in the same component or another component still require fresh top-level notes.
   A self-reported archive hash or an empty component list cannot grant coverage.
+  An empty plan is a no-op only when genuine committed source notes contain no version intent.
+  Recomputing a checksum or removing local notes cannot suppress pending source intent.
 - `npm run release:pack` restores and builds each component with locked dependencies.
   It packs contracts/libraries and prepares service images in a fresh, empty `artifacts/release/pack/` directory.
   It writes an atomic `provenance.json` receipt after all artifacts succeed.
@@ -186,6 +188,8 @@ The manual workflow has a separate publication choice.
   `<ContainerBaseImage>...@sha256:...</ContainerBaseImage>` in their project.
   Exactly one active declaration is required; XML comments do not supply a pin.
   Multiple active declarations, including conditional declarations, block preparation.
+  The validated digest is passed explicitly to Release build and container publication.
+  A Debug-only project condition cannot select an unpinned SDK default instead.
   The SDK writes a local `<id>.<version>.tar.gz` image archive without a registry push.
   Provenance records lock hashes and image archive hashes, not fabricated registry digests.
   A failed preparation produces no completed provenance.
@@ -195,6 +199,10 @@ The manually dispatched `v1 release pack` GitHub Actions workflow
 (`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.
 Dispatch requires the `v1` branch and an `expected_source` equal to the full dispatch SHA.
 The default `publish: false` uploads artifacts only.
+Pack artifact names bind the source SHA and workflow run ID, not the attempt number.
+Rerunning failed publication jobs uses the successful pack job's artifact.
+A full rerun replaces that run's pack artifact; a redispatch has a different run ID.
+Neither path bypasses the durable publication claim.
 
 ### Manual artifact publication
 
@@ -207,11 +215,22 @@ Configure `RELEASE_NUGET_SOURCE` and `RELEASE_REGISTRY` as environment variables
 Configure `RELEASE_NUGET_API_KEY`, `RELEASE_REGISTRY_USER`, and
 `RELEASE_REGISTRY_PASSWORD` as environment secrets.
 Feed URLs must use HTTPS without embedded credentials or query tokens.
+Feed fragments are also forbidden.
 The script suppresses subprocess output and passes the registry password through stdin.
 Credentials do not enter source files, provenance, or receipts.
 The runner uses an isolated Docker configuration under ignored `artifacts/`.
 
 Before publication, the script verifies source HEAD, source manifest, and every artifact hash.
+Only the publication job receives `contents: write` and a scoped `GH_TOKEN`.
+The repository is selected by `GITHUB_REPOSITORY`.
+The pack job and top-level workflow permissions remain read-only.
+After validation, the script atomically creates a GitHub annotated-tag claim at
+`refs/tags/agentweaver-publication/<sourceSha>/claim`.
+The claim binds the source commit, provenance hash, planned component versions,
+artifact hashes, and credential-free publication destinations.
+Only the successful ref creator proceeds to external operations.
+Existing claim or result refs, ambiguous responses, and API errors block publication.
+The script never overwrites or deletes these refs.
 It pushes packages with native `dotnet nuget push`.
 It loads prepared service images with Docker, then pushes their exact version tags.
 `publication.json` records package hashes and actual immutable registry digests at the source SHA.
@@ -220,8 +239,19 @@ The script does not modify the draft composition or fabricate deployment evidenc
 
 External publication cannot roll back atomically.
 An error leaves `status: "partial"` and the confirmed publication results in the receipt.
-The script rejects a repeated invocation when a publication receipt exists.
-Before a retry, inspect the feed and registry for uploads without confirmed receipts.
+An immutable annotated-tag result at
+`refs/tags/agentweaver-publication/<sourceSha>/result` records the terminal receipt
+and the exact claim object ID.
+It retains source, provenance, destination, and published-artifact bindings.
+Local `publication.json` and uploaded Actions receipts supplement this durable record.
+An existing claim blocks repeated publication even when no result or local receipt exists.
+Expired Actions artifacts do not permit another publication attempt.
+Concurrent publishers race on atomic ref creation; the loser performs no external operations.
+Result or local receipt persistence failures remain explicit.
+If publication also fails, the error retains both failures.
+The permanent claim remains in place and blocks automatic retry.
+Before any reconciliation, inspect the feed, registry, claim, and result independently.
+This tooling provides no automatic claim deletion, retry, or duplicate-skipping path.
 Do not treat partial receipts as completed publication.
 
 This candidate supplies the manual path but publishes no artifacts.
