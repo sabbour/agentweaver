@@ -3,6 +3,8 @@
   "private": true,
   "scripts": {
     "release:validate": "node scripts/release/validate.mjs releases/foundation.json",
-    "test:release": "node --test scripts/release/tests/*.test.mjs"
+    "test:release": "node --test scripts/release/tests/*.test.mjs",
+    "coverage:dotnet": "node scripts/coverage/dotnet.mjs",
+    "coverage:node": "node scripts/coverage/node.mjs"
   }
 }

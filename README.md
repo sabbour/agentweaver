@@ -74,8 +74,13 @@ npm run test:release
 ```
 
 The Node tooling has no external dependencies; no npm installation is required.
-The `v1 foundation CI` workflow runs these same checks for PRs targeting `v1` and
-pushes to `v1`. See [provider foundation](packages/Agentweaver.Providers/README.md)
+The `v1 foundation CI` workflow runs the same suites with coverage for PRs targeting
+`v1` and pushes to `v1`. After restore and build, use `npm run coverage:dotnet`
+and `npm run coverage:node` instead of the test commands above to reproduce its
+coverage reports. CI publishes a readable summary and downloadable reports with
+the tested source and PR head SHAs; no coverage percentage threshold is imposed.
+See [coverage commands and scope](docs/guide/testing.md#code-coverage).
+See [provider foundation](packages/Agentweaver.Providers/README.md)
 for supported resolution behavior and [release composition](releases/README.md)
 for manifest constraints. [Testing and Azure acceptance](docs/guide/testing.md)
 distinguishes current integration coverage from future deployed E2E tests.

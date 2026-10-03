@@ -29,6 +29,56 @@ containers or contacts production resources.
 These tests are **not platform E2E**. There is no deployable v1 service yet, and
 this slice does not create an Azure environment.
 
+## Code coverage
+
+After the locked restore and Release build documented in the root README, run:
+
+```powershell
+npm run coverage:dotnet
+npm run coverage:node
+node --test scripts\coverage\tests\*.test.mjs
+```
+
+The .NET command restores the pinned local ReportGenerator tool, runs both
+existing test suites once with Coverlet, and merges their reports using
+ReportGenerator. Its scope is all three current production libraries:
+Abstractions, Providers, and Persistence.Postgres. Shared sources are merged,
+not summed twice. Node uses its built-in test coverage and spec/LCOV reporters
+for the release validator; test files, fixtures, and coverage wrappers are not
+production targets. No external JavaScript coverage dependency is needed.
+
+Reports are written beneath `artifacts\coverage\` (ignored by Git):
+
+| Location | Contents |
+| --- | --- |
+| `dotnet\combined\` | HTML (`index.html`), Cobertura XML, JSON/text summaries, and GitHub Markdown summary |
+| `dotnet\providers\`, `dotnet\postgres\` | Individual test-suite Cobertura reports |
+| `node\` | `lcov.info` and `summary.txt` containing live test output and the native coverage table |
+| `source.json` (CI only) | Tested checkout SHA, PR head SHA, run ID, and run attempt |
+
+Each runner clears only its own report directory before collecting, rejects
+missing or unexecuted production coverage, and preserves failing test status.
+CI replaces plain test steps with these collectors rather than running suites
+twice. Its summary and downloadable artifact are published even after a failed
+step when available; partial reports do not turn a failed run green. Reports
+remain in GitHub Actions for 30 days, with no external analytics upload.
+
+The initial measured foundation baseline is:
+
+| Scope | Lines | Branches | Methods/functions |
+| --- | --- | --- | --- |
+| .NET combined | 423/452 (93.5%) | 184/240 (76.6%) | 90/97 (92.7%) |
+| Abstractions | 81/87 (93.1%) | 15/16 (93.7%) | 48/53 (90.5%) |
+| Providers | 126/144 (87.5%) | 102/148 (68.9%) | 17/18 (94.4%) |
+| Persistence.Postgres | 216/221 (97.7%) | 67/76 (88.1%) | 25/26 (96.1%) |
+| Node release validator | 95.92% | 92.59% | 100% |
+
+These are a starting observation, not a required percentage or a claim of
+behavioral completeness. Read the report for the exact tested candidate as
+source and tests change. Instrumented line, branch, and method/function coverage
+does not prove integration correctness, Azure connectivity, or platform E2E
+acceptance; the distinct test layers above still apply.
+
 ## When Azure is added
 
 Create a dedicated **v1 integration environment during P0 when the first deployable
