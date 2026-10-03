@@ -20,11 +20,22 @@
       "kind": "library",
       "version": "0.1.0",
       "project": "packages/Agentweaver.Persistence.Postgres/Agentweaver.Persistence.Postgres.csproj"
+    },
+    {
+      "id": "Agentweaver.Secrets.AzureKeyVault",
+      "kind": "library",
+      "version": "0.1.0",
+      "project": "packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVault.csproj"
     }
   ],
   "compatibility": [
     {
       "consumer": "Agentweaver.Providers",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.1.0"]
+    },
+    {
+      "consumer": "Agentweaver.Secrets.AzureKeyVault",
       "dependency": "Agentweaver.Abstractions",
       "versions": ["0.1.0"]
     }

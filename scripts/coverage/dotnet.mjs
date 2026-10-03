@@ -9,11 +9,13 @@ const manifest = join(root, '.config', 'dotnet-tools.json');
 const suites = [
   ['providers', 'Agentweaver.Providers.Tests'],
   ['postgres', 'Agentweaver.Persistence.Postgres.Tests'],
+  ['keyvault', 'Agentweaver.Secrets.AzureKeyVault.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
   'Agentweaver.Providers',
   'Agentweaver.Persistence.Postgres',
+  'Agentweaver.Secrets.AzureKeyVault',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 
@@ -99,7 +101,7 @@ if (reports.length) {
       const assemblies = new Map(coverage.assemblies.map((assembly) => [assembly.name, assembly]));
       if (totals.coverablelines <= 0 || totals.totalmethods <= 0 || totals.assemblies !== expectedAssemblies.length ||
           expectedAssemblies.some((name) => !assemblies.get(name)?.coverablelines)) {
-        console.error('Combined summary does not contain all three measurable production libraries');
+        console.error('Combined summary does not contain all measurable production libraries');
         failed = true;
       }
     } catch (error) {
