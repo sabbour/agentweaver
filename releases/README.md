@@ -29,6 +29,8 @@ to Azure Identity, with no developer-identity fallback. Fake-transport tests cov
 OAuth exchange and exact-version vault requests. Authentication, authorization and
 rotation in a deployed AKS service remain unverified; no new component or version
 is added to the draft manifest.
+The component-scoped Changeset records future minor release intent, not an
+immediate package version bump or a release of the draft platform.
 
 `manifest.schema.json` describes the strict wire shape. The dependency-free
 validator additionally checks unique component IDs and projects, safe project
