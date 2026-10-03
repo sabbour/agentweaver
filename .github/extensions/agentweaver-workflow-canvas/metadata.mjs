@@ -31,9 +31,10 @@ export async function repositoryContext(workspace, home = process.env.COPILOT_HO
 }
 
 export function projectRun(summary, detail, outcome, refs = {}) {
+  // Resumed phases can share timestamps; reversing lets stable sort prefer the later phase.
   const phase = summary.currentPhase
     ? detail?.phases?.find((item) => item.id === summary.currentPhase.id)
-    : detail?.phases?.filter((item) => item.entryCount > 0).sort((a, b) =>
+    : detail?.phases?.filter((item) => item.entryCount > 0).reverse().sort((a, b) =>
       (b.lastEnteredRunAttempt || 0) - (a.lastEnteredRunAttempt || 0) ||
       (b.startedAt || 0) - (a.startedAt || 0)
     )[0];

@@ -53,6 +53,17 @@ test("terminal runs show last entered phase, not later skipped phase", () => {
   assert.equal(projectRun(ended, { phases, agents: [] }).phase, "");
 });
 
+test("terminal resumed runs prefer the later phase when entry timestamps tie", () => {
+  const ended = { ...run("resumed", "error"), currentPhase: null };
+  const phases = [
+    { id: "p3", title: "Parallel local reviews", entryCount: 1, lastEnteredRunAttempt: 2, startedAt: 1000 },
+    { id: "p5", title: "Publish PR and review evidence", entryCount: 1, lastEnteredRunAttempt: 2, startedAt: 1000 },
+    { id: "p6", title: "Monitor CI and admit", entryCount: 1, lastEnteredRunAttempt: 2, startedAt: 1000 },
+    { id: "p7", title: "Cleanup handoff", entryCount: 0, lastEnteredRunAttempt: 0, startedAt: 1000 },
+  ];
+  assert.equal(projectRun(ended, { phases, agents: [] }).phase, "Monitor CI and admit");
+});
+
 test("per-session atomic publication is isolated, durable and strips unknown stored fields", async () => {
   await Promise.all([
     publish(context, "owner-a", { runs: [projectRun(run(), detail)], truncated: false }),
