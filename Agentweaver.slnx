@@ -1,5 +1,7 @@
 <Solution>
   <Project Path="packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
   <Project Path="packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+  <Project Path="packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
   <Project Path="tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj" />
+  <Project Path="tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj" />
 </Solution>

@@ -1,8 +1,9 @@
 # Foundation release composition (schema version 1)
 
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
-It pins only the two real, independently versioned .NET components
-(`Agentweaver.Abstractions` and `Agentweaver.Providers`, both `0.1.0`).
+It pins the independently versioned .NET foundation libraries
+(`Agentweaver.Abstractions`, `Agentweaver.Providers`, and
+`Agentweaver.Persistence.Postgres`, each currently `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.

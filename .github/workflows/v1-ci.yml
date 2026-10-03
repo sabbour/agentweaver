@@ -30,3 +30,5 @@ jobs:
         run: dotnet build Agentweaver.slnx --no-restore --configuration Release
       - name: Test provider contracts
         run: dotnet test tests/Agentweaver.Providers.Tests/Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
+      - name: Test PostgreSQL persistence
+        run: dotnet test tests/Agentweaver.Persistence.Postgres.Tests/Agentweaver.Persistence.Postgres.Tests.csproj --no-build --no-restore --configuration Release

@@ -14,6 +14,12 @@
       "kind": "library",
       "version": "0.1.0",
       "project": "packages/Agentweaver.Providers/Agentweaver.Providers.csproj"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "kind": "library",
+      "version": "0.1.0",
+      "project": "packages/Agentweaver.Persistence.Postgres/Agentweaver.Persistence.Postgres.csproj"
     }
   ],
   "compatibility": [
