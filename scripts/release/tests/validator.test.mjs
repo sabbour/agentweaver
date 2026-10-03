@@ -14,6 +14,8 @@ const azureMonitor = '<Project><PropertyGroup><Version>0.1.0</Version></Property
 const projects = new Map(fixture.components.map((component) => [
   component.project,
   component.id === 'Agentweaver.Telemetry.AzureMonitor' ? azureMonitor :
+    component.id === 'Agentweaver.Persistence.Postgres'
+      ? '<Project><PropertyGroup><Version>0.2.0</Version></PropertyGroup></Project>' :
     ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault', 'Agentweaver.ObjectStore.AzureBlob'].includes(component.id)
       ? provider : abstraction,
 ]));
@@ -113,7 +115,8 @@ test('scans both XML quote forms and ignores commented-out versions and referenc
   const commented = abstraction.replace('</Project>',
     "<!-- <Version>9.0.0</Version><ProjectReference Include='Unpinned.csproj' /> --></Project>");
   assert.equal(check(edit((m) => { m.compatibility = []; }), {
-    readProject: () => commented,
+    readProject: (file) => file.includes('Persistence.Postgres.csproj')
+      ? commented.replace('<Version>0.1.0</Version>', '<Version>0.2.0</Version>') : commented,
   }).stage, 'draft');
 });
 

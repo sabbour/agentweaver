@@ -14,6 +14,7 @@ public sealed class PostgresOutbox
     private readonly string _events;
     private readonly string _streams;
     private readonly string _migrations;
+    private readonly string _receipts;
 
     public PostgresOutbox(NpgsqlDataSource dataSource, string schema)
     {
@@ -27,6 +28,7 @@ public sealed class PostgresOutbox
         _events = $"{_schema}.outbox_events";
         _streams = $"{_schema}.outbox_streams";
         _migrations = $"{_schema}.outbox_schema_migrations";
+        _receipts = $"{_schema}.consumer_inbox_receipts";
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -58,22 +60,45 @@ public sealed class PostgresOutbox
                 versions.Add(reader.GetInt32(0));
         }
 
-        if (versions.Any(version => version != 1))
+        if (versions.Any(version => version is not (1 or 2))
+            || (versions.Contains(2) && !versions.Contains(1)))
             throw new InvalidOperationException("Unsupported outbox schema version.");
 
-        if (versions.Count == 0)
+        foreach (var version in new[] { 1, 2 }.Where(version => !versions.Contains(version)))
         {
             await using var resource = typeof(PostgresOutbox).Assembly.GetManifestResourceStream(
-                "Agentweaver.Persistence.Postgres.Migrations.001_outbox.sql")
-                ?? throw new InvalidOperationException("Outbox migration resource is missing.");
+                $"Agentweaver.Persistence.Postgres.Migrations.{version:000}_{(version == 1 ? "outbox" : "consumer_inbox")}.sql")
+                ?? throw new InvalidOperationException("Persistence migration resource is missing.");
             using var text = new StreamReader(resource);
             var migration = (await text.ReadToEndAsync(cancellationToken)).Replace(
                 "{schema}", _schema.Trim('"'), StringComparison.Ordinal);
             await ExecuteAsync(connection, transaction, migration, cancellationToken);
-            await ExecuteAsync(connection, transaction, $"INSERT INTO {_migrations} (version) VALUES (1)", cancellationToken);
+            await ExecuteAsync(connection, transaction, $"INSERT INTO {_migrations} (version) VALUES ({version})", cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<InboxAdmission> AdmitAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction,
+        string consumerId, string messageId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (connection.State != ConnectionState.Open || !ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied open connection.", nameof(transaction));
+        RequireText(consumerId, nameof(consumerId));
+        RequireText(messageId, nameof(messageId));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO {_receipts} (consumer_id, message_id) VALUES (@consumer, @message)
+            ON CONFLICT (consumer_id, message_id) DO NOTHING
+            """, connection, transaction);
+        command.Parameters.AddWithValue("consumer", NpgsqlDbType.Text, consumerId);
+        command.Parameters.AddWithValue("message", NpgsqlDbType.Text, messageId);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
+            ? InboxAdmission.Admitted : InboxAdmission.Duplicate;
     }
 
     public async Task<StoredOutboxEvent> EnqueueAsync(

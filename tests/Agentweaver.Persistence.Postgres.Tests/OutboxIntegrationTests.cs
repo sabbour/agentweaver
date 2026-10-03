@@ -354,7 +354,7 @@ public sealed class OutboxIntegrationTests : IAsyncLifetime
         {
             await Task.WhenAll(Enumerable.Range(0, 6)
                 .Select(_ => new PostgresOutbox(_fixture.DataSource, newSchema).InitializeAsync()));
-            Assert.Equal(1, await ScalarAsync($"SELECT count(*) FROM \"{newSchema}\".outbox_schema_migrations"));
+            Assert.Equal(2, await ScalarAsync($"SELECT count(*) FROM \"{newSchema}\".outbox_schema_migrations"));
             var store = new PostgresOutbox(_fixture.DataSource, newSchema);
             await using var connection = await _fixture.DataSource.OpenConnectionAsync();
             await using var transaction = await connection.BeginTransactionAsync();

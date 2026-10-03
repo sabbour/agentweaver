@@ -282,6 +282,13 @@ sequence numbers preserve addressed-message order without claiming exactly-once 
 a workflow approval. The Sessions domain owns durable delivery and acknowledgment state; the
 Orchestrator owns the gates and run transitions that consume those messages.
 
+The Postgres persistence library supplies a consumer-scoped receipt primitive for this
+deduplication: a consumer admits a stable message identity before its local domain work,
+and commits receipt, domain work and any outgoing event together in one service-owned
+schema transaction. A duplicate skips local effects. This is a foundation, not a
+cross-service transaction or exactly-once transport guarantee; external effects and
+transport acknowledgment remain outside the local commit.
+
 Snapshots and storage generations enter the run's consistency manifest. A sandbox move or resume
 re-verifies egress generation, volume binding, and the active writer before dispatch. Optional
 snapshot providers are not required for basic run consistency. These mechanics are specified in
