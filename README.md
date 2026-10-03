@@ -165,21 +165,40 @@ the product and does not change branch protection. Its rehearsal does not prove
 live CI or merge behavior.
 
 If the coordinator denies admission after publication, ordinary delivery and
-rehearsal remain unchanged. An explicitly selected `mode: "correct"` instead
-adopts fully staged, surgical corrections on the **same source branch and PR**.
-Pass the original issue's task, labels and milestone, plus a `source` object with
-`runId`, original `headSha` and `treeSha`, `branch`, `prNumber`, original
-`publicationCommentId`, exact-head `denialCommentId`, and the selected `paths`
-owned by that PR (or a component explicitly named in the denial, or a related
-changeset). The workflow verifies
-the live PR, original publication/review receipt, denial, origin, scope and
-staged-only state before validation. It runs affected checks and publishes a new
-head/tree comment on that PR; historical reviews remain evidence **only for the
-old tree**. New CI, current target base and an explicit exclusive coordinator
-grant for the corrected head remain mandatory for admission. A changed source,
-unrelated/unstaged files, material scope changes or failed checks block rather
-than authorize merge. Corrections cannot be inferred from an old rehearsal or
-from the worker's own claimed coordinator approval.
+rehearsal remain unchanged. An explicitly selected `mode: "correct"` in the
+**originating session** adopts fully staged, surgical corrections on the same
+source branch and PR. Pass the original issue's task, labels and milestone, plus
+a `source` object with `runId`, original published `headSha` and `treeSha`,
+`branch`, `prNumber`, `publicationCommentId`, `denialCommentId`, and selected
+`paths` equal to the actual staged correction paths. Paths absent from the old
+PR diff also require `scopeCommentId`: an exact-tree coordinator scope
+confirmation on the same PR after the denial, naming the native run, PR, issue,
+old head/tree, denial comment, staged tree, and every staged path as a separate
+``- `relative/path` `` line. It is **not** admission authorization. Set
+`reviewedTreeSha` only if the original pair reviewed a different tree and a
+native correction stage produced the published tree. The route reads the
+originating session's **terminal native run snapshot and run detail** to verify
+the actual review pair, any corrective transition, publication, and issue
+scope. A GitHub timeline claim by itself is never sufficient; missing or
+ambiguous native evidence blocks. The owning workflow verifies this SDK
+receipt before delegating affected validation; a subagent's separate session
+cannot independently read the originating run.
+
+The original remote PR/head/tree and denial remain bound to that stopped run.
+If `v1` advanced, the route commits only the staged owned corrections, rebases
+the owned branch without stashing or discarding changes, and verifies the
+original feature and correction deltas with zero-context verbatim patch IDs
+before validating the resulting current-base tree. This permits unrelated
+upstream context changes without accepting changes to the owned patches.
+A conflict leaves work in place and blocks for resolution.
+Otherwise it validates the staged tree directly. Historical pair results are
+old-tree evidence, **not approval of the new tree**. Failed validation cannot
+publish; successful validation pins the corrected tree. Publication reuses the
+same owned PR with a fresh head/tree comment. New CI, an unchanged current
+target tip, and an explicit exclusive coordinator grant for that new head
+remain mandatory for admission. A withdrawn old grant is a denial, never a
+fresh approval. A changed source, unrelated/unstaged files, material scope
+changes, or stale base/head evidence block rather than authorize merge.
 On replay the live PR must still link the source issue, and the fresh publication
 comment must be on that PR by the source receipt's author. A failed pre-publication
 validation can be retried with a newly staged owned tree; successful validation
