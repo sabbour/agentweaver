@@ -1,12 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="10.0.3" />
     <EmbeddedResource Include="Migrations\001_outbox.sql" />
+    <EmbeddedResource Include="Migrations\002_consumer_inbox.sql" />
   </ItemGroup>
 </Project>

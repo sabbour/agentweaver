@@ -6,7 +6,7 @@ answer different questions. Passing one does not substitute for the others.
 | Layer | What it proves | When it runs |
 | --- | --- | --- |
 | Unit and provider conformance | Selection, capabilities, immutable bindings, explicit failures | Every affected change |
-| PostgreSQL integration | State/event atomicity, schema migration, idempotency, stream ordering, concurrent claims, lease fencing and restart recovery | Every persistence change; the foundation CI runs the whole small suite |
+| PostgreSQL integration | State/event/consumer-receipt atomicity, version-1 schema upgrade, consumer-scoped duplicate admission and concurrent retry, stream ordering, concurrent claims, lease fencing and restart recovery | Every persistence change; the foundation CI runs the whole small suite |
 | Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
 | Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
 | Azure Blob transport fake | SDK HTTP requests, streamed binary data, create-only conditions, missing/conflict responses and failures without a live account | Every Object Store change |
@@ -79,7 +79,7 @@ twice. Its summary and downloadable artifact are published even after a failed
 step when available; partial reports do not turn a failed run green. Reports
 remain in GitHub Actions for 30 days, with no external analytics upload.
 
-The measured seven-library foundation snapshot is:
+The measured seven-library foundation snapshot before the consumer inbox change was:
 
 | Scope | Lines | Branches | Methods/functions |
 | --- | --- | --- | --- |

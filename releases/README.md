@@ -5,8 +5,8 @@ It pins the independently versioned .NET foundation libraries
 (`Agentweaver.Abstractions`, `Agentweaver.Providers`,
 `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`,
 `Agentweaver.Telemetry`, `Agentweaver.Telemetry.AzureMonitor`, and
-`Agentweaver.ObjectStore.AzureBlob`,
-each currently `0.1.0`).
+`Agentweaver.ObjectStore.AzureBlob`; Persistence.Postgres is `0.2.0` and
+the other libraries are `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
@@ -65,6 +65,10 @@ the Azure Blob transport adapter.
 
 ## Unreleased foundation impact
 
+- #1767 adds consumer-scoped transactional inbox receipts to
+  `Agentweaver.Persistence.Postgres` 0.2.0. Migration 2 upgrades existing
+  service-owned version-1 schemas without changing their outbox records. This
+  remains a draft library, not a consumer service or exactly-once delivery.
 - #1750 supplies the platform-singleton Object Store contract for opaque platform
   artifacts. #1744 adds the Azure Blob adapter, with streamed reads, create-only
   writes, and missing-object delete semantics. This draft library composition

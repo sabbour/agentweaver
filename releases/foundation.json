@@ -18,7 +18,7 @@
     {
       "id": "Agentweaver.Persistence.Postgres",
       "kind": "library",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "project": "packages/Agentweaver.Persistence.Postgres/Agentweaver.Persistence.Postgres.csproj"
     },
     {

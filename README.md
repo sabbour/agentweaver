@@ -65,8 +65,11 @@ provisions an Azure resource, or proves cloud delivery.
 
 The Postgres P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
-acknowledgment. Real PostgreSQL tests cover atomicity, duplicate handling, concurrency,
-and recovery. This is a persistence library, not a running relay or a deployed service.
+acknowledgment. Consumer-scoped inbox receipts admit a stable message identity in the
+same caller-owned transaction as domain changes and optional outbox enqueue, returning
+an explicit duplicate outcome. Real PostgreSQL tests cover atomicity, duplicate handling,
+concurrency, and recovery. Delivery remains at least once; this is a persistence
+library, not a running relay or consumer service.
 
 The Blob Object Store foundation adds provider-neutral opaque-object operations
 and an injected Azure SDK adapter for platform artifacts. It does not expose
