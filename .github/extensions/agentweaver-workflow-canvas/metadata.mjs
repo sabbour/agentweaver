@@ -31,7 +31,12 @@ export async function repositoryContext(workspace, home = process.env.COPILOT_HO
 }
 
 export function projectRun(summary, detail, outcome, refs = {}) {
-  const phase = detail?.phases?.find((item) => item.id === summary.currentPhase?.id);
+  const phase = summary.currentPhase
+    ? detail?.phases?.find((item) => item.id === summary.currentPhase.id)
+    : detail?.phases?.filter((item) => item.entryCount > 0).sort((a, b) =>
+      (b.lastEnteredRunAttempt || 0) - (a.lastEnteredRunAttempt || 0) ||
+      (b.startedAt || 0) - (a.startedAt || 0)
+    )[0];
   // Results and arguments are untrusted; copy only exact, validated fields.
   const result = outcome?.status === "completed" && outcome.result && typeof outcome.result === "object" && !Array.isArray(outcome.result)
     ? outcome.result : {};

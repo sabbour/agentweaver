@@ -29,12 +29,28 @@ test("projection contains only allowlisted fields and nested completed PR refs",
   const result = projectRun({ ...run(), description: "secret" }, detail, {
     status: "completed", result: { issueNumber: 1751, pr: { prNumber: 24, headSha: "a".repeat(40) }, task: "secret" },
   });
+
   assert.equal(result.phase, "Review");
   assert.equal(result.issueNumber, 1751);
   assert.equal(result.prNumber, 24);
   assert.deepEqual(result.referenceSources, { issue: "completed-result", pr: "completed-result", head: "completed-result" });
   assert.equal(result.agents[0].agentId, "agent-1");
   assert.doesNotMatch(JSON.stringify(result), /secret|prompt|task/);
+});
+
+test("terminal runs show last entered phase, not later skipped phase", () => {
+  const ended = run("finished", "error");
+  ended.currentPhase = null;
+  const phases = [
+    { id: "p0", title: "Validate", entryCount: 1, lastEnteredRunAttempt: 1, startedAt: 1000 },
+    { id: "p6", title: "Monitor CI and admit", entryCount: 1, lastEnteredRunAttempt: 1, startedAt: 2000 },
+    { id: "p7", title: "Cleanup handoff", entryCount: 0, lastEnteredRunAttempt: 0, startedAt: 3000, status: "skipped" },
+  ];
+  assert.equal(projectRun(ended, { phases, agents: [] }).phase, "Monitor CI and admit");
+  ended.currentPhase = { id: "p0" };
+  assert.equal(projectRun(ended, { phases, agents: [] }).phase, "Validate");
+  ended.currentPhase = { id: "phase-not-in-detail" };
+  assert.equal(projectRun(ended, { phases, agents: [] }).phase, "");
 });
 
 test("per-session atomic publication is isolated, durable and strips unknown stored fields", async () => {
