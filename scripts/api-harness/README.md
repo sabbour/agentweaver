@@ -106,6 +106,11 @@ npm test
 node run-persona.mjs --scenario generated-artifacts-seam --target https://agentweaver.example.staging.example --batch-id batch-1 --seed seed-1
 ```
 
+Durable workflow output is analyzed only after the job reaches `completed` and its
+result endpoint returns HTTP 200 with nonempty YAML. The HTTP-200 job-status DTO is
+job evidence, not an artifact; failed, cancelled, or nonterminal jobs retain their
+job ID, status, and canonical failure while leaving workflow analysis null.
+
 `--target` is an alias for the legacy `--base-url`. The default rung is `scoping`; deeper approval driving remains opt-in through scenario configuration.
 
 Targets are environment-agnostic: any absolute HTTPS URL is accepted, while HTTP is
