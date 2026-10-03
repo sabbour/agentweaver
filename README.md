@@ -9,7 +9,8 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
   rebuilt behind the 1.0 contracts.
 - **Status:** P0 foundations are under development. The architecture remains Proposed;
   the first implementation slice supplies libraries and validation tooling, not a
-  deployable platform.
+  deployable platform. [Phase progress](docs/architecture/decisions/0001-platform-architecture.md#phases)
+  distinguishes merged libraries, in-progress candidates, and remaining work.
 
 ## Start here
 
@@ -55,8 +56,10 @@ The provider-neutral Secrets foundation defines opaque, versioned references and
 purpose/run-bound requests for trusted Identity redemption. Short-lived credential
 values remain outside descriptors, bindings and durable state. This is a contract
 and an Azure Key Vault adapter library: the adapter resolves exact versions through
-an injected Azure SDK client or workload-identity-ready credential. It does not
-authorize callers, provision a vault or deploy a service.
+an injected Azure SDK client or credential, or through explicit AKS workload-identity
+host composition. It does not authorize callers, provision a vault or deploy a
+service. See the [workload-identity story](docs/specs/1766-aks-workload-identity.md)
+for this slice's boundaries.
 
 The [OpenTelemetry foundation](packages/Agentweaver.Telemetry/README.md) supplies
 native in-process trace, metric, and log composition with service resource
@@ -79,7 +82,8 @@ agent workspace storage or provision an Azure account; see the
 [Object Store guide](packages/Agentweaver.ObjectStore.AzureBlob/README.md).
 
 Remaining P0 work includes wiring these primitives into real services, Identity
-authorization and workload identity, and the dedicated Azure integration environment.
+authorization, deployed workload identity, and the dedicated Azure integration
+environment.
 
 ## Build and check the foundation
 

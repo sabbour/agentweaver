@@ -295,6 +295,18 @@ line enter the 1.0 backlog under the listed owner.
 
 ## Phases
 
+**Progress (2026-10-02):** Merged foundations below are libraries and validation
+tooling, not a running or released platform. Issue [#1766](https://github.com/sabbour/agentweaver/issues/1766)
+is an in-progress candidate until its PR is admitted; an implemented branch is
+not a merged foundation. The phase descriptions below remain the scope authority.
+
+| Phase | Status and evidence | Remaining before phase completion |
+| --- | --- | --- |
+| P0 — Foundation | **In progress.** Merged provider descriptors/resolution/pinning [#1735](https://github.com/sabbour/agentweaver/issues/1735), Postgres schemas/outbox [#1738](https://github.com/sabbour/agentweaver/issues/1738), coverage [#1741](https://github.com/sabbour/agentweaver/issues/1741), Secrets/Key Vault [#1752](https://github.com/sabbour/agentweaver/issues/1752)/[#1756](https://github.com/sabbour/agentweaver/issues/1756), OpenTelemetry/Azure Monitor [#1753](https://github.com/sabbour/agentweaver/issues/1753)/[#1758](https://github.com/sabbour/agentweaver/issues/1758), and Blob [#1760](https://github.com/sabbour/agentweaver/issues/1760)/[#1763](https://github.com/sabbour/agentweaver/issues/1763). Workload-identity composition [#1766](https://github.com/sabbour/agentweaver/issues/1766), composite/layered selection [#1767](https://github.com/sabbour/agentweaver/issues/1767), and consumer inbox [#1768](https://github.com/sabbour/agentweaver/issues/1768) are in progress, not merged evidence. | Identity service authorization/redemption and broker; service wiring/runtime/cloud layout; deployment and per-service compatibility proof; dedicated Azure integration environment with exact-SHA evidence. The manifest is still a draft, not a released platform. |
+| P1 — Core and defaults | **Not delivered.** The project issue workflow [#1743](https://github.com/sabbour/agentweaver/issues/1743) and workflow canvas [#1755](https://github.com/sabbour/agentweaver/issues/1755)/[#1757](https://github.com/sabbour/agentweaver/issues/1757)/[#1762](https://github.com/sabbour/agentweaver/issues/1762) are delivery tooling, not product P1. | Core services, default adapters, and exact-SHA AKS harness journeys described below. |
+| P2 — Parity and cutover | **Not delivered.** | Parity, application/surface capabilities, acceptance and cutover described below. |
+| P3 — After cutover | **Deferred and optional.** | Evaluate gated adapters only after cutover; none blocks it. |
+
 - **P0 — Foundation.** Establish cloud-only layout and CI; a platform release
   manifest, per-service Postgres schemas and outbox, Azure Blob Object Store,
   Identity and Azure Key Vault with workload identity, OpenTelemetry to Azure

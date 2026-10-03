@@ -23,6 +23,13 @@ Account-free SDK transport tests cover failures, cancellation and redaction.
 This adds no authorization gate, deployable service or released version; the
 draft composition remains at `0.1.0` without a manual version bump.
 
+#1766 adds explicit AKS workload-identity composition in the existing Key Vault
+adapter: trusted hosts provide tenant ID, client ID, and projected token-file path
+to Azure Identity, with no developer-identity fallback. Fake-transport tests cover
+OAuth exchange and exact-version vault requests. Authentication, authorization and
+rotation in a deployed AKS service remain unverified; no new component or version
+is added to the draft manifest.
+
 `manifest.schema.json` describes the strict wire shape. The dependency-free
 validator additionally checks unique component IDs and projects, safe project
 paths, each component's explicit `<Version>` in its checked-in `.csproj`, actual
