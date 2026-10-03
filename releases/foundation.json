@@ -38,6 +38,12 @@
       "kind": "library",
       "version": "0.1.0",
       "project": "packages/Agentweaver.Telemetry.AzureMonitor/Agentweaver.Telemetry.AzureMonitor.csproj"
+    },
+    {
+      "id": "Agentweaver.ObjectStore.AzureBlob",
+      "kind": "library",
+      "version": "0.1.0",
+      "project": "packages/Agentweaver.ObjectStore.AzureBlob/Agentweaver.ObjectStore.AzureBlob.csproj"
     }
   ],
   "compatibility": [
@@ -54,6 +60,11 @@
     {
       "consumer": "Agentweaver.Telemetry.AzureMonitor",
       "dependency": "Agentweaver.Telemetry",
+      "versions": ["0.1.0"]
+    },
+    {
+      "consumer": "Agentweaver.ObjectStore.AzureBlob",
+      "dependency": "Agentweaver.Abstractions",
       "versions": ["0.1.0"]
     }
   ]

@@ -9,6 +9,7 @@ answer different questions. Passing one does not substitute for the others.
 | PostgreSQL integration | State/event atomicity, schema migration, idempotency, stream ordering, concurrent claims, lease fencing and restart recovery | Every persistence change; the foundation CI runs the whole small suite |
 | Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
 | Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
+| Azure Blob transport fake | SDK HTTP requests, streamed binary data, create-only conditions, missing/conflict responses and failures without a live account | Every Object Store change |
 | Service compatibility | Current and N-1 API/event peers agree during rollout | When real service APIs and consumers exist |
 | Azure-backed service integration | Actual identity, network access, managed dependencies, rollout and recovery | From the first deployable vertical slice |
 | Platform E2E | A user's task completes correctly through the assembled platform | From the end of P1, and for integrated candidates thereafter |
@@ -23,6 +24,9 @@ request/response and error pipeline through an in-memory HTTP transport and fake
 `TokenCredential`; they require no Azure account, outbound network or provisioned
 vault. They prove adapter transport behavior, not live workload identity, RBAC or
 an Azure deployment.
+Object Store tests inject a fake HTTP transport into the Azure Blob SDK; these
+verify SDK requests and adapter mappings but do not prove cloud credentials,
+Azure permissions, durability, or deployed integration.
 
 Run the commands in the [root README](../../README.md#build-and-check-the-foundation).
 The PostgreSQL suite requires a running Docker-compatible engine and permission to
@@ -46,12 +50,12 @@ npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs
 ```
 
-The .NET command restores the pinned local ReportGenerator tool, runs all five
+The .NET command restores the pinned local ReportGenerator tool, runs all six
 test suites once with Coverlet, and merges their reports using ReportGenerator.
-Its scope is all six current production libraries: Abstractions, Providers,
-Persistence.Postgres, Secrets.AzureKeyVault, Telemetry, and
-Telemetry.AzureMonitor. Shared sources are merged, not summed twice. Node uses
-its built-in test coverage and spec/LCOV reporters
+Its scope is all seven current production libraries: Abstractions, Providers,
+Persistence.Postgres, Secrets.AzureKeyVault, Telemetry, Telemetry.AzureMonitor,
+and ObjectStore.AzureBlob. Shared sources are merged, not summed twice. Node
+uses its built-in test coverage and spec/LCOV reporters
 for the release validator; test files, fixtures, and coverage wrappers are not
 production targets. No external JavaScript coverage dependency is needed.
 
@@ -64,6 +68,7 @@ Reports are written beneath `artifacts\coverage\` (ignored by Git):
 | `dotnet\keyvault\` | Azure Key Vault adapter Cobertura report |
 | `dotnet\telemetry\` | Telemetry foundation Cobertura report |
 | `dotnet\azure-monitor\` | Azure Monitor adapter Cobertura report |
+| `dotnet\azure-blob\` | Azure Blob Object Store adapter Cobertura report |
 | `node\` | `lcov.info` and `summary.txt` containing live test output and the native coverage table |
 | `source.json` (CI only) | Tested checkout SHA, PR head SHA, run ID, and run attempt |
 
@@ -74,14 +79,18 @@ twice. Its summary and downloadable artifact are published even after a failed
 step when available; partial reports do not turn a failed run green. Reports
 remain in GitHub Actions for 30 days, with no external analytics upload.
 
-The initial measured foundation baseline (before the Secrets and Telemetry additions) is:
+The measured seven-library foundation snapshot is:
 
 | Scope | Lines | Branches | Methods/functions |
 | --- | --- | --- | --- |
-| .NET combined | 423/452 (93.5%) | 184/240 (76.6%) | 90/97 (92.7%) |
-| Abstractions | 81/87 (93.1%) | 15/16 (93.7%) | 48/53 (90.5%) |
+| .NET combined | 669/698 (95.8%) | 351/422 (83.1%) | 131/138 (94.9%) |
+| Abstractions | 133/139 (95.6%) | 68/72 (94.4%) | 68/73 (93.1%) |
 | Providers | 126/144 (87.5%) | 102/148 (68.9%) | 17/18 (94.4%) |
 | Persistence.Postgres | 216/221 (97.7%) | 67/76 (88.1%) | 25/26 (96.1%) |
+| Secrets.AzureKeyVault | 99/99 (100%) | 82/86 (95.3%) | 12/12 (100%) |
+| Telemetry | 27/27 (100%) | 6/10 (60%) | 2/2 (100%) |
+| Telemetry.AzureMonitor | 36/36 (100%) | 18/22 (81.8%) | 2/2 (100%) |
+| ObjectStore.AzureBlob | 32/32 (100%) | 8/8 (100%) | 5/5 (100%) |
 | Node release validator | 95.92% | 92.59% | 100% |
 
 These are a starting observation, not a required percentage or a claim of
@@ -89,9 +98,6 @@ behavioral completeness. Read the report for the exact tested candidate as
 source and tests change. Instrumented line, branch, and method/function coverage
 does not prove integration correctness, Azure connectivity, or platform E2E
 acceptance; the distinct test layers above still apply.
-The table predates the Azure Key Vault adapter and Telemetry library; use the
-new combined report for the current five-library measurement rather than
-interpreting the old baseline as a threshold.
 
 ## When Azure is added
 

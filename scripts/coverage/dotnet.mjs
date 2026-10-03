@@ -12,6 +12,7 @@ const suites = [
   ['keyvault', 'Agentweaver.Secrets.AzureKeyVault.Tests'],
   ['telemetry', 'Agentweaver.Telemetry.Tests'],
   ['azure-monitor', 'Agentweaver.Telemetry.AzureMonitor.Tests'],
+  ['azure-blob', 'Agentweaver.ObjectStore.AzureBlob.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
@@ -20,6 +21,7 @@ const expectedAssemblies = [
   'Agentweaver.Secrets.AzureKeyVault',
   'Agentweaver.Telemetry',
   'Agentweaver.Telemetry.AzureMonitor',
+  'Agentweaver.ObjectStore.AzureBlob',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 
