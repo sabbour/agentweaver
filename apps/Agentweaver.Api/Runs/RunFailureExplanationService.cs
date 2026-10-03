@@ -9,6 +9,8 @@ namespace Agentweaver.Api.Runs;
 
 public sealed class RunFailureExplanationService(
     RunTerminalDiagnosticReader terminalReader,
+    TerminalOutcomeProjector terminalProjector,
+    IRunStore runStore,
     ExecutionIdentityReader identityReader,
     IRunEventStream eventStream,
     ILogger<RunFailureExplanationService> logger)
@@ -17,6 +19,19 @@ public sealed class RunFailureExplanationService(
     {
         var collectedAt = DateTimeOffset.UtcNow;
         var diagnostic = await terminalReader.GetAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+        if (diagnostic is null
+            && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+            && run.Status is RunStatus.Failed or RunStatus.MergeFailed)
+        {
+            var pending = (await runStore.GetUnprojectedTerminalOutcomesAsync(ct).ConfigureAwait(false))
+                .SingleOrDefault(outcome => outcome.RunId == run.Id
+                    && outcome.LifecycleGeneration == run.LifecycleGeneration);
+            if (pending is not null)
+                await terminalProjector.ProjectAsync(pending, ct).ConfigureAwait(false);
+            // Another projector may have committed and marked this outcome between the first
+            // diagnostic read and the pending lookup.
+            diagnostic = await terminalReader.GetAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+        }
         if (diagnostic is null
             && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
             && run.Status is RunStatus.Failed or RunStatus.MergeFailed)

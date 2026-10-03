@@ -475,6 +475,83 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task Start_Refusal_StatusPrecedesDiagnosticProjection()
+    {
+        using var factory = CoordinatorWebApplicationFactory.CreateWithPausedTerminalProjection();
+        using var owner = factory.CreateOwnerClient();
+        var dir = factory.NewWorkingDirectory();
+        var projectResponse = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Coordinator projection test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator Test");
+        var project = await projectResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var projectId = project.GetProperty("project_id").GetString()!;
+
+        factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject.ExceptionToThrow =
+            new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.ProviderUnavailable,
+                CoordinatorFailureCodes.OutcomeSpecModelRefused,
+                "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.",
+                isRetryable: true);
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var start = await owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations",
+            new { goal = "Draft a reviewable outcome spec", start_mode = "defineOutcome" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var started = await start.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = started.GetProperty("runId").GetString()!;
+        var pause = factory.TerminalEventStream;
+        pause.Should().NotBeNull();
+        Task<RunTerminalDiagnosticResponse?>? diagnosticTask = null;
+        try
+        {
+            await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var run = await GetRunAsync(owner, runId);
+            run.Should().NotBeNull();
+            run!.Status.Should().Be("failed");
+            run.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var terminalEvents = await db.RunEvents.AsNoTracking()
+                .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+                .ToListAsync();
+            terminalEvents.Should().BeEmpty("the typed terminal append is held before its durable write");
+
+            diagnosticTask = owner.GetFromJsonAsync<RunTerminalDiagnosticResponse>(
+                $"/api/runs/{runId}/terminal-diagnostic");
+            await pause.EnteredAgain.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            diagnosticTask.IsCompleted.Should().BeFalse(
+                "the first diagnostic must wait for the durable terminal event");
+        }
+        finally
+        {
+            pause.Resume.TrySetResult();
+        }
+        var firstDiagnostic = await diagnosticTask!.WaitAsync(TimeSpan.FromSeconds(10));
+        firstDiagnostic.Should().NotBeNull();
+        firstDiagnostic!.Code.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        firstDiagnostic.Retryable.Should().BeTrue();
+        firstDiagnostic.CauseChain.Should().Contain("reason:coordinator_outcome_spec_model_refused");
+
+        await using var finalScope = factory.Services.CreateAsyncScope();
+        var finalDb = finalScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var terminal = await finalDb.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+            .ToListAsync();
+        var payload = JsonSerializer.Deserialize<JsonElement>(
+            terminal.Should().ContainSingle().Subject.PayloadJson);
+        payload.GetProperty("errorCode").GetString()
+            .Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Start_RepeatedOutcomeSpecRefusal_EmitsActionableRetryableTerminal()
     {
         var projectId = await CreateProjectAsync();
