@@ -41,10 +41,13 @@ public static class IdentityBrokerEndpoints
     private static async Task<IResult> AuthorizeAsync(
         HttpContext context, IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
         IOpenIddictAuthorizationManager authorizations, IOpenIddictApplicationManager applications,
-        TimeProvider timeProvider, IAntiforgery antiforgery, CancellationToken ct)
+        IdentityGrantAuthority grantAuthority, TimeProvider timeProvider, IAntiforgery antiforgery,
+        CancellationToken ct)
     {
         var request = context.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("The OpenIddict request cannot be retrieved.");
+        if (!TryGetRequestedRunBinding(context.Request.Query, out var runBinding))
+            return Forbid(Errors.InvalidRequest, "The project and run selectors are invalid.");
 
         var local = await context.AuthenticateAsync(LocalCookieScheme);
         if (!local.Succeeded || local.Principal?.FindFirst(Claims.Subject) is not { } subjectClaim)
@@ -61,6 +64,8 @@ public static class IdentityBrokerEndpoints
                 CodeChallenge = request.CodeChallenge,
                 CodeChallengeMethod = request.CodeChallengeMethod,
                 Nonce = request.Nonce,
+                ProjectId = runBinding?.ProjectId,
+                RunId = runBinding?.RunId,
                 CreatedAt = timeProvider.GetUtcNow(),
                 ExpiresAt = timeProvider.GetUtcNow().AddMinutes(10),
             });
@@ -73,6 +78,9 @@ public static class IdentityBrokerEndpoints
 
         var userId = Guid.Parse(subjectClaim.Value);
         var requestedScopes = request.GetScopes();
+        if (runBinding is not null && !await grantAuthority.HasActiveRunBindingAsync(
+            subjectClaim.Value, runBinding.ProjectId, runBinding.RunId, ct))
+            return Forbid(Errors.AccessDenied, "No active grant authorizes the requested project and run.");
 
         var application = await applications.FindByClientIdAsync(request.ClientId!, ct)
             ?? throw new InvalidOperationException("The client was removed after its request was validated.");
@@ -82,7 +90,8 @@ public static class IdentityBrokerEndpoints
             subject: subjectClaim.Value, client: applicationId!, status: Statuses.Valid,
             type: AuthorizationTypes.Permanent, scopes: requestedScopes).ToListAsync(ct);
         if (existing.Count > 0)
-            return await SignInAsync(db, scopes, authorizations, existing[0], userId, requestedScopes, ct);
+            return await SignInAsync(db, scopes, authorizations, existing[0], userId, requestedScopes,
+                runBinding, grantAuthority, ct);
 
         var consentHandle = OpaqueHandle.NewHandle();
         db.PendingAuthorizations.Add(new PendingAuthorization
@@ -96,6 +105,8 @@ public static class IdentityBrokerEndpoints
             CodeChallenge = request.CodeChallenge,
             CodeChallengeMethod = request.CodeChallengeMethod,
             Nonce = request.Nonce,
+            ProjectId = runBinding?.ProjectId,
+            RunId = runBinding?.RunId,
             SubjectUserId = userId,
             CreatedAt = timeProvider.GetUtcNow(),
             ExpiresAt = timeProvider.GetUtcNow().AddMinutes(10),
@@ -200,7 +211,8 @@ public static class IdentityBrokerEndpoints
     }
 
     private static async Task<IResult> TokenAsync(
-        HttpContext context, IdentityBrokerDbContext db, CancellationToken ct)
+        HttpContext context, IdentityBrokerDbContext db, IdentityGrantAuthority grantAuthority,
+        CancellationToken ct)
     {
         var request = context.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("The OpenIddict request cannot be retrieved.");
@@ -219,29 +231,47 @@ public static class IdentityBrokerEndpoints
         if (user is null || user.Disabled)
             return Forbid(Errors.InvalidGrant, "The account is disabled.");
 
+        if (!TryGetPrincipalRunBinding(result.Principal, out var runBinding) ||
+            (runBinding is not null && !await grantAuthority.HasActiveRunBindingAsync(
+                subjectClaim.Value, runBinding.ProjectId, runBinding.RunId, ct)))
+            return Forbid(Errors.InvalidGrant, "The run authorization is no longer active.");
+
         return Results.SignIn(result.Principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
     private static async Task<IResult> SignInAsync(
         IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
         IOpenIddictAuthorizationManager authorizations, object authorization,
-        Guid userId, ImmutableArray<string> requestedScopes, CancellationToken ct)
+        Guid userId, ImmutableArray<string> requestedScopes, RequestedRunBinding? runBinding,
+        IdentityGrantAuthority grantAuthority, CancellationToken ct)
     {
         var user = await db.Users.AsNoTracking().SingleAsync(u => u.Id == userId, ct);
         if (user.Disabled)
             return Forbid(Errors.AccessDenied, "The account is disabled.");
 
-        var principal = BuildMinimalPrincipal(userId, requestedScopes);
+        if (runBinding is not null && !await grantAuthority.HasActiveRunBindingAsync(
+            userId.ToString(), runBinding.ProjectId, runBinding.RunId, ct))
+            return Forbid(Errors.AccessDenied, "No active grant authorizes the requested project and run.");
+
+        var principal = BuildMinimalPrincipal(userId, requestedScopes, runBinding);
         principal.SetResources(await scopes.ListResourcesAsync(requestedScopes, ct).ToListAsync(ct));
         principal.SetAuthorizationId(await authorizations.GetIdAsync(authorization, ct));
         return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
-    private static ClaimsPrincipal BuildMinimalPrincipal(Guid userId, IEnumerable<string> scopes)
+    private static ClaimsPrincipal BuildMinimalPrincipal(
+        Guid userId, IEnumerable<string> scopes, RequestedRunBinding? runBinding = null)
     {
         var identity = new ClaimsIdentity(
             OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Claims.Name, Claims.Role);
         identity.AddClaim(new Claim(Claims.Subject, userId.ToString()).SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
+        if (runBinding is not null)
+        {
+            identity.AddClaim(new Claim(SecretRedemptionEndpoints.ProjectIdClaim, runBinding.ProjectId)
+                .SetDestinations(Destinations.AccessToken));
+            identity.AddClaim(new Claim(SecretRedemptionEndpoints.RunIdClaim, runBinding.RunId)
+                .SetDestinations(Destinations.AccessToken));
+        }
         var principal = new ClaimsPrincipal(identity);
         principal.SetScopes(scopes.ToImmutableArray());
         return principal;
@@ -259,6 +289,8 @@ public static class IdentityBrokerEndpoints
             ["code_challenge"] = pending.CodeChallenge,
             ["code_challenge_method"] = pending.CodeChallengeMethod,
             ["nonce"] = pending.Nonce,
+            [SecretRedemptionEndpoints.ProjectIdClaim] = pending.ProjectId,
+            [SecretRedemptionEndpoints.RunIdClaim] = pending.RunId,
         };
         var builder = new StringBuilder("/connect/authorize?");
         var first = true;
@@ -272,9 +304,55 @@ public static class IdentityBrokerEndpoints
         return builder.ToString();
     }
 
+    private static bool TryGetRequestedRunBinding(
+        IQueryCollection query,
+        out RequestedRunBinding? binding)
+    {
+        binding = null;
+        var projectValues = query[SecretRedemptionEndpoints.ProjectIdClaim];
+        var runValues = query[SecretRedemptionEndpoints.RunIdClaim];
+        if (projectValues.Count == 0 && runValues.Count == 0)
+            return true;
+        if (projectValues.Count != 1 || runValues.Count != 1)
+            return false;
+
+        var projectId = projectValues[0];
+        var runId = runValues[0];
+        if (projectId is null || runId is null ||
+            !IsValidBindingIdentifier(projectId) || !IsValidBindingIdentifier(runId))
+            return false;
+
+        binding = new RequestedRunBinding(projectId, runId);
+        return true;
+    }
+
+    private static bool TryGetPrincipalRunBinding(
+        ClaimsPrincipal principal,
+        out RequestedRunBinding? binding)
+    {
+        binding = null;
+        var projectClaims = principal.FindAll(SecretRedemptionEndpoints.ProjectIdClaim).Take(2).ToArray();
+        var runClaims = principal.FindAll(SecretRedemptionEndpoints.RunIdClaim).Take(2).ToArray();
+        if (projectClaims.Length == 0 && runClaims.Length == 0)
+            return true;
+        if (projectClaims.Length != 1 || runClaims.Length != 1 ||
+            !IsValidBindingIdentifier(projectClaims[0].Value) ||
+            !IsValidBindingIdentifier(runClaims[0].Value))
+            return false;
+
+        binding = new RequestedRunBinding(projectClaims[0].Value, runClaims[0].Value);
+        return true;
+    }
+
+    private static bool IsValidBindingIdentifier(string value) =>
+        value.Length is > 0 and <= 256 &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
+
     private static IResult Forbid(string error, string description) => Results.Json(
         new { error, error_description = description }, statusCode: StatusCodes.Status400BadRequest);
 }
+
+internal sealed record RequestedRunBinding(string ProjectId, string RunId);
 
 public sealed record ConsentDecision(
     [property: JsonPropertyName("consent_handle")] string? ConsentHandle,

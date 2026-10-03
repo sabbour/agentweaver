@@ -23,11 +23,37 @@ public sealed class IdentityBrokerOptions
     public required ExternalProviderOptions ExternalProvider { get; set; }
 
     [Required]
+    public required SecretRedemptionOptions SecretRedemption { get; set; }
+
+    [Required]
     public required string DataProtectionKeyPath { get; set; }
 
     [Required]
     [MinLength(1)]
     public required IReadOnlyList<BrokerClientOptions> Clients { get; set; }
+}
+
+/// <summary>
+/// Explicit production settings for the Identity-owned redemption endpoint and its
+/// workload-identity-authenticated Key Vault backend. None of these values has a
+/// development default.
+/// </summary>
+public sealed class SecretRedemptionOptions
+{
+    [Required]
+    public required string Audience { get; set; }
+
+    [Required]
+    public required string VaultUri { get; set; }
+
+    [Required]
+    public required string WorkloadIdentityTenantId { get; set; }
+
+    [Required]
+    public required string WorkloadIdentityClientId { get; set; }
+
+    [Required]
+    public required string WorkloadIdentityTokenFilePath { get; set; }
 }
 
 /// <summary>

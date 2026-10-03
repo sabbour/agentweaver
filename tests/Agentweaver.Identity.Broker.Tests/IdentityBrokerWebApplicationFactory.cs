@@ -40,6 +40,7 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
     private readonly FakeIdentityProvider _fakeIdp;
     private readonly (string PfxPath, string Password) _signingCertificate;
     private readonly bool _ownsSigningCertificate;
+    private readonly Action<IServiceCollection>? _configureServices;
     private readonly InMemoryLogSink _logSink = new();
 
     /// <summary>
@@ -56,18 +57,22 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
     /// </summary>
     public string ConnectionStringForRestartTest => _connectionString;
 
+    public (string PfxPath, string Password) SigningCertificateForTest => _signingCertificate;
+
     private readonly Dictionary<string, string?> _previousSettings = new();
     private bool _cleanedUp;
 
     public IdentityBrokerWebApplicationFactory(string connectionString, FakeIdentityProvider fakeIdp,
         bool confidential = false, string clientSecret = "generated-test-client-secret",
         string redirectUri = TestClientRedirectUri, (string PfxPath, string Password)? signingCertificate = null,
-        Action<Dictionary<string, string?>>? configure = null)
+        Action<Dictionary<string, string?>>? configure = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         _connectionString = connectionString;
         _fakeIdp = fakeIdp;
         _signingCertificate = signingCertificate ?? TestSigningCertificate.Create();
         _ownsSigningCertificate = signingCertificate is null;
+        _configureServices = configureServices;
 
         var settings = new Dictionary<string, string?>
         {
@@ -84,6 +89,12 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
                 $"{FakeIdentityProvider.Authority}/.well-known/openid-configuration",
             ["IdentityBroker__ExternalProvider__ClientId"] = "broker-to-fake-idp",
             ["IdentityBroker__ExternalProvider__ClientSecret"] = "fake-idp-client-secret",
+            ["IdentityBroker__SecretRedemption__Audience"] = "https://api.test",
+            ["IdentityBroker__SecretRedemption__VaultUri"] = "https://identity-test-vault.vault.azure.net/",
+            ["IdentityBroker__SecretRedemption__WorkloadIdentityTenantId"] = Guid.NewGuid().ToString(),
+            ["IdentityBroker__SecretRedemption__WorkloadIdentityClientId"] = Guid.NewGuid().ToString(),
+            ["IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath"] =
+                Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "identity-tests", "projected-token.jwt"),
             ["IdentityBroker__Clients__0__ClientId"] = TestClientId,
             ["IdentityBroker__Clients__0__DisplayName"] = "Test Client",
             ["IdentityBroker__Clients__0__Type"] = confidential ? nameof(BrokerClientType.Confidential) : nameof(BrokerClientType.Public),
@@ -129,6 +140,7 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
                     BaseAddress = new Uri(FakeIdentityProvider.Authority),
                 };
             });
+            _configureServices?.Invoke(services);
         });
     }
 

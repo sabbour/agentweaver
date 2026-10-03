@@ -4,9 +4,9 @@ namespace Agentweaver.Identity.Broker;
 /// A short-lived, server-persisted record of an in-flight authorization request that is
 /// waiting on either external login or explicit consent. The opaque handle returned to the
 /// caller is never stored directly: only its SHA-256 hash is persisted, so a leaked log line
-/// or database row cannot be replayed as the handle itself. Every authoritative request
-/// parameter (client, redirect URI, scope, PKCE challenge, state) lives here, never in a
-/// client-supplied hidden field trusted at consent time.
+/// or database row cannot be replayed as the handle itself. Protocol parameters and
+/// project/run selectors live here across redirects; selectors remain untrusted until the
+/// grant authority confirms the authenticated subject's active binding.
 /// </summary>
 public sealed class PendingAuthorization
 {
@@ -27,6 +27,11 @@ public sealed class PendingAuthorization
     public string? CodeChallengeMethod { get; set; }
 
     public string? Nonce { get; set; }
+
+    /// <summary>Untrusted authorization selectors, later checked against active Identity grants.</summary>
+    public string? ProjectId { get; set; }
+
+    public string? RunId { get; set; }
 
     /// <summary>Set once the caller has authenticated with the external provider.</summary>
     public Guid? SubjectUserId { get; set; }

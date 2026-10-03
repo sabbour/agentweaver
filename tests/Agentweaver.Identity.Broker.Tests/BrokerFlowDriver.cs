@@ -15,7 +15,8 @@ public static class BrokerFlowDriver
 {
     public static async Task<HttpResponseMessage> StartAuthorizeAsync(
         HttpClient broker, string clientId, string redirectUri, string scope,
-        string? codeChallenge, string? codeChallengeMethod, string state = "state-1", string nonce = "nonce-1")
+        string? codeChallenge, string? codeChallengeMethod, string state = "state-1", string nonce = "nonce-1",
+        string? projectId = null, string? runId = null)
     {
         var query = new Dictionary<string, string?>
         {
@@ -28,6 +29,8 @@ public static class BrokerFlowDriver
         };
         if (codeChallenge is not null) query["code_challenge"] = codeChallenge;
         if (codeChallengeMethod is not null) query["code_challenge_method"] = codeChallengeMethod;
+        if (projectId is not null) query["project_id"] = projectId;
+        if (runId is not null) query["run_id"] = runId;
 
         var url = QueryHelpers.AddQueryString("/connect/authorize", query);
         return await broker.GetAsync(url);
@@ -40,10 +43,11 @@ public static class BrokerFlowDriver
     /// </summary>
     public static async Task<string> AuthorizeWithConsentAsync(
         HttpClient broker, HttpClient fakeIdp, string clientId, string redirectUri, string scope,
-        string codeChallenge, string state = "state-1", string nonce = "nonce-1")
+        string codeChallenge, string state = "state-1", string nonce = "nonce-1",
+        string? projectId = null, string? runId = null)
     {
         var consentBody = await BeginConsentAsync(broker, fakeIdp, clientId, redirectUri, scope,
-            codeChallenge, state, nonce);
+            codeChallenge, state, nonce, projectId, runId);
         var consentResponse = await SubmitConsentAsync(broker, consentBody);
         AssertRedirect(consentResponse, "consent");
         var postConsentAuthorizeLocation = consentResponse.Headers.Location!;
@@ -58,10 +62,11 @@ public static class BrokerFlowDriver
 
     public static async Task<JsonElement> BeginConsentAsync(
         HttpClient broker, HttpClient fakeIdp, string clientId, string redirectUri, string scope,
-        string codeChallenge, string state = "state-1", string nonce = "nonce-1")
+        string codeChallenge, string state = "state-1", string nonce = "nonce-1",
+        string? projectId = null, string? runId = null)
     {
         var challengeResponse = await StartAuthorizeAsync(
-            broker, clientId, redirectUri, scope, codeChallenge, "S256", state, nonce);
+            broker, clientId, redirectUri, scope, codeChallenge, "S256", state, nonce, projectId, runId);
         if (challengeResponse.StatusCode == System.Net.HttpStatusCode.OK)
             return await challengeResponse.Content.ReadFromJsonAsync<JsonElement>();
         AssertRedirect(challengeResponse, "authorize challenge");

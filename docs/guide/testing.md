@@ -7,7 +7,7 @@ answer different questions. Passing one does not substitute for the others.
 | --- | --- | --- |
 | Unit and provider conformance | Selection, capabilities, immutable bindings, explicit failures | Every affected change |
 | Identity authorization candidate | Exact trusted actor/project/run/purpose/SecretRef bindings, immutable grant identity/revision/expiry races, metadata-only credential lifetime narrowing, cancellation and error invalidation | Every Identity or credential contract change |
-| Identity broker candidate | Native OIDC/cookie/OpenIddict protocol, authenticated consent/CSRF, S256 PKCE, configured resource audiences, permanent PostgreSQL grants, restart, refresh replay, cancellation, and Trace-level log redaction | Every broker change |
+| Identity broker candidate | Native OIDC/cookie/OpenIddict protocol, authenticated consent/CSRF, S256 PKCE, configured resource audiences, permanent PostgreSQL grants, refresh replay, revisioned Identity-owned run grants, authenticated redemption HTTP, restart, cancellation, and Trace-level log redaction | Every broker change |
 | PostgreSQL integration | State/event/consumer-receipt atomicity, version-1 schema upgrade, consumer-scoped duplicate admission and concurrent retry, stream ordering, concurrent claims, bounded relay publish-before-fenced-ack outcomes, cancellation at publish/ack and real lock waits, restart redelivery with inbox-gated effects | Every persistence change; the foundation CI runs the whole small suite |
 | Telemetry in-process | Native trace, metric, and log export composition, resource identity, disposal, and failed-export isolation; no network destination. Cancellation status awaits an instrumented cancellable operation. | Every telemetry foundation change |
 | Azure Monitor exporter composition | Configuration and injected-credential validation; SDK trace, metric, and log wiring with a fake HTTP transport, plus healthy exporter continuity when simulated ingestion fails. No Azure connection. | Every Azure Monitor integration change |
@@ -37,6 +37,18 @@ use the real Azure Identity OAuth token exchange with generated, nonsensitive
 projected token files and fake OAuth and Key Vault transports. They require no
 Azure account, outbound network, real credentials or provisioned vault. They prove
 the composition pipeline, not live workload identity, RBAC or an Azure deployment.
+Identity redemption integration tests run the actual OpenIddict validation
+middleware and HTTP endpoint against disposable PostgreSQL. Generated signed
+tokens include validated `sub`, `project_id`, and `run_id` claims; the test
+backend is in-memory. A Testcontainers end-to-end test also runs the supported
+external-login, consent, authorization-code, and token flow with durable
+project/run grants, then redeems with the broker-issued token and verifies
+cross-project/run denial before backend contact. A separate host-composition
+check resolves the production Key Vault workload-identity adapter. Persistent
+grant tests cover append-only revisions, compare-and-swap writers, idempotent
+replay, revocation, restart, expiry, and schema ownership. These tests prove
+local composition, not deployed token issuance, Key Vault authorization, or
+cloud acceptance.
 Object Store tests inject a fake HTTP transport into the Azure Blob SDK; these
 verify SDK requests and adapter mappings but do not prove cloud credentials,
 Azure permissions, durability, or deployed integration.

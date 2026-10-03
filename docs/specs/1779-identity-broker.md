@@ -47,6 +47,7 @@ Credential changes require an explicit administrative migration.
 | `POST /connect/consent` | JSON `consent_handle`, `approve`, optional scope subset, local cookie, and `X-CSRF-TOKEN` |
 | `POST /connect/token` | Native form-encoded authorization-code or refresh exchange |
 | `GET /diagnostics/whoami` | Local native bearer validation diagnostic, not an audience-policy acceptance test |
+| `POST /secrets/redeem` | OpenIddict-validated bearer for the configured audience plus JSON `secretId`, `secretVersion`, `purpose`, and `runId`; success returns the short-lived credential value |
 | `GET /health/live` | Process liveness |
 | `GET /health/ready` | PostgreSQL connectivity |
 
@@ -54,6 +55,43 @@ The JSON consent prompt includes `consent_handle`, `client_id`, `requested_scope
 The browser must retain the local and antiforgery cookies.
 The client sends `csrf_token` through `X-CSRF-TOKEN` when it submits consent.
 Consent is API-only in P0. The consent UI remains P1 work.
+
+## Run-bound SecretRef redemption (#1783)
+
+The redemption endpoint requires a bearer token validated by the existing
+OpenIddict validation middleware for this broker's issuer, signature, lifetime,
+and the explicit `IdentityBroker:SecretRedemption:Audience`. The audience must
+also occur in an operator-registered client resource. The authenticated
+principal must contain exactly one `sub`, `project_id`, and `run_id` claim.
+Actor identity is the validated `sub`; project and run identity come from the
+validated claims, never the request body or headers. The body intentionally
+contains only the exact SecretRef identifier/version, purpose, and request run
+ID. Unknown properties are rejected rather than accepted as caller-asserted identity.
+
+The broker's supported authorize flow accepts optional `project_id` and
+`run_id` query selectors. It stores them in the server-owned pending
+authorization across external login and consent; they are not identity claims
+and are never copied directly into a token. Before issuing a code-scoped
+principal, Identity requires an unexpired active grant for the authenticated
+local subject and exact project/run, then places those values in access-token
+claims only. The broker repeats the active-binding check at token exchange and
+refresh. Redemption still resolves the current durable grant revision for the
+exact purpose and SecretRef.
+
+The endpoint composes the admitted `AuthorizedSecretRedemption` primitive with
+an Identity-owned PostgreSQL `IGrantAuthority` and the existing
+`AzureKeyVaultSecretRedemption` adapter. The broker schema stores immutable
+binding snapshots; replacement, renewal, and revocation append revisions under
+a row-locked compare-and-swap transaction. Idempotency receipts are persisted
+with each mutation. PostgreSQL triggers enforce append-only snapshots and
+one-step revision advancement. No HTTP grant-administration endpoint is exposed;
+only trusted Identity service components may call the mutation API.
+
+The request carries references only. Credential bytes are not stored in the
+grant schema, returned in denials, or logged. Successful redemption returns the
+value only to the authenticated caller. Any denial or request cancellation after
+backend acquisition invalidates the credential before the service responds.
+The backend receives the exact requested SecretRef version.
 
 ## Host and deployment contract
 
@@ -70,6 +108,10 @@ The host supplies native .NET configuration through its deployment secret/config
 | `IdentityBroker:ExternalProvider:ClientId` / `ClientSecret` | Registered upstream confidential client |
 | `IdentityBroker:ExternalProvider:MetadataAddress` | Optional explicit HTTPS discovery address |
 | `IdentityBroker:Clients` | Explicit client IDs, type, redirects, scopes, resources, and confidential-client secrets |
+| `IdentityBroker:SecretRedemption:Audience` | Required HTTPS resource audience, also registered in an operator-seeded client resource list |
+| `IdentityBroker:SecretRedemption:VaultUri` | Azure Key Vault root URI; root forms with or without a trailing slash are accepted |
+| `IdentityBroker:SecretRedemption:WorkloadIdentityTenantId` / `WorkloadIdentityClientId` | Explicit Entra workload identity; no ambient credential or default identity |
+| `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected workload-identity token path |
 
 The upstream registration permits the broker's public `/signin-oidc` callback.
 The deployment retains signing/encryption certificates and the protected key ring across restart.
@@ -104,14 +146,19 @@ A separate native resource server enforces a configured audience for issued and 
 It rejects invalid issuer, audience, signature, purpose, and expiry.
 Trace-level log tests cover successful requests, denial, and invalid/replayed grants without raw token or secret values.
 Test artifacts remain under ignored repository artifacts and never use shared credentials.
+The #1783 tests also exercise real redemption middleware and HTTP against
+disposable PostgreSQL, including revision races, idempotency, ownership,
+restart, cancellation, and error redaction. A Testcontainers end-to-end test
+also completes the broker's external-login, consent, authorization-code, and
+token flow with a durable run grant, then proves successful redemption and
+cross-project/run denial using the broker-issued token. These local tests do
+not prove deployed token issuance, workload identity, Key Vault RBAC, or Azure
+acceptance.
 
 The draft release manifest registers `Agentweaver.Identity.Broker` at its initial `0.1.0` project version.
 A component-scoped changeset records minor release intent. No manual version bump occurs.
 The draft omits `imageDigest` until actual publication supplies it.
 A local Docker image proves only the local build, not registry publication or cloud execution.
 
-Run-grant authorization and exact-version Key Vault redemption composition remain dependent on
-[#1783](https://github.com/sabbour/agentweaver/issues/1783).
 Azure publication and deployed proof remain dependent on
 [#1790](https://github.com/sabbour/agentweaver/issues/1790).
-This broker does not expose secret redemption or purpose-bound run-token APIs.

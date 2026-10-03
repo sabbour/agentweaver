@@ -12,9 +12,11 @@ const abstraction = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyG
 const provider = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
 const identity = '<Project><PropertyGroup><Version>1.0.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
 const azureMonitor = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj" /></ItemGroup></Project>';
+const identityBroker = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj" /><ProjectReference Include="..\\..\\..\\packages\\Agentweaver.Secrets.AzureKeyVault\\Agentweaver.Secrets.AzureKeyVault.csproj" /></ItemGroup></Project>';
 const projects = new Map(fixture.components.map((component) => [
   component.project,
   component.id === 'Agentweaver.Telemetry.AzureMonitor' ? azureMonitor :
+    component.id === 'Agentweaver.Identity.Broker' ? identityBroker :
     component.id === 'Agentweaver.Identity' ? identity :
     component.id === 'Agentweaver.Persistence.Postgres'
       ? '<Project><PropertyGroup><Version>0.2.0</Version></PropertyGroup></Project>' :
@@ -144,6 +146,9 @@ test('drafts cannot carry deployment evidence, and releases need actual services
   assert.throws(() => check(edit((m) => {
     m.stage = 'release';
     m.components = m.components.filter((component) => component.kind !== 'service');
+    const componentIds = new Set(m.components.map((component) => component.id));
+    m.compatibility = m.compatibility.filter((rule) =>
+      componentIds.has(rule.consumer) && componentIds.has(rule.dependency));
   })), /actual deployable service/);
 });
 
