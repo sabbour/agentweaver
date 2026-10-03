@@ -74,9 +74,12 @@ the Azure Blob transport adapter.
   writes, and missing-object delete semantics. This draft library composition
   is not a platform release or version bump. No Changesets pipeline exists on v1.
 - #1767 adds ordered, layered provider composition: permitted Guardrails and
-  Telemetry providers resolve and pin as ordered sets, and Network Policy
-  resolves as a platform-owned layer, all with confirmed intent generation.
-  Exclusive and singleton provider cardinalities are preserved and other
-  cardinalities are explicitly deferred. This is a pinned, confirmed-intent
-  composition only; it adds no runtime enforcement, deployable service, or
-  version bump, and the draft composition remains at `0.1.0`.
+  Telemetry providers resolve and pin as ordered sets, pinning resource
+  generations and order. Network Policy resolves its required L3/L4 and
+  optional L7 layers as platform-selected, platform-owned providers, and
+  pinning that layer additionally records a confirmed *applied* egress intent
+  generation. Exclusive and singleton provider cardinalities are preserved
+  and other cardinalities are explicitly deferred. This only pins and records
+  the above; it adds no runtime enforcement, egress compilation/application,
+  deployable service, or version bump, and the draft composition remains at
+  `0.1.0`.
