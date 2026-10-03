@@ -54,3 +54,25 @@ effects on admission and use the same transaction. External side effects and
 transport acknowledgments are not atomic with that transaction. This library
 does not provide a consumer daemon, relay daemon, heartbeat, transport, or
 cross-service transaction. No local database fallback is provided.
+
+For a caller-driven batch, implement `IOutboxPublisher.PublishAsync` with the
+transport's publish operation and construct `new OutboxRelay(outbox, publisher)`.
+Call `RelayOnceAsync(workerId, batchSize, leaseDuration, cancellationToken)` at
+the cadence owned by your host. It claims a bounded batch, publishes each claimed
+event, and only then acknowledges it using the claim's lease token. It returns
+one `RelayOutcome` per attempted delivery: `Acknowledged` means publish and
+fenced acknowledgment succeeded; `AcknowledgmentFenced` means publish succeeded
+but the lease expired, was replaced, or was already settled before acknowledgment;
+`PublishFailed` carries a non-relay-cancellation publisher exception and leaves
+the event unacknowledged. A failure on one stream does not prevent attempts for
+other streams already claimed in that batch. Cancellation before or during
+publish, or after publish but before acknowledgment, never acknowledges an
+unconfirmed event; cancellation propagates rather than returning a partial
+outcome list, although earlier items in the batch may have completed.
+
+This bounded primitive is **not** a background loop, daemon, heartbeat, broker
+provisioning, or an exactly-once guarantee. The relay opens no separate network
+or database transaction of its own: its existing `ClaimAsync` and
+`AcknowledgeAsync` calls each open their own connection as before. Host-side
+scheduling, transport implementation, and consumer transaction/receipt handling
+remain caller responsibilities.
