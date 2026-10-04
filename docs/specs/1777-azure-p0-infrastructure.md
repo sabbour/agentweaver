@@ -34,39 +34,30 @@ Every subsequent Azure command also includes the explicit subscription.
 
 The resource group must already exist after separately approved bootstrap.
 Its full resource ID and ownership tags must match the target.
-The resource inventory must contain only resources in that exact group with
-matching environment, manager, owner, and cost-center tags. The inventory
-reader projects raw JSON to identifiers, types, names, tag counts, and
-expected-value equality flags before returning it; it does not include tag
-values in the report.
+The target guard checks the exact account, tenant, resource group, approved
+resource IDs, types, names, and role scopes. Core managed resources must match
+the resource group's ownership tags. Existing Private DNS roots may be untagged
+or partially tagged; any ownership tags that are present must not conflict
+with the dedicated resource group. Missing DNS tags do not trigger tag repair
+or historical deployment-operation checks.
 Access denied, malformed JSON, unapproved null tags, and missing groups block execution.
 No failed lookup permits creation or fallback to the default subscription.
 
-For the observed P0 target only, these seven exact Private DNS roots may be
-reported without tags when all seven are empty and ownership is proven by the
-selected successful SHA-derived deployment receipt, exactly one successful
-`Create` deployment operation per root, and the seven exact registration-
-disabled VNet links to the owned P0 VNet. The report explicitly sets
-`tagsPersisted: false`. This does not repair tags or authorize another write.
-Partial or nonempty incorrect tags, unknown zones, external links, incomplete
-receipts, and mismatched source SHA/tree/input hash remain blocking.
+The seven exact Private DNS roots and their VNet links remain allow-listed.
+Observed links are checked for successful provisioning, registration disabled,
+and the exact dedicated VNet. The selected deployment is still checked against
+its exact source SHA/tree/input-hash receipt; older deployment records do not
+need retrofitted source outputs or successful-create-operation collections.
 The roots are `privatelink.vaultcore.azure.net`,
 `privatelink.blob.core.windows.net`, `privatelink.monitor.azure.com`,
 `privatelink.oms.opinsights.azure.com`, `privatelink.ods.opinsights.azure.com`,
 `privatelink.agentsvc.azure-automation.net`, and
 `privatelink.postgres.database.azure.com`.
 
-The target inventory also recognizes one exact inherited NRMS NSG and one
-exact owned Failure Anomalies Smart Detector. The NSG must match the observed
-eight inbound rule shapes, be attached reciprocally only to the AKS,
-PostgreSQL, and private-endpoints subnets, and have no NIC association. Each
-rule requires its exact compliant management-group policy state and one
-successful child `securityRules/write` Activity Log event. The detector must
-remain Enabled/Sev3, use the exact Failure Anomalies detector at PT1M on the
-P0 Application Insights scope, and have no action-group references or custom
-notification fields. These checks leave inherited policy, NSG rules, alert
-configuration, and external action groups unchanged; CorpNet service-tag
-membership is reported as a source label, not inferred as a trust claim.
+Known inherited NSG and Smart Detector resources may be present, but they are
+not shipping blockers requiring management-group policy-origin, Activity Log,
+or provider-generated metadata audits. This does not authorize changes to
+inherited policy, NSG rules, alert configuration, or external action groups.
 
 The P0 parameter example explicitly splits regions: `location` is
 `eastus2euap` for the VNet, AKS, PostgreSQL, Key Vault, Blob, and subnet-bound
@@ -123,11 +114,12 @@ Digest format checks alone cannot prove a running pod.
 
 ## Network definitions
 
-AKS disables local accounts and uses managed Entra authentication with Azure RBAC.
-The tenant comes from the exact reviewed parameters.
-Operator access requires separately approved cluster-user access and scoped Kubernetes permissions.
-The private API requires an approved network path.
-This template defines no operator grants and provides no local administrator fallback.
+AKS exposes a public API endpoint and uses managed Entra authentication with
+Azure RBAC; local accounts are disabled. A public FQDN on a private API does
+not meet this requirement. The tenant comes from the exact reviewed parameters.
+Operator access still requires separately approved scoped Kubernetes
+permissions; this template defines no operator grants or local administrator
+fallback.
 
 AKS enables ACNS security and leaves ACNS observability disabled. This
 security-only setting supports the #1784 FQDN-filtering work; it does not

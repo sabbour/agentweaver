@@ -87,50 +87,30 @@ Access denied, missing targets, malformed responses, and untagged managed roots
 outside the exact seven-zone evidence path block.
 Every Azure command explicitly binds the selected subscription.
 
-The inventory guard checks exact resource IDs, types, and names.
-Declared child resources and module deployments do not require ownership tags.
-It projects raw inventory JSON to resource IDs/types/names and tag counts plus
-expected-value equality flags before returning data to the caller; tag values
-are not included in verifier output.
+The target guard checks the selected account, tenant, resource-group ownership,
+and exact approved resource IDs, types, names, and role scopes. Core managed
+resources must match the resource group's ownership tags. Private DNS roots may
+be untagged or have partial tags; any ownership tags that are present must not
+conflict with the dedicated resource group. Missing DNS tags do not trigger
+tag repair or a historical deployment-operation audit.
 The reviewed JSON parameters bind the existing PostgreSQL Entra administrator
 object ID, name, and supported type (`User`, `Group`, or `ServicePrincipal`);
 they do not require a new group. The P0 example keeps `location` for VNet/AKS/
 PostgreSQL and subnet-bound resources separate from required
 `monitorLocation` for Log Analytics and Application Insights.
-Historical outer deployments require matching SHA-derived names and source outputs.
-Historical receipts also require a lowercase, 40-character `sourceTree`.
-Missing or invalid tree outputs block plan and redeploy, including prior receipts without that field.
-The tooling never deletes or repairs those receipts automatically.
-Generated NICs require reciprocal links to an approved, tagged Private Endpoint.
+The selected deployment's source SHA, Git tree, and infrastructure hash are
+checked against its exact successful receipt. Older deployment-history entries
+do not have to be repacked or contain retrofitted outputs.
+Generated NICs still require reciprocal links to an approved Private Endpoint.
 Both the endpoint and all NIC IP configurations must use the dedicated private-endpoints subnet.
-Other NICs, child names, scopes, and resource types block.
+Unexpected resource IDs, child names, scopes, and types still block. Known
+inherited NSG and Smart Detector resources do not trigger management-group
+policy-origin, Activity Log, or provider-generated metadata audits.
 
-The seven exact P0 Private DNS zone roots (`privatelink.vaultcore.azure.net`,
-`privatelink.blob.core.windows.net`, `privatelink.monitor.azure.com`,
-`privatelink.oms.opinsights.azure.com`, `privatelink.ods.opinsights.azure.com`,
-`privatelink.agentsvc.azure-automation.net`, and
-`privatelink.postgres.database.azure.com`) have one narrow tag-omission path:
-all seven must have zero tags, and the selected SHA-derived deployment must
-have matching source SHA/tree/input-hash outputs, exactly one successful
-`Create` operation for each root, and seven successful VNet links with
-registration disabled to the exact P0 VNet. The configuration report says
-`tagsPersisted: false`; it does not treat missing tags as a repair or write
-permission. Partial, conflicting, extra, or mismatched tags, unknown roots,
-external links, or a different deployment source still block.
-
-The target guard admits only the observed `NRMS-gxlttooqhupscaw-v1-p0-vnet`
-security group and `Failure Anomalies - aw-v1-p0-appi` Smart Detector. The
-security group must match all eight observed inbound rules, attach reciprocally
-to only the AKS, PostgreSQL, and private-endpoints subnets, report an empty NIC
-association array, and have one compliant exact management-group policy state plus
-one successful exact child `securityRules/write` Activity Log event per rule.
-The detector must remain Enabled/Sev3 with the exact Failure Anomalies
-detector, PT1M frequency, the P0 Application Insights scope, no action groups,
-and null custom notification fields. This guard reads policy states and exact
-Activity Log entries; it does not read inaccessible management-group
-assignments or change inherited policies, NSG rules, alerts, or external
-action groups. It records CorpNet service-tag names only; it does not assert
-their public membership or trust boundary.
+The seven P0 Private DNS roots and their VNet links remain exact allow-listed
+resource names. Existing links are checked for successful provisioning,
+registration disabled, and the dedicated VNet. Missing or provider-omitted
+root tags and old resource-operation metadata are not deployment blockers.
 
 The source must be a clean full HEAD commit equal to the locally fetched
 admitted `origin/v1` tip. Unreviewed descendants fail closed.
@@ -183,7 +163,8 @@ provision PostgreSQL principals, apply schema grants, alter the strict
 `foundationProbeIdentity` DTO, or prove a deployed workload.
 The workspace GUID is not its ARM resource ID.
 
-Full integration acceptance requires the explicit read-only collection option:
+The optional Foundation Probe evidence collector can be run with the explicit
+read-only collection option:
 
 ```powershell
 node scripts\azure\verify-acceptance.mjs --resource-group aw-v1-p0 --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id> --expected-sha <40-hex-sha> --deployment-name aw-v1-p0-<first-12-sha> --collect-runtime-evidence --kube-context <approved-context> --image-reference <registry>/<repository>:<tag> [--image-receipt artifacts\images\foundation-probe.json]
@@ -225,22 +206,22 @@ versions do not satisfy the gate. Failed terminal pods retain only allow-listed
 probe failure codes and types; raw logs and credential-shaped diagnostics are
 not copied into the report.
 
-Configuration evidence and runtime evidence appear as separate report checks.
+This optional collector reports configuration and probe evidence separately.
 The report passes only when every required check passes; otherwise the command
 exits 1. This source-only consumer was validated with fake transports and local
 fixtures. It does not perform live Azure, Kubernetes, or registry reads during
 source validation, and it does not deploy, publish, or close the full P0
-shipping checklist. The observed ACNS/Cilium settings are configuration
-evidence only; the consumer does not claim that a Cilium policy is effectively
-enforced.
+shipping checklist. It is supplemental, not the P0 shipping smoke-test gate.
+The required practical checks are documented in [Azure acceptance](../../docs/guide/azure-acceptance.md).
+The observed ACNS/Cilium settings are configuration evidence only; the consumer
+does not claim that a Cilium policy is effectively enforced.
 
 ## Authentication prerequisites
 
-AKS uses managed Entra authentication and Azure RBAC, with local accounts disabled.
-There is no local administrator credential route.
-Operator access requires separately approved cluster-user credential access and scoped Kubernetes permissions.
-The private API also requires an approved network path.
-These definitions grant no operator access.
+AKS exposes a public API endpoint and uses managed Entra authentication and
+Azure RBAC, with local accounts disabled. A public FQDN on a private API does
+not satisfy this configuration. Operator access still requires scoped
+Kubernetes permissions; the Bicep definitions do not grant operator access.
 
 The probe identity has Log Analytics Reader on the exact workspace.
 It has Monitoring Metrics Publisher on the exact Application Insights resource.

@@ -16,11 +16,15 @@ test('AKS network preflight reads the exact observed cluster and reports enabled
   assert.equal(check.status, 'passed');
   assert.deepEqual(check.evidence, {
     clusterId: observedCluster.id,
+    publicApi: true,
+    apiServerFqdn: 'api.example.azmk8s.io',
+    managedEntra: true,
+    azureRbac: true,
+    localAccountsDisabled: true,
     kubernetesVersion: '1.29.7',
     networkDataplane: 'cilium',
     advancedNetworkingEnabled: true,
     advancedNetworkingSecurityEnabled: true,
-    apiServerHosts: ['api.example.privatelink.azmk8s.io'],
     apiVersion: '2024-09-01',
   });
   assert.equal(calls.length, 1);
@@ -54,6 +58,13 @@ test('AKS network preflight fails closed for missing target, failed/malformed GE
     { status: 0, stdout: JSON.stringify(altered({ networkProfile: {
       advancedNetworking: { enabled: true },
     } })) },
+    { status: 0, stdout: JSON.stringify(altered({ properties: {
+      apiServerAccessProfile: { enablePrivateCluster: true },
+    } })) },
+    { status: 0, stdout: JSON.stringify(altered({ properties: { aadProfile: { managed: false, enableAzureRBAC: true } } })) },
+    { status: 0, stdout: JSON.stringify(altered({ properties: { aadProfile: { managed: true, enableAzureRBAC: false } } })) },
+    { status: 0, stdout: JSON.stringify(altered({ properties: { disableLocalAccounts: false } })) },
+    { status: 0, stdout: JSON.stringify(altered({ properties: { fqdn: null } })) },
   ];
   for (const result of rejected) {
     assert.equal(checkAksNetworkSecurity({ ...fixture, clusterId: observedCluster.id }, () => result).status, 'blocked');
@@ -341,8 +352,9 @@ test('AKS preflight does not query an ID when the deployment receipt is not succ
     execAz: fakeAzure({ ...postDeploymentAzure,
       create: { status: 1, stdout: '', stderr: 'DeploymentNotFound' } }, calls) });
   assert.equal(report.overall, 'blocked');
-  assert.equal(report.checks.find(check => check.name === 'target-and-source').status, 'blocked');
-  assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security'), undefined);
+  assert.equal(report.checks.find(check => check.name === 'target-inventory').status, 'passed');
+  assert.equal(report.checks.find(check => check.name === 'deployed-sha').status, 'blocked');
+  assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security').status, 'blocked');
   assert.ok(!calls.some(args => args[0] === 'rest'));
   assert.equal(report.checks.find(check => check.name === 'runtime-workload-evidence').status, 'blocked');
 });

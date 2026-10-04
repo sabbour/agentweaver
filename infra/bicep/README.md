@@ -4,7 +4,7 @@ This directory defines infrastructure. It is not a deployed environment.
 No Azure provisioning, secret reads, permission changes, or cost-bearing operation
 occurred for this change.
 
-`main.bicep` composes a dedicated VNet, AKS with OIDC/workload identity,
+`main.bicep` composes a dedicated VNet, AKS with a public API endpoint and OIDC/workload identity,
 Entra-only PostgreSQL, Key Vault, Blob, and Azure Monitor.
 Key Vault and Blob have Private Endpoints and private DNS.
 PostgreSQL has a delegated subnet and private DNS.
@@ -15,6 +15,11 @@ Log Analytics and Application Insights in `eastus2`; the AMPLS remains global,
 and the Monitor Private Endpoint stays in the VNet's `location`. PostgreSQL
 continues to use the delegated subnet in the primary `location`; no cross-region
 database subnet is introduced.
+
+AKS is not a private cluster: `apiServerAccessProfile.enablePrivateCluster` is
+fixed to `false`. Managed Entra authentication and Azure RBAC are enabled and
+local accounts remain disabled. This is distinct from enabling a public FQDN
+on a private API endpoint.
 
 The AKS control-plane identity receives Network Contributor on the dedicated AKS subnet.
 The role assignment uses its system-assigned principal ID and depends on cluster creation.

@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "Azure resource and evidence dependencies",
-  "alt": "Structural Azure topology and evidence map. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights. The external read-only gate depends on Job and pod observations, the native probe receipt, a source-bound registry manifest, and correlated Azure Monitor evidence. No live deployment or P0 completion is claimed.",
+  "alt": "Structural Azure topology and evidence map. AKS has a public API endpoint with managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights. No live deployment or P0 completion is claimed.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [],
@@ -10,7 +10,7 @@
     {
       "id": "aks",
       "label": "AKS",
-      "subLabel": "Private; Cilium; OIDC/workload identity; App Routing Preview; NGINX None",
+      "subLabel": "Public API; Cilium; OIDC/workload identity; App Routing Preview; NGINX None",
       "icon": "server",
       "library": "azure",
       "shape": "image;image=img/lib/azure2/containers/Kubernetes_Services.svg;imageAspect=1",
@@ -141,7 +141,7 @@
     "canvasWidth": 1360,
     "canvasHeight": 1450,
     "nodes": [
-      { "id": "aks", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "AKS", "subLabel": "Private; Cilium; OIDC/workload identity; App Routing Preview; NGINX None" } },
+      { "id": "aks", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "AKS", "subLabel": "Public API; Cilium; OIDC/workload identity; App Routing Preview; NGINX None" } },
       { "id": "vnet", "type": "card", "position": { "x": 80, "y": 80 }, "data": { "label": "Dedicated VNet", "subLabel": "Separate AKS-node, delegated PostgreSQL, and private-endpoint subnets" } },
       { "id": "default-domain", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "App Routing domain", "subLabel": "Empty zone IDs request Azure's defaultDomain; custom zones disable it" } },
       { "id": "routing-identity", "type": "card", "position": { "x": 860, "y": 310 }, "data": { "label": "App Routing identity", "subLabel": "AKS-generated resourceId, clientId, and objectId" } },

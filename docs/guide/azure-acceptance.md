@@ -1,8 +1,9 @@
 # Azure acceptance
 
-The v1 Bicep and Kubernetes files define a dedicated Azure environment. The files have not been applied to a subscription.
-
-The local checks compile source and test guardrails. They do not prove Azure access, role assignments, token exchange, private networking, or service deployment.
+The v1 Bicep and Kubernetes sources define the dedicated P0 environment. They
+do not prove deployment or runtime behavior. Deployment and practical smoke
+acceptance are tracked separately in [#1812](https://github.com/sabbour/agentweaver/issues/1812)
+and [#1814](https://github.com/sabbour/agentweaver/issues/1814).
 
 ## Offline checks
 
@@ -15,30 +16,48 @@ kubectl kustomize deploy\k8s\base
 kubectl kustomize deploy\k8s\acceptance\foundation-probe
 ```
 
-These commands do not require Azure credentials or a cluster connection.
+They validate source and local rendering only; they do not contact Azure or
+prove a running service.
 
-## Deployment boundary
+## Deployment
 
-Deployment requires separate approval for the dedicated target, subscription, source commit, and cost. Allow-list values and `--execute` are technical guards, not approval.
+Use the guarded exact-source command in the [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md).
+It binds the approved subscription, tenant, resource group, and source
+SHA/tree/input hash. A public API endpoint is required:
+`apiServerAccessProfile.enablePrivateCluster` must be `false`. A publicly
+resolvable FQDN on a private cluster does not satisfy this requirement.
 
-The source tree must match the admitted `origin/v1` commit. The reviewed parameters must bind the tenant, owner, cost center, and resource prefix.
+The AKS API uses managed Entra authentication and Azure RBAC, with local
+accounts disabled. PostgreSQL, Key Vault, Blob, VNet/private endpoints, and
+Monitor retain their approved target and region placement.
 
-`npm run azure:deploy` does not exist. The supported deployment command is `node scripts/azure/deploy.mjs`. Without `--execute`, it does not call Azure. With `--execute`, it runs a guarded live what-if before deployment.
+## Required P0 smoke checks
 
-Use the exact argument contract in the [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md). The checked-in parameter examples contain placeholders and are not deploy-ready.
+Use standard Azure CLI/SDK and `kubectl` observations for a short runtime
+check:
 
-## Foundation Probe
+1. Read the actual AKS properties and confirm public API, managed Entra, Azure
+   RBAC, and disabled local accounts.
+2. Confirm normal workload rollout, service health, and deployed image/version.
+3. Exercise one real authorized Identity secret-redemption request and one
+   denied request. Do not log credentials or returned secret values.
+4. Use one small generated fixture for exact-version Key Vault read, Blob
+   round trip, and PostgreSQL behavior; confirm cleanup removes only data
+   owned by that fixture.
+5. Confirm relevant telemetry where the service integration requires it.
 
-The acceptance-only Job exercises the projected workload identity, exact Key Vault version, owned Blob object, PostgreSQL transaction, and telemetry export. The Job's receipt records resource-operation results; it does not attest to the pod UID, pulled image, or process exit.
+Record only concise, sanitized results and identify the actual source/image
+versions. Preserve the external P0 data services and all resources outside the
+approved fixture. Do not treat unrun checks as passed.
 
-The separate read-only consumer is enabled explicitly with `--collect-runtime-evidence` on `scripts/azure/verify-acceptance.mjs`. It observes the completed Job and its owned pod, verifies the expected registry manifest against the Job image and pod image ID, checks the exact target and identity projection, and validates the native receipt. Only after completion does it query Azure Monitor for fresh, matching `AppDependencies` or `AppRequests` rows correlated to the source SHA, Git tree, nonce, trace, and span. Configuration observations remain separate from runtime proof, and missing or mismatched evidence leaves acceptance blocked.
+## Optional Foundation Probe evidence
 
-The runtime observations are independent: the consumer requires one bounded Job completion and one pod whose observed UID is owned by that Job UID, in the exact namespace, with the exact ServiceAccount and projected workload-identity token, and a successful container exit. It compares the Job spec container `image` and the pod's `status.containerStatuses[].imageID` separately with the registry manifest digest verified from the source-bound image receipt. The probe receipt cannot attest to the pod UID, image pull, or process exit.
+The `foundation-probe` Job and `verify-acceptance.mjs --collect-runtime-evidence`
+remain available as supplemental evidence collection. The verifier observes
+the Job, pod, image, workload identity, native receipt, and correlated
+Azure Monitor records; it does not run the Identity broker grant-redemption
+smoke test. This extended collector is not an additional P0 shipping gate.
+Legacy tag-count, inherited NRMS policy-origin, provider-generated resource
+inventory, and historical receipt audits are not required acceptance steps.
 
-The strict native #1784 receipt must match the source SHA/tree and deployment target and identity, preserve the exact issuer, subject, and audience, and prove redemption of the exact Key Vault version, provider pins, committed PostgreSQL effect/inbox/outbox results, and the nonce-owned Blob object with its ETag, content hash, and confirmed conditional cleanup. Only after independent Job completion does the consumer require a fresh query of stored `AppDependencies` or `AppRequests` correlated by source SHA, Git tree, 32-character nonce, trace, and span. Exporter flush and `AppTraces` are not proof. Any missing or mismatched evidence remains blocked; only complete evidence sets `deployedAcceptance`.
-
-The probe uses its own workload identity and egress overlay. It does not test Identity broker OAuth or broker grant redemption.
-
-The consumer tests use fake transports and generated local fixtures. They do not read Azure, Kubernetes, or a registry, and they do not deploy or establish live acceptance.
-
-The operator CLI blocks acceptance when deployment evidence is missing. Read [Testing](./testing) for the current evidence boundary.
+See [Testing](./testing) for what source tests can and cannot prove.

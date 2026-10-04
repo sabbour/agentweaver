@@ -62,7 +62,10 @@ export const observedCluster = {
   id: deploymentOutputs.foundationResources.value.clusterId,
   properties: {
     kubernetesVersion: '1.29.7',
-    fqdn: 'api.example.privatelink.azmk8s.io',
+    fqdn: 'api.example.azmk8s.io',
+    disableLocalAccounts: true,
+    aadProfile: { managed: true, enableAzureRBAC: true },
+    apiServerAccessProfile: { enablePrivateCluster: false },
     networkProfile: {
       networkPlugin: 'azure',
       networkPolicy: 'cilium',

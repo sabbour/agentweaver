@@ -53,6 +53,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   const cluster = aks.resources.find(resource => resource.type === 'Microsoft.ContainerService/managedClusters');
   assert.equal(cluster.apiVersion, '2026-07-02-preview');
   assert.equal(cluster.properties.disableLocalAccounts, true);
+  assert.equal(cluster.properties.apiServerAccessProfile.enablePrivateCluster, false);
   assert.equal(cluster.properties.ingressProfile.webAppRouting.enabled, true);
   assert.equal(cluster.properties.ingressProfile.webAppRouting.nginx.defaultIngressControllerType, 'None');
   assert.match(cluster.properties.ingressProfile.webAppRouting.dnsZoneResourceIds, /appRoutingDnsZoneResourceIds/);

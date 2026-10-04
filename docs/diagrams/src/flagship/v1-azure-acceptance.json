@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Foundation Probe acceptance evidence",
-  "alt": "After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked.",
+  "alt": "The optional read-only Foundation Probe verifier observes a completed Job through the public AKS API, checks the source-bound registry manifest against the Job image, pod image, and pulled imageID, validates the native receipt, and queries Azure Monitor for correlated evidence. This supplemental verifier is not the P0 shipping smoke-test gate.",
   "autonumber": true,
   "participants": [
     {
@@ -19,7 +19,7 @@
     {
       "id": "aks",
       "label": "AKS Job / Pod",
-      "subLabel": "Completed Job and owned pod",
+      "subLabel": "Public API; completed Job and owned pod",
       "icon": "server",
       "fluentIcon": "api",
       "badge": {
