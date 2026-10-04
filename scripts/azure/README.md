@@ -21,6 +21,20 @@ No Azure account, credentials, or cluster connection is necessary.
 Tests use fake transports and generated local fixtures.
 The only real Azure CLI test reads local CLI version information.
 
+## ACNS security source setting
+
+AKS opts into Advanced Container Networking Services (ACNS) with security
+enabled and observability disabled, the security-only configuration needed for
+the #1784 FQDN-filtering work. Runtime Kubernetes must be version 1.29 or later.
+The template leaves `kubernetesVersion` empty so AKS selects its currently
+supported default rather than pinning an older version.
+
+ACNS has per-node/hour charges with a cluster-wide effect; security-only is not
+documented as free. This source setting does not apply to a cluster or prove
+FQDN enforcement. Applying it requires separate explicit approval of the exact
+target and cost, a current regional quote, and a guarded, reviewed update. No
+Azure operation is part of source validation.
+
 ## Future approved target
 
 CAUTION: Do not run a plan, deployment, bootstrap, or write diagnostic without

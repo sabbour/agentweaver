@@ -14,13 +14,19 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     resource.name === "[format('{0}-aks', parameters('namePrefix'))]");
   const aks = aksDeployment.properties.template;
   const cluster = aks.resources.find(resource => resource.type === 'Microsoft.ContainerService/managedClusters');
+  assert.equal(cluster.apiVersion, '2024-09-01');
   assert.equal(cluster.properties.disableLocalAccounts, true);
+  assert.deepEqual(cluster.properties.networkProfile.advancedNetworking, {
+    enabled: true,
+    security: { enabled: true },
+    observability: { enabled: false },
+  });
   assert.deepEqual(cluster.properties.aadProfile, {
     managed: true, enableAzureRBAC: true, tenantID: "[parameters('tenantId')]",
   });
   assert.equal(aksDeployment.properties.parameters.tenantId.value, "[parameters('tenantId')]");
   const assignment = aks.resources.find(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
-  const principal = "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), '2024-02-01', 'full').identity.principalId]";
+  const principal = "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), '2024-09-01', 'full').identity.principalId]";
   assert.equal(aks.outputs.controlPlanePrincipalId.value, principal);
   assert.equal(assignment.properties.principalId, principal);
   assert.equal(assignment.properties.principalType, 'ServicePrincipal');
