@@ -1,9 +1,74 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, existsSync } from 'node:fs';
-import { checkBlobRoundtrip, checkDeployedSha, checkKeyVaultSecretVersion, checkMonitorTrace,
+import { checkAksNetworkSecurity, checkBlobRoundtrip, checkDeployedSha, checkKeyVaultSecretVersion, checkMonitorTrace,
   checkServiceDigests, checkWorkloadIdentity, runAcceptance } from '../verify-acceptance.mjs';
-import { fixture, source, fakeAzure, ids, deploymentOutputs } from './fixtures/target.mjs';
+import { fixture, source, fakeAzure, ids, deploymentOutputs, observedCluster } from './fixtures/target.mjs';
+
+test('AKS network preflight reads the exact observed cluster and reports enabled security configuration', () => {
+  const calls = [];
+  const check = checkAksNetworkSecurity({ ...fixture, clusterId: observedCluster.id },
+    fakeAzure({}, calls));
+  assert.equal(check.status, 'passed');
+  assert.deepEqual(check.evidence, {
+    clusterId: observedCluster.id,
+    kubernetesVersion: '1.29.7',
+    networkDataplane: 'cilium',
+    advancedNetworkingEnabled: true,
+    advancedNetworkingSecurityEnabled: true,
+    apiVersion: '2024-09-01',
+  });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 4), ['rest', '--method', 'get', '--url']);
+  assert.equal(calls[0][4], `https://management.azure.com${observedCluster.id}?api-version=2024-09-01`);
+});
+
+test('AKS network preflight fails closed for missing target, failed/malformed GET, or unmet observed requirements', () => {
+  const altered = ({ properties = {}, networkProfile = {}, ...resource } = {}) => ({
+    ...observedCluster,
+    ...resource,
+    properties: { ...observedCluster.properties, ...properties,
+      networkProfile: { ...observedCluster.properties.networkProfile, ...networkProfile } },
+  });
+  const rejected = [
+    { status: 1, stdout: JSON.stringify(observedCluster) },
+    { status: 0, stdout: 'malformed' },
+    { status: 0, stdout: 'null' },
+    { status: 0, stdout: JSON.stringify({ ...observedCluster, id: `${observedCluster.id}-other` }) },
+    { status: 0, stdout: JSON.stringify({ ...observedCluster,
+      id: observedCluster.id.replace('aw-v1-p0-aks', 'AW-v1-p0-aks') }) },
+    { status: 0, stdout: JSON.stringify(altered({ properties: { kubernetesVersion: '1.28.9' } })) },
+    ...['not-a-version', '1.29.0-preview'].map(kubernetesVersion =>
+      ({ status: 0, stdout: JSON.stringify(altered({ properties: { kubernetesVersion } })) })),
+    { status: 0, stdout: JSON.stringify(altered({ networkProfile: { networkDataplane: 'azure' } })) },
+    { status: 0, stdout: JSON.stringify(altered({ networkProfile: { advancedNetworking: undefined } })) },
+    { status: 0, stdout: JSON.stringify(altered({ networkProfile: {
+      advancedNetworking: { enabled: false, security: { enabled: true } },
+    } })) },
+    { status: 0, stdout: JSON.stringify(altered({ networkProfile: {
+      advancedNetworking: { enabled: true, security: { enabled: false } },
+    } })) },
+    { status: 0, stdout: JSON.stringify(altered({ networkProfile: {
+      advancedNetworking: { enabled: true },
+    } })) },
+  ];
+  for (const result of rejected) {
+    assert.equal(checkAksNetworkSecurity({ ...fixture, clusterId: observedCluster.id }, () => result).status, 'blocked');
+  }
+
+  let queried = false;
+  const missingTarget = checkAksNetworkSecurity({ ...fixture }, () => { queried = true; });
+  assert.equal(missingTarget.status, 'blocked');
+  assert.equal(queried, false);
+  assert.equal(checkAksNetworkSecurity({ ...fixture, clusterId: `${observedCluster.id}-other` },
+    () => { queried = true; }).status, 'blocked');
+  assert.equal(checkAksNetworkSecurity({ ...fixture,
+    clusterId: observedCluster.id.replace('aw-v1-p0-aks', 'AW-v1-p0-aks') },
+  () => { queried = true; }).status, 'blocked');
+  assert.equal(queried, false);
+  assert.equal(checkAksNetworkSecurity({ ...fixture, clusterId: observedCluster.id },
+    () => { throw new Error('AuthorizationFailed'); }).status, 'blocked');
+});
 
 test('deployment reader requires exact successful Bicep output receipt, not fictitious deployment tags', () => {
   const config = { ...fixture, sourceTree: source.sourceTree, sourceHash: source.sourceHash };
@@ -182,6 +247,7 @@ test('FULL REPORT regression: original false full success remains BLOCKED, even 
   assert.equal(report.checks.find(check => check.name === 'blob-roundtrip').evidence.cleanupFailed, true);
   assert.match(report.checks.find(check => check.name === 'blob-roundtrip').evidence.cleanupFailure, /Conditional cleanup failed/);
   const identity = report.checks.find(check => check.name === 'workload-identity-oidc');
+  assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security').status, 'passed');
   assert.equal(identity.evidence.exact, true);
   assert.equal(identity.evidence.tokenExchangeVerified, false);
   assert.equal(identity.status, 'blocked');
@@ -240,4 +306,14 @@ test('acceptance account/source failure prevents probes and returns a structured
   assert.equal(report.overall, 'blocked');
   assert.ok(!calls.some(args => args[0] === 'deployment' || args[0] === 'storage'));
   assert.equal(report.checks[0].name, 'target-and-source');
+});
+
+test('AKS preflight does not query an ID when the deployment receipt is not successful', () => {
+  const calls = [];
+  const report = runAcceptance(fixture, { sourceResolver: () => source,
+    execAz: fakeAzure({ create: { status: 1, stdout: '', stderr: 'DeploymentNotFound' } }, calls) });
+  assert.equal(report.overall, 'blocked');
+  assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security').status, 'blocked');
+  assert.ok(!calls.some(args => args[0] === 'rest'));
+  assert.equal(report.checks.find(check => check.name === 'runtime-workload-evidence').status, 'blocked');
 });

@@ -37,10 +37,23 @@ export const deploymentOutputs = {
     appInsightsResourceId: `${fixture.groupId}/providers/Microsoft.Insights/components/aw-v1-p0-appi`,
   } },
 };
+export const observedCluster = {
+  id: deploymentOutputs.foundationResources.value.clusterId,
+  properties: {
+    kubernetesVersion: '1.29.7',
+    networkProfile: {
+      networkPlugin: 'azure',
+      networkPolicy: 'cilium',
+      networkDataplane: 'cilium',
+      advancedNetworking: { enabled: true, security: { enabled: true } },
+    },
+  },
+};
 const ok = value => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
 export function fakeAzure(overrides = {}, calls = []) {
   return args => {
     calls.push(args);
+    if (args[0] === 'rest') return overrides.clusterResult ?? ok(observedCluster);
     if (args[0] === 'account') return overrides.accountResult ?? ok(overrides.account ??
       { id: ids.subscriptionId, tenantId: ids.tenantId, state: 'Enabled' });
     if (args[0] === 'group') return overrides.groupResult ?? ok({ id: fixture.groupId, name: 'aw-v1-p0',
