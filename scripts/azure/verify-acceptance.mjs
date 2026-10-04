@@ -4,13 +4,16 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { runAz } from './lib/exec.mjs';
+import { run, runAz } from './lib/exec.mjs';
 import { guardAzureTarget, readFoundationOutputs } from './lib/guardrails.mjs';
 import { resolveSource, isFullSha } from './lib/git.mjs';
+import { collectFoundationProbeEvidence } from './lib/foundation-probe-runtime.mjs';
 import { cliConfig, cliOptions } from './deploy.mjs';
 
 const blocked = (name, reason, evidence) => ({ name, scope: 'configuration', status: 'blocked', reason, evidence });
 const configured = (name, evidence) => ({ name, scope: 'configuration', status: 'passed', evidence });
+const integrationBlocked = (name, reason, evidence) => ({ name, scope: 'integration', status: 'blocked', reason, evidence });
+const integrationPassed = (name, evidence) => ({ name, scope: 'integration', status: 'passed', evidence });
 
 export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscriptionId }, execAz) {
   const name = 'aks-observed-network-security';
@@ -64,6 +67,9 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
     networkDataplane: networkProfile.networkDataplane,
     advancedNetworkingEnabled: true,
     advancedNetworkingSecurityEnabled: true,
+    apiServerHosts: [cluster.properties?.privateFqdn, cluster.properties?.fqdn]
+      .filter(value => typeof value === 'string')
+      .map(value => value.toLowerCase().replace(/\.$/, '')),
     apiVersion,
   });
 }
@@ -122,10 +128,12 @@ export function checkWorkloadIdentity({ clusterName, resourceGroup, identityChec
         credential.audiences[0] !== 'api://AzureADTokenExchange') {
       return blocked(name, 'Exact subject/issuer/audience configuration differs.');
     }
-    identities.push({ identityName, subject: credential.subject });
+    identities.push({ identityName, issuer: credential.issuer, subject: credential.subject,
+      audience: credential.audiences[0] });
   }
-  return blocked(name, 'Issuer/federation configuration is not a verified pod token exchange.',
-    { issuerUrl, identities, exact: identities.length > 0, tokenExchangeVerified: false });
+  if (identities.length === 0) return blocked(name, 'Exact foundation-probe federation configuration is missing.',
+    { issuerUrl, identities, exact: false, tokenExchangeVerified: false });
+  return configured(name, { issuerUrl, identities, exact: true, tokenExchangeVerified: false });
 }
 
 export function checkKeyVaultSecretVersion({ secretVersion }) {
@@ -198,17 +206,22 @@ export function checkBlobRoundtrip({ accountName, container, executeProbes = fal
     { blobName, generation, cleanupFailed: false, operatorOnly: true });
 }
 
-export function checkMonitorTrace({ workspaceId, query, runId, expectedSha, sourceTree, traceId, spanId, startedAt },
+export function checkMonitorTrace({
+  workspaceId, query, runId, expectedSha, sourceTree, traceId, spanId, startedAt, completedAt,
+},
   execAz, { now = Date.now } = {}) {
   const name = 'monitor-trace';
   const start = Date.parse(startedAt);
+  const complete = Date.parse(completedAt);
   const current = now();
   if (query || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(workspaceId ?? '') ||
       !/^[0-9a-f]{32}$/.test(runId ?? '') || !isFullSha(expectedSha) || !isFullSha(sourceTree) ||
       !/^[0-9a-f]{32}$/.test(traceId ?? '') || /^0+$/.test(traceId) ||
       !/^[0-9a-f]{16}$/.test(spanId ?? '') || /^0+$/.test(spanId) ||
-      !Number.isFinite(start) || start > current || current - start > 15 * 60 * 1000) {
-    return blocked(name, 'Exact workspace GUID, fresh start time, SHA/tree, 32-hex nonce, trace and span are required. Custom queries are not evidence.');
+      !Number.isFinite(start) || !Number.isFinite(complete) || start > complete || complete >= current ||
+      current - start > 15 * 60 * 1000) {
+    return integrationBlocked(name,
+      'Exact workspace GUID, completed Job, fresh start time, SHA/tree, 32-hex nonce, trace and span are required. Custom queries are not evidence.');
   }
   const effectiveQuery = `union AppDependencies, AppRequests | where TimeGenerated >= datetime(${new Date(start).toISOString()}) ` +
     `and TimeGenerated <= datetime(${new Date(current).toISOString()}) | where Name == "foundation-probe" ` +
@@ -227,75 +240,198 @@ export function checkMonitorTrace({ workspaceId, query, runId, expectedSha, sour
         properties?.['probe.source_sha'] === expectedSha && properties?.['probe.source_tree'] === sourceTree &&
         properties?.['probe.nonce'] === runId && timestamp >= start && timestamp <= current;
     });
-    if (!matched) return blocked(name, 'No fresh exact-SHA/nonce telemetry from the Logs data-plane API.');
-    return configured(name, { sourceSha: expectedSha, sourceTree, nonce: runId, traceId, spanId, startedAt, query: effectiveQuery,
-      note: 'Correlated row only; pod identity and exporter receipt remain #1784 evidence.' });
+    if (!matched) return integrationBlocked(name, 'No fresh exact-SHA/nonce telemetry from the Logs data-plane API.');
+    return integrationPassed(name, {
+      sourceSha: expectedSha,
+      sourceTree,
+      nonce: runId,
+      traceId,
+      spanId,
+      startedAt,
+      completedAt,
+      queriedAt: new Date(current).toISOString(),
+      query: effectiveQuery,
+    });
   } catch {
-    return blocked(name, 'Monitor result is malformed or has no correlated evidence.');
+    return integrationBlocked(name, 'Monitor result is malformed or has no correlated evidence.');
   }
 }
 
-export function runAcceptance(config, { execAz = runAz, sourceResolver = resolveSource, uuid = randomUUID } = {}) {
+export function runAcceptance(config, {
+  execAz = runAz,
+  execKubectl = (args, options) => run('kubectl', args, options),
+  sourceResolver = resolveSource,
+  verifyImage,
+  now = Date.now,
+  uuid = randomUUID,
+} = {}) {
   const checks = [];
   let candidate;
+  let source;
+  let boundAz;
+  let deploymentEvidence;
+  let aksEvidence;
+  let identityEvidence;
   try {
-    const source = sourceResolver(config);
+    source = sourceResolver(config);
     candidate = { sourceSha: source.sha, sourceTree: source.sourceTree, sourceHash: source.sourceHash, scope: source.scope };
     if (config.expectedSha !== source.sha) throw new Error('Expected deployment SHA differs from reviewed HEAD.');
-    const { execAz: boundAz, group } = guardAzureTarget({ ...config, ...source }, execAz);
+    const target = guardAzureTarget({ ...config, ...source }, execAz);
+    boundAz = target.execAz;
+    const { group } = target;
     if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
       throw new Error('Source ownership differs from the actual target.');
     }
     const check = (name, operation) => {
-      try { checks.push(operation()); } catch (error) { checks.push(blocked(name, error.message)); }
+      try {
+        const result = operation();
+        checks.push(result);
+        return result;
+      } catch (error) {
+        const result = blocked(name, error.message);
+        checks.push(result);
+        return result;
+      }
     };
-    check('deployed-sha', () => checkDeployedSha({ ...config, sourceTree: source.sourceTree,
+    const deploymentCheck = check('deployed-sha', () => checkDeployedSha({ ...config, sourceTree: source.sourceTree,
       sourceHash: source.sourceHash, appRoutingDnsZoneResourceIds: source.appRoutingDnsZoneResourceIds }, boundAz));
-    const receipt = checks.find(item => item.name === 'deployed-sha' && item.status === 'passed')?.evidence;
+    deploymentEvidence = deploymentCheck.status === 'passed' ? deploymentCheck.evidence : undefined;
     const clusterName = `${config.resourceGroup}-aks`;
     const accountName = `${config.resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
-    check('aks-observed-network-security', () => receipt?.resources.clusterId ?
-      checkAksNetworkSecurity({ ...config, clusterId: receipt.resources.clusterId }, boundAz) :
+    const networkCheck = check('aks-observed-network-security', () => deploymentEvidence?.resources.clusterId ?
+      checkAksNetworkSecurity({ ...config, clusterId: deploymentEvidence.resources.clusterId }, boundAz) :
       blocked('aks-observed-network-security',
         'The successful source-bound deployment receipt must name the exact AKS resource before preflight.'));
-    check('workload-identity-oidc', () => checkWorkloadIdentity({ ...config, clusterName, identityChecks: [{
+    aksEvidence = networkCheck.status === 'passed' ? networkCheck.evidence : undefined;
+    const federationCheck = check('workload-identity-oidc', () => checkWorkloadIdentity({ ...config, clusterName, identityChecks: [{
       identityName: `${config.resourceGroup}-id-foundation-probe`,
       federatedCredentialName: 'foundation-probe-workload-identity',
       expectedSubject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
     }] }, boundAz));
-    check('key-vault-secret-version', () => checkKeyVaultSecretVersion(config));
-    check('blob-roundtrip', () => receipt?.resources.storageAccountId?.toLowerCase() ===
-      `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.Storage/storageAccounts/${accountName}`.toLowerCase() ?
-      checkBlobRoundtrip({ ...config, accountName }, boundAz, { uuid }) :
-      blocked('blob-roundtrip', 'The successful source-bound receipt must name the exact dedicated storage account before a diagnostic.'));
-    check('monitor-trace', () => {
-      const workspaceId = receipt?.resources.monitorWorkspaceId;
-      if (!/^[0-9a-f-]{36}$/i.test(workspaceId ?? '') || (config.workspaceId && config.workspaceId !== workspaceId)) {
-        return blocked('monitor-trace', 'The exact workspace GUID must come from the successful source-bound deployment receipt.');
-      }
-      return checkMonitorTrace({ ...config, sourceTree: source.sourceTree, workspaceId }, boundAz);
-    });
-    checks.push(checkServiceDigests(config));
+    identityEvidence = federationCheck.status === 'passed' ? federationCheck.evidence : undefined;
+    if (config.collectRuntimeEvidence !== true) {
+      check('key-vault-secret-version', () => checkKeyVaultSecretVersion(config));
+      checks.push(checkServiceDigests(config));
+    }
+    if (config.executeProbes === true) {
+      check('blob-roundtrip', () => deploymentEvidence?.resources.storageAccountId?.toLowerCase() ===
+        `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.Storage/storageAccounts/${accountName}`.toLowerCase() ?
+        checkBlobRoundtrip({ ...config, accountName }, boundAz, { uuid }) :
+        blocked('blob-roundtrip', 'The successful source-bound receipt must name the exact dedicated storage account before a diagnostic.'));
+    } else {
+      checks.push({ name: 'blob-roundtrip', scope: 'diagnostic', status: 'not-run',
+        reason: 'Operator Blob diagnostics require separate authorization and do not contribute to probe acceptance.' });
+    }
   } catch (error) {
     checks.push(blocked('target-and-source', error.message));
   }
-  checks.push({ name: 'runtime-workload-evidence', scope: 'integration', status: 'blocked',
-    reason: '#1784 admitted probe and authorized real deployment required: pod/image, token exchange, exact KV version, owned PG effects, Blob cleanup and fresh Monitor SHA+nonce. Caller JSON cannot close this gate.' });
-  return { scope: 'p0-integration', overall: 'blocked', candidate, checks, deployedAcceptance: false };
+
+  if (config.collectRuntimeEvidence === true && source && deploymentEvidence && aksEvidence && identityEvidence && boundAz) {
+    const deployment = {
+      subscriptionId: config.subscriptionId,
+      tenantId: config.tenantId,
+      resourceGroup: config.resourceGroup,
+      resourceGroupId: `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}`,
+      deploymentName: config.deploymentName,
+      deploymentId: deploymentEvidence.deploymentId,
+      aksOidcIssuerUrl: identityEvidence.issuerUrl,
+      foundationProbeIdentity: deploymentEvidence.foundationProbeIdentity,
+      resources: deploymentEvidence.resources,
+    };
+    const runtime = collectFoundationProbeEvidence({
+      source,
+      deployment,
+      observedCluster: aksEvidence,
+      kubeContext: config.kubeContext,
+      imageReference: config.imageReference,
+      imageReceiptPath: config.imageReceiptPath ?? resolve(process.cwd(), 'artifacts', 'images', 'foundation-probe.json'),
+      repoRoot: config.repoRoot ?? process.cwd(),
+    }, { execKubectl, verifyImage, now });
+    checks.push(...runtime.checks);
+    if (runtime.probeReceipt) {
+      const workspaceId = deploymentEvidence.resources.monitorWorkspaceId;
+      if (!/^[0-9a-f-]{36}$/i.test(workspaceId ?? '') ||
+          (config.workspaceId && config.workspaceId !== workspaceId)) {
+        checks.push(integrationBlocked('monitor-trace',
+          'The exact workspace GUID must come from the successful source-bound deployment receipt.'));
+      } else {
+        checks.push(checkMonitorTrace({
+          workspaceId,
+          query: config.query,
+          runId: runtime.probeReceipt.nonce,
+          expectedSha: source.sha,
+          sourceTree: source.sourceTree,
+          traceId: runtime.probeReceipt.telemetry.traceId,
+          spanId: runtime.probeReceipt.telemetry.spanId,
+          startedAt: runtime.probeReceipt.telemetry.startedAt,
+          completedAt: runtime.completedAt,
+        }, boundAz, { now }));
+      }
+    } else {
+      checks.push(integrationBlocked('monitor-trace',
+        'No validated completed probe receipt is available for a post-completion Monitor query.'));
+    }
+  } else if (config.collectRuntimeEvidence === true) {
+    for (const name of ['kubernetes-target', 'foundation-probe-target', 'foundation-probe-job-pod',
+      'foundation-probe-workload-identity', 'foundation-probe-registry-image', 'foundation-probe-receipt',
+      'foundation-probe-workload-identity-exchange', 'monitor-trace']) {
+      const reason = 'Runtime collection is blocked until exact source, deployment, observed AKS, and federation configuration pass.';
+      checks.push(['kubernetes-target', 'foundation-probe-target', 'foundation-probe-workload-identity'].includes(name)
+        ? blocked(name, reason)
+        : integrationBlocked(name, reason));
+    }
+  } else {
+    checks.push(integrationBlocked('runtime-workload-evidence',
+      'Full P0 acceptance requires explicit --collect-runtime-evidence to independently observe the completed Job, pod, projected identity, registry manifest, probe receipt, and post-completion Monitor row.'));
+    checks.push(integrationBlocked('monitor-trace',
+      'A Monitor query needs trace IDs from a validated completed probe receipt; caller-supplied trace fields are not evidence.'));
+  }
+
+  if (config.collectRuntimeEvidence === true) {
+    const requiredRuntimeChecks = [
+      'foundation-probe-job-pod', 'foundation-probe-registry-image',
+      'foundation-probe-receipt', 'foundation-probe-workload-identity-exchange', 'monitor-trace',
+    ];
+    const runtimeChecks = requiredRuntimeChecks.map(name => checks.find(check => check.name === name));
+    const runtimePassed = runtimeChecks.every(check => check?.status === 'passed');
+    checks.push(runtimePassed
+      ? integrationPassed('runtime-workload-evidence', { independentRuntimeChecks: requiredRuntimeChecks })
+      : integrationBlocked('runtime-workload-evidence', 'One or more required independent runtime observations are blocked.',
+        { blockedChecks: runtimeChecks.filter(check => check?.status !== 'passed').map(check => check?.name) }));
+  }
+
+  const requiredChecks = [
+    'deployed-sha', 'aks-observed-network-security', 'workload-identity-oidc',
+    'kubernetes-target', 'foundation-probe-target', 'foundation-probe-workload-identity',
+  ];
+  const allRequired = config.collectRuntimeEvidence === true &&
+    requiredChecks.every(name => checks.find(check => check.name === name)?.status === 'passed') &&
+    checks.find(check => check.name === 'runtime-workload-evidence')?.status === 'passed';
+  return {
+    scope: 'p0-integration',
+    overall: allRequired ? 'passed' : 'blocked',
+    candidate,
+    checks,
+    deployedAcceptance: allRequired,
+  };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    const { values } = parseArgs({ options: { ...cliOptions, 'expected-sha': { type: 'string' },
-      'deployment-name': { type: 'string' }, 'cluster-name': { type: 'string' }, 'secret-version': { type: 'string' },
-      'workspace-id': { type: 'string' }, 'run-id': { type: 'string' }, 'trace-id': { type: 'string' },
-      'span-id': { type: 'string' }, 'started-at': { type: 'string' } } });
+    const options = { ...cliOptions };
+    delete options.execute;
+    const { values } = parseArgs({ options: { ...options, 'expected-sha': { type: 'string' },
+      'deployment-name': { type: 'string' },
+      'workspace-id': { type: 'string' }, 'collect-runtime-evidence': { type: 'boolean', default: false },
+      'kube-context': { type: 'string' }, 'image-reference': { type: 'string' },
+      'image-receipt': { type: 'string' } } });
     const report = runAcceptance({ ...cliConfig(values), expectedSha: values['expected-sha'],
-      deploymentName: values['deployment-name'], clusterName: values['cluster-name'],
-      secretVersion: values['secret-version'], workspaceId: values['workspace-id'], runId: values['run-id'],
-      traceId: values['trace-id'], spanId: values['span-id'], startedAt: values['started-at'] });
+      deploymentName: values['deployment-name'],
+      workspaceId: values['workspace-id'],
+      collectRuntimeEvidence: values['collect-runtime-evidence'], kubeContext: values['kube-context'],
+      imageReference: values['image-reference'], imageReceiptPath: values['image-receipt'] });
     console.log(JSON.stringify(report, null, 2));
-    process.exitCode = 1;
+    process.exitCode = report.deployedAcceptance ? 0 : 1;
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

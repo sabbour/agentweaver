@@ -21,6 +21,20 @@ public sealed class ProbeContractTests
     }
 
     [Fact]
+    public void ProbeBlobReceiptUsesTheNativeCamelCaseEtagField()
+    {
+        var evidence = new BlobEvidence(
+            "container", "https://example.invalid/container", "foundation-probe/nonce/roundtrip.json",
+            "nonce", "\"owned-etag\"", new string('a', 64), CleanupConfirmed: true);
+        var json = JsonSerializer.Serialize(evidence, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        });
+
+        Assert.Contains("\"eTag\"", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RejectsMissingTargetPropertiesUnknownFieldsAndMalformedSource()
     {
         var valid = JsonSerializer.Serialize(ProbeFixtures.Target(), new JsonSerializerOptions

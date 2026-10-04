@@ -220,9 +220,11 @@ No duplicate runtime composition enters this infrastructure slice.
 ## Acceptance evidence
 
 `scripts/azure/verify-acceptance.mjs` returns a structured `p0-integration`
-report. Its overall status remains **blocked** until admitted #1784 runtime
-evidence and an authorized deployment exist.
-Configuration checks have their own scope. They cannot close integration acceptance.
+report. Configuration and runtime proof have separate scopes. The report passes
+only when the exact source-bound deployment and observed AKS configuration pass
+and the external consumer validates every required runtime observation. This
+source change does not run the consumer against a live target or close the full
+P0 shipping checklist.
 
 Required runtime evidence includes:
 
@@ -254,12 +256,27 @@ The final runtime receipt uses camelCase and has no `kind` or `schemaVersion`.
 Only the image receipt uses `kind: "foundation-probe-image"` and `schemaVersion: 1`.
 A local image config digest is not a registry manifest digest.
 Empty repository digests prove no registry publication.
-Live acceptance requires registry provenance and exact-cluster observations after the Job exits.
-The consumer must match Job/pod UIDs, immutable manifest digest, completion, exit code, nonce, source, and workload identity.
+The explicit `--collect-runtime-evidence` route verifies the registry image
+against the CI local-image receipt, then requires the Job and pod to report the
+same immutable manifest digest. It independently checks Job/pod UIDs, the
+bounded one-shot Job, completion, exit code, namespace, owner, and ServiceAccount.
+The selected Kubernetes API endpoint must match an FQDN from the observed AKS
+resource. The strict target ConfigMap must be immutable and match the deployment
+source, Git tree, infrastructure hash, identity, and exact runtime configuration.
 The Job requires `backoffLimit: 0` and a deadline of 360 to 420 seconds.
-The in-process receipt cannot prove external cluster identity or post-exit completion.
-Owned PostgreSQL effects, conditional Blob cleanup, and correlated workload telemetry also remain mandatory.
-The current CLI does not implement that final consumer.
+The projected token audience, issuer, subject, and client identity must agree
+with the observed ServiceAccount and federation configuration. Successful
+exact-version Key Vault redemption is required as runtime proof of token
+exchange. The native receipt must also report the provider pins, owned
+PostgreSQL effect/inbox/outbox result, and owned Blob ETag cleanup. The in-pod
+receipt cannot prove pod identity, pulled image, or process exit.
+
+After the completed Job is observed, the consumer queries the exact Monitor
+workspace for fresh `AppDependencies` and `AppRequests` evidence correlated by
+trace, span, SHA, tree, and nonce. Exporter flush and Cilium resource presence
+are not proof of stored telemetry or effective egress enforcement. The route
+does not create resources or run commands inside a pod. Missing, stale, failed,
+or mismatched observations keep acceptance blocked and exit nonzero.
 
 The optional operator Blob diagnostic is not runtime acceptance.
 It requires separate authorization for write effects.
