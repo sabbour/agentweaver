@@ -84,6 +84,18 @@ Operator access requires separately approved cluster-user access and scoped Kube
 The private API requires an approved network path.
 This template defines no operator grants and provides no local administrator fallback.
 
+AKS enables ACNS security and leaves ACNS observability disabled. This
+security-only setting supports the #1784 FQDN-filtering work; it does not
+establish a deployed FQDN policy or prove enforcement. Runtime Kubernetes must
+be 1.29 or later. The template leaves `kubernetesVersion` empty so AKS selects
+its currently supported default instead of pinning an older release.
+
+ACNS has per-node/hour charges with a cluster-wide effect, and security-only is
+not documented as free. This is a source-only setting: no cluster was changed
+or ACNS feature activated, and source CI cannot claim cluster enforcement.
+Applying it requires separate explicit approval for the exact target and cost,
+a current regional quote, and a guarded, reviewed update.
+
 Key Vault and Blob retain Private Endpoints and private DNS.
 PostgreSQL uses its dedicated delegated subnet and private DNS.
 Azure Monitor uses an AMPLS with private query and Open ingestion.

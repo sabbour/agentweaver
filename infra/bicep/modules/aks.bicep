@@ -41,7 +41,7 @@ resource existingNodeSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-09-0
   name: 'aks'
 }
 
-resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
+resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
   name: clusterName
   location: location
   tags: tags
@@ -72,6 +72,15 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {
       networkPlugin: 'azure'
       networkPolicy: 'cilium'
       networkDataplane: 'cilium'
+      advancedNetworking: {
+        enabled: true
+        security: {
+          enabled: true
+        }
+        observability: {
+          enabled: false
+        }
+      }
       serviceCidr: '172.20.0.0/16'
       dnsServiceIP: '172.20.0.10'
     }
