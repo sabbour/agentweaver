@@ -6,9 +6,9 @@ PostgreSQL, Key Vault, and Blob use private networking. Azure Monitor uses a pri
 
 <figure class="aw-diagram">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Dedicated Azure definitions showing private AKS and App Routing preview settings, existing service dependencies, and the acceptance-only Foundation Probe overlay." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Verifier flow checks one completed Job and its owned pod, compares the Job image and pod imageID separately with a source-bound registry manifest, validates a distinct native #1784 receipt, and requires fresh correlated Monitor rows. Missing evidence blocks; this does not show P0 completion or a live deployment." />
   </a>
-  <figcaption>Bicep defines Azure resources and identities. Kustomize defines the probe Job and its egress policy. Neither proves a deployed environment.</figcaption>
+  <figcaption>Bicep defines Azure resources and identities; Kustomize defines the probe Job and egress policy. The external read-only consumer independently checks the completed Job and owned pod, source-bound image, strict native receipt, and fresh correlated Monitor rows. Only complete evidence sets <code>deployedAcceptance</code>; missing evidence remains blocked. This does not close #1801, confirm P0 completion, or show a live deployment.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.drawio'">Open editable draw.io source</a></p>
 
