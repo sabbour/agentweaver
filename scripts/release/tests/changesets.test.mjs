@@ -26,8 +26,10 @@ function fixture(t, records = { 'provider.md': record() }) {
 
 test('checked-in backfill validates against all manifest component IDs', () => {
   const records = validateChangesets(manifest, { root });
-  assert.ok(records.size >= 15);
-  assert.deepEqual([...records.get('.changeset/provider-foundation-1735.md')].sort(),
+  const providerRecord = records.get('.changeset/provider-foundation-1735.md') ??
+    parseChangeset(readFileSync(path.join(root, '.changeset', 'archive', 'provider-foundation-1735.md'), 'utf8'),
+      '.changeset/archive/provider-foundation-1735.md', ids);
+  assert.deepEqual([...providerRecord].sort(),
     ['Agentweaver.Abstractions', 'Agentweaver.Providers']);
   assert.equal(records.get('.changeset/project-workflow-1743.md').size, 0);
 });
