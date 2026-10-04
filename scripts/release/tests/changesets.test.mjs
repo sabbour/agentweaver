@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -26,8 +26,14 @@ function fixture(t, records = { 'provider.md': record() }) {
 
 test('checked-in backfill validates against all manifest component IDs', () => {
   const records = validateChangesets(manifest, { root });
-  assert.ok(records.size >= 15);
-  assert.deepEqual([...records.get('.changeset/provider-foundation-1735.md')].sort(),
+  const archiveDirectory = path.join(root, '.changeset', 'archive');
+  const archivedRecords = existsSync(archiveDirectory)
+    ? readdirSync(archiveDirectory).filter((file) => file.endsWith('.md')).length : 0;
+  assert.ok(records.size + archivedRecords >= 15);
+  const providerChangeset = records.get('.changeset/provider-foundation-1735.md') ??
+    parseChangeset(readFileSync(path.join(archiveDirectory, 'provider-foundation-1735.md'), 'utf8'),
+      '.changeset/provider-foundation-1735.md', ids);
+  assert.deepEqual([...providerChangeset].sort(),
     ['Agentweaver.Abstractions', 'Agentweaver.Providers']);
   assert.equal(records.get('.changeset/project-workflow-1743.md').size, 0);
 });
