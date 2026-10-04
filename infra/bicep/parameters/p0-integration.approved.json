@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus2euap" },
+    "monitorLocation": { "value": "eastus2" },
+    "namePrefix": { "value": "aw-v1-p0" },
+    "tenantId": { "value": "72f988bf-86f1-41af-91ab-2d7cd011db47" },
+    "postgresEntraAdminObjectId": { "value": "c4279823-a7c7-477e-982e-f4145bb0a83d" },
+    "postgresEntraAdminPrincipalName": { "value": "asabbour@microsoft.com" },
+    "postgresEntraAdminPrincipalType": { "value": "User" },
+    "appRoutingDnsZoneResourceIds": { "value": [] },
+    "owner": { "value": "sabbour" },
+    "costCenter": { "value": "agentweaver-v1-p0" }
+  }
+}
