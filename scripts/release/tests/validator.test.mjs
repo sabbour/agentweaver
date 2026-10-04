@@ -8,24 +8,20 @@ import { validateFile, validateManifest } from '../validate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const fixture = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
-const versionFor = (id) => fixture.components.find((component) => component.id === id).version;
-const nextPatchVersion = (version) => {
-  const [major, minor, patch] = version.split('.').map(Number);
-  return `${major}.${minor}.${patch + 1}`;
-};
-const project = (id, references = '') => `<Project><PropertyGroup><Version>${versionFor(id)}</Version></PropertyGroup>${
-  references ? `<ItemGroup>${references}</ItemGroup>` : ''
-}</Project>`;
-const abstractionReference = '<ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" />';
-const projects = new Map(fixture.components.map(({ id, project: projectPath }) => [
-  projectPath,
-  id === 'Agentweaver.Telemetry.AzureMonitor'
-    ? project(id, '<ProjectReference Include="..\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj" />')
-    : id === 'Agentweaver.Identity.Broker'
-      ? project(id, '<ProjectReference Include="..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj" /><ProjectReference Include="..\\..\\..\\packages\\Agentweaver.Secrets.AzureKeyVault\\Agentweaver.Secrets.AzureKeyVault.csproj" />')
-      : ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault', 'Agentweaver.Identity', 'Agentweaver.ObjectStore.AzureBlob'].includes(id)
-        ? project(id, abstractionReference)
-        : project(id),
+const abstraction = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup></Project>';
+const provider = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
+const identity = '<Project><PropertyGroup><Version>1.0.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj" /></ItemGroup></Project>';
+const azureMonitor = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj" /></ItemGroup></Project>';
+const identityBroker = '<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup><ItemGroup><ProjectReference Include="..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj" /><ProjectReference Include="..\\..\\..\\packages\\Agentweaver.Secrets.AzureKeyVault\\Agentweaver.Secrets.AzureKeyVault.csproj" /></ItemGroup></Project>';
+const projects = new Map(fixture.components.map((component) => [
+  component.project,
+  component.id === 'Agentweaver.Telemetry.AzureMonitor' ? azureMonitor :
+    component.id === 'Agentweaver.Identity.Broker' ? identityBroker :
+    component.id === 'Agentweaver.Identity' ? identity :
+    component.id === 'Agentweaver.Persistence.Postgres'
+      ? '<Project><PropertyGroup><Version>0.2.0</Version></PropertyGroup></Project>' :
+    ['Agentweaver.Providers', 'Agentweaver.Secrets.AzureKeyVault', 'Agentweaver.ObjectStore.AzureBlob'].includes(component.id)
+      ? provider : abstraction,
 ]));
 const readProject = (file) => {
   const relative = path.relative(root, file).replaceAll('\\', '/');
@@ -96,34 +92,23 @@ test('rejects invalid semver and version drift from checked-in projects', () => 
   for (const invalid of ['1', '01.0.0', '1.0.0-01', '1.0.0-', '1.0.0+']) {
     assert.throws(() => check(edit((m) => { m.components[0].version = invalid; })), /semantic version/);
   }
-  const originalVersion = fixture.components[0].version;
-  const changedVersion = nextPatchVersion(originalVersion);
-  assert.throws(() => check(edit((m) => { m.components[0].version = changedVersion; })),
-    new RegExp(`must declare <Version>${changedVersion}`));
-  assert.throws(() => check(fixture, {
-    readProject: (file) => readProject(file).replace(`<Version>${originalVersion}</Version>`, `<Version>${changedVersion}</Version>`),
-  }), new RegExp(`must declare <Version>${originalVersion}`));
+  assert.throws(() => check(edit((m) => { m.components[0].version = '0.2.0'; })), /must declare <Version>0.2.0/);
+  assert.throws(() => check(fixture, { readProject: (file) => readProject(file).replace('<Version>0.1.0</Version>', '<Version>0.2.0</Version>') }), /must declare <Version>0.1.0/);
   assert.throws(() => check(fixture, { readProject: () => { throw new Error('ENOENT'); } }), /cannot read checked-in project: ENOENT/);
 });
 
 test('rejects dangling, duplicate, unsupported, and missing compatibility edges', () => {
   assert.throws(() => check(edit((m) => { m.compatibility[0].dependency = 'Unknown'; })), /distinct declared component IDs/);
-  assert.throws(() => check(edit((m) => { m.compatibility[0].versions = [nextPatchVersion(versionFor('Agentweaver.Abstractions'))]; })), /does not include pinned/);
+  assert.throws(() => check(edit((m) => { m.compatibility[0].versions = ['0.2.0']; })), /does not include pinned/);
   assert.throws(() => check(edit((m) => { m.compatibility[0].versions = ['0.1.0', '0.1.0']; })), /duplicate supported version/);
   assert.throws(() => check(edit((m) => { m.compatibility.push(m.compatibility[0]); })), /duplicate compatibility relationship/);
   assert.throws(() => check(edit((m) => { m.compatibility = []; })), /missing compatibility/);
-  assert.throws(() => check(fixture, {
-    readProject: (file) => file.includes('Providers.csproj') ? project('Agentweaver.Providers') : readProject(file),
-  }), /has no ProjectReference/);
-  assert.throws(() => check(fixture, {
-    readProject: (file) => file.includes('Providers.csproj')
-      ? projects.get('packages/Agentweaver.Providers/Agentweaver.Providers.csproj').replace('Agentweaver.Abstractions.csproj', 'Unpinned.csproj')
-      : readProject(file),
-  }), /not pinned in the manifest/);
+  assert.throws(() => check(fixture, { readProject: (file) => file.includes('Providers.csproj') ? abstraction : readProject(file) }), /has no ProjectReference/);
+  assert.throws(() => check(fixture, { readProject: (file) => file.includes('Providers.csproj') ? provider.replace('Agentweaver.Abstractions.csproj', 'Unpinned.csproj') : readProject(file) }), /not pinned in the manifest/);
 });
 
 test('scans both XML quote forms and ignores commented-out versions and references', () => {
-  const singleQuoted = projects.get('packages/Agentweaver.Providers/Agentweaver.Providers.csproj').replace(/Include="([^"]+)"/, "Include = '$1'");
+  const singleQuoted = provider.replace(/Include="([^"]+)"/, "Include = '$1'");
   assert.equal(check(fixture, {
     readProject: (file) => file.includes('Providers.csproj') ? singleQuoted : readProject(file),
   }).stage, 'draft');
@@ -131,12 +116,13 @@ test('scans both XML quote forms and ignores commented-out versions and referenc
     readProject: (file) => file.includes('Providers.csproj')
       ? singleQuoted.replace('Agentweaver.Abstractions.csproj', 'Unpinned.csproj') : readProject(file),
   }), /not pinned in the manifest/);
-  const commentedProjects = new Map(fixture.components.map(({ id, project: projectPath }) => [
-    projectPath,
-    project(id).replace('</Project>', "<!-- <Version>9.0.0</Version><ProjectReference Include='Unpinned.csproj' /> --></Project>"),
-  ]));
+  const commented = abstraction.replace('</Project>',
+    "<!-- <Version>9.0.0</Version><ProjectReference Include='Unpinned.csproj' /> --></Project>");
   assert.equal(check(edit((m) => { m.compatibility = []; }), {
-    readProject: (file) => commentedProjects.get(path.relative(root, file).replaceAll('\\', '/')),
+    readProject: (file) => file.includes('Persistence.Postgres.csproj')
+      ? commented.replace('<Version>0.1.0</Version>', '<Version>0.2.0</Version>')
+      : file.includes('Agentweaver.Identity.csproj')
+        ? commented.replace('<Version>0.1.0</Version>', '<Version>1.0.0</Version>') : commented,
   }).stage, 'draft');
 });
 

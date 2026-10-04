@@ -6,8 +6,8 @@ It pins the independently versioned .NET foundation libraries
 `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`,
 `Agentweaver.Telemetry`, `Agentweaver.Telemetry.AzureMonitor`, and
 `Agentweaver.ObjectStore.AzureBlob`, and `Agentweaver.Identity`;
-Persistence.Postgres is `0.3.0`, Identity is `1.1.0`, and the other libraries
-are `0.2.0`).
+Persistence.Postgres is `0.2.0`, the Identity candidate is `1.0.0`, and the
+other libraries remain `0.1.0`).
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
@@ -22,7 +22,7 @@ configuration and an injected Azure SDK client or `TokenCredential`, fetches exa
 versions, and limits returned credentials to five minutes or the vault expiry.
 Account-free SDK transport tests cover failures, cancellation and redaction.
 This adds no authorization gate, deployable service or released version; the
-source-bound draft preparation sets Abstractions to `0.2.0`; publication remains separate.
+draft composition remains at `0.1.0` without a manual version bump.
 
 #1766 adds explicit AKS workload-identity composition in the existing Key Vault
 adapter: trusted hosts provide tenant ID, client ID, and projected token-file path
@@ -33,9 +33,10 @@ is added to the draft manifest.
 The component-scoped Changeset records future minor release intent, not an
 immediate package version bump or a release of the draft platform.
 
-Component changesets record unreleased semver intent and are archived by
-`release:apply` after version preparation. Tooling-only records use empty
-frontmatter; neither type proves package publication or a deployed service.
+Each merged foundation change has a record under `.changeset/` with its actual
+component ID and unreleased semver intent. Tooling-only records use empty
+frontmatter; neither kind is a release, version bump, deployed-service claim, or
+substitute for independently verified publication.
 
 `manifest.schema.json` describes the strict wire shape. The dependency-free
 validator additionally checks unique component IDs and projects, safe project
@@ -49,8 +50,8 @@ suffixes; a prerelease numeric identifier cannot have a leading zero.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
 The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
-Its current draft manifest/project version is `0.2.0`, prepared from its component-scoped minor changesets.
-This is not a published registry artifact or deployment receipt.
+Its initial manifest/project version is `0.1.0`, with a fresh component-scoped minor changeset.
+The record is release intent, not a version bump, registry artifact, or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 
 Future `release` compositions must contain an actual `service` component
@@ -65,17 +66,17 @@ Platform release composition, chart wiring, and deployment gates remain future w
 
 ## Draft release impact
 
-- Added `Agentweaver.Telemetry` 0.2.0 to the draft foundation composition:
+- Added `Agentweaver.Telemetry` 0.1.0 to the draft foundation composition:
   native OpenTelemetry traces, metrics, and logs with per-service resource identity
   and caller-configured in-process/exporter integration. No exporter is configured
   by this lower layer.
-- Added `Agentweaver.Telemetry.AzureMonitor` 0.2.0 to the draft composition:
+- Added `Agentweaver.Telemetry.AzureMonitor` 0.1.0 to the draft composition:
   opt-in Azure Monitor traces, metrics, and logs via the supported exporter SDK,
   with explicit connection string and optional injected `TokenCredential`.
   Other exporters can be composed through the lower-layer callbacks.
-- These prepared component versions do not imply package publication or a platform
-  release. Documentation, tests, and CI-only changes do not require a component
-  changeset; product component changes require a fresh changeset.
+- No version bump or publication is implied by this draft entry. Documentation,
+  tests, and CI-only changes do not require a component changeset; product component
+  changes require a fresh changeset even when the release prose describes them.
 
 Run `npm run release:validate` to check the draft against checked-in projects
 and validate all `.changeset/*.md` records. Run
@@ -90,17 +91,17 @@ the Azure Blob transport adapter.
 
 ## Unreleased foundation impact
 
-- #1776 is an **implemented CANDIDATE**, not published:
-  `Agentweaver.Identity` 1.1.0 authorizes exact run grants and compares immutable
+- #1776 is an **implemented CANDIDATE**, not merged or published:
+  `Agentweaver.Identity` 1.0.0 authorizes exact run grants and compares immutable
   pre/post grant identity, revision, expiry and bindings. Abstractions adds a
   metadata-only, thread-safe `SecretCredential.LimitLifetime` on the original
   credential, preserving backend invalidation without reading or copying a
-  value. The archived quoted-ID changeset records minor intent. The
-  source-bound draft preparation sets Identity to 1.1.0 and Abstractions to
-  0.2.0; compatibility pins that exact dependency version. No broker/store/service/Azure
+  value. The fresh quoted-ID changeset covers both components with minor
+  intent; no existing version is manually bumped. Draft compatibility pins
+  Identity's Abstractions dependency to 0.1.0. No broker/store/service/Azure
   deployment or new-tree approval from historical review receipts is implied.
 - #1768 adds consumer-scoped transactional inbox receipts to
-  `Agentweaver.Persistence.Postgres` 0.3.0. Migration 2 upgrades existing
+  `Agentweaver.Persistence.Postgres` 0.2.0. Migration 2 upgrades existing
   service-owned version-1 schemas without changing their outbox records. This
   remains a draft library, not a consumer service or exactly-once delivery.
 - #1750 supplies the platform-singleton Object Store contract for opaque platform
@@ -117,8 +118,8 @@ the Azure Blob transport adapter.
   generation. Exclusive and singleton provider cardinalities are preserved
   and other cardinalities are explicitly deferred. This only pins and records
   the above; it adds no runtime enforcement, egress compilation/application,
-  deployable service, or runtime enforcement. The source-bound draft prepares
-  `Agentweaver.Providers` at `0.2.0`.
+  deployable service, or version bump, and the draft composition remains at
+  `0.1.0`.
 
 ## Release planning and package preparation
 
