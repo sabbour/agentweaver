@@ -31,6 +31,10 @@ function sourceFixture(overrides = {}) {
     realpath: path => resolve(path),
     readFile: path => files[relative(root, path).replaceAll('\\', '/')],
     validateRelease: () => ({}),
+    compareGitShow: (revision, file, expected) => {
+      assert.equal(revision, source.sha);
+      return !overrides.changed && Buffer.from(files[file]).equals(Buffer.from(expected));
+    },
     execGit: args => {
       if (args[0] === 'status') return { status: 0, stdout: overrides.dirty ?? '' };
       if (args[0] === 'rev-parse') return { status: 0, stdout: args[1].endsWith('^{tree}') ? overrides.sourceTree ?? source.sourceTree :
@@ -45,7 +49,6 @@ function sourceFixture(overrides = {}) {
       };
       if (args[0] === 'ls-files' && args.includes('--others')) return { status: 0, stdout: overrides.ignored ?? '' };
       if (args[0] === 'ls-files') return { status: 0, stdout: Object.keys(files).join('\n') };
-      if (args[0] === 'show') return { status: 0, stdout: overrides.changed ? 'changed' : files[args[1].slice(41)] };
       throw new Error(`Unexpected git command ${args.join(' ')}`);
     },
     ...overrides.deps,
