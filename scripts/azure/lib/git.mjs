@@ -1,7 +1,7 @@
 // Git-tree verification used before any deploy/acceptance tooling runs.
 // Exact-SHA proof requires a clean working tree and a full 40-character
 // commit SHA; anything else is rejected rather than silently normalized.
-import { runGit } from './exec.mjs';
+import { gitShowMatches, runGit } from './exec.mjs';
 import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -39,7 +39,8 @@ export function resolveCleanHead(cwd, { execGit = runGit } = {}) {
 }
 
 export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId },
-  { execGit = runGit, readFile = readFileSync, realpath = realpathSync, validateRelease = validateFile } = {}) {
+  { execGit = runGit, compareGitShow = gitShowMatches, readFile = readFileSync,
+    realpath = realpathSync, validateRelease = validateFile } = {}) {
   const { sha, branch } = resolveCleanHead(repoRoot, { execGit });
   const sourceTree = execGit(['rev-parse', `${sha}^{tree}`], { cwd: repoRoot }).stdout.trim();
   if (!isFullSha(sourceTree)) throw new Error('Source tree did not resolve to a full Git tree SHA.');
@@ -75,10 +76,9 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   for (const file of files) {
     const tracked = trackedPath(file);
     const content = readFile(tracked.absolute);
-    const committed = execGit(['show', `${sha}:${file}`], { cwd: root }).stdout;
     // Git normalizes CRLF in text files. Compare content, then hash normalized bytes.
     const normalized = content.toString().replaceAll('\r\n', '\n');
-    if (normalized !== committed.replaceAll('\r\n', '\n')) throw new Error(`Changed source input: ${file}`);
+    if (!compareGitShow(sha, file, content, { cwd: root })) throw new Error(`Changed source input: ${file}`);
     hash.update(file).update('\0').update(normalized).update('\0');
   }
   const document = JSON.parse(readFile(parameters.absolute, 'utf8'));

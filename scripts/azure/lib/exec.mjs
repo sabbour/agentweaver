@@ -106,9 +106,9 @@ function spawnPlatformSafe(command, args, spawnOptions) {
  * shell (on Windows, .cmd/.bat shims are routed through cmd.exe with fully
  * escaped arguments, which is required because such shims cannot be exec'd
  * directly, but caller-supplied argument values are never parsed as shell
- * syntax). Returns { status, stdout, stderr } with stderr/stdout redacted.
- * Throws a redacted error when `check` is true (default) and the process
- * exits non-zero or fails to spawn.
+ * syntax). Returns { status, stdout, stderr } with stdout and stderr
+ * redacted. Throws a redacted error when `check` is true (default) and the
+ * process exits non-zero or fails to spawn.
  */
 export function run(command, args, options = {}) {
   const { check = true, cwd, env, input, timeout } = options;
@@ -143,4 +143,19 @@ export function runAz(args, options = {}) {
 
 export function runGit(args, options = {}) {
   return run('git', args, options);
+}
+
+export function gitShowMatches(revision, file, expected, { cwd, env, timeout } = {}) {
+  const args = ['show', `${revision}:${file}`];
+  const result = spawnPlatformSafe('git', args, { cwd, env, timeout, windowsHide: true });
+  const stdout = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout ?? '');
+  const stderr = Buffer.isBuffer(result.stderr) ? result.stderr.toString('utf8') : result.stderr ?? '';
+
+  if (result.error) throw new Error(`Failed to start git: ${redact(result.error.message)}`);
+  if (result.status !== 0) {
+    throw new Error(redact(`git ${args.join(' ')} exited with status ${result.status}.\n${redact(stderr || stdout.toString('utf8'))}`.trim()));
+  }
+
+  const normalize = content => content.toString('utf8').replaceAll('\r\n', '\n');
+  return normalize(stdout) === normalize(expected);
 }

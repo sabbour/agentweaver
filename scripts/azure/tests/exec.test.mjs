@@ -1,12 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, delimiter, join } from 'node:path';
-import { redact, run, runAz, runGit } from '../lib/exec.mjs';
+import { gitShowMatches, redact, run, runAz, runGit } from '../lib/exec.mjs';
 
 const isWindows = process.platform === 'win32';
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const ECHO_ARGS_CMD = join(FIXTURES_DIR, 'echo-args.cmd');
+const SOURCE_REDACTION_FIXTURE = 'scripts/azure/tests/fixtures/source-redaction.txt';
+const SENSITIVE_FIXTURE_VALUE = 'synthetic-sensitive-fixture-value';
 
 // Resolves whether `command` is runnable on PATH at all, without caring how
 // (real executable, Windows .cmd/.bat shim, etc). Used to skip the real-CLI
@@ -41,11 +44,35 @@ test('redact is a no-op on plain text', () => {
   assert.equal(redact('plain status message'), 'plain status message');
 });
 
+test('git source comparison preserves redacted-looking bytes without exposing them', () => {
+  const fixture = readFileSync(join(FIXTURES_DIR, 'source-redaction.txt'));
+  const text = fixture.toString('utf8');
+  assert.ok(text.includes('aks.properties.identityProfile.kubeletidentity.objectId'));
+  assert.ok(text.includes(`AccountKey=${SENSITIVE_FIXTURE_VALUE}`));
+
+  assert.notEqual(redact(text), text);
+  assert.ok(!redact(text).includes(SENSITIVE_FIXTURE_VALUE));
+  const ordinaryOutput = runGit(['show', `HEAD:${SOURCE_REDACTION_FIXTURE}`], { cwd: process.cwd() }).stdout;
+  assert.ok(!ordinaryOutput.includes(SENSITIVE_FIXTURE_VALUE));
+  assert.ok(!ordinaryOutput.includes('aks.properties.identityProfile.kubeletidentity.objectId'));
+
+  assert.equal(gitShowMatches('HEAD', SOURCE_REDACTION_FIXTURE, fixture, { cwd: process.cwd() }), true);
+  const changed = Buffer.from(text.replace('objectId', 'otherId'));
+  assert.equal(gitShowMatches('HEAD', SOURCE_REDACTION_FIXTURE, changed, { cwd: process.cwd() }), false);
+
+  const missingFile = `scripts/azure/tests/fixtures/missing-AccountKey=${SENSITIVE_FIXTURE_VALUE}.txt`;
+  assert.throws(
+    () => gitShowMatches('HEAD', missingFile, fixture, { cwd: process.cwd() }),
+    error => !error.message.includes(SENSITIVE_FIXTURE_VALUE) && error.message.includes('[redacted]'),
+  );
+});
+
 test('run throws a redacted error on non-zero exit by default', () => {
   assert.throws(
-    () => run(process.execPath, ['-e', 'console.error("AccountKey=leaked"); process.exit(2)']),
+    () => run(process.execPath, ['-e', `console.error("AccountKey=${SENSITIVE_FIXTURE_VALUE}"); process.exit(2)`]),
     (error) => {
-      assert.ok(!error.message.includes('leaked'));
+      assert.ok(!error.message.includes(SENSITIVE_FIXTURE_VALUE));
+      assert.ok(error.message.includes('[redacted]'));
       return true;
     },
   );
