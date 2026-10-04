@@ -363,7 +363,7 @@
       "agentweaver.telemetry.azuremonitor": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Telemetry": "[0.1.0, )",
+          "Agentweaver.Telemetry": "[0.0.0, )",
           "Azure.Monitor.OpenTelemetry.Exporter": "[1.9.0, )"
         }
       }

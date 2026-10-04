@@ -18,6 +18,7 @@ import { preparationFiles, verifyPreparation } from './preparation.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sha = /^[a-f0-9]{40}$/;
+const notesReceiptPattern = /^releases\/receipts\/[a-f0-9]{40}\.json$/;
 
 function fail(location, message) {
   throw new Error(`${location}: ${message}`);
@@ -52,6 +53,18 @@ function validatePlanShape(plan) {
       if (typeof file !== 'string' || !changesetPathPattern.test(file)) {
         fail(`${location}.changesets`, `unsafe or unexpected changeset path "${file}"`);
       }
+    }
+  }
+  if (plan.initialBaseline !== undefined) {
+    const baseline = plan.initialBaseline;
+    if (baseline === null || typeof baseline !== 'object' || Array.isArray(baseline) ||
+        baseline.baselineVersion !== '0.0.0' || !Array.isArray(baseline.components) ||
+        baseline.components.length === 0 || baseline.components.some((id) => typeof id !== 'string') ||
+        new Set(baseline.components).size !== baseline.components.length ||
+        typeof baseline.changeset !== 'string' || !changesetPathPattern.test(baseline.changeset) ||
+        typeof baseline.initialNotesReceipt !== 'string' || !notesReceiptPattern.test(baseline.initialNotesReceipt) ||
+        Object.keys(baseline).some((key) => !['baselineVersion', 'components', 'changeset', 'initialNotesReceipt'].includes(key))) {
+      fail('plan.initialBaseline', 'malformed initial baseline record');
     }
   }
   if (typeof plan.checksum !== 'string' || plan.checksum !== planChecksum(plan)) {
@@ -151,10 +164,14 @@ export function applyPlan(plan, manifestPath, {
       readdirSync: () => sourcePaths.filter((file) => /^\.changeset\/[^/]+$/.test(file)).map((file) => path.posix.basename(file)),
       readFileSync: (file) => readSource(path.relative(root, file).replaceAll('\\', '/')),
     });
-    if (recomputed.components.length !== 0) {
+    if (recomputed.components.length !== 0 ||
+        JSON.stringify(recomputed.initialBaseline ?? null) !== JSON.stringify(plan.initialBaseline ?? null)) {
       fail('plan', 'empty plan does not match genuine committed source intent; re-run release:plan');
     }
-    return { applied: [], skipped: [], message: 'nothing to apply' };
+    return {
+      applied: [], skipped: [],
+      message: plan.initialBaseline ? 'initial baseline notes; no version changes' : 'nothing to apply',
+    };
   }
 
   let manifestText;
@@ -251,6 +268,9 @@ export function applyPlan(plan, manifestPath, {
   const recomputed = createPlan(manifest, { root, readdirSync: readdir, readFileSync: readFile, git });
   if (JSON.stringify(canonicalizeComponents(recomputed.components)) !== JSON.stringify(canonicalizeComponents(pending))) {
     fail('plan', 'plan does not match the actual pending changesets at this source commit (forged, stale, or tampered plan); re-run release:plan');
+  }
+  if (JSON.stringify(recomputed.initialBaseline ?? null) !== JSON.stringify(plan.initialBaseline ?? null)) {
+    fail('plan', 'initial baseline decision does not match the source record; re-run release:plan');
   }
 
   // Preflight: every consumed changeset must exist and every archive destination must be free,

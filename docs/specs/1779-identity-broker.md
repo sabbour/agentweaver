@@ -204,8 +204,7 @@ cross-project/run denial using the broker-issued token. These local tests do
 not prove deployed token issuance, workload identity, Key Vault RBAC, or Azure
 acceptance.
 
-The draft release manifest registers `Agentweaver.Identity.Broker` at its initial `0.1.0` project version.
-A component-scoped changeset records minor release intent. No manual version bump occurs.
+The draft release manifest registers `Agentweaver.Identity.Broker` at project version `0.2.0`.
 The draft omits `imageDigest` until actual publication supplies it.
 A local Docker image proves only the local build, not registry publication or cloud execution.
 

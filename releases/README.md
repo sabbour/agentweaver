@@ -1,16 +1,22 @@
 # Foundation release composition (schema version 1)
 
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
-It pins the independently versioned .NET foundation libraries
-(`Agentweaver.Abstractions`, `Agentweaver.Providers`,
+It pins eight independently versioned .NET foundation NuGet packages:
+`Agentweaver.Abstractions`, `Agentweaver.Providers`,
 `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`,
-`Agentweaver.Telemetry`, `Agentweaver.Telemetry.AzureMonitor`, and
-`Agentweaver.ObjectStore.AzureBlob`, and `Agentweaver.Identity`;
-Persistence.Postgres is `0.2.0`, the Identity candidate is `1.0.0`, and the
-other libraries remain `0.1.0`).
+`Agentweaver.Identity`, `Agentweaver.Telemetry`,
+`Agentweaver.Telemetry.AzureMonitor`, and `Agentweaver.ObjectStore.AzureBlob`.
+The current package baseline for all eight is `0.0.0`.
+`Agentweaver.Identity.Broker` remains service version `0.2.0`; it is not one
+of the NuGet packages.
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.
+
+The initial package notes are the archived P0 changesets referenced by the
+earlier release receipt. The baseline changeset does not create another version
+bump. Later published package changes use patch, minor, or major intent based
+on public API impact.
 
 ### Unreleased v1.0.0 impact
 
@@ -21,8 +27,8 @@ disclosure. The independent Azure Key Vault adapter uses validated vault
 configuration and an injected Azure SDK client or `TokenCredential`, fetches exact
 versions, and limits returned credentials to five minutes or the vault expiry.
 Account-free SDK transport tests cover failures, cancellation and redaction.
-This adds no authorization gate, deployable service or released version; the
-draft composition remains at `0.1.0` without a manual version bump.
+This adds no authorization gate or deployable service; the draft composition's
+initial package baseline is `0.0.0`.
 
 #1766 adds explicit AKS workload-identity composition in the existing Key Vault
 adapter: trusted hosts provide tenant ID, client ID, and projected token-file path
@@ -50,8 +56,8 @@ suffixes; a prerelease numeric identifier cannot have a leading zero.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
 The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
-Its initial manifest/project version is `0.1.0`, with a fresh component-scoped minor changeset.
-The record is release intent, not a version bump, registry artifact, or deployment receipt.
+Its current manifest/project version is `0.2.0`.
+The record is release intent, not a registry artifact or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 
 Future `release` compositions must contain an actual `service` component
@@ -66,11 +72,11 @@ Platform release composition, chart wiring, and deployment gates remain future w
 
 ## Draft release impact
 
-- Added `Agentweaver.Telemetry` 0.1.0 to the draft foundation composition:
+- Added `Agentweaver.Telemetry` 0.0.0 to the draft foundation composition:
   native OpenTelemetry traces, metrics, and logs with per-service resource identity
   and caller-configured in-process/exporter integration. No exporter is configured
   by this lower layer.
-- Added `Agentweaver.Telemetry.AzureMonitor` 0.1.0 to the draft composition:
+- Added `Agentweaver.Telemetry.AzureMonitor` 0.0.0 to the draft composition:
   opt-in Azure Monitor traces, metrics, and logs via the supported exporter SDK,
   with explicit connection string and optional injected `TokenCredential`.
   Other exporters can be composed through the lower-layer callbacks.
@@ -91,25 +97,26 @@ the Azure Blob transport adapter.
 
 ## Unreleased foundation impact
 
-- #1776 is an **implemented CANDIDATE**, not merged or published:
-  `Agentweaver.Identity` 1.0.0 authorizes exact run grants and compares immutable
+- #1776 adds the `Agentweaver.Identity` 0.0.0 authorization library. It authorizes
+  exact run grants and compares immutable
   pre/post grant identity, revision, expiry and bindings. Abstractions adds a
   metadata-only, thread-safe `SecretCredential.LimitLifetime` on the original
   credential, preserving backend invalidation without reading or copying a
-  value. The fresh quoted-ID changeset covers both components with minor
-  intent; no existing version is manually bumped. Draft compatibility pins
-  Identity's Abstractions dependency to 0.1.0. No broker/store/service/Azure
+  value. The archived P0 changesets provide its initial release notes. The
+  compatibility record pins Identity's Abstractions dependency to 0.0.0.
+  No broker/store/service/Azure
   deployment or new-tree approval from historical review receipts is implied.
 - #1768 adds consumer-scoped transactional inbox receipts to
-  `Agentweaver.Persistence.Postgres` 0.2.0. Migration 2 upgrades existing
+  `Agentweaver.Persistence.Postgres` 0.0.0. Migration 2 upgrades existing
   service-owned version-1 schemas without changing their outbox records. This
   remains a draft library, not a consumer service or exactly-once delivery.
 - #1750 supplies the platform-singleton Object Store contract for opaque platform
   artifacts. #1744 adds the Azure Blob adapter, with streamed reads, create-only
   writes, and missing-object delete semantics. This draft library composition
   is not a platform release or version bump. Changeset records track intent;
-  source-bound version preparation is described here. No package publication or deployment
-  occurred in this foundation.
+  source-bound version preparation is described here. The original P0 packages
+  were published from an earlier source; #1825 tracks their current 0.0.0 baseline.
+  This draft does not claim platform deployment.
 - #1767 adds ordered, layered provider composition: permitted Guardrails and
   Telemetry providers resolve and pin as ordered sets, pinning resource
   generations and order. Network Policy resolves its required L3/L4 and
@@ -119,7 +126,7 @@ the Azure Blob transport adapter.
   and other cardinalities are explicitly deferred. This only pins and records
   the above; it adds no runtime enforcement, egress compilation/application,
   deployable service, or version bump, and the draft composition remains at
-  `0.1.0`.
+  `0.0.0`.
 
 ## Release planning and package preparation
 
@@ -134,6 +141,9 @@ The manual workflow has a separate publication choice.
   HEAD-bound plan to `artifacts/release/plan.json` (gitignored). Planning
   never modifies source files. Notes must match their exact committed HEAD bytes.
   Uncommitted notes, missing source notes, and stale source claims fail.
+  The single recorded `baseline` changeset provides initial notes for the eight
+  NuGet packages at `0.0.0` and does not create a version bump. Other changesets
+  continue to use patch, minor, or major intent.
 - `npm run release:apply` consumes that plan and the manifest. It fails
   closed — writing nothing — on a corrupted or hand-edited plan, a plan
   computed against a different commit (`stale plan`), a dirty working tree,
@@ -173,10 +183,13 @@ The manual workflow has a separate publication choice.
   The guard compares archives with genuine Git source notes, then verifies preparation decisions.
   Extra edits in the same component or another component still require fresh top-level notes.
   A self-reported archive hash or an empty component list cannot grant coverage.
-  An empty plan is a no-op only when genuine committed source notes contain no version intent.
+  An empty plan is a no-op only when genuine committed source notes contain no
+  version intent or contain only the recorded initial package baseline.
   Recomputing a checksum or removing local notes cannot suppress pending source intent.
 - `npm run release:pack` restores and builds each component with locked dependencies.
-  It packs contracts/libraries and prepares service images in a fresh, empty `artifacts/release/pack/` directory.
+  By default it packs contracts/libraries and prepares service images in a fresh,
+  empty `artifacts/release/pack/` directory. Pass `--packages-only` to prepare
+  only the manifest's contracts and libraries; service images are not rebuilt.
   It writes an atomic `provenance.json` receipt after all artifacts succeed.
   The receipt includes the source commit SHA, manifest hash, each component's ID/kind/version,
   and a SHA-256 hash of every artifact file it actually produced. It refuses
@@ -197,6 +210,12 @@ The manual workflow has a separate publication choice.
   Provenance records lock hashes and image archive hashes, not fabricated registry digests.
   A failed preparation produces no completed provenance.
   Partial output must not mix with a later run.
+
+  For an exact-source NuGet-only release, use
+  `npm run release:pack -- --packages-only --out artifacts/release/packages-only`,
+  then run `node scripts/release/publish.mjs releases/foundation.json artifacts/release/packages-only <full-source-sha> --packages-only --confirm-publication`.
+  The publisher validates that provenance contains exactly the manifest's
+  non-service components and requires no container registry credentials.
 
 The manually dispatched `v1 release pack` GitHub Actions workflow
 (`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "issue": 1825,
+  "baselineVersion": "0.0.0",
+  "components": [
+    "Agentweaver.Abstractions",
+    "Agentweaver.Identity",
+    "Agentweaver.ObjectStore.AzureBlob",
+    "Agentweaver.Persistence.Postgres",
+    "Agentweaver.Providers",
+    "Agentweaver.Secrets.AzureKeyVault",
+    "Agentweaver.Telemetry",
+    "Agentweaver.Telemetry.AzureMonitor"
+  ],
+  "changeset": ".changeset/initial-p0-baseline-1825.md",
+  "initialNotesReceipt": "releases/receipts/9521209b0e8fa352a92e45563d70347dd007855d.json"
+}

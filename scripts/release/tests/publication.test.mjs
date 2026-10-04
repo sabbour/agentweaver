@@ -182,6 +182,32 @@ test('manual publication requires confirmation and intact exact-source artifacts
   assert.deepEqual(calls, []);
 });
 
+test('packages-only publication claims and pushes only the exact NuGet selection', (t) => {
+  const f = fixture(t);
+  f.prepare({ packagesOnly: true });
+  const env = { ...f.env };
+  delete env.RELEASE_REGISTRY;
+  delete env.RELEASE_REGISTRY_USER;
+  delete env.RELEASE_REGISTRY_PASSWORD;
+  delete env.DOCKER_CONFIG;
+
+  const receipt = f.publish({ packagesOnly: true, env });
+  assert.equal(receipt.status, 'published');
+  assert.deepEqual(receipt.planned.map(({ id, kind }) => ({ id, kind })), [{ id: 'Pkg', kind: 'package' }]);
+  assert.deepEqual(receipt.published.map(({ id, kind }) => ({ id, kind })), [{ id: 'Pkg', kind: 'package' }]);
+  assert.ok(!f.externalCalls.some(({ bin }) => bin === 'docker'));
+  assert.ok(f.externalCalls.some(({ bin, args }) => bin === 'dotnet' && args[0] === 'nuget'));
+});
+
+test('packages-only publication rejects a full composition pack before any external command', (t) => {
+  const f = fixture(t);
+  f.prepare();
+  assert.throws(() => f.publish({ packagesOnly: true }),
+    /provenance component selection does not match the package-only manifest selection/);
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
+});
+
 test('manual publication records actual immutable registry digests and never changes draft composition', (t) => {
   const f = fixture(t);
   f.prepare();
