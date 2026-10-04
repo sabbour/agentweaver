@@ -153,15 +153,32 @@ procedure; no blanket table grant is introduced here.
 
 The in-pod output is only one evidence source. The external acceptance consumer
 owns Job/pod identity, completion and exit code, immutable registry digest, and
-fresh post-exit Monitor ingestion. The current
-[`verify-acceptance.mjs`](../../scripts/azure/verify-acceptance.mjs) consumer
-queries `union AppDependencies, AppRequests`, requires `Name ==
-"foundation-probe"`, exact `OperationId` trace ID and `Id` span ID, and the
-`probe.source_sha`, `probe.source_tree`, and `probe.nonce` properties. The Git
-tree remains a 40-hex SHA; the nonce is exactly 32 lowercase hex. It does not
-use `AppTraces` or a dashed UUID nonce. Issue #1790 owns consuming and
-correlating the external completed-Job and fresh Monitor evidence; this probe
-does not duplicate that consumer.
+fresh post-completion Monitor ingestion. Issue #1801 adds that consumer in
+[`verify-acceptance.mjs`](../../scripts/azure/verify-acceptance.mjs). It reads
+the exact Job, its pod, the ServiceAccount, and an immutable target ConfigMap.
+It checks Job ownership by UID, the bounded one-shot deadline, pod namespace,
+service account, projected workload-identity token, and termination exit code.
+It obtains the expected manifest digest through the existing registry verifier
+and requires the Job image, pod image, and observed pulled image ID to match.
+The local Docker config digest remains provenance only, not a manifest digest.
+
+The immutable target ConfigMap must match the reviewed source SHA, Git tree,
+infrastructure hash, deployment outputs, identity, and exact runtime
+configuration. The native receipt preserves issuer/subject/audience correlation,
+provider pins, exact read-only Key Vault version redemption, owned Blob
+generation and ETag cleanup, and the committed PostgreSQL effect, inbox, and
+outbox outcomes. The pod receipt does not attest to its UID, image pull, or exit.
+After external Job completion is observed, the consumer queries
+`union AppDependencies, AppRequests` for `Name == "foundation-probe"`, exact
+`OperationId` trace ID and `Id` span ID, and the `probe.source_sha`,
+`probe.source_tree`, and `probe.nonce` properties. The Git tree remains a
+40-hex SHA; the nonce is exactly 32 lowercase hex. It does not use `AppTraces`
+or a dashed UUID nonce.
+
+Collection requires an explicit read-only CLI option and exact Kubernetes
+context. It does not create resources, run commands inside a pod, or perform
+live reads during source validation. A source-only consumer change does not
+deploy the probe or complete the wider P0 shipping checklist.
 
 Credential-free validation includes:
 

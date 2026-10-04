@@ -123,32 +123,61 @@ No unsupported deployment tags occur.
 ## Acceptance
 
 `verify-acceptance.mjs` accepts the same source/target arguments, plus
-`--expected-sha`, `--deployment-name`, and `--cluster-name`.
-Monitor configuration evidence additionally requires `--workspace-id`,
-`--run-id` (the probe's 32-character lowercase hexadecimal nonce),
-`--trace-id`, `--span-id`, and `--started-at` (a fresh ISO timestamp).
-It uses the Logs data-plane API from an approved private-network path.
-Custom query overrides are not supported.
-The query uses `AppDependencies` and `AppRequests`, not `AppTraces`.
-It matches `foundation-probe`, the trace/span IDs, and the exact `probe.source_sha`, `probe.source_tree`, and `probe.nonce` properties.
-The returned timestamp must fall within the fresh observation window.
+`--expected-sha` and `--deployment-name`. It always checks the exact source-bound
+deployment, target ownership, observed AKS security settings, and exact
+workload-identity federation configuration. Those configuration checks do not
+prove that a Job ran or exchanged a token.
 
-Successful deployment outputs include `foundationProbeIdentity` and `foundationResources`.
-The tooling checks their exact dedicated resource IDs, endpoints, namespace, ServiceAccount, and workspace GUID.
-The named identity contains distinct `clientId` and `principalObjectId` fields.
-Parallel identity arrays do not select the probe principal.
-The workspace GUID is not its ARM resource ID.
+Full integration acceptance requires the explicit read-only collection option:
 
-The report always blocks full P0 acceptance in this definition-only slice.
-It distinguishes infrastructure configuration from actual workload evidence.
-The admitted #1784 Job must prove pod/image provenance, token exchange,
-exact KV redemption, owned PG effects, owned Blob cleanup, and SHA/nonce telemetry.
-The CLI does not read secret values or treat its own credentials as pod proof.
-It checks the fixed `foundation-probe` federation name, subject, issuer, and audience.
-Caller configuration cannot replace that identity check.
-Exact federation configuration still does not prove token exchange.
-It does not consume or certify the final #1784 runtime receipt.
-New deployment fields cannot enter the strict #1784 target DTO without its explicit schema update.
+```powershell
+node scripts\azure\verify-acceptance.mjs --resource-group aw-v1-p0 --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id> --expected-sha <40-hex-sha> --deployment-name aw-v1-p0-<first-12-sha> --collect-runtime-evidence --kube-context <approved-context> --image-reference <registry>/<repository>:<tag> [--image-receipt artifacts\images\foundation-probe.json]
+```
+
+The image reference is a tag, not a digest. The receipt defaults to the
+source-bound image receipt downloaded from the CI artifact. The existing image
+verifier pulls and inspects that registry image. It checks the local image
+config digest and source labels, then derives the registry manifest digest from
+Docker's repository digests. The Job's immutable image reference and the pod's
+reported pulled image ID must both match that manifest digest. A local config
+digest is never used as a registry manifest digest.
+
+The collector uses only fixed read-only Kubernetes operations: it checks the
+selected context's API server against the observed AKS FQDN, then reads the
+named Job, its pod, the ServiceAccount, the immutable target ConfigMap, and the
+completed pod's logs. It does not list unrelated resources, run commands in a
+pod, create resources, or delete resources. The Job must have one completion,
+no retries, and a 360-to-420-second deadline. The observed pod must belong to
+that Job by UID, run in the exact namespace with the expected ServiceAccount,
+have the Azure workload-identity projection, and terminate with exit code 0.
+
+The immutable target ConfigMap must contain the strict #1784 `ProbeTarget` for
+the exact reviewed SHA, Git tree, infrastructure hash, deployment, identities,
+resources, database target, and read-only Key Vault secret name/version.
+The native probe receipt must preserve the exact federation issuer, subject,
+and audience; provider pins; successful exact-version Key Vault redemption;
+owned PostgreSQL effect/inbox/outbox results; and owned Blob generation, ETag,
+content hash, and confirmed conditional cleanup. The receipt cannot attest to
+the pod UID, pulled image, or process exit code.
+
+Only after the Job is independently observed complete does the consumer query
+the exact workspace from the deployment output. The fixed Logs query searches
+`AppDependencies` and `AppRequests`, not `AppTraces`, and matches the probe
+trace/span with `probe.source_sha`, `probe.source_tree`, and the 32-character
+nonce. A fresh matching row is required; exporter flush alone is not proof of
+stored telemetry. Caller-supplied digests, booleans, trace IDs, and secret
+versions do not satisfy the gate. Failed terminal pods retain only allow-listed
+probe failure codes and types; raw logs and credential-shaped diagnostics are
+not copied into the report.
+
+Configuration evidence and runtime evidence appear as separate report checks.
+The report passes only when every required check passes; otherwise the command
+exits 1. This source-only consumer was validated with fake transports and local
+fixtures. It does not perform live Azure, Kubernetes, or registry reads during
+source validation, and it does not deploy, publish, or close the full P0
+shipping checklist. The observed ACNS/Cilium settings are configuration
+evidence only; the consumer does not claim that a Cilium policy is effectively
+enforced.
 
 ## Authentication prerequisites
 

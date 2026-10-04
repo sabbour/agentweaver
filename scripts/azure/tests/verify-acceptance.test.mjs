@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { writeFileSync, existsSync } from 'node:fs';
 import { checkAksNetworkSecurity, checkBlobRoundtrip, checkDeployedSha, checkKeyVaultSecretVersion, checkMonitorTrace,
   checkServiceDigests, checkWorkloadIdentity, runAcceptance } from '../verify-acceptance.mjs';
 import { fixture, source, fakeAzure, ids, deploymentOutputs, observedCluster } from './fixtures/target.mjs';
+import { makeRuntimeFixture, probeReceipt as validProbeReceipt, completedAt as probeCompletedAt } from './fixtures/foundation-probe-runtime.mjs';
 
 test('AKS network preflight reads the exact observed cluster and reports enabled security configuration', () => {
   const calls = [];
@@ -16,6 +19,7 @@ test('AKS network preflight reads the exact observed cluster and reports enabled
     networkDataplane: 'cilium',
     advancedNetworkingEnabled: true,
     advancedNetworkingSecurityEnabled: true,
+    apiServerHosts: ['api.example.privatelink.azmk8s.io'],
     apiVersion: '2024-09-01',
   });
   assert.equal(calls.length, 1);
@@ -108,7 +112,7 @@ test('issuer and exact subject/issuer/audience configuration never imply verifie
     { status: 0, stdout: JSON.stringify({ issuer: 'https://issuer.example/',
       subject: check.identityChecks[0].expectedSubject, audiences: ['api://AzureADTokenExchange'] }) };
   const exact = checkWorkloadIdentity(check, execAz);
-  assert.equal(exact.status, 'blocked');
+  assert.equal(exact.status, 'passed');
   assert.equal(exact.evidence.exact, true);
   assert.equal(exact.evidence.tokenExchangeVerified, false);
   assert.equal(checkWorkloadIdentity({ ...check, identityChecks: [] }, execAz).status, 'blocked');
@@ -134,9 +138,10 @@ test('latest KV, exact operator KV and caller image strings are not runtime evid
 
 const nonce = '11111111222233334444555555555555';
 const startedAt = '2026-10-03T12:00:00.000Z';
+const completedAt = '2026-10-03T12:00:30.000Z';
 const monitorConfig = { workspaceId: deploymentOutputs.monitorWorkspaceId.value,
   runId: nonce, expectedSha: source.sha, sourceTree: source.sourceTree,
-  traceId: 'd'.repeat(32), spanId: 'e'.repeat(16), startedAt };
+  traceId: 'd'.repeat(32), spanId: 'e'.repeat(16), startedAt, completedAt };
 const monitorRow = { TimeGenerated: startedAt, Name: 'foundation-probe',
   OperationId: monitorConfig.traceId, Id: monitorConfig.spanId,
   Properties: { 'probe.source_sha': source.sha, 'probe.source_tree': source.sourceTree, 'probe.nonce': nonce } };
@@ -150,6 +155,8 @@ test('Monitor rejects custom/historical/malformed/injected evidence and missing 
     { ...monitorConfig, sourceTree: source.sourceHash }, { ...monitorConfig, traceId: '0'.repeat(32) },
     { ...monitorConfig, spanId: '0'.repeat(16) }, { ...monitorConfig, workspaceId: fixture.groupId },
     { ...monitorConfig, startedAt: '2025-01-01' },
+    { ...monitorConfig, completedAt: '2026-10-03T12:01:00.000Z' },
+    { ...monitorConfig, completedAt: '2026-10-03T11:59:00.000Z' },
   ]) assert.equal(checkMonitorTrace(config, called, clock).status, 'blocked');
   for (const row of [{ Message: 'old' }, { ...monitorRow, TimeGenerated: '2025-01-01' },
     { ...monitorRow, TimeGenerated: '2026-10-03T12:02:00.000Z' },
@@ -250,14 +257,14 @@ test('FULL REPORT regression: original false full success remains BLOCKED, even 
   assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security').status, 'passed');
   assert.equal(identity.evidence.exact, true);
   assert.equal(identity.evidence.tokenExchangeVerified, false);
-  assert.equal(identity.status, 'blocked');
+  assert.equal(identity.status, 'passed');
   for (const name of ['key-vault-secret-version', 'service-image-digests', 'blob-roundtrip',
     'monitor-trace', 'runtime-workload-evidence']) assert.equal(report.checks.find(check => check.name === name).status, 'blocked');
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
 });
 
 test('full report overrides caller federation checks with exact bound foundation-probe configuration', () => {
-  const valid = { issuer: 'https://issuer.example/',
+  const valid = { issuer: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
     subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe', audiences: ['api://AzureADTokenExchange'] };
   const json = value => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
   for (const overrides of [
@@ -280,7 +287,7 @@ test('full report overrides caller federation checks with exact bound foundation
     const identity = report.checks.find(check => check.name === 'workload-identity-oidc');
     assert.equal(report.overall, 'blocked');
     assert.equal(report.deployedAcceptance, false);
-    assert.equal(identity.status, 'blocked');
+    assert.equal(identity.status, Object.keys(overrides).length === 0 ? 'passed' : 'blocked');
     if (Object.keys(overrides).length === 0) {
       assert.equal(identity.evidence.exact, true);
       assert.equal(identity.evidence.tokenExchangeVerified, false);
@@ -316,4 +323,57 @@ test('AKS preflight does not query an ID when the deployment receipt is not succ
   assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security').status, 'blocked');
   assert.ok(!calls.some(args => args[0] === 'rest'));
   assert.equal(report.checks.find(check => check.name === 'runtime-workload-evidence').status, 'blocked');
+});
+
+test('only independently collected complete runtime evidence can pass deployed acceptance', () => {
+  const runtime = makeRuntimeFixture();
+  const monitorRow = {
+    TimeGenerated: validProbeReceipt.telemetry.startedAt,
+    Name: 'foundation-probe',
+    OperationId: validProbeReceipt.telemetry.traceId,
+    Id: validProbeReceipt.telemetry.spanId,
+    Properties: {
+      'probe.source_sha': source.sha,
+      'probe.source_tree': source.sourceTree,
+      'probe.nonce': validProbeReceipt.nonce,
+    },
+  };
+  const calls = [];
+  const report = runAcceptance({
+    ...fixture,
+    expectedSha: source.sha,
+    deploymentName: fixture.deploymentName,
+    collectRuntimeEvidence: true,
+    kubeContext: runtime.options.kubeContext,
+    imageReference: runtime.options.imageReference,
+    imageReceiptPath: runtime.options.imageReceiptPath,
+    workspaceId: deploymentOutputs.monitorWorkspaceId.value,
+    runtimeEvidence: { verified: true },
+  }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({ monitorResult: { status: 0, stdout: JSON.stringify([monitorRow]), stderr: '' } }, calls),
+    execKubectl: runtime.execKubectl,
+    verifyImage: runtime.verifyImage,
+    now: () => Date.parse('2026-10-03T12:02:00.000Z'),
+  });
+
+  assert.equal(report.overall, 'passed');
+  assert.equal(report.deployedAcceptance, true);
+  assert.equal(report.checks.find(check => check.name === 'runtime-workload-evidence').status, 'passed');
+  assert.equal(report.checks.find(check => check.name === 'monitor-trace').status, 'passed');
+  assert.equal(report.checks.find(check => check.name === 'monitor-trace').evidence.completedAt, probeCompletedAt);
+  assert.equal(report.checks.some(check => check.name === 'service-image-digests'), false);
+  assert.equal(report.checks.find(check => check.name === 'blob-roundtrip').scope, 'diagnostic');
+  assert.equal(report.checks.find(check => check.name === 'blob-roundtrip').status, 'not-run');
+  assert.ok(calls.some(args => args[0] === 'monitor' && args.includes('--analytics-query')));
+});
+
+test('CLI rejects mutation and caller-asserted runtime proof options before any target command', () => {
+  const script = fileURLToPath(new URL('../verify-acceptance.mjs', import.meta.url));
+  for (const option of ['--execute', '--run-id=11111111222233334444555555555555', '--trace-id=' + 'd'.repeat(32)]) {
+    const result = spawnSync(process.execPath, [script, option], { cwd: process.cwd(), encoding: 'utf8' });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unknown option/);
+    assert.doesNotMatch(result.stdout, /"deployedAcceptance": true/);
+  }
 });

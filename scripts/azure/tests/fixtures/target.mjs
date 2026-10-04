@@ -47,6 +47,7 @@ export const observedCluster = {
   id: deploymentOutputs.foundationResources.value.clusterId,
   properties: {
     kubernetesVersion: '1.29.7',
+    fqdn: 'api.example.privatelink.azmk8s.io',
     networkProfile: {
       networkPlugin: 'azure',
       networkPolicy: 'cilium',
@@ -73,12 +74,17 @@ export function fakeAzure(overrides = {}, calls = []) {
     if (args[0] === 'deployment') return overrides.create ?? ok({
       id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
       properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } });
-    if (args[0] === 'aks') return overrides.issuerResult ?? { status: 0, stdout: 'https://issuer.example/', stderr: '' };
+    if (args[0] === 'aks') return overrides.issuerResult ?? {
+      status: 0,
+      stdout: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
+      stderr: '',
+    };
     if (args[0] === 'identity') return overrides.federationResult ?? ok({
-      issuer: 'https://issuer.example/', subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
+      issuer: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
+      subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
       audiences: ['api://AzureADTokenExchange'],
     });
-    if (args[0] === 'monitor') return ok([{ Message: 'historical' }]);
+    if (args[0] === 'monitor') return overrides.monitorResult ?? ok([{ Message: 'historical' }]);
     throw new Error(`Unexpected Azure command: ${args.join(' ')}`);
   };
 }
