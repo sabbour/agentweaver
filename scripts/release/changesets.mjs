@@ -333,6 +333,7 @@ export function validateChangesets(manifest, { root, changes, ancestorSha } = {}
         if (!file.startsWith(prefix)) continue;
         const relative = file.slice(prefix.length);
         if (!relative || /^(?:bin|obj|artifacts|tests?)\//i.test(relative) ||
+            relative === 'packages.lock.json' ||
             /(?:^|\/)(?:README\.md|[^/]+\.md)$/i.test(relative) ||
             /(?:^|\/)(?:Generated|generated)\//.test(relative) ||
             /\.(?:g|generated)\.cs$/i.test(relative)) continue;

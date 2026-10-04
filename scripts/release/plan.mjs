@@ -175,17 +175,17 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       fail('usage', 'node scripts/release/plan.mjs <manifest.json> [--out <plan.json>]');
     }
     const plan = createPlanFromFile(manifestArg, { root: repositoryRoot });
-    if (plan.components.length === 0) {
-      if (plan.initialBaseline) {
-        console.log(`No version bumps pending; the initial ${plan.initialBaseline.baselineVersion} package baseline notes remain source-bound.`);
-      } else {
-        console.log('No pending changesets; nothing to plan.');
-      }
+    if (plan.components.length === 0 && !plan.initialBaseline) {
+      console.log('No pending changesets; nothing to plan.');
     } else {
       const outFile = path.resolve(repositoryRoot, out);
       mkdirSync(path.dirname(outFile), { recursive: true });
       writeFileSync(outFile, JSON.stringify(plan, null, 2) + '\n');
-      console.log(`Wrote release plan for ${plan.components.length} component(s) to ${path.relative(repositoryRoot, outFile)} (source ${plan.sourceSha})`);
+      if (plan.initialBaseline && plan.components.length === 0) {
+        console.log(`No version bumps pending; wrote source-bound initial ${plan.initialBaseline.baselineVersion} package baseline plan to ${path.relative(repositoryRoot, outFile)} (source ${plan.sourceSha}).`);
+      } else {
+        console.log(`Wrote release plan for ${plan.components.length} component(s) to ${path.relative(repositoryRoot, outFile)} (source ${plan.sourceSha})`);
+      }
       for (const component of plan.components) {
         console.log(`  ${component.id}: ${component.fromVersion} -> ${component.toVersion} (${component.bump})`);
       }
