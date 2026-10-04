@@ -6,7 +6,7 @@ PostgreSQL, Key Vault, and Blob use private networking. Azure Monitor uses a pri
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure resource and evidence dependency map. AKS hosts the Foundation Probe Job; its identity and egress policy support it. The read-only evidence gate depends on Job and pod observations, the native receipt, a source-bound registry manifest, and correlated Azure Monitor evidence. Edges are not a time sequence; no live deployment or P0 completion is claimed." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the Foundation Probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights. The read-only evidence gate depends on Job and pod observations, the native receipt, a source-bound registry manifest, and correlated Azure Monitor evidence. No live deployment or P0 completion is claimed." />
   </a>
   <figcaption>Structural resource and evidence dependencies. Bicep and Kustomize definitions are not a deployment record; the figure does not claim live readiness or P0 completion.</figcaption>
 </figure>
@@ -16,7 +16,7 @@ The following sequence shows the verifier's time-ordered, read-only checks after
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier observes the Job and owned pod, independently checks the source-bound registry digest and receipt, then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked." />
   </a>
   <figcaption>Ordered acceptance evidence checks, not a deployment sequence. Only complete source-, target-, image-, identity-, receipt-, and telemetry-bound evidence sets <code>deployedAcceptance</code>; this does not claim broader P0 readiness.</figcaption>
 </figure>

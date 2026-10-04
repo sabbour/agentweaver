@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Foundation Probe acceptance evidence",
-  "alt": "After a Foundation Probe Job completes, the read-only verifier observes its Job and owned pod, independently checks the source-bound registry image and native receipt, then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked.",
+  "alt": "After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked.",
   "autonumber": true,
   "participants": [
     {
@@ -71,7 +71,7 @@
       "type": "message",
       "from": "aks",
       "to": "verifier",
-      "label": "Namespace, owner UIDs, ServiceAccount, projected identity, success/timestamps, images and receipt",
+      "label": "Namespace, owner UIDs, ServiceAccount, projected identity, success/timestamps and image fields",
       "line": "dashed",
       "arrow": "open"
     },
@@ -98,6 +98,22 @@
       "label": "Compare Job image, observed Pod image and pulled imageID separately with manifest",
       "line": "solid",
       "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "verifier",
+      "to": "aks",
+      "label": "Read bounded probe output only after all image checks pass",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "aks",
+      "to": "verifier",
+      "label": "Native receipt from the completed probe",
+      "line": "dashed",
+      "arrow": "open"
     },
     {
       "type": "message",

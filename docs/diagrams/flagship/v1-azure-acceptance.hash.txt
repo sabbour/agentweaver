@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-azure-acceptance.json",
-    "sha256": "afb5d384d8d4701ff2e323645476a89c23394fa9bfeb5952eafc08ae28ce73b5"
+    "sha256": "5d76e5b2309271a651d6809a64424f45aeba0be0b5da533969741da97b2c03f3"
   },
   "drawio": {
     "file": "v1-azure-acceptance.drawio",
-    "sha256": "27a9022b1c77b42371afefc332c4cff92bcc19f47aa2cc4788b44fd80f3e7aca"
+    "sha256": "6356ae01f1c7d24122fb0f9cafa59daa84d839a294742e246d99284844a9660d"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-azure-acceptance.png",
-    "sha256": "10ebfea4f633c204ccf17c9d1e1aa757e5c9b6c28843ece2fd6b620c8161c170"
+    "sha256": "94879d401fad4accc9dbdb244fdbee29d678198592b28cf2c3e5b630d9d47067"
   }
 }
