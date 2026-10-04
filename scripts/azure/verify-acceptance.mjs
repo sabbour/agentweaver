@@ -12,6 +12,62 @@ import { cliConfig, cliOptions } from './deploy.mjs';
 const blocked = (name, reason, evidence) => ({ name, scope: 'configuration', status: 'blocked', reason, evidence });
 const configured = (name, evidence) => ({ name, scope: 'configuration', status: 'passed', evidence });
 
+export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscriptionId }, execAz) {
+  const name = 'aks-observed-network-security';
+  const expectedClusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}` +
+    `/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
+  if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(subscriptionId ?? '') ||
+      !/^[a-zA-Z0-9._()-]{1,90}$/.test(resourceGroup ?? '') ||
+      typeof clusterId !== 'string' || clusterId !== expectedClusterId) {
+    return blocked(name, 'The exact AKS resource ID from the successful source-bound deployment receipt is required.');
+  }
+
+  const apiVersion = '2024-09-01';
+  let result;
+  try {
+    result = execAz(['rest', '--method', 'get', '--url',
+      `https://management.azure.com${clusterId}?api-version=${apiVersion}`, '-o', 'json'], { check: false });
+  } catch (error) {
+    return blocked(name, `Observed AKS resource query failed: ${error.message}`);
+  }
+
+  let cluster;
+  try {
+    if (result.status !== 0) return blocked(name, 'Observed AKS resource query did not succeed.');
+    cluster = JSON.parse(result.stdout);
+  } catch {
+    return blocked(name, 'Observed AKS resource response is malformed.');
+  }
+  if (!cluster || typeof cluster !== 'object' || Array.isArray(cluster) ||
+      typeof cluster.id !== 'string' || cluster.id !== clusterId) {
+    return blocked(name, 'Observed AKS resource ID differs from the approved deployment receipt.');
+  }
+
+  const versionMatch = /^(\d+)\.(\d+)(?:\.\d+)?$/.exec(
+    cluster.properties?.kubernetesVersion ?? '');
+  if (!versionMatch || Number(versionMatch[1]) < 1 ||
+      (Number(versionMatch[1]) === 1 && Number(versionMatch[2]) < 29)) {
+    return blocked(name, 'Observed AKS Kubernetes version must be 1.29 or later.');
+  }
+
+  const networkProfile = cluster.properties?.networkProfile;
+  if (typeof networkProfile?.networkDataplane !== 'string' ||
+      networkProfile.networkDataplane.toLowerCase() !== 'cilium' ||
+      networkProfile.advancedNetworking?.enabled !== true ||
+      networkProfile.advancedNetworking?.security?.enabled !== true) {
+    return blocked(name, 'Observed AKS must have the Cilium dataplane and advanced network security enabled.');
+  }
+
+  return configured(name, {
+    clusterId: cluster.id,
+    kubernetesVersion: cluster.properties.kubernetesVersion,
+    networkDataplane: networkProfile.networkDataplane,
+    advancedNetworkingEnabled: true,
+    advancedNetworkingSecurityEnabled: true,
+    apiVersion,
+  });
+}
+
 export function checkDeployedSha({ resourceGroup, subscriptionId, deploymentName, expectedSha, sourceTree, sourceHash }, execAz) {
   const name = 'deployed-sha';
   if (!isFullSha(expectedSha) || !isFullSha(sourceTree) || !/^[0-9a-f]{64}$/.test(sourceHash ?? '') ||
@@ -194,6 +250,10 @@ export function runAcceptance(config, { execAz = runAz, sourceResolver = resolve
     const receipt = checks.find(item => item.name === 'deployed-sha' && item.status === 'passed')?.evidence;
     const clusterName = `${config.resourceGroup}-aks`;
     const accountName = `${config.resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
+    check('aks-observed-network-security', () => receipt?.resources.clusterId ?
+      checkAksNetworkSecurity({ ...config, clusterId: receipt.resources.clusterId }, boundAz) :
+      blocked('aks-observed-network-security',
+        'The successful source-bound deployment receipt must name the exact AKS resource before preflight.'));
     check('workload-identity-oidc', () => checkWorkloadIdentity({ ...config, clusterName, identityChecks: [{
       identityName: `${config.resourceGroup}-id-foundation-probe`,
       federatedCredentialName: 'foundation-probe-workload-identity',
