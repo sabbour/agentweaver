@@ -8,9 +8,22 @@ PostgreSQL, Key Vault, and Blob use private networking. Azure Monitor uses a pri
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Verifier flow checks one completed Job and its owned pod, compares the Job image and pod imageID separately with a source-bound registry manifest, validates a distinct native #1784 receipt, and requires fresh correlated Monitor rows. Missing evidence blocks; this does not show P0 completion or a live deployment." />
   </a>
-  <figcaption>Bicep defines Azure resources and identities; Kustomize defines the probe Job and egress policy. The external read-only consumer independently checks the completed Job and owned pod, source-bound image, strict native receipt, and fresh correlated Monitor rows. Only complete evidence sets <code>deployedAcceptance</code>; missing evidence remains blocked. This does not close #1801, confirm P0 completion, or show a live deployment.</figcaption>
+  <figcaption>Bicep defines Azure resources and identities; Kustomize defines the probe Job and egress policy. The external read-only consumer independently checks the completed Job and owned pod, source-bound image, strict native receipt, and fresh correlated Monitor rows. Only complete evidence sets <code>deployedAcceptance</code>; missing evidence remains blocked. This does not close #1801, confirm P0 completion, or show a live deployment. Intended P0 region placement is summarized below.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.drawio'">Open editable draw.io source</a></p>
+
+## P0 region placement
+
+The intended v1 P0 placement is:
+
+| Resource | Region | Notes |
+| --- | --- | --- |
+| AKS, private VNet and subnets, PostgreSQL Flexible Server, Key Vault, Blob Storage, and Private Endpoints | `eastus2euap` | PostgreSQL is Entra-only and uses `Standard_B2s`. |
+| Log Analytics workspace and Application Insights | `eastus2` | Provider metadata advertises these Monitor resources in East US 2, not East US 2 EUAP. |
+| Azure Monitor Private Link Scope (AMPLS) | `global` | Monitor resources can link to the global AMPLS. |
+| AMPLS Private Endpoint | `eastus2euap` | It is in the EUAP VNet/subnet; the endpoint region follows its VNet. |
+
+Provider metadata advertises AKS, including API version `2026-07-02-preview`, Key Vault, Storage, VNets, Private Endpoints, and PostgreSQL `Standard_B2s` in `eastus2euap`. East US 2 EUAP has no Retail Prices API meters, so this page makes no EUAP cost quote; standard `eastus2` rates are only a planning proxy. This region map is not deployment evidence and adds no 0.x product scope.
 
 ## AKS and Application Routing preview
 
