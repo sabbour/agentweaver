@@ -29,10 +29,12 @@ Use the exact argument contract in the [Azure operator guide](https://github.com
 
 ## Foundation Probe
 
-The acceptance-only Job checks the source receipt, projected workload identity, exact Key Vault version, owned Blob object, PostgreSQL transaction, and Azure Monitor trace.
+The acceptance-only Job exercises the projected workload identity, exact Key Vault version, owned Blob object, PostgreSQL transaction, and telemetry export. The Job's receipt records resource-operation results; it does not attest to the pod UID, pulled image, or process exit.
+
+The separate read-only consumer is enabled explicitly with `--collect-runtime-evidence` on `scripts/azure/verify-acceptance.mjs`. It observes the completed Job and its owned pod, verifies the expected registry manifest against the Job image and pod image ID, checks the exact target and identity projection, and validates the native receipt. Only after completion does it query Azure Monitor for fresh, matching `AppDependencies` or `AppRequests` rows correlated to the source SHA, Git tree, nonce, trace, and span. Configuration observations remain separate from runtime proof, and missing or mismatched evidence leaves acceptance blocked.
 
 The probe uses its own workload identity and egress overlay. It does not test Identity broker OAuth or broker grant redemption.
 
-The test suite uses fakes and disposable local PostgreSQL. No Azure account or cloud fixture is part of the local test.
+The consumer tests use fake transports and generated local fixtures. They do not read Azure, Kubernetes, or a registry, and they do not deploy or establish live acceptance.
 
 The operator CLI blocks acceptance when deployment evidence is missing. Read [Testing](./testing) for the current evidence boundary.

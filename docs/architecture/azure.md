@@ -30,6 +30,6 @@ AKS keeps the private API, Azure Linux nodes, Cilium networking, OIDC/workload i
 
 The base NetworkPolicy denies traffic by default. The Foundation Probe overlay grants its own egress. The base does not provide telemetry exporter egress.
 
-The Foundation Probe has a dedicated workload identity. It checks Key Vault, Blob, PostgreSQL, and Azure Monitor with source-bound evidence. It does not redeem through the Identity broker.
+The Foundation Probe Job has a dedicated workload identity. It exercises Key Vault, Blob, PostgreSQL, and telemetry without redeeming through the Identity broker. A separate read-only consumer checks the completed Job and pod, verifies the exact registry image, validates the native receipt, and queries Azure Monitor after completion for matching stored telemetry. Configuration observations remain separate from runtime evidence.
 
-The infrastructure has not been provisioned. No live role grant, addon activation, DNS zone, certificate, controller, or route was created. Runtime preview and serving effects remain unverified. See [Azure acceptance](../guide/azure-acceptance) for local checks and deployment approval boundaries.
+The infrastructure has not been provisioned. No live role grant, addon activation, DNS zone, certificate, controller, or route was created. Runtime preview and serving effects remain unverified. The consumer has only been validated with local fixtures; it has not run against Azure or AKS. See [Azure acceptance](../guide/azure-acceptance) for the evidence boundary and deployment approval requirements.
