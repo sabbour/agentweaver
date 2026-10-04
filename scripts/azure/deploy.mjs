@@ -54,7 +54,7 @@ export function deploy(config, { execAz = runAz, sourceResolver = resolveSource 
   return { ...summary, executed: true, receipt: { scope: source.scope, sourceSha: source.sha,
     sourceTree: source.sourceTree, sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,
     resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id,
-    ...readFoundationOutputs(outputs, config) } };
+    ...readFoundationOutputs(outputs, { ...config, ...source }) } };
 }
 
 export function cliConfig(values) {

@@ -7,6 +7,7 @@
     "tenantId": { "value": "00000000-0000-0000-0000-000000000000" },
     "postgresEntraAdminObjectId": { "value": "00000000-0000-0000-0000-000000000000" },
     "postgresEntraAdminPrincipalName": { "value": "CHANGEME-admin-group" },
+    "appRoutingDnsZoneResourceIds": { "value": [] },
     "owner": { "value": "CHANGEME-owner" },
     "costCenter": { "value": "unassigned" }
   }

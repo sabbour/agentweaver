@@ -29,8 +29,12 @@ param nodePoolCount int = 2
 @description('Whether the AKS API server is private (no public endpoint). Always true for this dedicated environment.')
 param enablePrivateCluster bool = true
 
+@description('Optional existing application DNS zone resource IDs for custom routing domains.')
+param appRoutingDnsZoneResourceIds array = []
+
 var clusterName = '${namePrefix}-aks'
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
+var managedDefaultDomainRequested = empty(appRoutingDnsZoneResourceIds)
 
 resource existingVnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
   name: '${namePrefix}-vnet'
@@ -41,7 +45,7 @@ resource existingNodeSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-09-0
   name: 'aks'
 }
 
-resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
+resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' = {
   name: clusterName
   location: location
   tags: tags
@@ -63,6 +67,27 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-09-01' = {
     securityProfile: {
       workloadIdentity: {
         enabled: true
+      }
+    }
+    ingressProfile: {
+      webAppRouting: {
+        enabled: true
+        dnsZoneResourceIds: empty(appRoutingDnsZoneResourceIds) ? null : appRoutingDnsZoneResourceIds
+        defaultDomain: {
+          enabled: managedDefaultDomainRequested
+        }
+        nginx: {
+          defaultIngressControllerType: 'None'
+        }
+      }
+    }
+    addonProfiles: {
+      azureKeyvaultSecretsProvider: {
+        enabled: true
+        config: {
+          enableSecretRotation: 'true'
+          rotationPollInterval: '2m'
+        }
       }
     }
     apiServerAccessProfile: {
@@ -114,3 +139,14 @@ output clusterId string = aks.id
 output clusterName string = aks.name
 output oidcIssuerUrl string = aks.properties.oidcIssuerProfile.issuerURL
 output kubeletIdentityObjectId string = aks.properties.identityProfile.kubeletidentity.objectId
+output appRoutingIdentity object = {
+  resourceId: aks.properties.ingressProfile.webAppRouting.identity.resourceId
+  clientId: aks.properties.ingressProfile.webAppRouting.identity.clientId
+  objectId: aks.properties.ingressProfile.webAppRouting.identity.objectId
+}
+output appRoutingDomain object = {
+  managedDefaultRequested: managedDefaultDomainRequested
+  domainName: managedDefaultDomainRequested
+    ? aks.properties.ingressProfile.webAppRouting.defaultDomain.domainName
+    : null
+}

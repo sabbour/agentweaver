@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   assertDedicatedTarget,
   assertImageDigest,
@@ -14,6 +15,15 @@ import { postDeploymentAzure, postDeploymentInventory, postDeploymentDetails } f
 import { plan } from '../plan.mjs';
 import { deploy } from '../deploy.mjs';
 import { runAcceptance } from '../verify-acceptance.mjs';
+
+function expectedArmGuid(...values) {
+  const namespace = Buffer.from('11fb06fb712d4ddd98c7e71bbd588830', 'hex');
+  const bytes = createHash('sha1').update(namespace).update(values.join('-')).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 test('assertDedicatedTarget accepts the dedicated naming convention', () => {
   assert.equal(assertDedicatedTarget('aw-v1-p0'), 'aw-v1-p0');
@@ -207,11 +217,104 @@ test('role assignments must have the exact reviewed parent scope and ARM GUID', 
       { ...role, id: role.id.replace(role.name, fixture.tenantId), name: fixture.tenantId },
     ]) assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [resource] })), /unexpected|outside/);
   }
+  const vaultId = `${fixture.groupId}/providers/Microsoft.KeyVault/vaults/aw-v1-p0-kv`;
+  const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`;
+  const roleId = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba';
+  const name = expectedArmGuid(vaultId, clusterId, roleId);
+  const routingRole = {
+    id: `${vaultId}/providers/Microsoft.Authorization/roleAssignments/${name}`,
+    type: 'Microsoft.Authorization/roleAssignments', name,
+  };
+  assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure({ resources: [routingRole] })));
+  assert.throws(() => guardAzureTarget(fixture, fakeAzure({
+    resources: [{ ...routingRole, id: routingRole.id.replace(name, fixture.tenantId), name: fixture.tenantId }],
+  })), /unexpected/);
+});
+
+test('custom App Routing DNS inventory admits only exact scoped roles and module deployments', () => {
+  const zoneIds = [
+    `${fixture.groupId}/providers/Microsoft.Network/dnsZones/apps.example.com`,
+    `${fixture.groupId}/providers/Microsoft.Network/privateDnsZones/apps.internal.example`,
+  ];
+  const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`;
+  const resources = zoneIds.flatMap((zoneId, index) => {
+    const zoneIsPrivate = zoneId.includes('/privateDnsZones/');
+    const zoneName = zoneId.slice(zoneId.lastIndexOf('/') + 1);
+    const roleId = zoneIsPrivate
+      ? 'b12aa53e-6015-4669-85d0-8515ebb3ae7f'
+      : 'befefa01-2a29-4197-83a8-272ff33ce314';
+    const roleName = expectedArmGuid(zoneId, clusterId, roleId);
+    const deploymentName = `aw-v1-p0-app-routing-dns-${index}`;
+    return [
+      { id: zoneId, type: zoneIsPrivate ? 'Microsoft.Network/privateDnsZones' : 'Microsoft.Network/dnsZones',
+        name: zoneName },
+      { id: `${zoneId}/providers/Microsoft.Authorization/roleAssignments/${roleName}`,
+        type: 'Microsoft.Authorization/roleAssignments', name: roleName },
+      { id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${deploymentName}`,
+        type: 'Microsoft.Resources/deployments', name: deploymentName },
+    ];
+  });
+  const config = { ...fixture, appRoutingDnsZoneResourceIds: zoneIds };
+  assert.doesNotThrow(() => guardAzureTarget(config, fakeAzure({ resources })));
+  const role = resources.find(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
+  assert.throws(() => guardAzureTarget(config, fakeAzure({
+    resources: [{ ...role, id: role.id.replace(role.name, fixture.tenantId), name: fixture.tenantId }],
+  })), /unexpected/);
+  assert.throws(() => guardAzureTarget(fixture, fakeAzure({
+    resources: [resources.find(resource => resource.type === 'Microsoft.Resources/deployments')],
+  })), /unexpected/);
+  assert.throws(() => guardAzureTarget(config, fakeAzure({
+    resources: [{ ...resources[0], type: 'Microsoft.Network/virtualNetworks' }],
+  })), /unexpected/);
+});
+
+test('external custom App Routing DNS zones require exact existing resource evidence', () => {
+  const zoneIds = [
+    `/subscriptions/${fixture.subscriptionId}/resourceGroups/public-dns/providers/Microsoft.Network/dnsZones/apps.example.com`,
+    `/subscriptions/${fixture.subscriptionId}/resourceGroups/private-dns/providers/Microsoft.Network/privateDnsZones/apps.internal.example`,
+  ];
+  const details = Object.fromEntries(zoneIds.map((id, index) => [id, {
+    id,
+    type: index === 0 ? 'Microsoft.Network/dnsZones' : 'Microsoft.Network/privateDnsZones',
+    name: index === 0 ? 'apps.example.com' : 'apps.internal.example',
+  }]));
+  const calls = [];
+  assert.doesNotThrow(() => guardAzureTarget({ ...fixture, appRoutingDnsZoneResourceIds: zoneIds },
+    fakeAzure({ details }, calls)));
+  assert.equal(calls.filter(args => args[0] === 'resource' && args[1] === 'show').length, 2);
+  for (const mismatch of [
+    { ...details[zoneIds[0]], id: `${details[zoneIds[0]].id}-other` },
+    { ...details[zoneIds[0]], type: 'Microsoft.Network/privateDnsZones' },
+    { ...details[zoneIds[0]], name: 'other.example.com' },
+  ]) {
+    assert.throws(() => guardAzureTarget({ ...fixture, appRoutingDnsZoneResourceIds: [zoneIds[0]] },
+      fakeAzure({ details: { [zoneIds[0]]: mismatch } })), /exact existing zone resource/);
+  }
+  assert.throws(() => guardAzureTarget({ ...fixture, appRoutingDnsZoneResourceIds: [zoneIds[0]] },
+    fakeAzure({ details: {} })));
+});
+
+test('custom App Routing DNS inputs are validated before target reads', () => {
+  const valid = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/dns-a/providers/Microsoft.Network/dnsZones/apps.example.com';
+  for (const zoneIds of [
+    ['not-an-arm-id'],
+    [valid.replace('11111111-1111-1111-1111-111111111111', '99999999-9999-9999-9999-999999999999')],
+    [valid.replace('apps.example.com', 'privatelink.example.com')],
+    [valid, valid.toUpperCase()],
+    [valid, valid.replace('/dns-a/', '/dns-b/')],
+  ]) {
+    const calls = [];
+    assert.throws(() => guardAzureTarget({ ...fixture, appRoutingDnsZoneResourceIds: zoneIds },
+      fakeAzure({}, calls)));
+    assert.equal(calls.length, 0);
+  }
 });
 
 test('deployment configuration requires exact resource IDs/endpoints and a named probe identity, not parallel array order', () => {
   const result = readFoundationOutputs(deploymentOutputs, fixture);
   assert.equal(result.foundationProbeIdentity.name, 'foundation-probe');
+  assert.equal(result.appRoutingIdentity.objectId, deploymentOutputs.appRoutingIdentity.value.objectId);
+  assert.equal(result.appRoutingDomain.managedDefaultRequested, true);
   assert.notEqual(result.resources.monitorWorkspaceId, result.resources.monitorWorkspaceResourceId);
   for (const key of Object.keys(deploymentOutputs.foundationResources.value)) {
     const outputs = structuredClone(deploymentOutputs);
@@ -223,13 +326,35 @@ test('deployment configuration requires exact resource IDs/endpoints and a named
     outputs.foundationProbeIdentity.value[key] = 'unreviewed';
     assert.throws(() => readFoundationOutputs(outputs, fixture));
   }
+  const customZones = [
+    `/subscriptions/${fixture.subscriptionId}/resourceGroups/dns/providers/Microsoft.Network/dnsZones/apps.example.com`,
+  ];
+  const customOutputs = structuredClone(deploymentOutputs);
+  customOutputs.appRoutingDomain.value = { managedDefaultRequested: false, domainName: null };
+  assert.equal(readFoundationOutputs(customOutputs, {
+    ...fixture, appRoutingDnsZoneResourceIds: customZones,
+  }).appRoutingDomain.domainName, null);
   for (const outputs of [
     {},
+    { ...deploymentOutputs, appRoutingIdentity: undefined },
     { ...deploymentOutputs, foundationProbeIdentity: { value: deploymentOutputs.foundationProbeIdentity.value.clientId } },
     { ...deploymentOutputs, serviceIdentityClientIds: { value: [fixture.tenantId] }, foundationProbeIdentity: undefined },
     { ...deploymentOutputs, monitorWorkspaceId: { value: fixture.groupId } },
     { ...deploymentOutputs, foundationProbeIdentity: { value: {
       ...deploymentOutputs.foundationProbeIdentity.value, principalObjectId: deploymentOutputs.foundationProbeIdentity.value.clientId,
     } } },
+    { ...deploymentOutputs, appRoutingIdentity: { value: {
+      ...deploymentOutputs.appRoutingIdentity.value, objectId: deploymentOutputs.appRoutingIdentity.value.clientId,
+    } } },
+    { ...deploymentOutputs, appRoutingIdentity: { value: {
+      ...deploymentOutputs.appRoutingIdentity.value, objectId: deploymentOutputs.aksControlPlanePrincipalId.value,
+    } } },
+    { ...deploymentOutputs, appRoutingIdentity: { value: {
+      ...deploymentOutputs.appRoutingIdentity.value,
+      resourceId: deploymentOutputs.appRoutingIdentity.value.resourceId.replace(fixture.subscriptionId, fixture.tenantId),
+    } } },
+    { ...deploymentOutputs, appRoutingDomain: { value: { managedDefaultRequested: true, domainName: null } } },
+    { ...deploymentOutputs, appRoutingDomain: { value: { managedDefaultRequested: false, domainName: 'test-only.invalid' } } },
   ]) assert.throws(() => readFoundationOutputs(outputs, fixture));
+  assert.throws(() => readFoundationOutputs(customOutputs, fixture), /App Routing|Deployment outputs/);
 });
