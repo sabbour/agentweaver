@@ -80,11 +80,15 @@ function createApiRequest({
   liveRun = createRun(),
   currentSha = SOURCE_SHA,
   workflows = {},
+  filenameUnavailable = false,
 } = {}) {
   const requests = [];
   const request = async (endpoint) => {
     requests.push(endpoint);
     if (endpoint.endsWith('/actions/workflows/v1-docs-ci.yml')) {
+      if (filenameUnavailable) {
+        throw Object.assign(new Error('Not Found'), { status: 404 });
+      }
       return workflows[WORKFLOW_ID] ?? {
         id: WORKFLOW_ID,
         name: WORKFLOW_NAME,
@@ -92,7 +96,20 @@ function createApiRequest({
         state: 'active',
       };
     }
+    const workflowIdMatch = endpoint.match(/\/actions\/workflows\/(\d+)$/);
+    if (workflowIdMatch) {
+      const workflowId = Number(workflowIdMatch[1]);
+      return workflows[workflowId] ?? {
+        id: workflowId,
+        name: WORKFLOW_NAME,
+        path: workflowId === WORKFLOW_ID ? V1_WORKFLOW_PATH : '.github/workflows/other.yml',
+        state: 'active',
+      };
+    }
     if (endpoint.includes(`/actions/workflows/${WORKFLOW_ID}/runs?`)) {
+      return { workflow_runs: runs };
+    }
+    if (endpoint.includes('/actions/runs?')) {
       return { workflow_runs: runs };
     }
     if (endpoint.endsWith(`/actions/runs/${RUN_ID}`)) {
@@ -134,6 +151,21 @@ test('selects the successful current v1 push run and binds its attempt-specific 
   ];
   const { source, requests } = await resolveSource({
     runs: [...invalidRuns, createRun()],
+  });
+
+  test('resolves the exact workflow ID and path when filename lookup is absent from the default branch', async () => {
+    const { source, requests } = await resolveSource({
+      filenameUnavailable: true,
+      runs: [
+        createRun({ id: RUN_ID + 1, workflow_id: WORKFLOW_ID + 1, run_number: 13 }),
+        createRun(),
+      ],
+    });
+    assert.equal(source.publish, true);
+    assert.equal(source.workflowId, WORKFLOW_ID);
+    assert.equal(source.sourceSha, SOURCE_SHA);
+    assert.ok(requests.some((endpoint) => endpoint.endsWith('/actions/runs?branch=v1&event=push&head_sha=' + SOURCE_SHA + '&per_page=100')));
+    assert.ok(requests.some((endpoint) => endpoint.endsWith(`/actions/workflows/${WORKFLOW_ID}`)));
   });
 
   assert.equal(source.repository, PUBLISHED_REPOSITORY);
@@ -226,6 +258,21 @@ test('a workflow_run event must be a successful admitted push for the current v1
     requests.filter((endpoint) => endpoint.includes('/artifacts?')).length,
     artifactRequestCount,
   );
+});
+
+test('workflow_run uses the event workflow ID and verifies its exact path when filename lookup returns 404', async () => {
+  const { request, requests } = createApiRequest({ filenameUnavailable: true });
+  const source = await resolveV1DocsSource({
+    eventName: 'workflow_run',
+    eventPayload: {
+      repository: { full_name: PUBLISHED_REPOSITORY },
+      workflow_run: createRun(),
+    },
+    repository: PUBLISHED_REPOSITORY,
+    request,
+  });
+  assert.equal(source.publish, true);
+  assert.ok(requests.some((endpoint) => endpoint.endsWith(`/actions/workflows/${WORKFLOW_ID}`)));
 });
 
 test('rejects a queued workflow_run event after its run attempt changes', async () => {
@@ -505,6 +552,14 @@ test('keeps one Pages publisher and uploads only the composed root artifact', as
   );
   const publisher = await readFile(path.join(REPO_ROOT, 'scripts', 'docs', 'pages-publisher.mjs'), 'utf8');
   assert.match(publisher, /actions\/workflows\/v1-docs-ci\.yml/);
+});
+
+test('runs the skipped area checks when a draft pull request becomes ready', async () => {
+  const workflow = await readFile(path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(
+    workflow,
+    /pull_request:\n\s+types: \[opened, synchronize, reopened, ready_for_review\]/,
+  );
 });
 
 test('documents the single-publisher and fail-before-deploy contract', async () => {

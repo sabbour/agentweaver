@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 export const PUBLISHED_REPOSITORY = 'sabbour/agentweaver';
 export const ADMITTED_BRANCH = 'v1';
+export const V1_WORKFLOW_NAME = 'Agentweaver v1 Docs CI';
 export const V1_WORKFLOW_PATH = '.github/workflows/v1-docs-ci.yml';
 export const V1_BASE = '/agentweaver/v1/';
 export const ROOT_BASE = '/agentweaver/';
@@ -44,15 +45,19 @@ function artifactNameFor(sourceSha, runAttempt) {
   return `v1-docs-${sourceSha}-${runAttempt}`;
 }
 
-function validateWorkflow(workflow) {
-  if (
-    !workflow ||
-    !Number.isSafeInteger(workflow.id) ||
-    workflow.path !== V1_WORKFLOW_PATH ||
-    typeof workflow.name !== 'string' ||
-    workflow.name.length === 0 ||
-    workflow.state !== 'active'
-  ) {
+function matchesWorkflow(workflow, workflowId = workflow?.id) {
+  return Boolean(
+    workflow &&
+    Number.isSafeInteger(workflowId) &&
+    workflow.id === workflowId &&
+    workflow.path === V1_WORKFLOW_PATH &&
+    workflow.name === V1_WORKFLOW_NAME &&
+    workflow.state === 'active',
+  );
+}
+
+function validateWorkflow(workflow, workflowId = workflow?.id) {
+  if (!matchesWorkflow(workflow, workflowId)) {
     fail(`The active workflow must match the exact filename ${V1_WORKFLOW_PATH}.`);
   }
   return workflow;
@@ -119,6 +124,56 @@ function latestMatchingRun(runs, { workflowId, expectedSha }) {
   });
 }
 
+async function workflowById(request, workflowId) {
+  return validateWorkflow(
+    await request(`/repos/${PUBLISHED_REPOSITORY}/actions/workflows/${workflowId}`),
+  );
+}
+
+async function workflowByFilename(request) {
+  try {
+    return validateWorkflow(
+      await request(`/repos/${PUBLISHED_REPOSITORY}/actions/workflows/v1-docs-ci.yml`),
+    );
+  } catch (error) {
+    if (error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function latestRunWithoutDefaultBranchWorkflow(runs, { expectedSha, request }) {
+  const candidates = runs.filter((run) =>
+    run?.name === V1_WORKFLOW_NAME &&
+    run.event === 'push' &&
+    run.head_branch === ADMITTED_BRANCH &&
+    run.head_repository?.full_name === PUBLISHED_REPOSITORY &&
+    isSha(run.head_sha) &&
+    run.head_sha.toLowerCase() === expectedSha.toLowerCase() &&
+    Number.isSafeInteger(run.workflow_id),
+  );
+  candidates.sort((left, right) => {
+    const runNumberDifference = (right.run_number ?? 0) - (left.run_number ?? 0);
+    return runNumberDifference || right.id - left.id;
+  });
+
+  for (const candidate of candidates) {
+    const workflow = await request(
+      `/repos/${PUBLISHED_REPOSITORY}/actions/workflows/${candidate.workflow_id}`,
+    );
+    if (!matchesWorkflow(workflow, candidate.workflow_id)) {
+      continue;
+    }
+    const run = validateRun(candidate, {
+      workflowId: candidate.workflow_id,
+      expectedSha,
+    });
+    return { workflow, run };
+  }
+  fail(`No successful v1 docs push run exists for current v1 commit ${expectedSha}.`);
+}
+
 function validateArtifact(artifact, run, expectedName) {
   const linkedRun = artifact?.workflow_run;
   if (
@@ -158,11 +213,10 @@ export async function resolveV1DocsSource({
   }
 
   const basePath = `/repos/${PUBLISHED_REPOSITORY}`;
-  const workflow = validateWorkflow(
-    await request(`${basePath}/actions/workflows/v1-docs-ci.yml`),
-  );
+  let workflow = await workflowByFilename(request);
   if (
     eventName === 'workflow_run' &&
+    workflow &&
     eventPayload.workflow_run?.workflow_id !== workflow.id
   ) {
     return { publish: false };
@@ -173,6 +227,12 @@ export async function resolveV1DocsSource({
 
   if (eventName === 'workflow_run') {
     const eventRun = eventPayload.workflow_run;
+    if (!workflow) {
+      if (!Number.isSafeInteger(eventRun?.workflow_id)) {
+        fail('The v1 docs workflow_run event has no workflow ID.');
+      }
+      workflow = await workflowById(request, eventRun.workflow_id);
+    }
     validateRun(eventRun, {
       workflowId: workflow.id,
       expectedSha: currentHeadSha,
@@ -193,13 +253,26 @@ export async function resolveV1DocsSource({
       head_sha: currentHeadSha,
       per_page: '100',
     });
-    const result = await request(
-      `${basePath}/actions/workflows/${workflow.id}/runs?${query}`,
-    );
-    run = latestMatchingRun(result?.workflow_runs ?? [], {
-      workflowId: workflow.id,
-      expectedSha: currentHeadSha,
-    });
+    if (workflow) {
+      const result = await request(
+        `${basePath}/actions/workflows/${workflow.id}/runs?${query}`,
+      );
+      run = latestMatchingRun(result?.workflow_runs ?? [], {
+        workflowId: workflow.id,
+        expectedSha: currentHeadSha,
+      });
+    } else {
+      const result = await request(`${basePath}/actions/runs?${query}`);
+      const selected = await latestRunWithoutDefaultBranchWorkflow(
+        result?.workflow_runs ?? [],
+        {
+          expectedSha: currentHeadSha,
+          request,
+        },
+      );
+      workflow = selected.workflow;
+      run = selected.run;
+    }
   } else {
     fail(`The docs publisher does not accept the ${eventName} event.`);
   }
@@ -462,7 +535,11 @@ async function githubRequest(apiUrl, token, endpoint) {
     },
   });
   if (!response.ok) {
-    fail(`GitHub Actions API request failed with status ${response.status}: ${endpoint}`);
+    const error = new Error(
+      `GitHub Actions API request failed with status ${response.status}: ${endpoint}`,
+    );
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
