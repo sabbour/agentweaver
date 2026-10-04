@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: identity-broker-migration
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: identity-broker-migration
+spec:
+  activeDeadlineSeconds: 600
+  backoffLimit: 0
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        agentweaver.io/workload: identity-broker-migration
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: identity-broker-migration
+      automountServiceAccountToken: true
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: identity-broker-migration
+          image: registry.invalid/agentweaver-identity-broker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          command:
+            - dotnet
+            - Agentweaver.Identity.Broker.dll
+            - --migrate
+          envFrom:
+            - configMapRef:
+                name: identity-broker-migration-config
+                optional: false
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

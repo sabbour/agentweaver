@@ -1126,6 +1126,7 @@
         "dependencies": {
           "Agentweaver.Identity": "[1.0.0, )",
           "Agentweaver.Secrets.AzureKeyVault": "[0.1.0, )",
+          "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.0, )",
           "Microsoft.EntityFrameworkCore": "[10.0.12, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",

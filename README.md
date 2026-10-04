@@ -128,9 +128,14 @@ agent workspace storage or provision an Azure account; see the
 
 The Identity broker now composes the admitted authorization boundary with an
 Identity-owned PostgreSQL run-grant authority and the exact-version Key Vault
-workload-identity adapter. It remains an unpublished P0 candidate; deployed
-workload identity and the dedicated Azure integration environment are still
-separate acceptance work.
+workload-identity adapter. Its source now also defines a dedicated HTTPS
+ClusterIP runtime, separate runtime and migration workload identities, and an
+opt-in schema migration Job. Runtime PostgreSQL authentication uses an async
+Entra token callback per new physical connection; normal startup verifies the
+schema and never applies migrations. The source is still unpublished and
+undeployed: approved image, certificate, Secret, ConfigMap, PVC, database
+principal/bootstrap, and egress inputs remain operator responsibilities. No
+Azure, PostgreSQL, or Kubernetes write occurred.
 
 ## Build and check the foundation
 

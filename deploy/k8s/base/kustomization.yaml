@@ -7,6 +7,7 @@ resources:
   - limitrange.yaml
   - networkpolicy-default-deny.yaml
   - serviceaccounts/foundation-probe-sa.yaml
+  - identity-broker
 labels:
   - pairs:
       agentweaver.io/environment: v1-p0

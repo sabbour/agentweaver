@@ -7,15 +7,19 @@
 
 Native Bicep defines dedicated AKS, workload identity, PostgreSQL, Key Vault,
 Blob, and Azure Monitor resources. Kustomize defines a namespace, quotas,
-default-deny network policies, DNS egress, and a reserved `foundation-probe`
-ServiceAccount. It contains no workload.
+default-deny network policies, DNS egress, a reserved `foundation-probe`
+ServiceAccount, and the source-only Identity runtime Deployment with its HTTPS
+ClusterIP Service and scoped egress. The migration Job has its own opt-in
+Kustomize target.
 
 Identity is the product host. Relay is a persistence library, and release
 is a CLI. They are not four broker/auth/relay/release runtime services.
 The `foundation-probe` principal belongs to the acceptance-only
 [#1784 Job](https://github.com/sabbour/agentweaver/issues/1784), not the operator CLI.
 That issue owns executable .NET probe code, the image receipt, and scoped Job
-egress. This slice does not duplicate that runtime.
+egress. Identity runtime and migration have their own separate UAMIs and
+federated ServiceAccounts. No Azure resource, principal, PostgreSQL role, or
+Kubernetes workload was created by these source definitions.
 
 No live provisioning, secret reads, permission changes, bootstrap, deployment,
 or cleanup occurred. Future cloud operations require separate explicit approval
@@ -63,6 +67,11 @@ It is not the 64-character SHA-256 infrastructure input hash.
 The `foundationProbeIdentity` output selects the principal by service name, not parallel-array order.
 It contains `name`, `resourceId`, `clientId`, `principalObjectId`, `namespace`, and `serviceAccount`.
 The client ID and principal object ID are distinct.
+The named `identityBrokerRuntimeIdentity` and `identityBrokerMigrationIdentity`
+outputs have the same fields and identify separate service accounts. The
+runtime alone receives Key Vault Secrets User on the exact existing vault; the
+migration identity receives no Azure resource role. These named outputs do not
+change the strict #1784 probe target DTO or create PostgreSQL principals.
 The `foundationResources` output contains exact cluster, vault, storage, container, PostgreSQL, workspace, and Application Insights resource IDs.
 It also contains `vaultUri`, `blobContainerUri`, `postgresHost`, and the workspace GUID.
 The producer does not invent database roles, secret fixtures, registry publication, or successful probe effects.
@@ -114,9 +123,13 @@ Its zone group includes all five documented zones:
 
 Private query requires an approved VNet-connected AKS Job, VM, or VPN and
 correct private DNS. The Logs data-plane API supports Private Link.
-An ARM query does not. The default-deny base permits DNS only.
-`CHANGEME` identity annotations are not deploy-ready configuration.
-The #1784 overlay must supply the pod workload-identity label and explicit egress.
+An ARM query does not. The default-deny base permits DNS only. Identity's
+runtime Cilium policy allows the exact PostgreSQL, Key Vault, Entra token, and
+operator-configured upstream OIDC hosts; its separate migration policy allows
+only PostgreSQL and Entra token exchange. The manifests use required
+`CHANGEME` client/tenant/host/image references, not deploy-ready values. They
+add no public Ingress, Gateway, or controller. Source policy does not prove
+cluster enforcement.
 
 The `foundation-probe` principal receives two additional built-in role definitions:
 
@@ -201,6 +214,17 @@ The procedure addresses dedicated-database PUBLIC grants.
 Existing role memberships and inherited privileges require a separate audit.
 NOINHERIT alone does not prohibit SET ROLE through existing membership.
 
+Identity uses `postgres-identity-bootstrap.sql` and
+`postgres-identity-runtime-grants.sql`, not the probe role. The bootstrap takes
+separate operator-supplied runtime and migration role names and their UAMI
+principal object IDs. It creates `identity_broker` owned by the migration role,
+then grants the runtime role `USAGE` only. After the explicit migration Job
+runs, the runtime-grants file allows DML on the current Identity/OpenIddict
+tables and SELECT-only on the migration history. It grants no future tables,
+schema creation, or role/database administration. The normal Identity host
+checks the schema and applied migrations and never runs migrations or
+provisions a database role.
+
 The current `PostgresOutbox.MigrateAsync` creates a schema and migration tables.
 It must run with the migration principal before runtime proof.
 Existing outbox/inbox migrations do not create the probe's domain-effect table.
@@ -208,14 +232,16 @@ Existing outbox/inbox migrations do not create the probe's domain-effect table.
 Bootstrap and migration success require real database evidence before acceptance.
 This slice makes no claim about undocumented transaction restrictions.
 
-The future #1784 Npgsql composition must use native asynchronous
-`UsePasswordProvider` with `WorkloadIdentityCredential` for each new physical
-connection. A pooled checkout does not request another password.
-Cancellation and authentication errors must not fall back to another credential.
-A fixed 55-minute cache is not a universal token lifetime.
+The #1784 probe and Identity runtime both use native asynchronous Npgsql
+`UsePasswordProvider` callbacks with explicit `WorkloadIdentityCredential`
+configuration and the PostgreSQL token scope
+`https://ossrdbms-aad.database.windows.net/.default`. Npgsql invokes the
+callback for each new physical connection; a pooled checkout does not request
+another password. There is no periodic password cache, synchronous provider,
+ambient/default credential, Azure CLI fallback, or alternate credential path.
+Cancellation and authentication errors propagate.
 The current locked foundations use Npgsql 10.0.3 and Azure.Identity 1.17.1.
-#1784 must verify its executable composition against its own locked dependencies.
-No duplicate runtime composition enters this infrastructure slice.
+No live token exchange, role creation, or database migration was performed.
 
 ## Acceptance evidence
 

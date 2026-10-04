@@ -1,7 +1,10 @@
+extern alias AzureIdentity;
+
 using System.ComponentModel.DataAnnotations;
+using System.Runtime.InteropServices;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
-using Azure.Identity;
+using Azure.Core;
 using Azure.Security.KeyVault.Secrets;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -18,8 +21,39 @@ using Npgsql;
 using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
 using static OpenIddict.Abstractions.OpenIddictConstants;
+using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
+using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.WorkloadIdentityCredentialOptions;
 
-var builder = WebApplication.CreateBuilder(args);
+var runMigrations = IdentityBrokerMigrationCommand.IsRequested(args);
+if (IdentityBrokerMigrationCommand.ContainsArgument(args) && !runMigrations)
+    throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
+
+var builder = WebApplication.CreateBuilder(runMigrations ? Array.Empty<string>() : args);
+if (runMigrations)
+{
+    using var cancellation = new CancellationTokenSource();
+    ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+    {
+        eventArgs.Cancel = true;
+        cancellation.Cancel();
+    };
+    Console.CancelKeyPress += cancelHandler;
+    using var sigterm = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+    {
+        context.Cancel = true;
+        cancellation.Cancel();
+    });
+    try
+    {
+        await IdentityBrokerMigrationCommand.RunAsync(
+            builder.Configuration, cancellationToken: cancellation.Token);
+    }
+    finally
+    {
+        Console.CancelKeyPress -= cancelHandler;
+    }
+    return;
+}
 
 // Explicit, fail-closed configuration: every broker setting (issuer, signing material,
 // external provider, client list) must be supplied by the host. There is no environment
@@ -77,9 +111,13 @@ builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Warning);
 builder.Logging.AddFilter("Npgsql", LogLevel.Warning);
 
 var connectionString = builder.Configuration.GetConnectionString("IdentityBroker")
-    ?? throw new InvalidOperationException("Missing required connection string 'IdentityBroker'.");
+    ?? throw new InvalidOperationException("Missing required configuration 'ConnectionStrings:IdentityBroker'.");
 
-builder.Services.AddSingleton(new NpgsqlDataSourceBuilder(connectionString).Build());
+builder.Services.AddSingleton<TokenCredential>(_ => new WorkloadIdentityCredential(workloadIdentityOptions));
+builder.Services.AddSingleton<NpgsqlDataSource>(provider =>
+    IdentityBrokerPostgresDataSource.Create(
+        connectionString,
+        provider.GetRequiredService<TokenCredential>()));
 
 builder.Services.AddDbContext<IdentityBrokerDbContext>((provider, options) =>
 {
@@ -237,7 +275,7 @@ using (var scope = app.Services.CreateScope())
 {
     var dataSource = scope.ServiceProvider.GetRequiredService<NpgsqlDataSource>();
     var dbOptions = scope.ServiceProvider.GetRequiredService<DbContextOptions<IdentityBrokerDbContext>>();
-    await IdentityBrokerMigrator.MigrateAsync(dataSource, dbOptions);
+    await IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
 
     await scope.ServiceProvider.GetRequiredService<BrokerScopeSeeder>().SeedAsync(CancellationToken.None);
     await scope.ServiceProvider.GetRequiredService<BrokerClientSeeder>().SeedAsync(CancellationToken.None);

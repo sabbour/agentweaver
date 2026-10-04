@@ -1,61 +1,90 @@
-# P0 Kubernetes base layout (Kustomize)
+# P0 Kubernetes source layout (Kustomize)
 
-**Status:** scaffolding only. Applying this layout creates a namespace,
-quota/limit guardrails, a default-deny network policy, and one stable
-`ServiceAccount` (`foundation-probe`) — nothing that runs a workload. No
-`Deployment`, `StatefulSet`, or `Service` exists here, and no
-product workload runs from this base. Identity is the product host.
-Relay is a library and release is a CLI, not runtime services.
-The `foundation-probe` `ServiceAccount` is reserved for the acceptance-only
-#1784 AKS Job. The operator CLI does not run under that ServiceAccount.
-#1784 owns its image receipt, executable probe, pod workload-identity label,
-and explicit egress overlay.
+**Status:** source definitions only. No cluster was changed. The base renders
+the Identity runtime Deployment, an HTTPS `ClusterIP` Service, its dedicated
+runtime `ServiceAccount`, and scoped Cilium egress. It also contains the
+acceptance-only `foundation-probe` ServiceAccount. The separate migration
+Job is not included in the base and does not run during ordinary host startup.
 
-## Why Kustomize, not Helm
-
-This slice has no templated values beyond the `foundation-probe` identity's
-workload-identity client ID, which an environment-specific overlay patches
-in (see below). Kustomize needs no extra runtime or chart repository and
-keeps the base layout plain, versioned YAML — consistent with the
-Node-stdlib-only, dependency-free tooling used elsewhere in this phase.
+There is no public Ingress, Gateway, or ingress controller in these manifests.
+AKS Application Routing remains configured with its default NGINX controller
+type set to `None`. The Identity Service is cluster-internal.
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `namespace.yaml` | Dedicated, bounded namespace `agentweaver-v1-p0` with restricted Pod Security Standards labels. |
-| `resourcequota.yaml` | Namespace-wide compute/object ceilings. |
-| `limitrange.yaml` | Per-container default and max compute requests/limits. |
-| `networkpolicy-default-deny.yaml` | Default-deny ingress and egress for every pod in the namespace, plus a narrow DNS-only egress allowance so workloads are not fully network-dead. Every workload must add its own scoped egress policy for anything beyond DNS. |
-| `serviceaccounts/foundation-probe-sa.yaml` | Reserved `foundation-probe` ServiceAccount for the #1784 Job. Its pod must carry the workload-identity label. |
-| `kustomization.yaml` | Ties the above together. |
+| `base/namespace.yaml`, `resourcequota.yaml`, `limitrange.yaml` | Bounded namespace and pod/resource ceilings. |
+| `base/networkpolicy-default-deny.yaml` | Default-deny ingress/egress and DNS-only standard NetworkPolicy. |
+| `base/serviceaccounts/foundation-probe-sa.yaml` | Reserved identity for the #1784 acceptance-only Job. |
+| `base/identity-broker/` | Identity runtime ServiceAccount, HTTPS Deployment, ClusterIP Service, and narrow Cilium policy. |
+| `migrations/identity-broker/` | Separate migration ServiceAccount, one-shot Job, and PostgreSQL/token egress policy. |
+| `acceptance/foundation-probe/` | #1784 executable Job and its own scoped egress overlay. |
+
+The runtime listens with HTTPS on port 8443. Its ClusterIP Service exposes
+port 443. Cilium permits health probes from the node and requests only from
+same-namespace pods labeled `agentweaver.io/identity-client: "true"`.
+It permits DNS, Entra token exchange, the configured upstream OIDC hosts,
+the exact PostgreSQL host, and the exact Key Vault host. The migration policy
+permits DNS, Entra token exchange, and PostgreSQL only.
+
+## Required operator inputs
+
+The manifests reference, but do not create, these objects:
+
+| Reference | Required contents |
+| --- | --- |
+| `identity-broker-runtime-config` ConfigMap | `ConnectionStrings__IdentityBroker`, public HTTPS issuer, external OIDC authority and client ID, exact `IdentityBroker__Clients__...` registration, redemption audience and Key Vault URI, runtime workload-identity tenant/client/token-file settings, and `IdentityBroker__DataProtectionKeyPath`. |
+| `identity-broker-signing` Secret | `signing.pfx` and its `password`; the PFX signs/encrypts tokens and protects the durable data-protection key ring. |
+| `identity-broker-upstream-oidc` Secret | `clientSecret` for the registered external OIDC client. |
+| `identity-broker-client-secrets` Secret | Optional `IdentityBroker__Clients__<index>__ClientSecret` keys for each configured confidential client. Public clients have no secret. |
+| `identity-broker-tls` Secret | Approved `tls.crt` and `tls.key` for Kestrel HTTPS. No certificate is created here. |
+| `identity-broker-key-ring` PVC | Durable writable storage mounted for the protected ASP.NET data-protection key ring. The host runs one replica with a recreate strategy. |
+| `identity-broker-migration-config` ConfigMap | `ConnectionStrings__IdentityBrokerMigration` and the separate migration workload-identity tenant, client, and absolute projected-token-file settings. |
+
+All connection strings must omit passwords. The runtime database username is
+the separately bootstrapped Entra runtime role. The migration connection uses
+the separately bootstrapped schema-owner role. The runtime and migration
+ServiceAccount client-ID and tenant annotations are placeholders; patch them
+from `identityBrokerRuntimeIdentity` and `identityBrokerMigrationIdentity`
+outputs and the selected tenant. Do not use the `foundation-probe` identity.
+
+The image reference uses a non-deployable `registry.invalid`/zero-digest
+sentinel. Replace it with the approved immutable registry image digest in an
+environment overlay. Replace each `CHANGEME-*` egress host with the exact
+approved endpoint; do not add wildcard or public egress rules. The upstream
+OIDC authority and metadata/JWKS endpoints may require separate exact hosts.
+
+The ordinary base never runs migrations. After separate approval, apply the
+Identity bootstrap SQL as the PostgreSQL Entra administrator, then explicitly
+run the migration Job from `deploy/k8s/migrations/identity-broker`. It uses a
+different ServiceAccount and workload identity. The runtime has no schema
+ownership or migration privileges; missing schema/configuration/authentication
+fails startup.
 
 ## Workload identity wiring
 
-Each `ServiceAccount` annotation (`azure.workload.identity/client-id`,
-`azure.workload.identity/tenant-id`) is a `CHANGEME-*` placeholder in this
-base layout. An environment overlay (not included here, since it is
-environment-specific and not reusable) patches these from the
-`identity.bicep` module's `identityClientIds`/tenant outputs after a real
-deployment. No client ID or tenant ID is a secret, but neither is invented
-or hardcoded here, since this base layout is not tied to any one deployed
-environment.
+The Bicep identity module defines three separate UAMIs:
+`foundation-probe`, `identity-broker`, and `identity-broker-migration`.
+Each federated subject must match its exact ServiceAccount in
+`agentweaver-v1-p0`. The Identity runtime alone receives Key Vault Secrets User
+on the existing vault. The migration identity has no Azure resource role.
+PostgreSQL access comes from the separately approved SQL principals and grants,
+not Azure RBAC.
 
-The `CHANGEME` base is not deploy-ready. DNS-only egress does not permit
-Key Vault, Blob, PostgreSQL, token exchange, or Monitor access by itself.
-The DNS peer requires both the `kube-system` namespace label and the `k8s-app: kube-dns` pod label.
-Only TCP and UDP port 53 receive this allowance.
-Pods in other namespaces do not receive port-53 access.
-
-The federated credential's trusted subject is
-`system:serviceaccount:agentweaver-v1-p0:foundation-probe`, matching this
-exact `ServiceAccount` name and namespace — see
-`infra/bicep/modules/identity.bicep`.
+The default-deny policy only allows DNS to `kube-system` pods labeled
+`k8s-app: kube-dns`, on TCP/UDP port 53. Each workload has its own Cilium
+policy for destinations beyond DNS. The `CHANGEME-*` values make these
+definitions non-deployable until approved environment inputs are supplied.
 
 ## Validating locally
 
 ```powershell
-kubectl kustomize deploy/k8s/base
+kubectl kustomize deploy\k8s\base
+kubectl kustomize deploy\k8s\migrations\identity-broker
+kubectl kustomize deploy\k8s\acceptance\foundation-probe
 ```
 
-This only renders the manifests; it requires no cluster connection.
+These commands only render manifests. They require no cluster connection and
+do not prove a running workload, image, token exchange, network policy, or Azure
+permission.

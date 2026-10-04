@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity-broker
+  namespace: agentweaver-v1-p0
+  labels:
+    app.kubernetes.io/name: identity-broker
+    agentweaver.io/service: identity-broker
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: identity-broker
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+      protocol: TCP

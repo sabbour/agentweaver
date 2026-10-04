@@ -128,6 +128,19 @@ deployment, target ownership, observed AKS security settings, and exact
 workload-identity federation configuration. Those configuration checks do not
 prove that a Job ran or exchanged a token.
 
+Successful deployment outputs include `foundationProbeIdentity` and `foundationResources`.
+The tooling checks their exact dedicated resource IDs, endpoints, namespace, ServiceAccount, and workspace GUID.
+The named identity contains distinct `clientId` and `principalObjectId` fields.
+Parallel identity arrays do not select the probe principal.
+The Bicep outputs also name the separate `identityBrokerRuntimeIdentity` and
+`identityBrokerMigrationIdentity`. The source guard checks their exact resource
+IDs, namespace, ServiceAccount names, and distinct client/principal IDs. Only
+the runtime identity receives Key Vault Secrets User on the exact vault; the
+migration identity receives no Azure resource role. These outputs do not
+provision PostgreSQL principals, apply schema grants, alter the strict
+`foundationProbeIdentity` DTO, or prove a deployed workload.
+The workspace GUID is not its ARM resource ID.
+
 Full integration acceptance requires the explicit read-only collection option:
 
 ```powershell

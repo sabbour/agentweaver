@@ -60,6 +60,23 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.deepEqual(Object.keys(identities.outputs.foundationProbeIdentity.value).sort(), [
     'clientId', 'name', 'namespace', 'principalObjectId', 'resourceId', 'serviceAccount',
   ]);
+  for (const identityName of ['identityBrokerRuntimeIdentity', 'identityBrokerMigrationIdentity']) {
+    assert.deepEqual(Object.keys(identities.outputs[identityName].value).sort(), [
+      'clientId', 'name', 'namespace', 'principalObjectId', 'resourceId', 'serviceAccount',
+    ]);
+  }
+  const configuredServices = identities.parameters.services.defaultValue;
+  assert.deepEqual(configuredServices.map(service => service.name), [
+    'foundation-probe', 'identity-broker', 'identity-broker-migration',
+  ]);
+  const runtimeService = configuredServices.find(service => service.name === 'identity-broker');
+  const migrationService = configuredServices.find(service => service.name === 'identity-broker-migration');
+  assert.equal(runtimeService.needsKeyVault, true);
+  assert.equal(runtimeService.needsBlob, false);
+  assert.equal(runtimeService.needsMonitor, false);
+  assert.equal(migrationService.needsKeyVault, false);
+  assert.equal(migrationService.needsBlob, false);
+  assert.equal(migrationService.needsMonitor, false);
   for (const [name, roleId, scope] of [
     ['monitorQueryRoleAssignments', '73c42c96-874c-492b-b04d-ab87d138a893',
       "[resourceId('Microsoft.OperationalInsights/workspaces', last(split(parameters('monitorWorkspaceResourceId'), '/')))]"],
@@ -119,14 +136,62 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     assert.equal(role.properties.principalType, 'ServicePrincipal');
     assert.match(role.name, /parameters\('zoneResourceId'\).*parameters\('aksClusterId'\).*variables/);
   }
-  for (const field of ['appRoutingIdentity', 'appRoutingDomain', 'foundationProbeIdentity', 'foundationResources', 'sourceTree']) {
+  for (const field of [
+    'appRoutingIdentity', 'appRoutingDomain', 'foundationProbeIdentity',
+    'identityBrokerRuntimeIdentity', 'identityBrokerMigrationIdentity', 'foundationResources', 'sourceTree',
+  ]) {
     assert.ok(template.outputs[field]);
   }
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/base']).stdout;
   assert.match(rendered, /kind: ServiceAccount/);
   assert.match(rendered, /foundation-probe/);
-  assert.doesNotMatch(rendered, /kind: (Deployment|StatefulSet|Job|Service)\r?\n/);
-  assert.doesNotMatch(rendered, /^kind: (Ingress|IngressClass|Deployment|StatefulSet|DaemonSet|Job|Service)$/m);
+  assert.match(rendered, /kind: Deployment/);
+  assert.match(rendered, /kind: Service/);
+  assert.doesNotMatch(rendered, /^kind: (Ingress|IngressClass|Gateway|StatefulSet|DaemonSet|Job)$/m);
+  const identityDeploymentDocument = rendered.split('---').find(document =>
+    document.includes('kind: Deployment') && document.includes('name: identity-broker'));
+  assert.ok(identityDeploymentDocument);
+  assert.match(identityDeploymentDocument, /serviceAccountName: identity-broker/);
+  assert.match(identityDeploymentDocument, /azure\.workload\.identity\/use: "true"/);
+  assert.match(identityDeploymentDocument, /image: registry\.invalid\/agentweaver-identity-broker@sha256:0{64}/);
+  assert.match(identityDeploymentDocument, /ASPNETCORE_URLS\s*\n\s+value: https:\/\/\+:8443/);
+  assert.match(identityDeploymentDocument, /ASPNETCORE_Kestrel__Certificates__Default__Path\s*\n\s+value: \/var\/run\/identity-broker-tls\/tls\.crt/);
+  assert.match(identityDeploymentDocument, /ASPNETCORE_Kestrel__Certificates__Default__KeyPath\s*\n\s+value: \/var\/run\/identity-broker-tls\/tls\.key/);
+  assert.match(identityDeploymentDocument, /claimName: identity-broker-key-ring/);
+  assert.match(identityDeploymentDocument, /configMapRef:\s+name: identity-broker-runtime-config\s+optional: false/);
+  assert.match(identityDeploymentDocument, /secretRef:\s+name: identity-broker-client-secrets\s+optional: true/);
+  assert.match(identityDeploymentDocument, /optional: false\s+secretName: identity-broker-signing/);
+  assert.match(identityDeploymentDocument, /optional: false\s+secretName: identity-broker-tls/);
+  assert.match(identityDeploymentDocument, /runAsNonRoot: true/);
+  assert.match(identityDeploymentDocument, /runAsUser: 10001/);
+  const identityService = rendered.split('---').find(document =>
+    document.includes('kind: Service\n') && document.includes('name: identity-broker'));
+  assert.ok(identityService);
+  assert.match(identityService, /type: ClusterIP/);
+  assert.match(identityService, /port: 443/);
+  assert.match(identityService, /targetPort: https/);
+  const migrationRender = run('kubectl', ['kustomize', 'deploy/k8s/migrations/identity-broker']).stdout;
+  const migrationJob = migrationRender.split('---').find(document =>
+    document.includes('kind: Job') && document.includes('name: identity-broker-migration'));
+  assert.ok(migrationJob);
+  assert.match(migrationJob, /serviceAccountName: identity-broker-migration/);
+  assert.match(migrationJob, /--migrate/);
+  assert.match(migrationJob, /identity-broker-migration-config/);
+  const identityEgress = rendered.split('---').find(document =>
+    document.includes('name: identity-broker-egress'));
+  const migrationEgress = migrationRender.split('---').find(document =>
+    document.includes('name: identity-broker-migration-egress'));
+  assert.ok(identityEgress && migrationEgress);
+  for (const host of [
+    'login.microsoftonline.com',
+    'CHANGEME-KEYVAULT-HOST',
+    'CHANGEME-POSTGRES-HOST',
+    'CHANGEME-UPSTREAM-OIDC-AUTHORITY',
+    'CHANGEME-UPSTREAM-OIDC-METADATA-HOST',
+  ]) assert.ok(identityEgress.includes(host));
+  assert.ok(migrationEgress.includes('login.microsoftonline.com'));
+  assert.ok(migrationEgress.includes('CHANGEME-POSTGRES-HOST'));
+  assert.doesNotMatch(`${identityEgress}\n${migrationEgress}`, /toEntities:\s*\n\s+- world|0\.0\.0\.0\/0|matchPattern:\s*\*/);
   const dnsPolicy = rendered.split('---').find(document => document.includes('name: allow-dns-egress'));
   assert.match(dnsPolicy, /namespaceSelector:\s+matchLabels:\s+kubernetes\.io\/metadata\.name: kube-system/);
   assert.match(dnsPolicy, /podSelector:\s+matchLabels:\s+k8s-app: kube-dns/);
@@ -184,4 +249,16 @@ test('native PG bootstrap is a definition, maps object ID, separates runtime and
   assert.match(grants, /GRANT SELECT, INSERT ON TABLE/);
   assert.match(grants, /REVOKE ALL ON TABLE %I.outbox_schema_migrations/);
   assert.doesNotMatch(grants, /GRANT.*ALL TABLES|ALTER DEFAULT PRIVILEGES/);
+  const identityBootstrap = readFileSync('infra/bicep/postgres-identity-bootstrap.sql', 'utf8');
+  assert.match(identityBootstrap, /:'runtime_principal_oid'/);
+  assert.match(identityBootstrap, /:'migration_principal_oid'/);
+  assert.match(identityBootstrap, /CREATE SCHEMA identity_broker AUTHORIZATION/);
+  assert.match(identityBootstrap, /GRANT USAGE ON SCHEMA identity_broker TO %I/);
+  assert.doesNotMatch(identityBootstrap, /azure_pg_admin|GRANT CREATE .*runtime_role/);
+  const identityGrants = readFileSync('infra/bicep/postgres-identity-runtime-grants.sql', 'utf8');
+  assert.match(identityGrants, /GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE/);
+  assert.match(identityGrants, /GRANT SELECT ON TABLE %I.%I TO %I/);
+  assert.match(identityGrants, /OpenIddictApplications/);
+  assert.match(identityGrants, /REVOKE CREATE ON SCHEMA identity_broker/);
+  assert.doesNotMatch(identityGrants, /ALL TABLES|ALTER DEFAULT PRIVILEGES/);
 });
