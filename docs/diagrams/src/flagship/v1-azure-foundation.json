@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "Azure resource and evidence dependencies",
-  "alt": "Structural Azure topology and evidence map. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the Foundation Probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights. The external read-only gate depends on Job and pod observations, the native probe receipt, a source-bound registry manifest, and correlated Azure Monitor evidence. No live deployment or P0 completion is claimed.",
+  "alt": "Structural Azure topology and evidence map. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault, Blob, and AMPLS endpoints use the private-endpoint subnet. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2; AMPLS is global. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights. The external read-only gate depends on Job and pod observations, the native probe receipt, a source-bound registry manifest, and correlated Azure Monitor evidence. No live deployment or P0 completion is claimed.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [],
@@ -139,23 +139,23 @@
   ],
   "layoutSnapshot": {
     "canvasWidth": 1360,
-    "canvasHeight": 1220,
+    "canvasHeight": 1450,
     "nodes": [
       { "id": "aks", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "AKS", "subLabel": "Private; Cilium; OIDC/workload identity; App Routing Preview; NGINX None" } },
       { "id": "vnet", "type": "card", "position": { "x": 80, "y": 80 }, "data": { "label": "Dedicated VNet", "subLabel": "Separate AKS-node, delegated PostgreSQL, and private-endpoint subnets" } },
       { "id": "default-domain", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "App Routing domain", "subLabel": "Empty zone IDs request Azure's defaultDomain; custom zones disable it" } },
-      { "id": "routing-identity", "type": "card", "position": { "x": 920, "y": 310 }, "data": { "label": "App Routing identity", "subLabel": "AKS-generated resourceId, clientId, and objectId" } },
-      { "id": "custom-zones", "type": "card", "position": { "x": 920, "y": 540 }, "data": { "label": "Optional existing DNS zones", "subLabel": "1–5 public/private IDs; roles scoped to each exact zone" } },
+      { "id": "routing-identity", "type": "card", "position": { "x": 860, "y": 310 }, "data": { "label": "App Routing identity", "subLabel": "AKS-generated resourceId, clientId, and objectId" } },
+      { "id": "custom-zones", "type": "card", "position": { "x": 860, "y": 540 }, "data": { "label": "Optional existing DNS zones", "subLabel": "1–5 public/private IDs; roles scoped to each exact zone" } },
       { "id": "postgres", "type": "card", "position": { "x": 80, "y": 310 }, "data": { "label": "Azure Database for PostgreSQL", "subLabel": "Entra-only; private network" } },
       { "id": "keyvault", "type": "card", "position": { "x": 500, "y": 540 }, "data": { "label": "Azure Key Vault", "subLabel": "Private; routing Certificate User; CSI rotation 'true' / '2m'" } },
-      { "id": "blob", "type": "card", "position": { "x": 920, "y": 80 }, "data": { "label": "Azure Blob Storage", "subLabel": "Private endpoint" } },
-      { "id": "monitor", "type": "card", "position": { "x": 920, "y": 1000 }, "data": { "label": "Azure Monitor", "subLabel": "Fresh AppDependencies/AppRequests query after Job completion" } },
+      { "id": "blob", "type": "card", "position": { "x": 860, "y": 80 }, "data": { "label": "Azure Blob Storage", "subLabel": "Private endpoint" } },
+      { "id": "monitor", "type": "card", "position": { "x": 860, "y": 1000 }, "data": { "label": "Azure Monitor", "subLabel": "Fresh AppDependencies/AppRequests query after Job completion" } },
       { "id": "probe-identity", "type": "card", "position": { "x": 80, "y": 540 }, "data": { "label": "Foundation Probe identity", "subLabel": "Dedicated user-assigned managed identity" } },
       { "id": "job", "type": "card", "position": { "x": 500, "y": 770 }, "data": { "label": "Foundation Probe Job", "subLabel": "One completed Job; pod UID/owner, namespace, SA, projected ID, success" } },
       { "id": "native-receipt", "type": "card", "position": { "x": 80, "y": 770 }, "data": { "label": "Native #1784 receipt", "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof" } },
       { "id": "image-receipt", "type": "card", "position": { "x": 80, "y": 1000 }, "data": { "label": "CI image receipt", "subLabel": "Source SHA/tree-bound registry manifest digest" } },
       { "id": "acceptance-consumer", "type": "card", "position": { "x": 500, "y": 1000 }, "data": { "label": "External evidence gate", "subLabel": "Complete evidence => deployedAcceptance; otherwise blocked" } },
-      { "id": "egress", "type": "card", "position": { "x": 920, "y": 770 }, "data": { "label": "Probe egress policy", "subLabel": "Overlay-scoped NetworkPolicy" } }
+      { "id": "egress", "type": "card", "position": { "x": 860, "y": 1230 }, "data": { "label": "Probe egress policy", "subLabel": "Overlay-scoped NetworkPolicy" } }
     ]
   },
   "edges": [
@@ -170,10 +170,16 @@
     { "from": "probe-identity", "to": "blob", "label": "storage Blob role" },
     { "from": "probe-identity", "to": "monitor", "label": "Monitor access roles" },
     { "from": "egress", "to": "job" },
-    { "from": "job", "to": "acceptance-consumer", "label": "image ref + pod imageID; each vs digest" },
+    { "from": "job", "to": "acceptance-consumer" },
     { "from": "job", "to": "native-receipt", "label": "probe output" },
-    { "from": "native-receipt", "to": "acceptance-consumer", "label": "strict receipt; not UID/pull/exit proof" },
-    { "from": "image-receipt", "to": "acceptance-consumer", "label": "source-bound registry digest" },
-    { "from": "monitor", "to": "acceptance-consumer", "label": "fresh SHA/tree/nonce/trace/span correlation" }
+    { "from": "native-receipt", "to": "acceptance-consumer", "label": "validated native receipt" },
+    { "from": "image-receipt", "to": "acceptance-consumer", "label": "source-bound image digest" },
+    { "from": "monitor", "to": "acceptance-consumer" },
+    { "from": "vnet", "to": "keyvault", "label": "KV PE attachment" },
+    { "from": "vnet", "to": "blob", "label": "Blob PE attachment" },
+    { "from": "vnet", "to": "monitor", "label": "in-VNet AMPLS PE" },
+    { "from": "job", "to": "keyvault", "label": "secret probe" },
+    { "from": "job", "to": "blob", "label": "object-store round trip" },
+    { "from": "job", "to": "postgres", "label": "Entra-authenticated probe effects" }
   ]
 }
