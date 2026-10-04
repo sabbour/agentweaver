@@ -23,3 +23,15 @@
   text-align: center;
   font-size: 0.9rem;
 }
+
+@media (max-width: 760px) {
+  .vp-doc .aw-diagram {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .vp-doc .aw-diagram img {
+    max-width: none;
+  }
+}

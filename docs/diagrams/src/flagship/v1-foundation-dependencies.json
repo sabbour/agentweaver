@@ -1,121 +1,134 @@
 {
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
-  "title": "Foundation compile dependencies",
-  "alt": "Compile dependency graph for Agentweaver v1 foundation projects. Abstractions feed Providers, Identity, Key Vault, and Blob. Azure Monitor extends Telemetry. The Identity broker and Foundation Probe reference the libraries that they compose.",
+  "title": "V1 contract and adapter components",
+  "alt": "Structural component view of two adapter chains. Agentweaver.Abstractions.IObjectStore is implemented by AzureBlobObjectStore in the Agentweaver.ObjectStore.AzureBlob library, which accesses an Azure Blob container. Agentweaver.Abstractions.ISecretRedemption is implemented by AzureKeyVaultSecretRedemption in the Agentweaver.Secrets.AzureKeyVault library, which accesses Azure Key Vault. The adjacent composition and registration table documents the Identity Broker, AuthorizedSecretRedemption, Foundation Probe, and provider IDs.",
   "direction": "TB",
   "routing": "separate-ports",
-  "groups": [],
-  "nodes": [
+  "groups": [
     {
-      "id": "abstractions",
-      "label": "Agentweaver.Abstractions",
-      "subLabel": "Provider, secret, and object-store contracts",
-      "icon": "box",
-      "fluentIcon": "package",
-      "badge": { "text": "Contract", "tone": "lavender" }
+      "id": "contracts",
+      "label": "Generic interfaces",
+      "subLabel": "Contracts do not access Azure resources.",
+      "tier": 1
     },
     {
-      "id": "providers",
-      "label": "Agentweaver.Providers",
-      "subLabel": "Catalog and pure resolver",
-      "icon": "box",
-      "fluentIcon": "package",
-      "badge": { "text": "Library", "tone": "teal" }
+      "id": "adapters",
+      "label": "Azure adapter libraries",
+      "subLabel": "Concrete in-process classes, not microservices.",
+      "tier": 1
     },
     {
-      "id": "identity",
-      "label": "Agentweaver.Identity",
-      "subLabel": "Trusted run-grant authorization",
-      "icon": "box",
-      "fluentIcon": "identity",
-      "badge": { "text": "Library", "tone": "teal" }
-    },
-    {
-      "id": "keyvault",
-      "label": "Secrets.AzureKeyVault",
-      "subLabel": "Exact-version secret adapter",
-      "icon": "box",
-      "fluentIcon": "identity",
-      "badge": { "text": "Azure adapter", "tone": "green" }
-    },
-    {
-      "id": "postgres",
-      "label": "Persistence.Postgres",
-      "subLabel": "Outbox, inbox, and relay primitives",
-      "icon": "box",
-      "fluentIcon": "state",
-      "badge": { "text": "Library", "tone": "teal" }
-    },
-    {
-      "id": "blob",
-      "label": "ObjectStore.AzureBlob",
-      "subLabel": "Opaque platform objects",
-      "icon": "box",
-      "fluentIcon": "archive",
-      "badge": { "text": "Azure adapter", "tone": "green" }
-    },
-    {
-      "id": "telemetry",
-      "label": "Agentweaver.Telemetry",
-      "subLabel": "OpenTelemetry signals",
-      "icon": "box",
-      "fluentIcon": "telemetry",
-      "badge": { "text": "Library", "tone": "teal" }
-    },
-    {
-      "id": "monitor",
-      "label": "Telemetry.AzureMonitor",
-      "subLabel": "Opt-in trace, metric, and log exporters",
-      "icon": "box",
-      "fluentIcon": "telemetry",
-      "badge": { "text": "Azure adapter", "tone": "green" }
-    },
-    {
-      "id": "broker",
-      "label": "Identity.Broker",
-      "subLabel": "OAuth service candidate",
-      "icon": "box",
-      "fluentIcon": "identity",
-      "badge": { "text": "Unpublished", "tone": "marigold" }
-    },
-    {
-      "id": "probe",
-      "label": "FoundationProbe",
-      "subLabel": "Acceptance-only executable",
-      "icon": "box",
-      "fluentIcon": "test",
-      "badge": { "text": "Tool", "tone": "marigold" }
+      "id": "azure-resources",
+      "label": "External Azure resources",
+      "subLabel": "Accessed by concrete adapters only.",
+      "tier": 1
     }
   ],
-  "layoutSnapshot": {
-    "canvasWidth": 1360,
-    "canvasHeight": 1050,
-    "nodes": [
-      { "id": "abstractions", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "Agentweaver.Abstractions", "subLabel": "Provider, secret, and object-store contracts" } },
-      { "id": "providers", "type": "card", "position": { "x": 80, "y": 310 }, "data": { "label": "Agentweaver.Providers", "subLabel": "Catalog and pure resolver" } },
-      { "id": "identity", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "Agentweaver.Identity", "subLabel": "Trusted run-grant authorization" } },
-      { "id": "keyvault", "type": "card", "position": { "x": 920, "y": 310 }, "data": { "label": "Secrets.AzureKeyVault", "subLabel": "Exact-version secret adapter" } },
-      { "id": "postgres", "type": "card", "position": { "x": 80, "y": 80 }, "data": { "label": "Persistence.Postgres", "subLabel": "Outbox, inbox, and relay primitives" } },
-      { "id": "blob", "type": "card", "position": { "x": 80, "y": 540 }, "data": { "label": "ObjectStore.AzureBlob", "subLabel": "Opaque platform objects" } },
-      { "id": "telemetry", "type": "card", "position": { "x": 920, "y": 80 }, "data": { "label": "Agentweaver.Telemetry", "subLabel": "OpenTelemetry signals" } },
-      { "id": "monitor", "type": "card", "position": { "x": 920, "y": 540 }, "data": { "label": "Telemetry.AzureMonitor", "subLabel": "Opt-in trace, metric, and log exporters" } },
-      { "id": "broker", "type": "card", "position": { "x": 500, "y": 540 }, "data": { "label": "Identity.Broker", "subLabel": "OAuth service candidate" } },
-      { "id": "probe", "type": "card", "position": { "x": 500, "y": 770 }, "data": { "label": "FoundationProbe", "subLabel": "Acceptance-only executable" } }
-    ]
-  },
+  "nodes": [
+    {
+      "id": "azure-blob-object-store",
+      "label": "AzureBlobObjectStore",
+      "subLabel": "Concrete object-store adapter.",
+      "meta": "Library: Agentweaver.ObjectStore.AzureBlob",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "class / library",
+        "tone": "teal",
+        "visible": true
+      },
+      "group": "adapters"
+    },
+    {
+      "id": "azure-key-vault-secret-redemption",
+      "label": "Key Vault\nadapter",
+      "subLabel": "Does not authorize callers.",
+      "meta": "Agentweaver.Secrets.AzureKeyVault",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "class / library",
+        "tone": "teal",
+        "visible": true
+      },
+      "group": "adapters"
+    },
+    {
+      "id": "iobjectstore",
+      "label": "Agentweaver.Abstractions.IObjectStore",
+      "subLabel": "Generic object-storage contract.",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "interface",
+        "tone": "lavender",
+        "visible": true
+      },
+      "group": "contracts"
+    },
+    {
+      "id": "isecretredemption",
+      "label": "Agentweaver.Abstractions.ISecretRedemption",
+      "subLabel": "Generic secret-redemption contract.",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "interface",
+        "tone": "lavender",
+        "visible": true
+      },
+      "group": "contracts"
+    },
+    {
+      "id": "azure-blob-container",
+      "label": "Azure Blob container",
+      "subLabel": "External object-storage resource.",
+      "icon": "box",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/storage/Storage_Accounts.svg;imageAspect=1",
+      "badge": {
+        "text": "Azure resource",
+        "tone": "green",
+        "visible": true
+      },
+      "group": "azure-resources"
+    },
+    {
+      "id": "azure-key-vault",
+      "label": "Azure Key Vault",
+      "subLabel": "External secret store.",
+      "icon": "box",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=1",
+      "badge": {
+        "text": "Azure resource",
+        "tone": "green",
+        "visible": true
+      },
+      "group": "azure-resources"
+    }
+  ],
   "edges": [
-    { "from": "abstractions", "to": "providers" },
-    { "from": "abstractions", "to": "identity" },
-    { "from": "abstractions", "to": "keyvault" },
-    { "from": "abstractions", "to": "blob" },
-    { "from": "telemetry", "to": "monitor" },
-    { "from": "identity", "to": "broker" },
-    { "from": "keyvault", "to": "broker" },
-    { "from": "providers", "to": "probe" },
-    { "from": "postgres", "to": "probe" },
-    { "from": "keyvault", "to": "probe" },
-    { "from": "blob", "to": "probe" },
-    { "from": "monitor", "to": "probe" }
+    {
+      "from": "iobjectstore",
+      "to": "azure-blob-object-store",
+      "label": "implemented by"
+    },
+    {
+      "from": "isecretredemption",
+      "to": "azure-key-vault-secret-redemption",
+      "label": "implemented by"
+    },
+    {
+      "from": "azure-blob-object-store",
+      "to": "azure-blob-container",
+      "label": "accesses"
+    },
+    {
+      "from": "azure-key-vault-secret-redemption",
+      "to": "azure-key-vault",
+      "label": "accesses"
+    }
   ]
 }
