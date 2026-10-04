@@ -6,55 +6,55 @@
     {
       "id": "Agentweaver.Abstractions",
       "kind": "contract",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "project": "packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj"
     },
     {
       "id": "Agentweaver.Providers",
       "kind": "library",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "project": "packages/Agentweaver.Providers/Agentweaver.Providers.csproj"
     },
     {
       "id": "Agentweaver.Persistence.Postgres",
       "kind": "library",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "project": "packages/Agentweaver.Persistence.Postgres/Agentweaver.Persistence.Postgres.csproj"
     },
     {
       "id": "Agentweaver.Secrets.AzureKeyVault",
       "kind": "library",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "project": "packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVault.csproj"
     },
     {
       "id": "Agentweaver.Identity",
       "kind": "library",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "project": "packages/Agentweaver.Identity/Agentweaver.Identity.csproj"
     },
     {
       "id": "Agentweaver.Telemetry",
       "kind": "library",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "project": "packages/Agentweaver.Telemetry/Agentweaver.Telemetry.csproj"
     },
     {
       "id": "Agentweaver.Telemetry.AzureMonitor",
       "kind": "library",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "project": "packages/Agentweaver.Telemetry.AzureMonitor/Agentweaver.Telemetry.AzureMonitor.csproj"
     },
     {
       "id": "Agentweaver.ObjectStore.AzureBlob",
       "kind": "library",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "project": "packages/Agentweaver.ObjectStore.AzureBlob/Agentweaver.ObjectStore.AzureBlob.csproj"
     },
     {
       "id": "Agentweaver.Identity.Broker",
       "kind": "service",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "project": "services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj"
     }
   ],
@@ -62,37 +62,58 @@
     {
       "consumer": "Agentweaver.Providers",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.1.0", "0.2.0"]
+      "versions": [
+        "0.1.0",
+        "0.2.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Secrets.AzureKeyVault",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.1.0", "0.2.0"]
+      "versions": [
+        "0.1.0",
+        "0.2.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Identity",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.1.0", "0.2.0"]
+      "versions": [
+        "0.1.0",
+        "0.2.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Telemetry.AzureMonitor",
       "dependency": "Agentweaver.Telemetry",
-      "versions": ["0.1.0", "0.2.0"]
+      "versions": [
+        "0.1.0",
+        "0.2.0"
+      ]
     },
     {
       "consumer": "Agentweaver.ObjectStore.AzureBlob",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.1.0", "0.2.0"]
+      "versions": [
+        "0.1.0",
+        "0.2.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Identity.Broker",
       "dependency": "Agentweaver.Identity",
-      "versions": ["1.0.0", "1.1.0"]
+      "versions": [
+        "1.0.0",
+        "1.1.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Identity.Broker",
       "dependency": "Agentweaver.Secrets.AzureKeyVault",
-      "versions": ["0.1.0", "0.2.0"]
+      "versions": [
+        "0.1.0",
+        "0.2.0"
+      ]
     }
   ]
 }
