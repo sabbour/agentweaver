@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { collectFoundationProbeEvidence } from '../lib/foundation-probe-runtime.mjs';
 import {
-  completedAt, makeRuntimeFixture, probeNonce, startedAt,
+  completedAt, finishedAt, makeRuntimeFixture, probeNonce, startedAt,
 } from './fixtures/foundation-probe-runtime.mjs';
 
 function collect(runtime, overrides = {}) {
@@ -33,6 +33,8 @@ test('independent Job, pod, target, identity, registry, and native probe receipt
     serviceAccountName: 'foundation-probe',
     startedAt,
     completedAt,
+    containerStartedAt: startedAt,
+    containerFinishedAt: finishedAt,
     exitCode: 0,
     activeDeadlineSeconds: 420,
   });
@@ -73,6 +75,21 @@ test('incomplete or failed Job and nonzero process exit remain blocked', () => {
   const result = collect(wrongOwner);
   assert.equal(check(result, 'foundation-probe-job-pod').status, 'blocked');
   assert.equal(wrongOwner.calls.some(({ args }) => args[0] === 'logs'), false);
+});
+
+test('Job and observed pod cannot override the verified image entrypoint or execution arguments', () => {
+  for (const mutate of [
+    runtime => { runtime.state.job.spec.template.spec.containers[0].command = ['/bin/sh', '-c']; },
+    runtime => { runtime.state.pod.spec.containers[0].command = ['/bin/sh', '-c']; },
+    runtime => { runtime.state.pod.spec.containers[0].args = ['--plan']; },
+  ]) {
+    const runtime = makeRuntimeFixture();
+    mutate(runtime);
+    const result = collect(runtime);
+    assert.equal(check(result, 'foundation-probe-job-pod').status, 'blocked');
+    assert.equal(check(result, 'foundation-probe-receipt').status, 'blocked');
+    assert.equal(runtime.calls.some(({ args }) => args[0] === 'logs'), false);
+  }
 });
 
 test('pod UID and owner must independently bind exactly one pod to the completed Job', () => {
@@ -134,6 +151,14 @@ test('registry manifest image must match source labels, the Job, and the pod pul
   wrongProvenance.state.localImageReceipt.sourceTree = 'f'.repeat(40);
   result = collect(wrongProvenance);
   assert.equal(check(result, 'foundation-probe-registry-image').status, 'blocked');
+
+  const credentialReference = makeRuntimeFixture();
+  credentialReference.options.imageReference =
+    'https://user:credential-sentinel@registry.example/agentweaver/foundation-probe:tag';
+  result = collect(credentialReference);
+  assert.equal(check(result, 'foundation-probe-registry-image').status, 'blocked');
+  assert.doesNotMatch(JSON.stringify(check(result, 'foundation-probe-registry-image')), /credential-sentinel/);
+  assert.equal(credentialReference.calls.some(({ args }) => args[0] === 'logs'), false);
 });
 
 test('probe receipt must correlate source, Git tree, nonce, issuer, and audience', () => {
@@ -141,6 +166,7 @@ test('probe receipt must correlate source, Git tree, nonce, issuer, and audience
     runtime => { runtime.state.probeReceipt.sourceSha = 'f'.repeat(40); },
     runtime => { runtime.state.probeReceipt.sourceTree = 'f'.repeat(40); },
     runtime => { runtime.state.probeReceipt.nonce = 'f'.repeat(32); },
+    runtime => { runtime.state.probeReceipt.telemetry.startedAt = '2026-10-03T11:55:00.000Z'; },
     runtime => { runtime.state.probeReceipt.workloadIdentity.issuer = 'https://wrong.example/'; },
     runtime => { runtime.state.probeReceipt.workloadIdentity.audience = 'wrong'; },
   ]) {

@@ -6,7 +6,7 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { checkAksNetworkSecurity, checkBlobRoundtrip, checkDeployedSha, checkKeyVaultSecretVersion, checkMonitorTrace,
   checkServiceDigests, checkWorkloadIdentity, runAcceptance } from '../verify-acceptance.mjs';
 import { fixture, source, fakeAzure, ids, deploymentOutputs, observedCluster } from './fixtures/target.mjs';
-import { makeRuntimeFixture, probeReceipt as validProbeReceipt, completedAt as probeCompletedAt } from './fixtures/foundation-probe-runtime.mjs';
+import { makeRuntimeFixture, completedAt as probeCompletedAt } from './fixtures/foundation-probe-runtime.mjs';
 
 test('AKS network preflight reads the exact observed cluster and reports enabled security configuration', () => {
   const calls = [];
@@ -182,6 +182,21 @@ test('Monitor fixes query to fresh SHA plus nonce and validates returned row cor
   assert.doesNotMatch(query, /AppTraces|Properties\.sourceSha/);
 });
 
+test('Monitor transport failures remain structured and redact diagnostics', () => {
+  const thrown = checkMonitorTrace(monitorConfig, () => {
+    throw new Error('Bearer monitor-token-sentinel');
+  }, clock);
+  assert.equal(thrown.status, 'blocked');
+  assert.equal(thrown.scope, 'integration');
+  assert.doesNotMatch(JSON.stringify(thrown), /monitor-token-sentinel/);
+
+  const failed = checkMonitorTrace(monitorConfig, () => ({
+    status: 1, stdout: '', stderr: 'InstrumentationKey=monitor-secret-sentinel',
+  }), clock);
+  assert.equal(failed.status, 'blocked');
+  assert.doesNotMatch(JSON.stringify(failed), /monitor-secret-sentinel/);
+});
+
 function blobFake({ upload = 'ok', cleanup = 'ok', generation = nonce } = {}, calls = []) {
   return args => {
     calls.push(args);
@@ -326,36 +341,41 @@ test('AKS preflight does not query an ID when the deployment receipt is not succ
 });
 
 test('only independently collected complete runtime evidence can pass deployed acceptance', () => {
-  const runtime = makeRuntimeFixture();
-  const monitorRow = {
-    TimeGenerated: validProbeReceipt.telemetry.startedAt,
-    Name: 'foundation-probe',
-    OperationId: validProbeReceipt.telemetry.traceId,
-    Id: validProbeReceipt.telemetry.spanId,
-    Properties: {
-      'probe.source_sha': source.sha,
-      'probe.source_tree': source.sourceTree,
-      'probe.nonce': validProbeReceipt.nonce,
-    },
+  const collect = runtime => {
+    const receipt = runtime.state.probeReceipt;
+    const monitorRow = {
+      TimeGenerated: receipt.telemetry.startedAt,
+      Name: 'foundation-probe',
+      OperationId: receipt.telemetry.traceId,
+      Id: receipt.telemetry.spanId,
+      Properties: {
+        'probe.source_sha': source.sha,
+        'probe.source_tree': source.sourceTree,
+        'probe.nonce': receipt.nonce,
+      },
+    };
+    const calls = [];
+    const report = runAcceptance({
+      ...fixture,
+      expectedSha: source.sha,
+      deploymentName: fixture.deploymentName,
+      collectRuntimeEvidence: true,
+      kubeContext: runtime.options.kubeContext,
+      imageReference: runtime.options.imageReference,
+      imageReceiptPath: runtime.options.imageReceiptPath,
+      workspaceId: deploymentOutputs.monitorWorkspaceId.value,
+      runtimeEvidence: { verified: true },
+    }, {
+      sourceResolver: () => source,
+      execAz: fakeAzure({ monitorResult: { status: 0, stdout: JSON.stringify([monitorRow]), stderr: '' } }, calls),
+      execKubectl: runtime.execKubectl,
+      verifyImage: runtime.verifyImage,
+      now: () => Date.parse('2026-10-03T12:02:00.000Z'),
+    });
+    return { report, calls };
   };
-  const calls = [];
-  const report = runAcceptance({
-    ...fixture,
-    expectedSha: source.sha,
-    deploymentName: fixture.deploymentName,
-    collectRuntimeEvidence: true,
-    kubeContext: runtime.options.kubeContext,
-    imageReference: runtime.options.imageReference,
-    imageReceiptPath: runtime.options.imageReceiptPath,
-    workspaceId: deploymentOutputs.monitorWorkspaceId.value,
-    runtimeEvidence: { verified: true },
-  }, {
-    sourceResolver: () => source,
-    execAz: fakeAzure({ monitorResult: { status: 0, stdout: JSON.stringify([monitorRow]), stderr: '' } }, calls),
-    execKubectl: runtime.execKubectl,
-    verifyImage: runtime.verifyImage,
-    now: () => Date.parse('2026-10-03T12:02:00.000Z'),
-  });
+  const runtime = makeRuntimeFixture();
+  const { report, calls } = collect(runtime);
 
   assert.equal(report.overall, 'passed');
   assert.equal(report.deployedAcceptance, true);
@@ -366,6 +386,14 @@ test('only independently collected complete runtime evidence can pass deployed a
   assert.equal(report.checks.find(check => check.name === 'blob-roundtrip').scope, 'diagnostic');
   assert.equal(report.checks.find(check => check.name === 'blob-roundtrip').status, 'not-run');
   assert.ok(calls.some(args => args[0] === 'monitor' && args.includes('--analytics-query')));
+
+  const staleRun = makeRuntimeFixture();
+  staleRun.state.probeReceipt.telemetry.startedAt = '2026-10-03T11:55:00.000Z';
+  const stale = collect(staleRun);
+  assert.equal(stale.report.deployedAcceptance, false);
+  assert.equal(stale.report.checks.find(check => check.name === 'foundation-probe-receipt').status, 'blocked');
+  assert.equal(stale.report.checks.find(check => check.name === 'monitor-trace').status, 'blocked');
+  assert.equal(stale.calls.some(args => args[0] === 'monitor'), false);
 });
 
 test('CLI rejects mutation and caller-asserted runtime proof options before any target command', () => {

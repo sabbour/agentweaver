@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { run, runAz } from './lib/exec.mjs';
+import { redact, run, runAz } from './lib/exec.mjs';
 import { guardAzureTarget, readFoundationOutputs } from './lib/guardrails.mjs';
 import { resolveSource, isFullSha } from './lib/git.mjs';
 import { collectFoundationProbeEvidence } from './lib/foundation-probe-runtime.mjs';
@@ -229,11 +229,21 @@ export function checkMonitorTrace({
     `| where tostring(Properties["probe.source_sha"]) == "${expectedSha}" ` +
     `and tostring(Properties["probe.source_tree"]) == "${sourceTree}" and tostring(Properties["probe.nonce"]) == "${runId}" ` +
     '| project TimeGenerated, Name, OperationId, Id, Properties';
-  const result = execAz(['monitor', 'log-analytics', 'query', '--workspace', workspaceId,
-    '--analytics-query', effectiveQuery, '-o', 'json'], { check: false });
+  let result;
+  try {
+    result = execAz(['monitor', 'log-analytics', 'query', '--workspace', workspaceId,
+      '--analytics-query', effectiveQuery, '-o', 'json'], { check: false });
+  } catch (error) {
+    return integrationBlocked(name, 'Monitor Logs query failed.',
+      { queryStatus: 'unavailable', diagnostic: redact(error.message) });
+  }
+  if (!result || result.status !== 0) {
+    return integrationBlocked(name, 'Monitor Logs query failed.',
+      { queryStatus: result?.status ?? 'missing', diagnostic: redact(result?.stderr || result?.stdout) });
+  }
   try {
     const rows = JSON.parse(result.stdout);
-    const matched = result.status === 0 && Array.isArray(rows) && rows.some(row => {
+    const matched = Array.isArray(rows) && rows.some(row => {
       const properties = typeof row.Properties === 'string' ? JSON.parse(row.Properties) : row.Properties;
       const timestamp = Date.parse(row.TimeGenerated);
       return row.Name === 'foundation-probe' && row.OperationId === traceId && row.Id === spanId &&

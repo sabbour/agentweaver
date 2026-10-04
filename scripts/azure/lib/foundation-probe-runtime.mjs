@@ -20,8 +20,12 @@ const configurationBlocked = (name, reason, evidence) => ({
   name, scope: 'configuration', status: 'blocked', reason, evidence,
 });
 
-function redactDiagnostic(value) {
-  return String(value ?? '')
+function redactDiagnostic(value, secretValues = []) {
+  let text = String(value ?? '');
+  for (const secret of secretValues) {
+    if (typeof secret === 'string' && secret.length > 0) text = text.replaceAll(secret, '[redacted]');
+  }
+  return text
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [redacted]')
     .replace(/[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '[redacted]')
     .replace(/\b(InstrumentationKey|AccountKey|SharedAccessKey|Password|Secret|Token|client_secret|sig)\s*=\s*[^;\s,]+/gi,
@@ -73,13 +77,24 @@ function validIssuer(value) {
   }
 }
 
+function nativeProbeInvocation(container) {
+  return container?.name === imageName &&
+    (container.command == null || (Array.isArray(container.command) && container.command.length === 0)) &&
+    Array.isArray(container.args) && container.args.length === 3 &&
+    container.args[0] === '--execute' && container.args[1] === '--target' &&
+    container.args[2] === '/run/foundation-probe/target.json';
+}
+
 function imageRepository(reference) {
   if (typeof reference !== 'string' || reference.length === 0 || reference.includes('@') ||
-      /\s|[\r\n]/.test(reference)) return null;
+      reference.includes('://') || /[\s\r\n?#\\]/.test(reference)) return null;
   const slash = reference.lastIndexOf('/');
   const colon = reference.lastIndexOf(':');
   if (colon <= slash || !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(reference.slice(colon + 1))) return null;
   const repository = reference.slice(0, colon);
+  const registry = repository.includes('/') ? repository.slice(0, repository.indexOf('/')) : '';
+  const registryColon = registry.indexOf(':');
+  if (registryColon !== -1 && !/^\d+$/.test(registry.slice(registryColon + 1))) return null;
   return repository.length > 0 ? repository : null;
 }
 
@@ -218,9 +233,7 @@ function checkJobAndPod(job, pods, target, now) {
         job.spec?.template?.metadata?.labels?.['azure.workload.identity/use'] !== 'true' ||
         jobPodSpec?.serviceAccountName !== target.foundationProbeIdentity.serviceAccount ||
         jobPodSpec?.automountServiceAccountToken !== true || jobPodSpec?.restartPolicy !== 'Never' ||
-        jobContainer?.name !== imageName || !Array.isArray(jobContainer.args) ||
-        jobContainer.args.length !== 3 || jobContainer.args[0] !== '--execute' ||
-        jobContainer.args[1] !== '--target' || jobContainer.args[2] !== '/run/foundation-probe/target.json' ||
+        !nativeProbeInvocation(jobContainer) ||
         !Array.isArray(jobPodSpec.volumes) ||
         !jobPodSpec.volumes.some(volume => volume.name === 'target' &&
           volume.configMap?.name === configMapName &&
@@ -275,7 +288,8 @@ function checkJobAndPod(job, pods, target, now) {
     if (pod.spec?.serviceAccountName !== target.foundationProbeIdentity.serviceAccount ||
         pod.spec?.automountServiceAccountToken !== true || pod.spec?.restartPolicy !== 'Never' ||
         !Array.isArray(pod.spec?.containers) || pod.spec.containers.length !== 1 ||
-        pod.spec.containers[0].name !== imageName || pod.spec.initContainers?.length > 0 ||
+        !nativeProbeInvocation(pod.spec.containers[0]) ||
+        pod.spec.initContainers?.length > 0 ||
         pod.spec.containers[0].image !== job.spec.template?.spec?.containers?.[0]?.image ||
         pod.spec.containers[0].image !== containerStatus?.image ||
         !Array.isArray(pod.status.containerStatuses) || pod.status.containerStatuses.length !== 1 ||
@@ -315,11 +329,15 @@ function checkJobAndPod(job, pods, target, now) {
         serviceAccountName: pod.spec.serviceAccountName,
         startedAt: job.status.startTime,
         completedAt: job.status.completionTime,
+        containerStartedAt: containerStatus.state.terminated.startedAt,
+        containerFinishedAt: containerStatus.state.terminated.finishedAt,
         exitCode: containerStatus.state.terminated.exitCode,
         activeDeadlineSeconds: job.spec.activeDeadlineSeconds,
       }),
       pod,
       completedAt: job.status.completionTime,
+      containerStartedAt: containerStatus.state.terminated.startedAt,
+      containerFinishedAt: containerStatus.state.terminated.finishedAt,
     };
   } catch (error) {
     return { check: blocked(name, error.message, {
@@ -449,13 +467,9 @@ function checkProbeJobImage(job, pod, verifiedReceipt, imageReference, source) {
     });
   } catch (error) {
     return blocked(name, error.message, {
-      imageReference,
       sourceSha: verifiedReceipt?.sourceSha,
       sourceTree: verifiedReceipt?.sourceTree,
-      repositoryDigests: verifiedReceipt?.image?.repositoryDigests,
-      jobImage: job?.spec?.template?.spec?.containers?.[0]?.image,
-      podImage: pod?.spec?.containers?.[0]?.image,
-      podImageId: pod?.status?.containerStatuses?.[0]?.imageID,
+      podUid: pod?.metadata?.uid,
     });
   }
 }
@@ -483,7 +497,7 @@ const postgresKeys = [
 ];
 const telemetryKeys = ['name', 'traceId', 'spanId', 'startedAt'];
 
-function checkProbeReceipt(receipt, target, source, completedAt) {
+function checkProbeReceipt(receipt, target, source, execution) {
   const name = 'foundation-probe-receipt';
   try {
     if (!hasExactKeys(receipt, receiptKeys) ||
@@ -502,7 +516,9 @@ function checkProbeReceipt(receipt, target, source, completedAt) {
     const deployment = receipt.deployment;
     const monitorUrl = new URL(receipt.monitorConfiguration.ingestionEndpoint);
     const startedAt = Date.parse(receipt.telemetry.startedAt);
-    const completed = Date.parse(completedAt);
+    const containerStartedAt = Date.parse(execution?.containerStartedAt);
+    const containerFinishedAt = Date.parse(execution?.containerFinishedAt);
+    const completed = Date.parse(execution?.completedAt);
     const expectedPins = [
       ['Secrets', 'azure-key-vault', resources.keyVaultId],
       ['ObjectStore', 'azure-blob', resources.blobContainerId],
@@ -557,8 +573,11 @@ function checkProbeReceipt(receipt, target, source, completedAt) {
         receipt.telemetry.name !== 'foundation-probe' || !/^[0-9a-f]{32}$/.test(receipt.telemetry.traceId ?? '') ||
         /^0+$/.test(receipt.telemetry.traceId) || !/^[0-9a-f]{16}$/.test(receipt.telemetry.spanId ?? '') ||
         /^0+$/.test(receipt.telemetry.spanId) || !Number.isFinite(startedAt) ||
-        !Number.isFinite(completed) || startedAt > completed) {
-      throw new Error('Probe output is incomplete or differs from the observed source, target, identity, or owned effects.');
+        !Number.isFinite(containerStartedAt) || !Number.isFinite(containerFinishedAt) ||
+        !Number.isFinite(completed) || containerStartedAt > containerFinishedAt ||
+        containerFinishedAt > completed ||
+        startedAt < containerStartedAt - 1000 || startedAt > containerFinishedAt + 1000) {
+      throw new Error('Probe output is incomplete or differs from the observed source, target, identity, execution window, or owned effects.');
     }
     return passed(name, 'integration', {
       sourceSha: receipt.sourceSha,
@@ -745,7 +764,9 @@ export function collectFoundationProbeEvidence({
   if (jobPod?.pod &&
       checks.find(check => check.name === 'foundation-probe-workload-identity')?.status === 'passed') {
     try {
-      if (!imageReference || !imageReceiptPath) throw new Error('A registry image reference and admitted CI image receipt path are required.');
+      if (!imageRepository(imageReference) || !imageReceiptPath) {
+        throw new Error('A registry repository:tag reference without credentials or digest and the admitted CI image receipt are required.');
+      }
       verifiedImage = verifyImage(imageReference, {
         repoRoot,
         readReceiptPath: imageReceiptPath,
@@ -754,7 +775,9 @@ export function collectFoundationProbeEvidence({
       checks.push(imageCheck);
       imageStatus = imageCheck.status;
     } catch (error) {
-      checks.push(blocked('foundation-probe-registry-image', redactDiagnostic(error.message), { imageReference }));
+      checks.push(blocked('foundation-probe-registry-image', redactDiagnostic(error.message, [imageReference]), {
+        imageReferenceProvided: Boolean(imageReference),
+      }));
       imageStatus = 'blocked';
     }
   } else {
@@ -765,7 +788,10 @@ export function collectFoundationProbeEvidence({
 
   const identityProjectionPassed =
     checks.find(check => check.name === 'foundation-probe-workload-identity')?.status === 'passed';
-  if (jobPod?.pod && podHasTerminalProbeContainer(jobPod.pod) &&
+  const nativeInvocation =
+    nativeProbeInvocation(observations.job?.spec?.template?.spec?.containers?.[0]) &&
+    nativeProbeInvocation(jobPod?.pod?.spec?.containers?.[0]);
+  if (jobPod?.pod && podHasTerminalProbeContainer(jobPod.pod) && nativeInvocation &&
       identityProjectionPassed && imageStatus === 'passed') {
     try {
       const podName = jobPod.pod.metadata.name;
@@ -792,7 +818,11 @@ export function collectFoundationProbeEvidence({
         return collected;
       }
       const receipt = parseProbeLog(logs);
-      const result = checkProbeReceipt(receipt, target, source, jobPod.completedAt);
+      const result = checkProbeReceipt(receipt, target, source, {
+        completedAt: jobPod.completedAt,
+        containerStartedAt: jobPod.containerStartedAt,
+        containerFinishedAt: jobPod.containerFinishedAt,
+      });
       checks.push(result);
       if (result.status === 'passed') {
         checks.push(passed('foundation-probe-workload-identity-exchange', 'integration', {
@@ -826,12 +856,12 @@ export function collectFoundationProbeEvidence({
     }
   } else {
     if (jobPod?.pod && podHasTerminalProbeContainer(jobPod.pod) && identityProjectionPassed &&
-        imageStatus !== 'passed') {
+        (imageStatus !== 'passed' || !nativeInvocation)) {
       checks.push({
         name: 'foundation-probe-failure-diagnostic',
         scope: 'diagnostic',
         status: 'not-captured',
-        reason: 'Pod logs were not read because the source-bound registry image did not verify.',
+        reason: 'Pod logs were not read because the source-bound image or native execution contract did not verify.',
       });
     }
     checks.push(blocked('foundation-probe-receipt',
