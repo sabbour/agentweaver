@@ -114,10 +114,10 @@ function checkKubernetesTarget(kubeConfig, kubeContext, cluster) {
   }
 
   const server = new URL(kubeConfig.clusters[0].cluster.server);
-  const observedHosts = cluster?.apiServerHosts ??
-    [cluster?.properties?.fqdn, cluster?.properties?.privateFqdn]
-    .filter(value => typeof value === 'string')
-    .map(value => value.toLowerCase().replace(/\.$/, ''));
+  const observedFqdn = cluster?.apiServerFqdn ?? cluster?.properties?.fqdn;
+  const observedHosts = typeof observedFqdn === 'string'
+    ? [observedFqdn.toLowerCase().replace(/\.$/, '')]
+    : [];
   const clusterId = cluster?.clusterId ?? cluster?.id;
   if (server.protocol !== 'https:' || server.username || server.password || server.search || server.hash ||
       server.pathname !== '/' || (server.port && server.port !== '443') ||

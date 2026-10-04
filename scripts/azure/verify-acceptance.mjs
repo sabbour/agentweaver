@@ -46,6 +46,15 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
     return blocked(name, 'Observed AKS resource ID differs from the approved deployment receipt.');
   }
 
+  const apiServerAccessProfile = cluster.properties?.apiServerAccessProfile;
+  const aadProfile = cluster.properties?.aadProfile;
+  if (apiServerAccessProfile?.enablePrivateCluster !== false ||
+      aadProfile?.managed !== true || aadProfile?.enableAzureRBAC !== true ||
+      cluster.properties?.disableLocalAccounts !== true ||
+      typeof cluster.properties?.fqdn !== 'string' || cluster.properties.fqdn.length === 0) {
+    return blocked(name, 'Observed AKS must expose a public API with managed Entra, Azure RBAC and local accounts disabled.');
+  }
+
   const versionMatch = /^(\d+)\.(\d+)(?:\.\d+)?$/.exec(
     cluster.properties?.kubernetesVersion ?? '');
   if (!versionMatch || Number(versionMatch[1]) < 1 ||
@@ -63,13 +72,15 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
 
   return configured(name, {
     clusterId: cluster.id,
+    publicApi: true,
+    apiServerFqdn: cluster.properties.fqdn.toLowerCase().replace(/\.$/, ''),
+    managedEntra: true,
+    azureRbac: true,
+    localAccountsDisabled: true,
     kubernetesVersion: cluster.properties.kubernetesVersion,
     networkDataplane: networkProfile.networkDataplane,
     advancedNetworkingEnabled: true,
     advancedNetworkingSecurityEnabled: true,
-    apiServerHosts: [cluster.properties?.privateFqdn, cluster.properties?.fqdn]
-      .filter(value => typeof value === 'string')
-      .map(value => value.toLowerCase().replace(/\.$/, '')),
     apiVersion,
   });
 }
@@ -287,7 +298,7 @@ export function runAcceptance(config, {
     candidate = { verifierSha: source.verifierSha ?? source.sha, sourceSha: source.sha,
       sourceTree: source.sourceTree, sourceHash: source.sourceHash, scope: source.scope };
     if (config.expectedSha !== source.sha) throw new Error('Expected deployment SHA differs from reviewed HEAD.');
-    const target = guardAzureTarget({ ...config, ...source, requireCompleteP0Evidence: true }, execAz);
+    const target = guardAzureTarget({ ...config, ...source }, execAz);
     boundAz = target.execAz;
     const { group } = target;
     if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {

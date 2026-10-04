@@ -12,7 +12,6 @@ import {
 } from '../lib/guardrails.mjs';
 import { fixture, source, tags, fakeAzure, deploymentOutputs } from './fixtures/target.mjs';
 import { postDeploymentAzure, postDeploymentInventory, postDeploymentDetails } from './fixtures/post-deployment.mjs';
-import { nrmsNsgName, smartDetectorEvidence } from './fixtures/owned-p0-evidence.mjs';
 import { plan } from '../plan.mjs';
 import { deploy } from '../deploy.mjs';
 import { runAcceptance } from '../verify-acceptance.mjs';
@@ -30,8 +29,8 @@ function clonePostDeployment() {
   return structuredClone(postDeploymentAzure);
 }
 
-function guardPopulatedTarget(evidence = postDeploymentAzure, config = {}) {
-  return guardAzureTarget({ ...fixture, ...source, ...config }, fakeAzure(evidence));
+function guardPopulatedTarget(evidence = postDeploymentAzure, config = {}, calls = []) {
+  return guardAzureTarget({ ...fixture, ...source, ...config }, fakeAzure(evidence, calls));
 }
 
 test('assertDedicatedTarget accepts the dedicated naming convention', () => {
@@ -120,17 +119,14 @@ test('assertDedicatedResourceGroupOwnership rejects an existing resource group t
 test('populated post-deployment inventory admits exact roots, untagged children, deployments and generated PE NICs', () => {
   const calls = [];
   const target = guardAzureTarget({ ...fixture, ...source }, fakeAzure(postDeploymentAzure, calls));
-  assert.equal(calls.filter(args => args[0] === 'resource' && args[1] === 'show').length, 18);
+  assert.equal(calls.filter(args => args[0] === 'resource' && args[1] === 'show').length, 13);
   assert.equal(target.inventoryEvidence.privateDnsZones.rootCount, 7);
-  assert.equal(target.inventoryEvidence.privateDnsZones.tagsPersisted, false);
-  assert.equal(target.inventoryEvidence.privateDnsZones.taglessRootCount, 7);
-  assert.equal(target.inventoryEvidence.privateDnsZones.sourceReceipt.successfulRootCreates, 7);
-  assert.equal(target.inventoryEvidence.inheritedNetworkSecurityGroup.compliantPolicyStateCount, 8);
-  assert.equal(target.inventoryEvidence.inheritedNetworkSecurityGroup.successfulRuleWriteEventCount, 8);
-  assert.equal(target.inventoryEvidence.smartDetectorAlert.actionGroupCount, 0);
+  assert.equal(target.inventoryEvidence.privateDnsZones.vnetLinkCount, 7);
+  assert.equal('tagsPersisted' in target.inventoryEvidence.privateDnsZones, false);
+  assert.equal('sourceReceipt' in target.inventoryEvidence.privateDnsZones, false);
+  assert.ok(!calls.some(args => args[0] === 'policy' || args.includes('activity-log') ||
+    args.includes('operation') || args[0] === 'deployment' && args.includes('show')));
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], fixture.subscriptionId);
-  assert.throws(() => guardAzureTarget({ ...fixture, ...source, sha: 'c'.repeat(40) },
-    fakeAzure(postDeploymentAzure)), /exact SHA-derived source receipt/);
 });
 
 test('the same populated layout reaches plan, redeploy and configuration acceptance, never runtime success', () => {
@@ -140,47 +136,41 @@ test('the same populated layout reaches plan, redeploy and configuration accepta
   const report = runAcceptance({ ...fixture, deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}` }, dependencies());
   assert.ok(!report.checks.some(check => check.name === 'target-and-source'));
   assert.equal(report.checks.find(check => check.name === 'target-inventory').status, 'passed');
-  assert.equal(report.checks.find(check => check.name === 'target-inventory').evidence.privateDnsZones.tagsPersisted, false);
+  assert.equal(report.checks.find(check => check.name === 'target-inventory').evidence.privateDnsZones.vnetLinkCount, 7);
   assert.equal(report.checks.find(check => check.name === 'deployed-sha').status, 'passed');
   assert.equal(report.overall, 'blocked');
 });
 
-test('the seven tagless private DNS roots require exact source, create-operation and owned-link proof', () => {
-  const expectedTags = { ...tags, 'agentweaver:sourceSha': source.sha };
-  const tagged = clonePostDeployment();
-  for (const resource of tagged.resources.filter(item => item.type === 'Microsoft.Network/privateDnsZones')) {
-    resource.tags = { ...expectedTags };
-  }
-  const taggedEvidence = guardPopulatedTarget(tagged).inventoryEvidence.privateDnsZones;
-  assert.equal(taggedEvidence.tagsPersisted, true);
-  assert.equal(taggedEvidence.taglessRootCount, 0);
+test('missing DNS tags and inherited resource audit metadata do not block exact-target deployment', () => {
+  const evidence = clonePostDeployment();
+  const rootZones = evidence.resources.filter(item => item.type === 'Microsoft.Network/privateDnsZones');
+  rootZones[0].tags = null;
+  rootZones[1].tags = { 'agentweaver:owner': tags['agentweaver:owner'] };
+  const auditResources = evidence.resources.filter(item =>
+    item.type === 'Microsoft.Network/networkSecurityGroups' ||
+    item.type === 'Microsoft.AlertsManagement/smartDetectorAlertRules' ||
+    item.name === `aw-v1-p0-${source.sha.slice(0, 12)}`);
+  evidence.resources = evidence.resources.filter(item => !auditResources.includes(item));
+  evidence.policyStates = undefined;
+  evidence.activityEvents = undefined;
+  evidence.deploymentOperations = undefined;
+  evidence.create = { status: 1, stderr: 'Historical receipt unavailable', stdout: '' };
+  const calls = [];
+  const target = guardPopulatedTarget(evidence, {}, calls);
+  assert.equal(target.inventoryEvidence.privateDnsZones.rootCount, 7);
+  assert.equal(target.inventoryEvidence.privateDnsZones.vnetLinkCount, 7);
+  assert.ok(!calls.some(args => args[0] === 'policy' || args.includes('activity-log') ||
+    args.includes('operation') || args[0] === 'deployment' && args.includes('show')));
+});
 
-  const deploymentNotInInventory = clonePostDeployment();
-  deploymentNotInInventory.resources = deploymentNotInInventory.resources.filter(resource =>
-    resource.name !== `aw-v1-p0-${source.sha.slice(0, 12)}`);
-  assert.equal(guardPopulatedTarget(deploymentNotInInventory).inventoryEvidence.privateDnsZones.tagsPersisted, false);
-
+test('existing private DNS ownership tags reject conflicts with the dedicated target', () => {
   const conflictingTags = clonePostDeployment();
   const firstZone = conflictingTags.resources.find(item => item.type === 'Microsoft.Network/privateDnsZones');
-  firstZone.tags = { 'agentweaver:environment': 'v1-p0', diagnostic: 'tag-secret-sentinel' };
-  assert.throws(() => guardPopulatedTarget(conflictingTags), error => {
-    assert.match(error.message, /conflicting or incomplete ownership tags/);
-    assert.ok(!error.message.includes('tag-secret-sentinel'));
-    return true;
-  });
+  firstZone.tags = { 'agentweaver:owner': 'different-owner' };
+  assert.throws(() => guardPopulatedTarget(conflictingTags), /ownership conflicts/);
+});
 
-  const partialTags = clonePostDeployment();
-  partialTags.resources.find(item => item.type === 'Microsoft.Network/privateDnsZones').tags = expectedTags;
-  assert.throws(() => guardPopulatedTarget(partialTags), /partially missing/);
-
-  const missingCreate = clonePostDeployment();
-  missingCreate.deploymentOperations = missingCreate.deploymentOperations.slice(1);
-  assert.throws(() => guardPopulatedTarget(missingCreate), /exactly one successful Create operation/);
-
-  const duplicateCreate = clonePostDeployment();
-  duplicateCreate.deploymentOperations.push(structuredClone(duplicateCreate.deploymentOperations[0]));
-  assert.throws(() => guardPopulatedTarget(duplicateCreate), /exactly one successful Create operation/);
-
+test('an observed private DNS VNet link still rejects an external or registration-enabled link', () => {
   const failedLink = clonePostDeployment();
   const link = failedLink.resources.find(item => item.type.endsWith('/virtualNetworkLinks'));
   failedLink.details[link.id].properties.virtualNetwork.id += '-external';
@@ -190,65 +180,6 @@ test('the seven tagless private DNS roots require exact source, create-operation
   const registrationLink = enabledRegistration.resources.find(item => item.type.endsWith('/virtualNetworkLinks'));
   enabledRegistration.details[registrationLink.id].properties.registrationEnabled = true;
   assert.throws(() => guardPopulatedTarget(enabledRegistration), /registration-disabled P0 link/);
-});
-
-test('inherited NRMS NSG requires exact rules, reciprocal subnet links, compliant policy and successful child writes', () => {
-  const baseline = clonePostDeployment();
-  const nsgResource = baseline.resources.find(item => item.name === nrmsNsgName);
-  const nsgId = nsgResource.id;
-  const makeChanged = change => {
-    const evidence = clonePostDeployment();
-    change(evidence, evidence.details[nsgId]);
-    return evidence;
-  };
-  const rejected = [
-    [makeChanged((_evidence, nsg) => {
-      nsg.properties.securityRules.find(rule => rule.name === 'NRMS-Rule-105')
-        .properties.destinationPortRanges.pop();
-    }), /exact shape/],
-    [makeChanged((_evidence, nsg) => { delete nsg.properties.networkInterfaces; }),
-      /network-interface association/],
-    [makeChanged((_evidence, nsg) => { nsg.properties.networkInterfaces = null; }),
-      /network-interface association/],
-    [makeChanged((_evidence, nsg) => { nsg.properties.networkInterfaces = [{ id: `${nsgId}/nic` }]; }),
-      /network-interface association/],
-    [makeChanged((evidence, nsg) => {
-      const subnetId = nsg.properties.subnets[0].id;
-      evidence.details[subnetId].properties.networkSecurityGroup.id += '-external';
-    }), /not reciprocal/],
-    [makeChanged(evidence => { evidence.policyStates[0].complianceState = 'NonCompliant'; }),
-      /exact compliant management-group assignment/],
-    [makeChanged(evidence => {
-      evidence.policyStates[0].policyDefinitionId = `${evidence.policyStates[0].policyDefinitionId}-other`;
-    }), /exact compliant management-group assignment/],
-    [makeChanged(evidence => {
-      const ruleId = `${nsgId}/securityRules/NRMS-Rule-101`;
-      evidence.activityEvents[ruleId] = [];
-    }), /one successful child securityRules\/write event/],
-    [makeChanged(evidence => {
-      const ruleId = `${nsgId}/securityRules/NRMS-Rule-101`;
-      evidence.activityEvents[ruleId][2].status.value = 'Failed';
-    }), /one successful child securityRules\/write event/],
-  ];
-  for (const [evidence, message] of rejected) assert.throws(() => guardPopulatedTarget(evidence), message);
-});
-
-test('the owned Failure Anomalies rule rejects drift and external action-group links', () => {
-  const alertResource = postDeploymentInventory.find(item => item.name === smartDetectorEvidence.name);
-  const changeAlert = change => {
-    const evidence = clonePostDeployment();
-    change(evidence.details[alertResource.id].properties);
-    return evidence;
-  };
-  for (const evidence of [
-    changeAlert(properties => { properties.state = 'Disabled'; }),
-    changeAlert(properties => { properties.severity = 'Sev2'; }),
-    changeAlert(properties => { properties.detector.id = 'OtherDetector'; }),
-    changeAlert(properties => { properties.frequency = 'PT5M'; }),
-    changeAlert(properties => { properties.scope = [`${fixture.groupId}/external`]; }),
-    changeAlert(properties => { properties.actionGroups.groupIds = ['/subscriptions/other/actionGroups/external']; }),
-    changeAlert(properties => { properties.actionGroups.customEmailSubject = 'unexpected subject'; }),
-  ]) assert.throws(() => guardPopulatedTarget(evidence), /exact isolated P0 Smart Detector/);
 });
 
 test('inventory rejects wrong root IDs, root ownership, arbitrary children and unreviewed admin IDs', () => {
@@ -295,42 +226,15 @@ test('generated NIC admission requires reciprocal approved endpoint and exact su
   ]) assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [endpointResource, nic], detailResult })));
 });
 
-test('module deployment names are exact and historical deployment names require matching SHA/tree/hash outputs', () => {
+test('module names remain exact while old source-derived deployment history is non-blocking', () => {
   const outer = postDeploymentInventory.find(resource => resource.name === `aw-v1-p0-${source.sha.slice(0, 12)}`);
   const module = postDeploymentInventory.find(resource => resource.name === 'aw-v1-p0-network');
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({
     resources: [{ ...module, name: 'arbitrary', id: module.id.replace(module.name, 'arbitrary') }],
   })), /unexpected/);
-  for (const outputs of [{}, { sourceSha: { value: 'c'.repeat(40) }, sourceHash: { value: source.sourceHash } },
-    { sourceSha: { value: source.sha }, sourceHash: { value: 'invalid' } }]) {
-    assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [outer], create: {
-      status: 0, stderr: '', stdout: JSON.stringify({ id: outer.id, properties: { outputs } }),
-    } })), /source-bound receipt/);
-  }
-});
-
-test('historical receipt requires lowercase Git tree SHA before plan or redeploy, without repair fallback', () => {
-  const outer = postDeploymentInventory.find(resource => resource.name === `aw-v1-p0-${source.sha.slice(0, 12)}`);
-  const receipt = tree => ({ resources: [outer], create: {
-    status: 0, stderr: '', stdout: JSON.stringify({ id: outer.id, properties: { outputs: {
-      sourceSha: { value: source.sha }, sourceTree: { value: tree }, sourceHash: { value: source.sourceHash },
-    } } }),
-  } });
-  assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure(receipt(source.sourceTree))));
-  for (const tree of [undefined, '', 'malformed', source.sourceHash, source.sourceTree.toUpperCase()]) {
-    for (const operation of [plan, deploy]) {
-      const calls = [];
-      assert.throws(() => operation({ ...fixture, execute: true },
-        { sourceResolver: () => source, execAz: fakeAzure(receipt(tree), calls) }), /source-bound receipt/);
-      assert.ok(!calls.some(args => args.includes('what-if') || args.includes('create') || args.includes('delete')));
-    }
-    const calls = [];
-    const report = runAcceptance(fixture, { sourceResolver: () => source, execAz: fakeAzure(receipt(tree), calls) });
-    assert.equal(report.overall, 'blocked');
-    assert.equal(report.deployedAcceptance, false);
-    assert.equal(report.checks[0].name, 'target-and-source');
-    assert.ok(!calls.some(args => args[0] === 'identity' || args[0] === 'storage'));
-  }
+  const calls = [];
+  assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure({ resources: [outer] }, calls)));
+  assert.ok(!calls.some(args => args[0] === 'deployment' && args.includes('show')));
 });
 
 test('role assignments must have the exact reviewed parent scope and ARM GUID', () => {

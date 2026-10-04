@@ -229,6 +229,13 @@ test('explicit context must resolve to the observed AKS API server and failures 
   assert.equal(check(result, 'kubernetes-target').status, 'blocked');
   assert.equal(wrongContext.calls.filter(({ args }) => args[0] === 'get').length, 0);
 
+  const privateContext = makeRuntimeFixture();
+  privateContext.state.kubeConfig.clusters[0].cluster.server =
+    'https://api.example.privatelink.azmk8s.io:443/';
+  result = collect(privateContext);
+  assert.equal(check(result, 'kubernetes-target').status, 'blocked');
+  assert.equal(privateContext.calls.filter(({ args }) => args[0] === 'get').length, 0);
+
   const missingContext = makeRuntimeFixture();
   missingContext.options.kubeContext = undefined;
   result = collect(missingContext);

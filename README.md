@@ -58,13 +58,15 @@ It is a draft composition, not evidence of deployment or a released platform.
 
 The [P0 Azure infrastructure story](docs/specs/1777-azure-p0-infrastructure.md) adds
 a dedicated-environment layout: native Bicep modules under `infra/bicep/`
-(private AKS with OIDC/workload identity, Entra-only PostgreSQL, RBAC-only Key
+(public AKS API with OIDC/workload identity, Entra-only PostgreSQL, RBAC-only Key
 Vault, Blob storage, Azure Monitor, least-privilege per-service identities), a
 Kustomize base under `deploy/k8s/base/`, and dependency-free Node CLI tooling
-under `scripts/azure/` for read-only plan, confirmed exact-SHA deploy, and a
-blocking acceptance entrypoint. None of it has been applied to a real
-subscription; see [Azure infrastructure tooling](scripts/azure/README.md) for
-the guardrail contract.
+under `scripts/azure/` for read-only plan, confirmed exact-SHA deployment, and
+optional acceptance evidence collection. Source definitions are not deployment
+or runtime proof; the approved target's deployment and smoke acceptance are
+tracked separately in [#1812](https://github.com/sabbour/agentweaver/issues/1812)
+and [#1814](https://github.com/sabbour/agentweaver/issues/1814). See
+[Azure infrastructure tooling](scripts/azure/README.md) for the guardrails.
 
 The [P0 Foundation Probe story](docs/specs/1784-foundation-probe.md) adds an
 acceptance-only .NET workload Job, source-bound image receipt, and ownership-safe

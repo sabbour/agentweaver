@@ -1,6 +1,6 @@
 // Dedicated P0 AKS cluster: OIDC issuer + workload identity enabled so
 // per-service user-assigned identities can federate without storing any
-// client secret. Private cluster, system-assigned control-plane identity,
+// client secret. Public API endpoint, system-assigned control-plane identity,
 // and a single system node pool sized for the foundation smoke workload.
 @description('Azure region for the cluster.')
 param location string
@@ -25,9 +25,6 @@ param nodePoolVmSize string = 'Standard_D2s_v5'
 
 @description('System node pool node count. Kept small and fixed for the P0 smoke environment.')
 param nodePoolCount int = 2
-
-@description('Whether the AKS API server is private (no public endpoint). Always true for this dedicated environment.')
-param enablePrivateCluster bool = true
 
 @description('Optional existing application DNS zone resource IDs for custom routing domains.')
 param appRoutingDnsZoneResourceIds array = []
@@ -91,7 +88,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' = {
       }
     }
     apiServerAccessProfile: {
-      enablePrivateCluster: enablePrivateCluster
+      enablePrivateCluster: false
     }
     networkProfile: {
       networkPlugin: 'azure'

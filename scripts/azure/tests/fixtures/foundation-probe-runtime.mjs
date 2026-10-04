@@ -314,11 +314,11 @@ export const configMap = {
 
 export const observedCluster = {
   clusterId: resources.clusterId,
-  apiServerHosts: ['api.example.privatelink.azmk8s.io'],
+  apiServerFqdn: 'api.example.azmk8s.io',
 };
 
 export const kubeConfig = {
-  clusters: [{ name: 'aw-v1-p0-aks', cluster: { server: 'https://api.example.privatelink.azmk8s.io:443/' } }],
+  clusters: [{ name: 'aw-v1-p0-aks', cluster: { server: 'https://api.example.azmk8s.io:443/' } }],
 };
 
 export function makeRuntimeFixture() {
