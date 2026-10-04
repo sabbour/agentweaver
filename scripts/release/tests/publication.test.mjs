@@ -55,6 +55,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   const tags = new Map();
   const refs = new Map();
   const remoteCalls = [];
+  const externalCalls = [];
   const github = (args, input) => {
     remoteCalls.push({ args, input });
     const method = args[args.indexOf('--method') + 1];
@@ -80,15 +81,22 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   };
   const publish = (options = {}) => {
     const external = options.run ?? ((bin, args) => {
-      if (bin === 'docker' && args[0] === 'inspect') return JSON.stringify([`registry.example.invalid/svc@sha256:${'b'.repeat(64)}`]);
+      if (bin === 'docker' && args[0] === 'inspect') {
+        const repository = args.at(-1).replace(/:[^/:]+$/, '');
+        return JSON.stringify([`${repository}@sha256:${'b'.repeat(64)}`]);
+      }
       return '';
     });
     return publishArtifacts('releases/foundation.json', outDir, sourceSha, {
       root, confirmed: true, env, ...options,
-      run: (bin, args, input) => bin === 'gh' ? (options.github ?? github)(args, input) : external(bin, args, input),
+      run: (bin, args, input) => {
+        if (bin === 'gh') return (options.github ?? github)(args, input);
+        externalCalls.push({ bin, args, input });
+        return external(bin, args, input);
+      },
     });
   };
-  return { root, outDir, prepare, publish, calls, sourceSha, github, tags, refs, remoteCalls, env };
+  return { root, outDir, prepare, publish, calls, sourceSha, github, tags, refs, remoteCalls, externalCalls, env };
 }
 
 test('prepares locked packages and unpublished service images without a registry push or fake digest', (t) => {
@@ -182,6 +190,8 @@ test('manual publication records actual immutable registry digests and never cha
   assert.equal(receipt.status, 'published');
   assert.equal(receipt.sourceSha, f.sourceSha);
   assert.equal(receipt.published[1].image, `registry.example.invalid/svc@sha256:${'b'.repeat(64)}`);
+  assert.equal(receipt.planned[1].destination, 'registry.example.invalid/svc:0.1.0');
+  assert.equal(f.externalCalls.find(({ bin, args }) => bin === 'docker' && args[0] === 'login').args[1], 'registry.example.invalid');
   assert.deepEqual(readFileSync(path.join(f.root, 'releases', 'foundation.json')), before);
   const text = readFileSync(path.join(f.outDir, 'publication.json'), 'utf8');
   assert.doesNotMatch(text, /test-secret|test-password|test-user|test-github-secret/);
@@ -196,6 +206,51 @@ test('manual publication records actual immutable registry digests and never cha
   assert.deepEqual(JSON.parse(result.message), receipt);
   assert.doesNotMatch(JSON.stringify([...f.tags.values()]), /test-secret|test-password|test-user|test-github-secret/);
   assert.throws(() => f.publish(), /receipt already exists/);
+});
+
+test('GHCR namespace scopes image paths while Docker login uses only the registry host', (t) => {
+  const f = fixture(t);
+  f.prepare();
+  const registry = 'ghcr.io/sabbour';
+  const receipt = f.publish({ env: { ...f.env, RELEASE_REGISTRY: registry } });
+  assert.equal(receipt.status, 'published');
+  assert.equal(receipt.planned[1].destination, `${registry}/svc:0.1.0`);
+  assert.equal(receipt.published[1].image, `${registry}/svc@sha256:${'b'.repeat(64)}`);
+  assert.equal(f.externalCalls.find(({ bin, args }) => bin === 'docker' && args[0] === 'login').args[1], 'ghcr.io');
+  assert.ok(f.externalCalls.some(({ bin, args }) => bin === 'docker' && args[0] === 'push' && args[1] === `${registry}/svc:0.1.0`));
+});
+
+for (const registry of [
+  'GHCR.io/sabbour',
+  'ghcr.io/sabbour/',
+  'ghcr.io//sabbour',
+  'ghcr.io/sabbour/..',
+  'ghcr.io/sabbour?token=value',
+  'ghcr.io/sabbour#tag',
+  'https://ghcr.io/sabbour',
+  'ghcr.io\\sabbour',
+  'ghcr.io/%2e%2e/other',
+  'user@ghcr.io/sabbour',
+  'ghcr.io:65536/sabbour',
+  'ghcr..io/sabbour',
+]) {
+  test(`rejects malformed registry destination ${JSON.stringify(registry)} before publication`, (t) => {
+    const f = fixture(t);
+    f.prepare();
+    assert.throws(() => f.publish({ env: { ...f.env, RELEASE_REGISTRY: registry } }),
+      /normalized registry host with an optional lowercase repository path/);
+    assert.deepEqual(f.remoteCalls, []);
+    assert.deepEqual(f.externalCalls, []);
+  });
+}
+
+test('rejects an overlong complete image repository path before publication', (t) => {
+  const f = fixture(t);
+  f.prepare();
+  assert.throws(() => f.publish({ env: { ...f.env, RELEASE_REGISTRY: `ghcr.io/${'a'.repeat(252)}` } }),
+    /image repository path for Svc exceeds 255 characters/);
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
 });
 
 test('manual publication failure preserves partial receipts instead of claiming atomic external publication', (t) => {

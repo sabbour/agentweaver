@@ -8,12 +8,31 @@ import { validateFile } from './validate.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`manual publication: ${message}`); };
+const repositoryPathPattern = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 
 function command(bin, args, input) {
   const result = spawnSync(bin, args, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
   // Subprocess output can contain credentials. Never relay it, even on failure.
   if (result.error || result.status !== 0) fail(`${bin} failed; inspect the target independently before retrying`);
   return result.stdout.trim();
+}
+
+function parseRegistry(value) {
+  if (typeof value !== 'string' || value.trim() !== value) return undefined;
+  const slash = value.indexOf('/');
+  const host = slash < 0 ? value : value.slice(0, slash);
+  const repositoryPath = slash < 0 ? undefined : value.slice(slash + 1);
+  const authority = /^([a-z0-9.-]+)(?::([0-9]+))?$/.exec(host);
+  if (!authority) return undefined;
+
+  const [, hostname, port] = authority;
+  if (hostname.length > 253 || hostname.split('.').some((label) =>
+    label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) return undefined;
+  if (port !== undefined && (!/^[1-9]\d{0,4}$/.test(port) || Number(port) > 65535)) return undefined;
+  if (repositoryPath !== undefined &&
+      (repositoryPath.length > 255 || !repositoryPathPattern.test(repositoryPath))) return undefined;
+
+  return { host, repositoryPath: repositoryPath ?? '' };
 }
 
 export function publishArtifacts(manifestPath, outDir, sourceSha, {
@@ -47,6 +66,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   }
   const hasPackages = selected.some(({ artifact }) => artifact.kind === 'package');
   const hasImages = selected.some(({ artifact }) => artifact.kind === 'image');
+  let registry;
   if (hasPackages) {
     let feed;
     try { feed = new URL(env.RELEASE_NUGET_SOURCE); } catch { fail('configure an HTTPS NuGet feed and API key'); }
@@ -54,9 +74,18 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       fail('configure a credential-free HTTPS feed URL and a separate secret API key');
     }
   }
-  if (hasImages && (!/^[a-z0-9.-]+(?::[0-9]+)?$/.test(env.RELEASE_REGISTRY ?? '') ||
-      !env.RELEASE_REGISTRY_USER || !env.RELEASE_REGISTRY_PASSWORD || !env.DOCKER_CONFIG)) {
-    fail('configure a registry host, separate secret credentials, and an isolated Docker configuration directory');
+  if (hasImages) {
+    registry = parseRegistry(env.RELEASE_REGISTRY);
+    if (!registry || !env.RELEASE_REGISTRY_USER || !env.RELEASE_REGISTRY_PASSWORD || !env.DOCKER_CONFIG) {
+      fail('configure a normalized registry host with an optional lowercase repository path, separate secret credentials, and an isolated Docker configuration directory');
+    }
+  }
+  const imageRepositories = new Map();
+  for (const { component, artifact } of selected) {
+    if (artifact.kind !== 'image') continue;
+    const repositoryPath = [registry.repositoryPath, component.id.toLowerCase()].filter(Boolean).join('/');
+    if (repositoryPath.length > 255) fail(`image repository path for ${component.id} exceeds 255 characters`);
+    imageRepositories.set(component.id, `${registry.host}/${repositoryPath}`);
   }
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY ?? '') || !env.GH_TOKEN) {
     fail('configure the GitHub repository and scoped publication token for durable claims');
@@ -75,7 +104,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const planned = selected.map(({ component, artifact }) => ({
     id: component.id, version: component.version, kind: artifact.kind, sha256: artifact.sha256,
     destination: artifact.kind === 'package' ? env.RELEASE_NUGET_SOURCE
-      : `${env.RELEASE_REGISTRY}/${component.id.toLowerCase()}:${component.version}`,
+      : `${imageRepositories.get(component.id)}:${component.version}`,
   }));
   const receipt = {
     schemaVersion: 1, sourceSha, provenanceSha256: hash(readFileSync(path.join(directory, 'provenance.json'))),
@@ -99,19 +128,19 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   receipt.claimSha = createRecord('claim', { ...receipt, status: 'claimed' });
   let publicationError;
   try {
-    if (hasImages) run('docker', ['login', env.RELEASE_REGISTRY, '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'], env.RELEASE_REGISTRY_PASSWORD);
+    if (hasImages) run('docker', ['login', registry.host, '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'], env.RELEASE_REGISTRY_PASSWORD);
     for (const { component, artifact, file } of selected) {
       if (artifact.kind === 'package') {
         run('dotnet', ['nuget', 'push', file, '--source', env.RELEASE_NUGET_SOURCE, '--api-key', env.RELEASE_NUGET_API_KEY]);
         receipt.published.push({ id: component.id, version: component.version, kind: 'package', feed: env.RELEASE_NUGET_SOURCE, sha256: artifact.sha256 });
       } else {
         const local = `${component.id.toLowerCase()}:${component.version}`;
-        const remote = `${env.RELEASE_REGISTRY}/${local}`;
+        const remote = `${imageRepositories.get(component.id)}:${component.version}`;
         run('docker', ['load', '--input', file]);
         run('docker', ['tag', local, remote]);
         run('docker', ['push', remote]);
         const digests = JSON.parse(run('docker', ['inspect', '--format', '{{json .RepoDigests}}', remote]));
-        const digest = digests.find((value) => value.startsWith(`${env.RELEASE_REGISTRY}/${component.id.toLowerCase()}@sha256:`));
+        const digest = digests.find((value) => value.startsWith(`${imageRepositories.get(component.id)}@sha256:`));
         if (!digest || !/@sha256:[a-f0-9]{64}$/.test(digest)) fail(`registry did not return an immutable digest for ${component.id}`);
         receipt.published.push({ id: component.id, version: component.version, kind: 'image', image: digest, archiveSha256: artifact.sha256 });
       }
