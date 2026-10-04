@@ -1,0 +1,25 @@
+.vp-doc figure.aw-diagram {
+  margin: 2rem 0;
+  text-align: center;
+}
+
+.vp-doc figure.aw-diagram img {
+  display: block;
+  width: 100%;
+  max-width: 960px;
+  height: auto;
+  margin: 0 auto;
+}
+
+.vp-doc figure.aw-diagram figcaption {
+  margin: 0.75rem auto 0;
+  max-width: 75ch;
+  color: var(--vp-c-text-2);
+  font-size: 0.9rem;
+}
+
+.vp-doc .aw-diagram-links {
+  margin-top: 0.5rem;
+  text-align: center;
+  font-size: 0.9rem;
+}

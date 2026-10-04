@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "v1-identity-redemption.json",
+    "sha256": "1ed3e5d2119795a7cb49578f8f6509ea06c302195d2dc089affe04f6edde1878"
+  },
+  "drawio": {
+    "file": "v1-identity-redemption.drawio",
+    "sha256": "de6993d405ee2a6be19b10eef376d300dc2f3b799e59484fe611811b8c3a6346"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "v1-identity-redemption.png",
+    "sha256": "4f935d241546cdb893aecda46b2cd2e52ed9784fe6b1d3fccb265fcbb283cd0c"
+  }
+}

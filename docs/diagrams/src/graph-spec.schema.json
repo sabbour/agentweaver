@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentweaver architecture diagram graph-spec",
+  "description": "Structured generator input for Agentweaver draw.io diagrams. The browser-free pipeline converts this JSON to editable uncompressed draw.io XML, then exports it with the official draw.io Desktop CLI.",
+  "type": "object",
+  "required": ["title", "alt", "nodes", "edges"],
+  "properties": {
+    "kind": { "const": "graph", "description": "Optional for backward compatibility; omitted specs are treated as graph specs." },
+    "title": { "type": "string" },
+    "alt": { "type": "string", "description": "Markdown image alt text used in README.md / architecture-aks.md" },
+    "brand": {
+      "type": "object",
+      "description": "Optional product header shown above the graph. The logo path resolves from the renderer's public root.",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "logo": { "type": "string" },
+        "compact": { "type": "boolean", "default": false, "description": "Use the compact brand treatment for fixed-size overview diagrams." }
+      }
+    },
+    "direction": { "type": "string", "enum": ["TB", "LR"], "default": "TB" },
+    "layoutSnapshot": {
+      "type": "object",
+      "description": "Optional authored canvas and card positions used to keep fixed-size flagship diagrams compact.",
+      "required": ["canvasWidth", "canvasHeight", "nodes"],
+      "properties": {
+        "canvasWidth": { "type": "number", "exclusiveMinimum": 0 },
+        "canvasHeight": { "type": "number", "exclusiveMinimum": 0 },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "type", "position", "data"],
+            "properties": {
+              "id": { "type": "string" },
+              "type": { "const": "card" },
+              "position": {
+                "type": "object",
+                "required": ["x", "y"],
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" }
+                }
+              },
+              "data": {
+                "type": "object",
+                "required": ["label"],
+                "properties": {
+                  "label": { "type": "string" },
+                  "subLabel": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "groups": {
+      "type": "array",
+      "description": "Visual clusters (rendered as tinted rounded containers behind their member nodes), mirroring mermaid subgraphs. Tier controls nesting fill (1 = outermost).",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "tier"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "subLabel": { "type": "string", "description": "Optional explanatory line beneath the group title." },
+          "tier": { "type": "integer", "minimum": 1 },
+          "parent": { "type": "string", "description": "id of an enclosing group, for nested clusters" }
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "icon", "badge"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "subLabel": { "type": "string" },
+          "meta": { "type": "string", "description": "Optional monospace third line (ports/protocol/mode)" },
+          "variant": {
+            "type": "string",
+            "enum": ["card", "decision", "terminator", "document", "state", "initial", "final"],
+            "description": "Optional native notation shape. Omit or use card for the Fluent component card."
+          },
+          "icon": { "type": "string", "enum": ["globe", "branch", "route", "window", "server", "bot", "database", "key", "box"] },
+          "fluentIcon": {
+            "type": "string",
+            "description": "Optional semantic icon key from iconcloud-fluent-icons.json. Label-based selection is used when omitted."
+          },
+          "library": {
+            "type": "string",
+            "enum": ["azure", "kubernetes", "c4", "uml", "flowchart", "bpmn", "networking", "database", "cloud", "agentweaver"],
+            "description": "Optional explicit draw.io native library selection. When omitted, the generator infers a semantic library from the node."
+          },
+          "shape": { "type": "string", "description": "Optional draw.io native shape name within the selected library." },
+          "badge": {
+            "type": "object",
+            "required": ["text", "tone"],
+            "properties": {
+              "text": { "type": "string" },
+              "tone": { "type": "string", "enum": ["lavender", "teal", "green", "marigold", "neutral"] }
+            }
+          },
+          "group": { "type": "string", "description": "id of the group this node belongs to, if any" }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "label": { "type": "string" },
+          "dashed": { "type": "boolean", "default": false },
+          "loopback": { "type": "boolean", "default": false, "description": "Semantic revision or return connector. Rendered in the revision color with a dedicated loop rail." },
+          "undirected": { "type": "boolean", "default": false, "description": "Render without an arrowhead (association, e.g. shared volume mount)" }
+        }
+      }
+    }
+  }
+}

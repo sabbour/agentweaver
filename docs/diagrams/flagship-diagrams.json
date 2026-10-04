@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "embedWidthPx": 960,
+  "diagrams": [
+    {
+      "name": "v1-foundation-dependencies",
+      "concept": "Foundation compile dependencies",
+      "docs": ["docs/architecture/overview.md"]
+    },
+    {
+      "name": "v1-provider-resolution",
+      "concept": "Provider resolution and pinning",
+      "docs": ["docs/architecture/providers-models.md"]
+    },
+    {
+      "name": "v1-identity-redemption",
+      "concept": "Identity and secret redemption",
+      "docs": ["docs/architecture/identity-secrets.md"]
+    },
+    {
+      "name": "v1-outbox-inbox",
+      "concept": "PostgreSQL outbox and inbox delivery",
+      "docs": ["docs/architecture/persistence-objects.md"]
+    },
+    {
+      "name": "v1-azure-foundation",
+      "concept": "Dedicated Azure definitions and probe overlay",
+      "docs": ["docs/architecture/azure.md"]
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "pages": [
+    "docs/index.md",
+    "docs/guide/build-and-use.md",
+    "docs/guide/testing.md",
+    "docs/guide/azure-acceptance.md",
+    "docs/diagrams/README.md",
+    "docs/architecture/overview.md",
+    "docs/architecture/providers-models.md",
+    "docs/architecture/identity-secrets.md",
+    "docs/architecture/persistence-objects.md",
+    "docs/architecture/telemetry.md",
+    "docs/architecture/azure.md",
+    "docs/reference/contracts.md",
+    "docs/reference/releases.md"
+  ],
+  "rules": [
+    {
+      "name": "foundation architecture",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/",
+        "packages/Agentweaver.Providers/",
+        "packages/Agentweaver.Identity/",
+        "packages/Agentweaver.Secrets.AzureKeyVault/",
+        "packages/Agentweaver.Persistence.Postgres/",
+        "packages/Agentweaver.ObjectStore.AzureBlob/",
+        "packages/Agentweaver.Telemetry/",
+        "packages/Agentweaver.Telemetry.AzureMonitor/",
+        "services/identity/Agentweaver.Identity.Broker/",
+        "tools/Agentweaver.FoundationProbe/"
+      ],
+      "required": [
+        "docs/architecture/overview.md",
+        "docs/diagrams/src/flagship/v1-foundation-dependencies.json"
+      ]
+    },
+    {
+      "name": "provider resolution",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/ProviderContracts",
+        "packages/Agentweaver.Providers/"
+      ],
+      "required": [
+        "docs/architecture/providers-models.md",
+        "docs/diagrams/src/flagship/v1-provider-resolution.json"
+      ]
+    },
+    {
+      "name": "Identity and secrets",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Identity/",
+        "packages/Agentweaver.Secrets.AzureKeyVault/",
+        "services/identity/Agentweaver.Identity.Broker/"
+      ],
+      "required": [
+        "docs/architecture/identity-secrets.md",
+        "docs/reference/contracts.md",
+        "docs/diagrams/src/flagship/v1-identity-redemption.json"
+      ]
+    },
+    {
+      "name": "PostgreSQL and object storage",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Persistence.Postgres/",
+        "packages/Agentweaver.ObjectStore.AzureBlob/"
+      ],
+      "required": [
+        "docs/architecture/persistence-objects.md",
+        "docs/diagrams/src/flagship/v1-outbox-inbox.json"
+      ]
+    },
+    {
+      "name": "Telemetry",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Telemetry/"
+      ],
+      "required": [
+        "docs/architecture/telemetry.md",
+        "docs/architecture/overview.md",
+        "docs/diagrams/src/flagship/v1-foundation-dependencies.json"
+      ]
+    },
+    {
+      "name": "Azure infrastructure and probe",
+      "sourcePrefixes": [
+        "infra/bicep/",
+        "deploy/k8s/",
+        "scripts/azure/",
+        "tools/Agentweaver.FoundationProbe/"
+      ],
+      "required": [
+        "docs/architecture/azure.md",
+        "docs/reference/contracts.md",
+        "docs/guide/azure-acceptance.md",
+        "docs/diagrams/src/flagship/v1-azure-foundation.json"
+      ]
+    },
+    {
+      "name": "Component releases",
+      "sourcePrefixes": [
+        "scripts/release/",
+        "releases/"
+      ],
+      "required": [
+        "docs/reference/releases.md"
+      ]
+    }
+  ]
+}

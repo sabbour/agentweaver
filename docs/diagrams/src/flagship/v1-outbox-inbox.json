@@ -1,0 +1,94 @@
+{
+  "$schema": "../graph-spec.schema.json",
+  "kind": "graph",
+  "title": "PostgreSQL outbox and inbox delivery",
+  "alt": "PostgreSQL transaction flow. A caller commits domain state and an outbox event together. A caller-driven relay publishes leased events and uses a fencing token for acknowledgment. A consumer admits a receipt with its domain effects and acknowledges after commit.",
+  "direction": "TB",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "producer",
+      "label": "Producer transaction",
+      "subLabel": "Domain state and EnqueueAsync in one transaction",
+      "icon": "database",
+      "fluentIcon": "state",
+      "badge": { "text": "Caller-owned", "tone": "teal" }
+    },
+    {
+      "id": "commit",
+      "label": "Commit producer transaction",
+      "subLabel": "State and event become durable together",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": { "text": "PostgreSQL", "tone": "green" }
+    },
+    {
+      "id": "lease",
+      "label": "ClaimAsync",
+      "subLabel": "Lease earliest undelivered event per stream",
+      "icon": "box",
+      "fluentIcon": "event",
+      "badge": { "text": "Lease", "tone": "lavender" }
+    },
+    {
+      "id": "publisher",
+      "label": "Injected IOutboxPublisher",
+      "subLabel": "Transport publish owned by the host",
+      "icon": "box",
+      "fluentIcon": "workflow",
+      "badge": { "text": "At least once", "tone": "marigold" }
+    },
+    {
+      "id": "fenced-ack",
+      "label": "AcknowledgeAsync",
+      "subLabel": "Requires the current, unexpired lease token",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": { "text": "Fenced", "tone": "teal" }
+    },
+    {
+      "id": "admit",
+      "label": "AdmitAsync",
+      "subLabel": "Consumer ID and message ID in caller transaction",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": { "text": "Inbox", "tone": "teal" }
+    },
+    {
+      "id": "admitted",
+      "label": "Admitted",
+      "subLabel": "Apply domain effects and optional outbox write",
+      "icon": "box",
+      "fluentIcon": "document",
+      "badge": { "text": "Same transaction", "tone": "green" }
+    },
+    {
+      "id": "duplicate",
+      "label": "Duplicate",
+      "subLabel": "Skip domain effects",
+      "icon": "box",
+      "fluentIcon": "archive",
+      "badge": { "text": "Same transaction", "tone": "lavender" }
+    },
+    {
+      "id": "delivery-ack",
+      "label": "Acknowledge delivery",
+      "subLabel": "Only after the consumer transaction commits",
+      "icon": "box",
+      "fluentIcon": "event",
+      "badge": { "text": "Transport", "tone": "teal" }
+    }
+  ],
+  "edges": [
+    { "from": "producer", "to": "commit" },
+    { "from": "commit", "to": "lease" },
+    { "from": "lease", "to": "publisher" },
+    { "from": "publisher", "to": "fenced-ack" },
+    { "from": "publisher", "to": "admit" },
+    { "from": "admit", "to": "admitted" },
+    { "from": "admit", "to": "duplicate" },
+    { "from": "admitted", "to": "delivery-ack" },
+    { "from": "duplicate", "to": "delivery-ack" }
+  ]
+}

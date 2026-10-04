@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "area": "architecture",
+  "diagrams": [
+    {
+      "name": "v1-azure-foundation",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Dedicated Azure definitions and the acceptance-only Foundation Probe overlay.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-azure-foundation.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-azure-foundation.drawio",
+        "png": "docs/diagrams/flagship/v1-azure-foundation.png",
+        "hash": "docs/diagrams/flagship/v1-azure-foundation.hash.txt"
+      }
+    },
+    {
+      "name": "v1-foundation-dependencies",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Compiled dependency references between current v1 components.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-foundation-dependencies.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-foundation-dependencies.drawio",
+        "png": "docs/diagrams/flagship/v1-foundation-dependencies.png",
+        "hash": "docs/diagrams/flagship/v1-foundation-dependencies.hash.txt"
+      }
+    },
+    {
+      "name": "v1-identity-redemption",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Native Identity OAuth, exact grant checks, workload identity, and Key Vault redemption.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-identity-redemption.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-identity-redemption.drawio",
+        "png": "docs/diagrams/flagship/v1-identity-redemption.png",
+        "hash": "docs/diagrams/flagship/v1-identity-redemption.hash.txt"
+      }
+    },
+    {
+      "name": "v1-outbox-inbox",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Caller-owned PostgreSQL outbox and inbox transactions with at-least-once delivery.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-outbox-inbox.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-outbox-inbox.drawio",
+        "png": "docs/diagrams/flagship/v1-outbox-inbox.png",
+        "hash": "docs/diagrams/flagship/v1-outbox-inbox.hash.txt"
+      }
+    },
+    {
+      "name": "v1-provider-resolution",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Provider catalog, cardinality-aware resolution, resource negotiation, and run pinning.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-provider-resolution.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-provider-resolution.drawio",
+        "png": "docs/diagrams/flagship/v1-provider-resolution.png",
+        "hash": "docs/diagrams/flagship/v1-provider-resolution.hash.txt"
+      }
+    }
+  ]
+}

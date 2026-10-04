@@ -9,6 +9,16 @@
     "test:release": "node --test scripts/release/tests/*.test.mjs",
     "test:azure": "node --test scripts/azure/tests/*.test.mjs",
     "coverage:dotnet": "node scripts/coverage/dotnet.mjs",
-    "coverage:node": "node scripts/coverage/node.mjs"
+    "coverage:node": "node scripts/coverage/node.mjs",
+    "docs:dev": "npm --prefix docs run dev",
+    "docs:build": "npm --prefix docs run build",
+    "docs:preview": "npm --prefix docs run preview",
+    "docs:build-flagship-specs": "node scripts/docs/build-flagship-specs.mjs",
+    "docs:render-diagrams": "node scripts/docs/render-diagrams.mjs",
+    "docs:check-diagrams": "node scripts/docs/render-diagrams.mjs --check",
+    "docs:check-flagship-diagrams": "node scripts/docs/validate-flagship-diagrams.mjs",
+    "docs:check-links": "node scripts/docs/check-docs.mjs --links",
+    "docs:check-drift": "node scripts/docs/check-docs.mjs --drift",
+    "test:docs-diagrams": "node --test scripts/docs/*.test.mjs"
   }
 }

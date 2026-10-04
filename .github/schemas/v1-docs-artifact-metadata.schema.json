@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentweaver v1 documentation artifact metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "repository",
+    "branch",
+    "event",
+    "workflow",
+    "workflowPath",
+    "runId",
+    "runAttempt",
+    "sourceSha",
+    "artifactName"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+    "branch": { "const": "v1" },
+    "event": { "const": "push" },
+    "workflow": { "const": "Agentweaver v1 Docs CI" },
+    "workflowPath": { "const": ".github/workflows/v1-docs-ci.yml" },
+    "runId": { "type": "integer", "minimum": 1 },
+    "runAttempt": { "type": "integer", "minimum": 1 },
+    "sourceSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "artifactName": {
+      "type": "string",
+      "pattern": "^v1-docs-[0-9a-f]{40}-[1-9][0-9]*$"
+    }
+  }
+}

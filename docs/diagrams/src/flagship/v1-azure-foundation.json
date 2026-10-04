@@ -1,0 +1,133 @@
+{
+  "$schema": "../graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Dedicated Azure definitions and App Routing",
+  "alt": "Source view of the dedicated v1 Azure environment. Bicep defines private AKS, Application Routing preview settings, the generated routing identity, private PostgreSQL, Key Vault, Blob, Monitor, and the probe identity. A Kustomize overlay adds the acceptance-only Job and its egress policy. No resources are deployed.",
+  "direction": "TB",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "aks",
+      "label": "AKS",
+      "subLabel": "Private; Cilium; OIDC/workload identity; App Routing Preview; NGINX None",
+      "icon": "server",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/containers/Kubernetes_Services.svg;imageAspect=1",
+      "badge": { "text": "Bicep", "tone": "teal" }
+    },
+    {
+      "id": "default-domain",
+      "label": "App Routing domain",
+      "subLabel": "Empty zone IDs request Azure's defaultDomain; custom zones disable it",
+      "icon": "network",
+      "fluentIcon": "network",
+      "badge": { "text": "Preview", "tone": "marigold" }
+    },
+    {
+      "id": "routing-identity",
+      "label": "App Routing identity",
+      "subLabel": "AKS-generated resourceId, clientId, and objectId",
+      "icon": "key",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=1",
+      "badge": { "text": "Bicep", "tone": "teal" }
+    },
+    {
+      "id": "custom-zones",
+      "label": "Optional existing DNS zones",
+      "subLabel": "1–5 public/private IDs; roles scoped to each exact zone",
+      "icon": "network",
+      "fluentIcon": "network",
+      "badge": { "text": "Optional", "tone": "neutral" }
+    },
+    {
+      "id": "postgres",
+      "label": "Azure Database for PostgreSQL",
+      "subLabel": "Entra-only; private network",
+      "icon": "database",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/databases/Azure_Database_PostgreSQL_Server.svg;imageAspect=1",
+      "badge": { "text": "Bicep", "tone": "teal" }
+    },
+    {
+      "id": "keyvault",
+      "label": "Azure Key Vault",
+      "subLabel": "Private; routing Certificate User; CSI rotation 'true' / '2m'",
+      "icon": "key",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=1",
+      "badge": { "text": "Bicep", "tone": "teal" }
+    },
+    {
+      "id": "blob",
+      "label": "Azure Blob Storage",
+      "subLabel": "Private endpoint",
+      "icon": "archive",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/storage/Storage_Accounts.svg;imageAspect=1",
+      "badge": { "text": "Bicep", "tone": "teal" }
+    },
+    {
+      "id": "monitor",
+      "label": "Azure Monitor",
+      "subLabel": "Private query; configured ingestion",
+      "icon": "telemetry",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/management_governance/Application_Insights.svg;imageAspect=1",
+      "badge": { "text": "Bicep", "tone": "teal" }
+    },
+    {
+      "id": "probe-identity",
+      "label": "Foundation Probe identity",
+      "subLabel": "Dedicated user-assigned managed identity",
+      "icon": "key",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/identity/Managed_Identities.svg;imageAspect=1",
+      "badge": { "text": "Bicep", "tone": "teal" }
+    },
+    {
+      "id": "job",
+      "label": "Foundation Probe Job",
+      "subLabel": "Acceptance-only AKS workload",
+      "icon": "server",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.job",
+      "badge": { "text": "Kustomize", "tone": "green" }
+    },
+    {
+      "id": "egress",
+      "label": "Probe egress policy",
+      "subLabel": "Overlay-scoped NetworkPolicy",
+      "icon": "network",
+      "library": "kubernetes",
+      "shape": "mxgraph.kubernetes.network_policy",
+      "badge": { "text": "Kustomize", "tone": "green" }
+    }
+  ],
+  "layoutSnapshot": {
+    "canvasWidth": 1360,
+    "canvasHeight": 1050,
+    "nodes": [
+      { "id": "aks", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "AKS", "subLabel": "Private; Cilium; OIDC/workload identity; App Routing Preview; NGINX None" } },
+      { "id": "default-domain", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "App Routing domain", "subLabel": "Empty zone IDs request Azure's defaultDomain; custom zones disable it" } },
+      { "id": "routing-identity", "type": "card", "position": { "x": 920, "y": 310 }, "data": { "label": "App Routing identity", "subLabel": "AKS-generated resourceId, clientId, and objectId" } },
+      { "id": "custom-zones", "type": "card", "position": { "x": 920, "y": 540 }, "data": { "label": "Optional existing DNS zones", "subLabel": "1–5 public/private IDs; roles scoped to each exact zone" } },
+      { "id": "postgres", "type": "card", "position": { "x": 80, "y": 310 }, "data": { "label": "Azure Database for PostgreSQL", "subLabel": "Entra-only; private network" } },
+      { "id": "keyvault", "type": "card", "position": { "x": 500, "y": 540 }, "data": { "label": "Azure Key Vault", "subLabel": "Private; routing Certificate User; CSI rotation 'true' / '2m'" } },
+      { "id": "blob", "type": "card", "position": { "x": 920, "y": 80 }, "data": { "label": "Azure Blob Storage", "subLabel": "Private endpoint" } },
+      { "id": "monitor", "type": "card", "position": { "x": 80, "y": 80 }, "data": { "label": "Azure Monitor", "subLabel": "Private query; configured ingestion" } },
+      { "id": "probe-identity", "type": "card", "position": { "x": 80, "y": 540 }, "data": { "label": "Foundation Probe identity", "subLabel": "Dedicated user-assigned managed identity" } },
+      { "id": "job", "type": "card", "position": { "x": 500, "y": 770 }, "data": { "label": "Foundation Probe Job", "subLabel": "Acceptance-only AKS workload" } },
+      { "id": "egress", "type": "card", "position": { "x": 920, "y": 770 }, "data": { "label": "Probe egress policy", "subLabel": "Overlay-scoped NetworkPolicy" } }
+    ]
+  },
+  "edges": [
+    { "from": "aks", "to": "default-domain" },
+    { "from": "aks", "to": "routing-identity" },
+    { "from": "routing-identity", "to": "custom-zones" },
+    { "from": "routing-identity", "to": "keyvault" },
+    { "from": "probe-identity", "to": "job" },
+    { "from": "egress", "to": "job" }
+  ]
+}

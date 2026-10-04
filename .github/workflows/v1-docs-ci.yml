@@ -1,0 +1,62 @@
+name: Agentweaver v1 Docs CI
+
+on:
+  pull_request:
+    branches: [v1]
+  push:
+    branches: [v1]
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Restore locked documentation dependencies
+        run: npm ci --prefix docs --ignore-scripts --no-audit --no-fund
+      - name: Test documentation and diagram tools
+        run: npm run test:docs-diagrams
+      - name: Validate release composition
+        env:
+          DOCS_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: npm run release:validate -- --base "$DOCS_BASE_SHA"
+      - name: Build documentation site
+        run: npm run docs:build
+      - name: Check documentation links and assets
+        run: npm run docs:check-links
+      - name: Check documentation source coverage
+        env:
+          DOCS_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: npm run docs:check-drift -- --base "$DOCS_BASE_SHA"
+      - name: Check diagram provenance and readability
+        run: |
+          npm run docs:check-diagrams
+          npm run docs:check-flagship-diagrams
+      - name: Stage source-bound site artifact
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/v1' }}
+        env:
+          DOCS_REPOSITORY: ${{ github.repository }}
+          DOCS_BRANCH: ${{ github.ref_name }}
+          DOCS_EVENT: ${{ github.event_name }}
+          DOCS_RUN_ID: ${{ github.run_id }}
+          DOCS_RUN_ATTEMPT: ${{ github.run_attempt }}
+          DOCS_SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/docs/stage-docs-artifact.mjs
+      - uses: actions/upload-artifact@v4
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/v1' }}
+        with:
+          name: v1-docs-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/docs/
+          if-no-files-found: error
+          retention-days: 30
