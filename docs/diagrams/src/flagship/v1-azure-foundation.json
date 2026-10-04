@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "Dedicated Azure definitions and App Routing",
-  "alt": "Source view of the dedicated v1 Azure environment. Bicep defines private AKS, Application Routing preview settings, the generated routing identity, private PostgreSQL, Key Vault, Blob, Monitor, and the probe identity. A Kustomize overlay adds the acceptance-only Job and its egress policy. No resources are deployed.",
+  "alt": "Verifier flow checks one completed Job and its owned pod, compares the Job image and pod imageID separately with a source-bound registry manifest, validates a distinct native #1784 receipt, and requires fresh correlated Monitor rows. Missing evidence blocks; this does not show P0 completion or a live deployment.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [],
@@ -71,7 +71,7 @@
     {
       "id": "monitor",
       "label": "Azure Monitor",
-      "subLabel": "Private query; configured ingestion",
+      "subLabel": "Fresh AppDependencies/AppRequests query after Job completion",
       "icon": "telemetry",
       "library": "azure",
       "shape": "image;image=img/lib/azure2/management_governance/Application_Insights.svg;imageAspect=1",
@@ -89,11 +89,35 @@
     {
       "id": "job",
       "label": "Foundation Probe Job",
-      "subLabel": "Acceptance-only AKS workload",
+      "subLabel": "One completed Job; pod UID/owner, namespace, SA, projected ID, success",
       "icon": "server",
       "library": "kubernetes",
       "shape": "mxgraph.kubernetes.job",
       "badge": { "text": "Kustomize", "tone": "green" }
+    },
+    {
+      "id": "native-receipt",
+      "label": "Native #1784 receipt",
+      "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof",
+      "icon": "document",
+      "fluentIcon": "document",
+      "badge": { "text": "Probe output", "tone": "lavender" }
+    },
+    {
+      "id": "image-receipt",
+      "label": "CI image receipt",
+      "subLabel": "Source SHA/tree-bound registry manifest digest",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": { "text": "Source-bound", "tone": "lavender" }
+    },
+    {
+      "id": "acceptance-consumer",
+      "label": "External evidence gate",
+      "subLabel": "Complete evidence => deployedAcceptance; otherwise blocked",
+      "icon": "server",
+      "fluentIcon": "test",
+      "badge": { "text": "Evidence gate", "tone": "marigold" }
     },
     {
       "id": "egress",
@@ -107,7 +131,7 @@
   ],
   "layoutSnapshot": {
     "canvasWidth": 1360,
-    "canvasHeight": 1050,
+    "canvasHeight": 1220,
     "nodes": [
       { "id": "aks", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "AKS", "subLabel": "Private; Cilium; OIDC/workload identity; App Routing Preview; NGINX None" } },
       { "id": "default-domain", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "App Routing domain", "subLabel": "Empty zone IDs request Azure's defaultDomain; custom zones disable it" } },
@@ -116,9 +140,12 @@
       { "id": "postgres", "type": "card", "position": { "x": 80, "y": 310 }, "data": { "label": "Azure Database for PostgreSQL", "subLabel": "Entra-only; private network" } },
       { "id": "keyvault", "type": "card", "position": { "x": 500, "y": 540 }, "data": { "label": "Azure Key Vault", "subLabel": "Private; routing Certificate User; CSI rotation 'true' / '2m'" } },
       { "id": "blob", "type": "card", "position": { "x": 920, "y": 80 }, "data": { "label": "Azure Blob Storage", "subLabel": "Private endpoint" } },
-      { "id": "monitor", "type": "card", "position": { "x": 80, "y": 80 }, "data": { "label": "Azure Monitor", "subLabel": "Private query; configured ingestion" } },
+      { "id": "monitor", "type": "card", "position": { "x": 920, "y": 1000 }, "data": { "label": "Azure Monitor", "subLabel": "Fresh AppDependencies/AppRequests query after Job completion" } },
       { "id": "probe-identity", "type": "card", "position": { "x": 80, "y": 540 }, "data": { "label": "Foundation Probe identity", "subLabel": "Dedicated user-assigned managed identity" } },
-      { "id": "job", "type": "card", "position": { "x": 500, "y": 770 }, "data": { "label": "Foundation Probe Job", "subLabel": "Acceptance-only AKS workload" } },
+      { "id": "job", "type": "card", "position": { "x": 500, "y": 770 }, "data": { "label": "Foundation Probe Job", "subLabel": "One completed Job; pod UID/owner, namespace, SA, projected ID, success" } },
+      { "id": "native-receipt", "type": "card", "position": { "x": 80, "y": 770 }, "data": { "label": "Native #1784 receipt", "subLabel": "Source/target/identity; Key Vault, PostgreSQL, Blob proof" } },
+      { "id": "image-receipt", "type": "card", "position": { "x": 80, "y": 1000 }, "data": { "label": "CI image receipt", "subLabel": "Source SHA/tree-bound registry manifest digest" } },
+      { "id": "acceptance-consumer", "type": "card", "position": { "x": 500, "y": 1000 }, "data": { "label": "External evidence gate", "subLabel": "Complete evidence => deployedAcceptance; otherwise blocked" } },
       { "id": "egress", "type": "card", "position": { "x": 920, "y": 770 }, "data": { "label": "Probe egress policy", "subLabel": "Overlay-scoped NetworkPolicy" } }
     ]
   },
@@ -128,6 +155,11 @@
     { "from": "routing-identity", "to": "custom-zones" },
     { "from": "routing-identity", "to": "keyvault" },
     { "from": "probe-identity", "to": "job" },
-    { "from": "egress", "to": "job" }
+    { "from": "egress", "to": "job" },
+    { "from": "job", "to": "acceptance-consumer", "label": "image ref + pod imageID; each vs digest" },
+    { "from": "job", "to": "native-receipt", "label": "probe output" },
+    { "from": "native-receipt", "to": "acceptance-consumer", "label": "strict receipt; not UID/pull/exit proof" },
+    { "from": "image-receipt", "to": "acceptance-consumer", "label": "source-bound registry digest" },
+    { "from": "monitor", "to": "acceptance-consumer", "label": "post-completion SHA/tree/nonce/trace/span" }
   ]
 }
