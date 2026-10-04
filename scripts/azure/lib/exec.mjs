@@ -145,6 +145,24 @@ export function runGit(args, options = {}) {
   return run('git', args, options);
 }
 
+function normalizeLineEndings(content) {
+  const normalized = Buffer.allocUnsafe(content.length);
+  let length = 0;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === 0x0d && content[index + 1] === 0x0a) {
+      normalized[length++] = 0x0a;
+      index += 1;
+    } else {
+      normalized[length++] = content[index];
+    }
+  }
+  return normalized.subarray(0, length);
+}
+
+export function sourceBytesMatch(committed, expected) {
+  return normalizeLineEndings(committed).equals(normalizeLineEndings(expected));
+}
+
 export function gitShowMatches(revision, file, expected, { cwd, env, timeout } = {}) {
   const args = ['show', `${revision}:${file}`];
   const result = spawnPlatformSafe('git', args, { cwd, env, timeout, windowsHide: true });
@@ -156,6 +174,5 @@ export function gitShowMatches(revision, file, expected, { cwd, env, timeout } =
     throw new Error(redact(`git ${args.join(' ')} exited with status ${result.status}.\n${redact(stderr || stdout.toString('utf8'))}`.trim()));
   }
 
-  const normalize = content => content.toString('utf8').replaceAll('\r\n', '\n');
-  return normalize(stdout) === normalize(expected);
+  return sourceBytesMatch(stdout, expected);
 }

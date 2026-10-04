@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, delimiter, join } from 'node:path';
-import { gitShowMatches, redact, run, runAz, runGit } from '../lib/exec.mjs';
+import { gitShowMatches, redact, run, runAz, runGit, sourceBytesMatch } from '../lib/exec.mjs';
 
 const isWindows = process.platform === 'win32';
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -65,6 +65,14 @@ test('git source comparison preserves redacted-looking bytes without exposing th
     () => gitShowMatches('HEAD', missingFile, fixture, { cwd: process.cwd() }),
     error => !error.message.includes(SENSITIVE_FIXTURE_VALUE) && error.message.includes('[redacted]'),
   );
+});
+
+test('source byte comparison preserves distinct invalid bytes and normalizes only CRLF', () => {
+  const invalidUtf8A = Buffer.from([0xc3, 0x28]);
+  const invalidUtf8B = Buffer.from([0xff, 0x28]);
+  assert.equal(invalidUtf8A.toString('utf8'), invalidUtf8B.toString('utf8'));
+  assert.equal(sourceBytesMatch(invalidUtf8A, invalidUtf8B), false);
+  assert.equal(sourceBytesMatch(Buffer.from('a\r\nb'), Buffer.from('a\nb')), true);
 });
 
 test('run throws a redacted error on non-zero exit by default', () => {
