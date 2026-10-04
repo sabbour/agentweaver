@@ -1,21 +1,18 @@
 # Component releases
 
 `releases/foundation.json` is a draft component manifest. It does not describe a published package set or platform release.
-The current source-bound preparation updates these version mirrors; publication remains separate.
 
 | Component | Kind | Manifest version |
 | --- | --- | --- |
-| `Agentweaver.Abstractions` | Contract | `0.2.0` |
-| `Agentweaver.Providers` | Library | `0.2.0` |
-| `Agentweaver.Persistence.Postgres` | Library | `0.3.0` |
-| `Agentweaver.Secrets.AzureKeyVault` | Library | `0.2.0` |
-| `Agentweaver.Identity` | Library | `1.1.0` |
-| `Agentweaver.Telemetry` | Library | `0.2.0` |
-| `Agentweaver.Telemetry.AzureMonitor` | Library | `0.2.0` |
-| `Agentweaver.ObjectStore.AzureBlob` | Library | `0.2.0` |
-| `Agentweaver.Identity.Broker` | Service | `0.2.0` |
-
-When published, this will be the first v1 P0 component set; no earlier v1 package set exists for N-1 comparison.
+| `Agentweaver.Abstractions` | Contract | `0.1.0` |
+| `Agentweaver.Providers` | Library | `0.1.0` |
+| `Agentweaver.Persistence.Postgres` | Library | `0.2.0` |
+| `Agentweaver.Secrets.AzureKeyVault` | Library | `0.1.0` |
+| `Agentweaver.Identity` | Library | `1.0.0` |
+| `Agentweaver.Telemetry` | Library | `0.1.0` |
+| `Agentweaver.Telemetry.AzureMonitor` | Library | `0.1.0` |
+| `Agentweaver.ObjectStore.AzureBlob` | Library | `0.1.0` |
+| `Agentweaver.Identity.Broker` | Service | `0.1.0` |
 
 The manifest pins exact project-reference compatibility. The broker entry has no image digest because no image has been published.
 
