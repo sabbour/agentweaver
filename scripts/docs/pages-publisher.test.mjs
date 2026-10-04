@@ -63,14 +63,27 @@ function createMetadata(overrides = {}) {
     schemaVersion: 1,
     repository: PUBLISHED_REPOSITORY,
     branch: ADMITTED_BRANCH,
-    eventName: 'push',
-    workflowName: WORKFLOW_NAME,
+    event: 'push',
+    workflow: WORKFLOW_NAME,
     workflowPath: V1_WORKFLOW_PATH,
     runId: RUN_ID,
     runAttempt: RUN_ATTEMPT,
     sourceSha: SOURCE_SHA,
     artifactName: ARTIFACT_NAME,
     ...overrides,
+  };
+}
+
+function createSource() {
+  return {
+    repository: PUBLISHED_REPOSITORY,
+    branch: ADMITTED_BRANCH,
+    workflowName: WORKFLOW_NAME,
+    workflowPath: V1_WORKFLOW_PATH,
+    runId: RUN_ID,
+    runAttempt: RUN_ATTEMPT,
+    sourceSha: SOURCE_SHA,
+    artifactName: ARTIFACT_NAME,
   };
 }
 
@@ -341,23 +354,14 @@ test('fails when the current run has no artifact, an expired artifact, or mismat
 });
 
 test('pins metadata to the repository, push branch, workflow, run, attempt, SHA, and artifact name', () => {
-  const expected = {
-    repository: PUBLISHED_REPOSITORY,
-    branch: ADMITTED_BRANCH,
-    workflowName: WORKFLOW_NAME,
-    workflowPath: V1_WORKFLOW_PATH,
-    runId: RUN_ID,
-    runAttempt: RUN_ATTEMPT,
-    sourceSha: SOURCE_SHA,
-    artifactName: ARTIFACT_NAME,
-  };
+  const expected = createSource();
   assert.deepEqual(validateV1Metadata(createMetadata(), expected), createMetadata());
 
   for (const override of [
     { repository: 'fork/agentweaver' },
     { branch: 'feature/docs' },
-    { eventName: 'pull_request' },
-    { workflowName: 'Other CI' },
+    { event: 'pull_request' },
+    { workflow: 'Other CI' },
     { workflowPath: '.github/workflows/other.yml' },
     { runId: RUN_ID + 1 },
     { runAttempt: RUN_ATTEMPT + 1 },
@@ -395,7 +399,7 @@ test('composes only v1 dist and preserves the 0.x root, base assets, and CNAME',
       writeFile(path.join(v1Dist, 'guide.html'), 'v1 guide'),
     ]);
 
-    await composePagesDist({ rootDist, artifactDir, source: createMetadata() });
+    await composePagesDist({ rootDist, artifactDir, source: createSource() });
 
     assert.equal(await readFile(path.join(rootDist, 'index.html'), 'utf8'), rootIndex);
     assert.equal(await readFile(path.join(rootDist, 'CNAME'), 'utf8'), 'sabbour.me\n');
@@ -426,19 +430,19 @@ test('rejects a v1 artifact with the wrong base or an asset link outside its dis
       writeFile(path.join(artifactDir, 'dist', 'assets', 'v1.js'), ''),
     ]);
     await assert.rejects(
-      composePagesDist({ rootDist, artifactDir, source: createMetadata() }),
+      composePagesDist({ rootDist, artifactDir, source: createSource() }),
       /outside \/agentweaver\/v1\//,
     );
 
     await writeFile(path.join(artifactDir, 'dist', 'index.html'), '<script src="/agentweaver/v1/assets/../../outside.js"></script>');
     await assert.rejects(
-      composePagesDist({ rootDist, artifactDir, source: createMetadata() }),
+      composePagesDist({ rootDist, artifactDir, source: createSource() }),
       /outside \/agentweaver\/v1\//,
     );
 
     await writeFile(path.join(artifactDir, 'dist', 'index.html'), '<script src="/agentweaver/v1/assets/missing.js"></script>');
     await assert.rejects(
-      composePagesDist({ rootDist, artifactDir, source: createMetadata() }),
+      composePagesDist({ rootDist, artifactDir, source: createSource() }),
       /does not exist in the composed output/,
     );
   } finally {
@@ -466,7 +470,7 @@ test('rejects source metadata copied inside public v1 dist', async () => {
     ]);
 
     await assert.rejects(
-      composePagesDist({ rootDist, artifactDir, source: createMetadata() }),
+      composePagesDist({ rootDist, artifactDir, source: createSource() }),
       /must remain outside the public dist directory/,
     );
     await assert.rejects(readFile(path.join(rootDist, 'v1', 'metadata.json')));
@@ -499,13 +503,13 @@ test('rejects artifact symlinks before copying files into the public site', asyn
     ]);
     await symlink(path.join(temp, 'outside.txt'), path.join(v1Dist, 'assets', 'escape.txt'));
     await assert.rejects(
-      composePagesDist({ rootDist, artifactDir, source: createMetadata() }),
+      composePagesDist({ rootDist, artifactDir, source: createSource() }),
       /cannot contain symbolic links/,
     );
     await rm(path.join(artifactDir, 'metadata.json'));
     await symlink(path.join(temp, 'outside.txt'), path.join(artifactDir, 'metadata.json'));
     await assert.rejects(
-      composePagesDist({ rootDist, artifactDir, source: createMetadata() }),
+      composePagesDist({ rootDist, artifactDir, source: createSource() }),
       /safe metadata\.json/,
     );
   } finally {
