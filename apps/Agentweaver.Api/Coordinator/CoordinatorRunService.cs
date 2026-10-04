@@ -1781,6 +1781,9 @@ public sealed class CoordinatorRunService
             }
             finally
             {
+                if (runCt.IsCancellationRequested)
+                    _registry.AbandonIfCurrent(runId, streamingRun);
+
                 renewCts.Cancel();
                 try
                 {

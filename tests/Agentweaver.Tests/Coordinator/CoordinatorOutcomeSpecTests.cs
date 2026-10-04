@@ -1279,6 +1279,96 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
     }
 
     [Fact]
+    public async Task NonResidentGate_LifecycleInvalidationWithoutNextEvent_CleansUpRecoveredRegistry()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Clean up a recovered gate after lifecycle invalidation");
+        await WaitForGateAsync(runId);
+
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+        await WaitForLeaseReleasedAsync(runId);
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        await coordinator.RecoverInterruptedRunsAsync(CancellationToken.None);
+        registry.Get(runId).Should().NotBeNull("recovery must re-arm the gate before its lifecycle changes");
+
+        var leases = _factory.Services.GetRequiredService<IRunLeaseStore>();
+        var recoveredLease = await leases.GetActiveClaimAsync(runId);
+        recoveredLease.Should().NotBeNull();
+        var eventCountBeforeInvalidation = await CountRunEventsAsync(runId);
+
+        try
+        {
+            await using (var connection = await _factory.Services.GetRequiredService<SqliteDb>().OpenConnectionAsync())
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE runs SET lifecycle_generation = lifecycle_generation + 1 WHERE run_id = $runId";
+                command.Parameters.AddWithValue("$runId", runId);
+                (await command.ExecuteNonQueryAsync()).Should().Be(1);
+            }
+
+            // Recovery left the workflow parked at its confirmation request. No decision or other
+            // event is sent, so the ownership monitor must cancel the watcher before any next event.
+            await WaitForLeaseReleasedAsync(runId, recoveredLease);
+
+            registry.Get(runId).Should().BeNull(
+                "the runCt-cancelled watcher must abandon its registry entry even with no later event");
+            (await CountRunEventsAsync(runId)).Should().Be(eventCountBeforeInvalidation,
+                "lifecycle invalidation alone must not produce another workflow event");
+        }
+        finally
+        {
+            registry.Abandon(runId);
+        }
+    }
+
+    [Fact]
+    public async Task NonResidentGate_CancelledRecoveredGeneration_DoesNotAbandonRegistrySuccessor()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Preserve a newer registry successor during cleanup");
+        await WaitForGateAsync(runId);
+
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+        await WaitForLeaseReleasedAsync(runId);
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        await coordinator.RecoverInterruptedRunsAsync(CancellationToken.None);
+        var recoveredRun = registry.Get(runId);
+        recoveredRun.Should().NotBeNull();
+
+        var leases = _factory.Services.GetRequiredService<IRunLeaseStore>();
+        var recoveredLease = await leases.GetActiveClaimAsync(runId);
+        recoveredLease.Should().NotBeNull();
+        (await leases.IsLeaseOwnerAsync(runId, recoveredLease!.OwnerId, recoveredLease.FencingToken))
+            .Should().BeTrue();
+
+        var successorProjectId = await CreateProjectAsync();
+        var successorRunId = await StartOrchestrationAsync(
+            successorProjectId, "Use a distinct active workflow as the registry successor");
+        await WaitForGateAsync(successorRunId);
+        var successorRun = registry.Get(successorRunId);
+        successorRun.Should().NotBeNull().And.NotBeSameAs(recoveredRun);
+
+        try
+        {
+            registry.Register(runId, successorRun!, new CancellationTokenSource());
+
+            // Releasing this lease proves the old recovered watcher handled cancellation and
+            // completed its cleanup path; its compare-and-swap must leave the successor untouched.
+            await WaitForLeaseReleasedAsync(runId, recoveredLease);
+            registry.Get(runId).Should().BeSameAs(successorRun);
+        }
+        finally
+        {
+            registry.Abandon(runId);
+            registry.Abandon(successorRunId);
+        }
+    }
+
+    [Fact]
     public async Task NonResidentGate_CancellationBeforeRecovery_DoesNotStartPlanning()
     {
         var projectId = await CreateProjectAsync();
@@ -1311,7 +1401,9 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var projectId = await CreateProjectAsync();
         var runId = await StartOrchestrationAsync(projectId, "A late run change must fence recovered work");
         await WaitForGateAsync(runId);
-        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+        await WaitForLeaseReleasedAsync(runId);
         var factory = _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
         var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
             .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
@@ -1363,7 +1455,6 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
                 await write.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
             }
 
-            var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
             var deadline = DateTime.UtcNow.AddSeconds(10);
             while (registry.Get(runId) is not null && DateTime.UtcNow < deadline)
                 await Task.Delay(25);
@@ -1667,6 +1758,60 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         }
 
         throw new TimeoutException($"Coordinator run {runId} did not suspend at the confirmation gate in time.");
+    }
+
+    private async Task WaitForLeaseReleasedAsync(string runId, RunLeaseClaim? expectedClaim = null)
+    {
+        var leaseStore = _factory.Services.GetRequiredService<IRunLeaseStore>();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (expectedClaim is null)
+            {
+                if (await leaseStore.GetActiveClaimAsync(runId) is null)
+                    return;
+            }
+            else if (await IsLeaseReleasedAsync(runId, expectedClaim))
+            {
+                return;
+            }
+
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException($"Coordinator run {runId} drafting lease was not released in time.");
+    }
+
+    private async Task<bool> IsLeaseReleasedAsync(string runId, RunLeaseClaim expectedClaim)
+    {
+        await using var connection = await _factory.Services
+            .GetRequiredService<SqliteDb>()
+            .OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        // ReleaseAsync expires this exact claim only after StartWatching reaches its finally block.
+        // A changed owner/token is not evidence that this recovered watcher completed cleanup.
+        command.CommandText =
+            """
+            SELECT EXISTS(
+                SELECT 1
+                  FROM run_execution_leases
+                 WHERE run_id = $runId
+                   AND owner_id = $ownerId
+                   AND fencing_token = $fencingToken
+                   AND lease_expires_at <= $now);
+            """;
+        command.Parameters.AddWithValue("$runId", runId);
+        command.Parameters.AddWithValue("$ownerId", expectedClaim.OwnerId);
+        command.Parameters.AddWithValue("$fencingToken", expectedClaim.FencingToken);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+        return Convert.ToInt32(await command.ExecuteScalarAsync()) != 0;
+    }
+
+    private async Task<int> CountRunEventsAsync(string runId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.RunEvents.AsNoTracking().CountAsync(e => e.RunId == runId);
     }
 
     private async Task<OutcomeSpecResponse?> GetOutcomeSpecAsync(HttpClient client, string runId)
