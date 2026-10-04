@@ -144,6 +144,9 @@ jobs:
               - '.github/workflows/ci.yml'
             docs:
               - 'docs/**'
+              - 'scripts/docs/pages-publisher.mjs'
+              - 'scripts/docs/pages-publisher.test.mjs'
+              - '.github/workflows/deploy-docs.yml'
               - 'scripts/ci/shared-deps.mjs'
               - 'scripts/ci/validate.mjs'
               - '.github/workflows/ci.yml'
@@ -410,6 +413,9 @@ jobs:
       # Catches broken markdown, dead config, and landing-page regressions.
       - name: Build docs site
         run: node scripts/ci/validate.mjs --profile ci --area docs
+
+      - name: Test Pages publisher
+        run: node --test scripts/docs/pages-publisher.test.mjs
 
   diagram-checks:
     name: Documentation diagrams

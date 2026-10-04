@@ -189,6 +189,17 @@ npm run coverage:all
 npm run docs:build
 ```
 
+### Published documentation
+
+`.github/workflows/deploy-docs.yml` is the only GitHub Pages publisher.
+It publishes 0.x at `/agentweaver/` and v1 at `/agentweaver/v1/`.
+The workflow combines the 0.x build with an artifact from the current `v1` branch head.
+It accepts only a successful push run to that head from `sabbour/agentweaver`.
+It records the v1 source commit, run, attempt, and artifact ID in the workflow summary.
+The composer leaves the 0.x output in place, including `CNAME` when present.
+If no matching artifact exists, the build stops before deployment.
+Do not add a second Pages deployment.
+
 See [Validation workflow](docs/guide/validation.md) for cache keys, invalidation,
 fallback behavior, and timing output.
 
