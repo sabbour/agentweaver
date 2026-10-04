@@ -87,6 +87,8 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
   const storageName = `${resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
   const resources = outputs?.foundationResources?.value;
   const identity = outputs?.foundationProbeIdentity?.value;
+  const identityBrokerRuntimeIdentity = outputs?.identityBrokerRuntimeIdentity?.value;
+  const identityBrokerMigrationIdentity = outputs?.identityBrokerMigrationIdentity?.value;
   const appRoutingIdentity = outputs?.appRoutingIdentity?.value;
   const appRoutingDomain = outputs?.appRoutingDomain?.value;
   const expected = {
@@ -108,6 +110,15 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
     if (!matches) throw new Error(`Deployment output ${key} is not the exact dedicated target.`);
   }
   const guid = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  const exactServiceIdentity = (candidate, name, serviceAccount) =>
+    candidate?.name === name && candidate?.namespace === 'agentweaver-v1-p0' &&
+    candidate?.serviceAccount === serviceAccount &&
+    typeof candidate?.resourceId === 'string' &&
+    candidate?.resourceId?.toLowerCase() === id('Microsoft.ManagedIdentity/userAssignedIdentities',
+      `${resourceGroup}-id-${name}`).toLowerCase() &&
+    typeof candidate?.clientId === 'string' && typeof candidate?.principalObjectId === 'string' &&
+    guid.test(candidate.clientId) && guid.test(candidate.principalObjectId) &&
+    candidate.clientId.toLowerCase() !== candidate.principalObjectId.toLowerCase();
   const routingIdentityResourceIdPattern =
     /^\/subscriptions\/[0-9a-f-]{36}\/resourceGroups\/[^/]+\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[^/]+$/i;
   const dnsNamePattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
@@ -115,6 +126,13 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
   const validDomainName = typeof appRoutingDomain?.domainName === 'string' &&
     dnsNamePattern.test(appRoutingDomain.domainName) &&
     !appRoutingDomain.domainName.toLowerCase().startsWith('privatelink.');
+  const serviceIdentityIds = [
+    identity?.clientId, identity?.principalObjectId,
+    identityBrokerRuntimeIdentity?.clientId, identityBrokerRuntimeIdentity?.principalObjectId,
+    identityBrokerMigrationIdentity?.clientId, identityBrokerMigrationIdentity?.principalObjectId,
+  ].map(value => typeof value === 'string' ? value.toLowerCase() : undefined);
+  const distinctServiceIdentityIds = serviceIdentityIds.every(value => guid.test(value ?? '')) &&
+    new Set(serviceIdentityIds).size === serviceIdentityIds.length;
   if (!guid.test(resources?.monitorWorkspaceId ?? '') ||
       outputs.monitorWorkspaceId?.value !== resources.monitorWorkspaceId ||
       outputs.aksClusterName?.value !== `${resourceGroup}-aks` ||
@@ -125,7 +143,8 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
       !guid.test(appRoutingIdentity?.clientId ?? '') || !guid.test(appRoutingIdentity?.objectId ?? '') ||
       appRoutingIdentity.clientId.toLowerCase() === appRoutingIdentity.objectId.toLowerCase() ||
       appRoutingIdentity.objectId.toLowerCase() === outputs.aksControlPlanePrincipalId?.value?.toLowerCase() ||
-      appRoutingIdentity.objectId.toLowerCase() === identity?.principalObjectId?.toLowerCase() ||
+      serviceIdentityIds.includes(appRoutingIdentity.objectId.toLowerCase()) ||
+      serviceIdentityIds.includes(appRoutingIdentity.clientId.toLowerCase()) ||
       appRoutingDomain?.managedDefaultRequested !== managedDefaultRequested ||
       (managedDefaultRequested ? !validDomainName : appRoutingDomain?.domainName !== null) ||
       identity?.resourceId?.toLowerCase() !== id('Microsoft.ManagedIdentity/userAssignedIdentities',
@@ -133,10 +152,20 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
       identity?.name !== 'foundation-probe' || identity?.namespace !== 'agentweaver-v1-p0' ||
       identity?.serviceAccount !== 'foundation-probe' ||
       !guid.test(identity?.clientId ?? '') || !guid.test(identity?.principalObjectId ?? '') ||
-      identity.clientId.toLowerCase() === identity.principalObjectId.toLowerCase()) {
-    throw new Error('Deployment outputs lack the exact App Routing identity, named probe principal, or workspace GUID.');
+      identity.clientId.toLowerCase() === identity.principalObjectId.toLowerCase() ||
+      !exactServiceIdentity(identityBrokerRuntimeIdentity, 'identity-broker', 'identity-broker') ||
+      !exactServiceIdentity(identityBrokerMigrationIdentity, 'identity-broker-migration', 'identity-broker-migration') ||
+      !distinctServiceIdentityIds) {
+    throw new Error('Deployment outputs lack the exact App Routing identity, named service principals, or workspace GUID.');
   }
-  return { resources, foundationProbeIdentity: identity, appRoutingIdentity, appRoutingDomain };
+  return {
+    resources,
+    foundationProbeIdentity: identity,
+    identityBrokerRuntimeIdentity,
+    identityBrokerMigrationIdentity,
+    appRoutingIdentity,
+    appRoutingDomain,
+  };
 }
 
 // ARM guid() uses UUID v5 with this namespace and hyphen-joined arguments.
@@ -188,7 +217,11 @@ export function guardAzureTarget(config, execAz) {
     ['microsoft.operationalinsights/workspaces', [`${resourceGroup}-law`]],
     ['microsoft.insights/components', [`${resourceGroup}-appi`]],
     ['microsoft.insights/privatelinkscopes', [`${resourceGroup}-ampls`]],
-    ['microsoft.managedidentity/userassignedidentities', [`${resourceGroup}-id-foundation-probe`]],
+    ['microsoft.managedidentity/userassignedidentities', [
+      `${resourceGroup}-id-foundation-probe`,
+      `${resourceGroup}-id-identity-broker`,
+      `${resourceGroup}-id-identity-broker-migration`,
+    ]],
     ['microsoft.network/privateendpoints', [`${resourceGroup}-kv-pe`, `${resourceGroup}-blob-pe`, `${resourceGroup}-ampls-pe`]],
     ['microsoft.network/privatednszones', [
       'privatelink.vaultcore.azure.net', 'privatelink.blob.core.windows.net',
@@ -228,6 +261,10 @@ export function guardAzureTarget(config, execAz) {
   }
   child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
     `${resourceGroup}-id-foundation-probe/foundation-probe-workload-identity`);
+  child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
+    `${resourceGroup}-id-identity-broker/identity-broker-workload-identity`);
+  child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
+    `${resourceGroup}-id-identity-broker-migration/identity-broker-migration-workload-identity`);
   child('microsoft.storage/storageaccounts/blobservices', `${storageName}/default`);
   child('microsoft.storage/storageaccounts/blobservices/containers', `${storageName}/default/platform-artifacts`);
   if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.postgresEntraAdminObjectId ?? '')) {
@@ -237,11 +274,13 @@ export function guardAzureTarget(config, execAz) {
     child('microsoft.resources/deployments', `${resourceGroup}-${name}`);
   }
   const identityId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', `${resourceGroup}-id-foundation-probe`);
+  const identityBrokerRuntimeId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', `${resourceGroup}-id-identity-broker`);
   const aksId = resourceId('Microsoft.ContainerService/managedClusters', `${resourceGroup}-aks`);
   const subnetId = resourceId('Microsoft.Network/virtualNetworks/subnets', `${resourceGroup}-vnet/aks`);
   // Extension resources retain their exact parent scope and ARM-generated name.
   for (const [scope, principalResource, role] of [
     [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), identityId, '4633458b-17de-408a-b874-0445c86b69e6'],
+    [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), identityBrokerRuntimeId, '4633458b-17de-408a-b874-0445c86b69e6'],
     [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), aksId, 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'],
     [resourceId('Microsoft.Storage/storageAccounts', storageName), identityId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'],
     [resourceId('Microsoft.OperationalInsights/workspaces', `${resourceGroup}-law`), identityId, '73c42c96-874c-492b-b04d-ab87d138a893'],

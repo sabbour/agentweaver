@@ -1,11 +1,6 @@
 // Least-privilege user-assigned managed identities with AKS workload-
-// identity federation (no client secret or certificate). This currently
-// provisions a single `foundation-probe` identity used only by
-// the separately owned #1784 AKS Job, not the operator CLI (see
-// the `services` param description below). Once a real service lands,
-// it gets its own entry granted only the RBAC roles it actually needs,
-// scoped to the exact resource rather than the resource group or
-// subscription.
+// identity federation (no client secret or certificate). Identity runtime
+// and migration identities are separate from the acceptance-only probe.
 @description('Azure region for the identities.')
 param location string
 
@@ -38,9 +33,10 @@ param appInsightsResourceId string
 
 @description('''
 The foundation-probe principal is reserved for the #1784 acceptance-only
-AKS Job. The operator CLI does not run as that principal. Identity is the
-product host. Relay is a library and release is a CLI, not runtime services.
-Future product hosts add only identities for the permissions they need.
+AKS Job. The Identity broker runtime and schema migration Job each have a
+separate principal and ServiceAccount. Only the runtime identity receives
+Key Vault Secrets User on this exact vault; the migration identity receives
+no Azure resource role.
 ''')
 param services array = [
   {
@@ -50,6 +46,22 @@ param services array = [
     needsKeyVault: true
     needsBlob: true
     needsMonitor: true
+  }
+  {
+    name: 'identity-broker'
+    namespace: 'agentweaver-v1-p0'
+    serviceAccountName: 'identity-broker'
+    needsKeyVault: true
+    needsBlob: false
+    needsMonitor: false
+  }
+  {
+    name: 'identity-broker-migration'
+    namespace: 'agentweaver-v1-p0'
+    serviceAccountName: 'identity-broker-migration'
+    needsKeyVault: false
+    needsBlob: false
+    needsMonitor: false
   }
 ]
 
@@ -164,6 +176,8 @@ resource monitorIngestionRoleAssignments 'Microsoft.Authorization/roleAssignment
 
 var serviceNames = [for service in services: service.name]
 var probeIndex = indexOf(serviceNames, 'foundation-probe')
+var identityBrokerIndex = indexOf(serviceNames, 'identity-broker')
+var identityBrokerMigrationIndex = indexOf(serviceNames, 'identity-broker-migration')
 
 output foundationProbeIdentity object = {
   name: services[probeIndex].name
@@ -172,4 +186,22 @@ output foundationProbeIdentity object = {
   principalObjectId: identities[probeIndex].properties.principalId
   namespace: services[probeIndex].namespace
   serviceAccount: services[probeIndex].serviceAccountName
+}
+
+output identityBrokerRuntimeIdentity object = {
+  name: services[identityBrokerIndex].name
+  resourceId: identities[identityBrokerIndex].id
+  clientId: identities[identityBrokerIndex].properties.clientId
+  principalObjectId: identities[identityBrokerIndex].properties.principalId
+  namespace: services[identityBrokerIndex].namespace
+  serviceAccount: services[identityBrokerIndex].serviceAccountName
+}
+
+output identityBrokerMigrationIdentity object = {
+  name: services[identityBrokerMigrationIndex].name
+  resourceId: identities[identityBrokerMigrationIndex].id
+  clientId: identities[identityBrokerMigrationIndex].properties.clientId
+  principalObjectId: identities[identityBrokerMigrationIndex].properties.principalId
+  namespace: services[identityBrokerMigrationIndex].namespace
+  serviceAccount: services[identityBrokerMigrationIndex].serviceAccountName
 }

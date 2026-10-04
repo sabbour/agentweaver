@@ -313,6 +313,8 @@ output sourceSha string = sourceSha
 output sourceHash string = sourceHash
 output sourceTree string = sourceTree
 output foundationProbeIdentity object = identity.outputs.foundationProbeIdentity
+output identityBrokerRuntimeIdentity object = identity.outputs.identityBrokerRuntimeIdentity
+output identityBrokerMigrationIdentity object = identity.outputs.identityBrokerMigrationIdentity
 output foundationResources object = {
   clusterId: aks.outputs.clusterId
   keyVaultId: keyVault.outputs.vaultId

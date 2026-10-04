@@ -1,3 +1,5 @@
+using Agentweaver.Identity.Broker;
+using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -38,6 +40,18 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
             Database = databaseName,
         };
         return builder.ConnectionString;
+    }
+
+    public async Task<string> CreateMigratedDatabaseAsync()
+    {
+        var connectionString = await CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var options = new DbContextOptionsBuilder<IdentityBrokerDbContext>()
+            .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", IdentityBrokerDbContext.Schema))
+            .Options;
+        await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
+        return connectionString;
     }
 
     public string GetConnectionString() => _container.GetConnectionString();

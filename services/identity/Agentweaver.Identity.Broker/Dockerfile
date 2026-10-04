@@ -35,12 +35,12 @@ WORKDIR /app
 # Run as a non-root, unprivileged user. The aspnet runtime image does not include
 # curl/wget, so there is deliberately no shell-based HEALTHCHECK instruction here —
 # the hosting orchestrator (e.g. Kubernetes) must probe the exposed /health/live and
-# /health/ready endpoints directly (HTTP GET), not via an in-container shell command.
-RUN groupadd --system identitybroker && \
-    useradd --system --gid identitybroker --no-create-home identitybroker
-USER identitybroker
+# /health/ready endpoints directly over HTTPS, not via an in-container shell command.
+RUN groupadd --gid 10001 identitybroker && \
+    useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin identitybroker
+USER 10001:10001
 
 COPY --from=build /app/publish .
 
-EXPOSE 8080
+EXPOSE 8443
 ENTRYPOINT ["dotnet", "Agentweaver.Identity.Broker.dll"]

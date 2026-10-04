@@ -229,6 +229,24 @@ test('role assignments must have the exact reviewed parent scope and ARM GUID', 
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({
     resources: [{ ...routingRole, id: routingRole.id.replace(name, fixture.tenantId), name: fixture.tenantId }],
   })), /unexpected/);
+
+  const runtimeIdentityId =
+    `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-identity-broker`;
+  const migrationIdentityId =
+    `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-identity-broker-migration`;
+  const secretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6';
+  const runtimeRoleName = expectedArmGuid(vaultId, runtimeIdentityId, secretsUserRoleId);
+  const runtimeVaultRole = {
+    id: `${vaultId}/providers/Microsoft.Authorization/roleAssignments/${runtimeRoleName}`,
+    type: 'Microsoft.Authorization/roleAssignments', name: runtimeRoleName,
+  };
+  assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure({ resources: [runtimeVaultRole] })));
+  const migrationRoleName = expectedArmGuid(vaultId, migrationIdentityId, secretsUserRoleId);
+  const migrationVaultRole = {
+    id: `${vaultId}/providers/Microsoft.Authorization/roleAssignments/${migrationRoleName}`,
+    type: 'Microsoft.Authorization/roleAssignments', name: migrationRoleName,
+  };
+  assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [migrationVaultRole] })), /unexpected/);
 });
 
 test('custom App Routing DNS inventory admits only exact scoped roles and module deployments', () => {
@@ -313,6 +331,8 @@ test('custom App Routing DNS inputs are validated before target reads', () => {
 test('deployment configuration requires exact resource IDs/endpoints and a named probe identity, not parallel array order', () => {
   const result = readFoundationOutputs(deploymentOutputs, fixture);
   assert.equal(result.foundationProbeIdentity.name, 'foundation-probe');
+  assert.equal(result.identityBrokerRuntimeIdentity.name, 'identity-broker');
+  assert.equal(result.identityBrokerMigrationIdentity.name, 'identity-broker-migration');
   assert.equal(result.appRoutingIdentity.objectId, deploymentOutputs.appRoutingIdentity.value.objectId);
   assert.equal(result.appRoutingDomain.managedDefaultRequested, true);
   assert.notEqual(result.resources.monitorWorkspaceId, result.resources.monitorWorkspaceResourceId);
@@ -326,6 +346,13 @@ test('deployment configuration requires exact resource IDs/endpoints and a named
     outputs.foundationProbeIdentity.value[key] = 'unreviewed';
     assert.throws(() => readFoundationOutputs(outputs, fixture));
   }
+  for (const name of ['identityBrokerRuntimeIdentity', 'identityBrokerMigrationIdentity']) {
+    for (const key of Object.keys(deploymentOutputs[name].value)) {
+      const outputs = structuredClone(deploymentOutputs);
+      outputs[name].value[key] = 'unreviewed';
+      assert.throws(() => readFoundationOutputs(outputs, fixture));
+    }
+  }
   const customZones = [
     `/subscriptions/${fixture.subscriptionId}/resourceGroups/dns/providers/Microsoft.Network/dnsZones/apps.example.com`,
   ];
@@ -338,6 +365,16 @@ test('deployment configuration requires exact resource IDs/endpoints and a named
     {},
     { ...deploymentOutputs, appRoutingIdentity: undefined },
     { ...deploymentOutputs, foundationProbeIdentity: { value: deploymentOutputs.foundationProbeIdentity.value.clientId } },
+    { ...deploymentOutputs, identityBrokerRuntimeIdentity: undefined },
+    { ...deploymentOutputs, identityBrokerMigrationIdentity: undefined },
+    { ...deploymentOutputs, identityBrokerMigrationIdentity: { value: {
+      ...deploymentOutputs.identityBrokerMigrationIdentity.value,
+      principalObjectId: deploymentOutputs.identityBrokerRuntimeIdentity.value.clientId,
+    } } },
+    { ...deploymentOutputs, appRoutingIdentity: { value: {
+      ...deploymentOutputs.appRoutingIdentity.value,
+      clientId: deploymentOutputs.identityBrokerRuntimeIdentity.value.principalObjectId,
+    } } },
     { ...deploymentOutputs, serviceIdentityClientIds: { value: [fixture.tenantId] }, foundationProbeIdentity: undefined },
     { ...deploymentOutputs, monitorWorkspaceId: { value: fixture.groupId } },
     { ...deploymentOutputs, foundationProbeIdentity: { value: {

@@ -31,7 +31,7 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
         _fakeIdp = await FakeIdentityProvider.StartAsync();
         _backend = new RecordingSecretRedemption();
         _factory = new IdentityBrokerWebApplicationFactory(
-            await postgres.CreateDatabaseAsync(),
+            await postgres.CreateMigratedDatabaseAsync(),
             _fakeIdp,
             configureServices: services =>
             {
@@ -357,7 +357,7 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
     public async Task ProductionHostComposesWorkloadIdentityKeyVaultAdapterWithExplicitRootUri()
     {
         await using var production = new IdentityBrokerWebApplicationFactory(
-            await postgres.CreateDatabaseAsync(),
+            await postgres.CreateMigratedDatabaseAsync(),
             _fakeIdp);
         using var client = production.CreateClient(new WebApplicationFactoryClientOptions
         {

@@ -33,7 +33,7 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        var connectionString = await _postgres.CreateDatabaseAsync();
+        var connectionString = await _postgres.CreateMigratedDatabaseAsync();
         _fakeIdp = await FakeIdentityProvider.StartAsync();
         _signingCertificate = TestSigningCertificate.Create();
         _factory = new IdentityBrokerWebApplicationFactory(connectionString, _fakeIdp,
@@ -343,7 +343,7 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     public async Task Startup_InvalidOrMissingProductionConfigurationFailsClosed(string mode)
     {
         await _factory.DisposeAsync();
-        using var invalid = new IdentityBrokerWebApplicationFactory(await _postgres.CreateDatabaseAsync(), _fakeIdp,
+        using var invalid = new IdentityBrokerWebApplicationFactory(await _postgres.CreateMigratedDatabaseAsync(), _fakeIdp,
             signingCertificate: _signingCertificate, configure: settings =>
             {
                 if (mode == "issuer") settings["IdentityBroker__Issuer"] = "http://untrusted.test";
@@ -501,7 +501,7 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     public async Task ConfidentialClient_UnchangedRestartUsesNativeSecretValidationAndChangesFailClosed()
     {
         await _factory.DisposeAsync();
-        var connectionString = await _postgres.CreateDatabaseAsync();
+        var connectionString = await _postgres.CreateMigratedDatabaseAsync();
         _factory = new IdentityBrokerWebApplicationFactory(connectionString, _fakeIdp, confidential: true,
             signingCertificate: _signingCertificate);
         _broker = _factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -552,7 +552,7 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     public async Task ClientWithoutOfflineAccess_CannotRequestOrReceiveRefreshTokens()
     {
         await using var factory = new IdentityBrokerWebApplicationFactory(
-            await _postgres.CreateDatabaseAsync(), _fakeIdp, signingCertificate: _signingCertificate,
+            await _postgres.CreateMigratedDatabaseAsync(), _fakeIdp, signingCertificate: _signingCertificate,
             configure: settings => settings["IdentityBroker__Clients__0__Scopes__4"] = null);
         using var broker = factory.CreateClient(new WebApplicationFactoryClientOptions
         {

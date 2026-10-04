@@ -44,9 +44,13 @@ It injects exact `sourceSha` and `sourceHash` parameters and reads matching outp
 ## Identity and PostgreSQL
 
 The `foundation-probe` UAMI and ServiceAccount are reserved for the #1784
-acceptance-only Job. The operator CLI is not that identity.
-Identity is the product host. Relay is a library, and release is a CLI.
-This directory does not invent runtime identities for those libraries or CLIs.
+acceptance-only Job. Identity is the product host; Relay is a persistence
+library and release is a CLI. The identity module defines separate
+`identity-broker` runtime and `identity-broker-migration` UAMIs and federated
+ServiceAccounts. Only the runtime identity receives Key Vault Secrets User on
+the exact existing vault. The migration identity receives no Azure resource
+role. Named outputs preserve the probe DTO and expose the two Identity
+identities separately.
 
 The PostgreSQL Entra administrator definition does not create a runtime
 database principal, schema, or table.
@@ -55,17 +59,26 @@ It maps the UAMI **principalId**, not clientId, through the native
 `pgaadauth_create_principal_with_oid` function while connected to `postgres`.
 It separates the runtime role from the approved migration/schema owner.
 
-The procedure requires `runtime_role`, `principal_oid`, `database`,
-`service_schema`, and `migration_role` psql variables.
-It fails on existing/conflicting principals or schemas rather than silently
-changing ownership. It does not run from tooling or CI.
-Existing role memberships and inherited/PUBLIC rights require an audit.
-The runtime role cannot run the current `PostgresOutbox.MigrateAsync`.
-The approved migration principal must apply migrations first.
-`postgres-runtime-grants.sql` then defines only the required persistence table
-grants. Runtime cannot edit the migration registry.
-#1784 owns grants for its domain-effect table and sequences, if necessary.
+The generic persistence procedure requires `runtime_role`, `principal_oid`,
+`database`, `service_schema`, and `migration_role` psql variables. Identity
+uses separate `postgres-identity-bootstrap.sql` and
+`postgres-identity-runtime-grants.sql` definitions. The Identity bootstrap
+requires the two operator-selected role names, their UAMI principal object IDs,
+and the database name. It creates `identity_broker` under the migration role
+and grants the runtime role schema USAGE only.
 
-The [specification](../../docs/specs/1777-azure-p0-infrastructure.md) records
-native token scope, password-provider requirements, source guards, and acceptance
-evidence. No runtime PostgreSQL credential code enters this slice.
+After the separate `identity-broker-migration` Job applies EF migrations, the
+Identity runtime-grants file allows DML only on the current Identity/OpenIddict
+tables and SELECT on the migration history. It gives runtime no schema CREATE,
+database administration, default table privileges, or migration-registry
+writes. Neither Identity SQL file runs from tooling, CI, or ordinary host
+startup. Existing role memberships and inherited/PUBLIC rights require an
+audit; `NOINHERIT` alone does not prevent `SET ROLE`.
+
+The Identity host uses native asynchronous Npgsql password-provider callbacks
+with its explicit `WorkloadIdentityCredential` for each new physical
+connection. Startup verifies the schema and migration state but never applies
+migrations or provisions database roles. The
+[infrastructure specification](../../docs/specs/1777-azure-p0-infrastructure.md)
+records the full acceptance boundary. No live database or Azure operation is
+part of these definitions.

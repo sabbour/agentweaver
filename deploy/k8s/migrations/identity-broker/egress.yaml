@@ -1,0 +1,36 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: identity-broker-migration-egress
+  namespace: agentweaver-v1-p0
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: identity-broker-migration
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: login.microsoftonline.com
+              - matchName: CHANGEME-POSTGRES-HOST
+    - toFQDNs:
+        - matchName: login.microsoftonline.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: CHANGEME-POSTGRES-HOST
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP

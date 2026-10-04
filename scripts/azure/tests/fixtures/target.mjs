@@ -29,6 +29,17 @@ export const deploymentOutputs = {
     clientId: '44444444-4444-4444-4444-444444444444', principalObjectId: '55555555-5555-5555-5555-555555555555',
     namespace: 'agentweaver-v1-p0', serviceAccount: 'foundation-probe',
   } },
+  identityBrokerRuntimeIdentity: { value: {
+    name: 'identity-broker', resourceId: `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-identity-broker`,
+    clientId: '99999999-9999-9999-9999-999999999999', principalObjectId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    namespace: 'agentweaver-v1-p0', serviceAccount: 'identity-broker',
+  } },
+  identityBrokerMigrationIdentity: { value: {
+    name: 'identity-broker-migration',
+    resourceId: `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-identity-broker-migration`,
+    clientId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', principalObjectId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    namespace: 'agentweaver-v1-p0', serviceAccount: 'identity-broker-migration',
+  } },
   foundationResources: { value: {
     clusterId: `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`,
     keyVaultId: `${fixture.groupId}/providers/Microsoft.KeyVault/vaults/aw-v1-p0-kv`,

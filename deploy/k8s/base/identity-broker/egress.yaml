@@ -1,0 +1,62 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: identity-broker-egress
+  namespace: agentweaver-v1-p0
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: identity-broker
+  ingress:
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/identity-client: "true"
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: login.microsoftonline.com
+              - matchName: CHANGEME-KEYVAULT-HOST
+              - matchName: CHANGEME-POSTGRES-HOST
+              - matchName: CHANGEME-UPSTREAM-OIDC-AUTHORITY
+              - matchName: CHANGEME-UPSTREAM-OIDC-METADATA-HOST
+    - toFQDNs:
+        - matchName: login.microsoftonline.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: CHANGEME-KEYVAULT-HOST
+        - matchName: CHANGEME-UPSTREAM-OIDC-AUTHORITY
+        - matchName: CHANGEME-UPSTREAM-OIDC-METADATA-HOST
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: CHANGEME-POSTGRES-HOST
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
