@@ -4,7 +4,7 @@ The v1 source builds independent .NET components. Contracts separate provider-ne
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
-The Foundation Probe composes the provider resolver, PostgreSQL, Key Vault, Blob, and Azure Monitor adapters for acceptance checks. It is not an agent runtime.
+The Foundation Probe resolves provider descriptors and pins binding evidence for acceptance checks. The IDs `azure-blob`, `azure-key-vault`, and `azure-monitor` identify catalog entries; they do not instantiate adapters. `AzureProbeOperations` separately constructs the Key Vault and Blob classes, while `Program` registers telemetry composition. The probe is not an agent runtime.
 
 ## Canonical component overview
 
@@ -29,10 +29,10 @@ The figure is a structural component view, not runtime request order or deployme
 | Host or ID | Composition or registration | Meaning |
 | --- | --- | --- |
 | Identity Broker | Constructs `AzureKeyVaultSecretRedemption` as an `ISecretRedemption` backend and constructs `AuthorizedSecretRedemption` with the grant authority and backend. | The wrapper checks actor, project, run, purpose, and exact-version grants before backend redemption. The adapter does not authorize callers. |
-| Foundation Probe | Constructs `AzureBlobObjectStore` and `AzureKeyVaultSecretRedemption` for acceptance checks. | Acceptance executable only; not an application service host. |
-| `azure-blob` | Foundation Probe ObjectStore registration selects `AzureBlobObjectStore`. | Provider registration ID, not a class, library, or package name. |
-| `azure-key-vault` | Foundation Probe SecretRedemption registration selects `AzureKeyVaultSecretRedemption`. | Provider registration ID, not a class, library, or package name. |
-| `azure-monitor` | Foundation Probe telemetry registration. | Telemetry ID only; not a model vendor. |
+| Foundation Probe | `ProbeProviderBindings.ResolveAndPin` records provider IDs in pin evidence. Separately, `AzureProbeOperations` constructs `AzureBlobObjectStore` and `AzureKeyVaultSecretRedemption`; `Program` registers telemetry composition. | ID-based pinning does not construct adapters; the probe is an acceptance executable, not an application service host. |
+| `azure-blob` | ObjectStore provider ID recorded in Foundation Probe binding evidence. | Registration ID, not the `AzureBlobObjectStore` class, library, or constructor. |
+| `azure-key-vault` | SecretRedemption provider ID recorded in Foundation Probe binding evidence. | Registration ID, not the `AzureKeyVaultSecretRedemption` class, library, or constructor. |
+| `azure-monitor` | Telemetry provider ID recorded in Foundation Probe binding evidence. | Registration ID, not an exporter class, library, or model vendor. |
 
 ## Component boundaries and project references
 
