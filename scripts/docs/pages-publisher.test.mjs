@@ -375,11 +375,12 @@ test('pins metadata to the repository, push branch, workflow, run, attempt, SHA,
   }
 });
 
-test('composes only v1 dist and preserves the 0.x root, base assets, and CNAME', async () => {
+test('composes the named downloaded v1 artifact and preserves the 0.x root, base assets, and CNAME', async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-pages-'));
   try {
     const rootDist = path.join(temp, 'root');
-    const artifactDir = path.join(temp, 'artifact');
+    const downloadDir = path.join(temp, 'download');
+    const artifactDir = path.join(downloadDir, ARTIFACT_NAME);
     const rootAssets = path.join(rootDist, 'assets');
     const v1Dist = path.join(artifactDir, 'dist');
     const v1Assets = path.join(v1Dist, 'assets');
@@ -399,7 +400,7 @@ test('composes only v1 dist and preserves the 0.x root, base assets, and CNAME',
       writeFile(path.join(v1Dist, 'guide.html'), 'v1 guide'),
     ]);
 
-    await composePagesDist({ rootDist, artifactDir, source: createSource() });
+    await composePagesDist({ rootDist, artifactDir: downloadDir, source: createSource() });
 
     assert.equal(await readFile(path.join(rootDist, 'index.html'), 'utf8'), rootIndex);
     assert.equal(await readFile(path.join(rootDist, 'CNAME'), 'utf8'), 'sabbour.me\n');
