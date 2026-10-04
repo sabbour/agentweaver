@@ -12,8 +12,11 @@
 // or deploy call is attempted.
 targetScope = 'resourceGroup'
 
-@description('Azure region for all resources.')
+@description('Primary region for the VNet and core resources. Monitor service resources use monitorLocation.')
 param location string = resourceGroup().location
+
+@description('Separate Azure region for the Log Analytics workspace and Application Insights. The Monitor private endpoint stays with the VNet.')
+param monitorLocation string
 
 @minLength(6)
 @maxLength(12)
@@ -23,11 +26,19 @@ param namePrefix string
 @description('Microsoft Entra tenant ID that owns Key Vault and the PostgreSQL administrator.')
 param tenantId string = subscription().tenantId
 
-@description('Microsoft Entra administrator object ID (group recommended) for PostgreSQL.')
+@description('Microsoft Entra administrator object ID for PostgreSQL.')
 param postgresEntraAdminObjectId string
 
-@description('Microsoft Entra administrator principal name (user or group display name) for PostgreSQL.')
+@description('Microsoft Entra administrator principal name as returned by the directory for PostgreSQL.')
 param postgresEntraAdminPrincipalName string
+
+@allowed([
+  'User'
+  'Group'
+  'ServicePrincipal'
+])
+@description('Supported Microsoft Entra administrator principal type for PostgreSQL.')
+param postgresEntraAdminPrincipalType string
 
 @description('Owning team or individual, recorded as a tag for cost and incident routing.')
 param owner string
@@ -110,6 +121,7 @@ module monitor 'modules/monitor.bicep' = {
   name: '${namePrefix}-monitor'
   params: {
     location: location
+    monitorLocation: monitorLocation
     namePrefix: namePrefix
     tags: tags
     privateEndpointsSubnetId: network.outputs.privateEndpointsSubnetId
@@ -268,6 +280,7 @@ module postgres 'modules/postgres.bicep' = {
     privateDnsZoneId: postgresPrivateDnsZone.id
     entraAdminObjectId: postgresEntraAdminObjectId
     entraAdminPrincipalName: postgresEntraAdminPrincipalName
+    entraAdminPrincipalType: postgresEntraAdminPrincipalType
   }
 }
 
