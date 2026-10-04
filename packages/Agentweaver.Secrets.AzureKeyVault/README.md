@@ -1,4 +1,4 @@
-# Azure Key Vault Secrets adapter (0.1.0)
+# Azure Key Vault Secrets adapter (0.0.0)
 
 `Agentweaver.Secrets.AzureKeyVault` implements the provider-neutral
 `ISecretRedemption` contract for the **trusted Identity/control-plane singleton**.

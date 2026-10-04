@@ -38,6 +38,7 @@ function parseRegistry(value) {
 export function publishArtifacts(manifestPath, outDir, sourceSha, {
   root = process.cwd(), confirmed = false, env = process.env, run = command,
   writeFileSync: writeReceipt = writeFileSync,
+  packagesOnly = false,
 } = {}) {
   if (!confirmed || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) fail('explicit confirmation and exact source SHA are required');
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -51,9 +52,22 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const provenance = JSON.parse(readFileSync(path.join(directory, 'provenance.json'), 'utf8'));
   if (provenance.schemaVersion !== 1 || provenance.sourceSha !== sourceSha ||
       provenance.manifestSha256 !== hash(JSON.stringify(manifest))) fail('provenance does not match exact source composition');
-  if (!Array.isArray(provenance.artifacts)) fail('missing artifact provenance');
+  const components = packagesOnly
+    ? manifest.components.filter((component) => component.kind !== 'service')
+    : manifest.components;
+  if (!Array.isArray(provenance.components) || provenance.components.length !== components.length ||
+      provenance.components.some((record, index) => {
+        const component = components[index];
+        return !component || record?.id !== component.id || record?.kind !== component.kind ||
+          record?.version !== component.version || record?.project !== component.project;
+      })) {
+    fail(`provenance component selection does not match the ${packagesOnly ? 'package-only' : 'full'} manifest selection`);
+  }
+  if (!Array.isArray(provenance.artifacts) || provenance.artifacts.length !== components.length) {
+    fail('missing or unexpected artifact provenance');
+  }
   const selected = [];
-  for (const component of manifest.components) {
+  for (const component of components) {
     const kind = component.kind === 'service' ? 'image' : 'package';
     const filename = kind === 'image' ? `${component.id}.${component.version}.tar.gz`
       : `${path.basename(component.project, '.csproj')}.${component.version}.nupkg`;
@@ -172,8 +186,12 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const [manifest, output, sourceSha, confirmation] = process.argv.slice(2);
-    publishArtifacts(manifest, output, sourceSha, { confirmed: confirmation === '--confirm-publication' });
+    const args = process.argv.slice(2);
+    const [manifest, output, sourceSha] = args;
+    publishArtifacts(manifest, output, sourceSha, {
+      confirmed: args.includes('--confirm-publication'),
+      packagesOnly: args.includes('--packages-only'),
+    });
     console.log('Manual artifact publication completed; see publication.json. No platform release or deployment was performed.');
   } catch (error) {
     console.error(`Publication failed: ${error.message}`);

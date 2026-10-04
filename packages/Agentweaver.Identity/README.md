@@ -1,6 +1,6 @@
-# Identity authorization boundary (1.0.0)
+# Identity authorization boundary (0.0.0)
 
-**Status: implemented CANDIDATE for #1776, not admitted or released.**
+**Package baseline: 0.0.0.**
 
 `Agentweaver.Identity` implements the trusted Identity authorization boundary
 around the provider-neutral `ISecretRedemption` contract from

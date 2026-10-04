@@ -5,11 +5,12 @@ import path from 'node:path';
 import { verifyPreparation } from './preparation.mjs';
 
 const recordName = /^[a-z0-9][a-z0-9-]*\.md$/;
-const entry = /^"([A-Za-z][A-Za-z0-9.-]*)": (patch|minor|major)$/;
+const entry = /^"([A-Za-z][A-Za-z0-9.-]*)": (patch|minor|major|baseline)$/;
 const sha = /^[a-f0-9]{40}$/;
 const receiptName = /^releases\/receipts\/([a-f0-9]{40})\.json$/;
 const sourcePathPattern = /^\.changeset\/[a-z0-9][a-z0-9-]*\.md$/;
 const archivedPathPattern = /^\.changeset\/archive\/[a-z0-9][a-z0-9-]*\.md$/;
+const initialBaselinePath = 'releases/initial-baseline.json';
 
 function fail(location, message) {
   throw new Error(`${location}: ${message}`);
@@ -39,6 +40,96 @@ export function parseChangesetEntries(text, filename, componentIds) {
 export function parseChangeset(text, filename, componentIds) {
   const { entries } = parseChangesetEntries(text, filename, componentIds);
   return new Set(entries.map(({ id }) => id));
+}
+
+export function readInitialBaseline(manifest, {
+  root, readFileSync: readFile = readFileSync,
+} = {}) {
+  const baselinePath = path.join(root, initialBaselinePath);
+  let text;
+  try {
+    text = readFile(baselinePath, 'utf8');
+  } catch (error) {
+    const stderr = Buffer.isBuffer(error.stderr) ? error.stderr.toString('utf8') : error.stderr ?? '';
+    if (error.code === 'ENOENT' ||
+        (error.status === 128 && stderr.includes(`fatal: path '${initialBaselinePath}' does not exist in `))) {
+      return undefined;
+    }
+    fail(initialBaselinePath, `cannot read initial baseline record: ${error.message}`);
+  }
+
+  let baseline;
+  try {
+    baseline = JSON.parse(text);
+  } catch (error) {
+    fail(initialBaselinePath, `invalid JSON: ${error.message}`);
+  }
+  if (baseline === null || typeof baseline !== 'object' || Array.isArray(baseline)) {
+    fail(initialBaselinePath, 'expected an object');
+  }
+  const required = ['schemaVersion', 'issue', 'baselineVersion', 'components', 'changeset', 'initialNotesReceipt'];
+  for (const key of required) {
+    if (!Object.hasOwn(baseline, key)) fail(initialBaselinePath, `missing required field "${key}"`);
+  }
+  for (const key of Object.keys(baseline)) {
+    if (!required.includes(key)) fail(initialBaselinePath, `unknown field "${key}"`);
+  }
+  if (baseline.schemaVersion !== 1) fail(initialBaselinePath, 'expected schema version 1');
+  if (!Number.isSafeInteger(baseline.issue) || baseline.issue < 1) fail(initialBaselinePath, 'expected a positive issue number');
+  if (baseline.baselineVersion !== '0.0.0') fail(initialBaselinePath, 'the initial foundation package baseline must be 0.0.0');
+  if (!Array.isArray(baseline.components) || baseline.components.length === 0 ||
+      baseline.components.some((component) => typeof component !== 'string') ||
+      new Set(baseline.components).size !== baseline.components.length) {
+    fail(initialBaselinePath, 'expected a nonempty list of unique component IDs');
+  }
+  const components = new Map(manifest.components.map((component) => [component.id, component]));
+  for (const id of baseline.components) {
+    const component = components.get(id);
+    if (!component || component.kind === 'service') fail(initialBaselinePath, `unknown NuGet component "${id}"`);
+  }
+  if (typeof baseline.changeset !== 'string' || !sourcePathPattern.test(baseline.changeset) ||
+      path.posix.basename(baseline.changeset) === 'README.md') {
+    fail(initialBaselinePath, 'expected a safe top-level changeset path');
+  }
+
+  const receiptMatch = typeof baseline.initialNotesReceipt === 'string' && receiptName.exec(baseline.initialNotesReceipt);
+  if (!receiptMatch) fail(initialBaselinePath, 'expected a source-derived release receipt path for the initial notes');
+  let notesReceipt;
+  try {
+    notesReceipt = JSON.parse(readFile(path.join(root, baseline.initialNotesReceipt), 'utf8'));
+  } catch (error) {
+    fail(initialBaselinePath, `cannot read initial notes receipt: ${error.message}`);
+  }
+  if (notesReceipt === null || typeof notesReceipt !== 'object' || Array.isArray(notesReceipt) ||
+      notesReceipt.schemaVersion !== 1 || notesReceipt.sourceSha !== receiptMatch[1] ||
+      !Array.isArray(notesReceipt.components) || !Array.isArray(notesReceipt.changesets)) {
+    fail(initialBaselinePath, 'initial notes receipt does not match its source-derived filename and shape');
+  }
+  const preparedIds = new Set(notesReceipt.components.map((component) => component?.id));
+  for (const id of baseline.components) {
+    if (!preparedIds.has(id)) fail(initialBaselinePath, `initial notes receipt does not include ${id}`);
+  }
+
+  let changesetText;
+  try {
+    changesetText = readFile(path.join(root, baseline.changeset), 'utf8');
+  } catch (error) {
+    fail(baseline.changeset, `cannot read initial baseline changeset: ${error.message}`);
+  }
+  const { entries } = parseChangesetEntries(changesetText, baseline.changeset, new Set(components.keys()));
+  if (entries.some(({ bump }) => bump !== 'baseline') ||
+      JSON.stringify(entries.map(({ id }) => id).sort()) !== JSON.stringify([...baseline.components].sort())) {
+    fail(baseline.changeset, 'must contain baseline intent for exactly the recorded NuGet components');
+  }
+
+  return {
+    path: initialBaselinePath,
+    text,
+    baselineVersion: baseline.baselineVersion,
+    components: [...baseline.components].sort(),
+    changeset: baseline.changeset,
+    initialNotesReceipt: baseline.initialNotesReceipt,
+  };
 }
 
 /**
@@ -201,6 +292,7 @@ export function creditReceiptedComponents(root, changes, componentIds, ancestorS
 
 export function validateChangesets(manifest, { root, changes, ancestorSha } = {}) {
   const ids = new Set(manifest.components.map(({ id }) => id));
+  const baseline = readInitialBaseline(manifest, { root });
   const records = new Map();
   const directory = path.join(root, '.changeset');
   let filenames;
@@ -219,7 +311,12 @@ export function validateChangesets(manifest, { root, changes, ancestorSha } = {}
     } catch (error) {
       fail(file, `cannot read changeset: ${error.message}`);
     }
-    records.set(file, parseChangeset(text, file, ids));
+    const { entries } = parseChangesetEntries(text, file, ids);
+    const hasBaselineIntent = entries.some(({ bump }) => bump === 'baseline');
+    if (hasBaselineIntent !== (file === baseline?.changeset)) {
+      fail(file, 'baseline intent is allowed only in the recorded initial baseline changeset');
+    }
+    records.set(file, new Set(entries.map(({ id }) => id)));
   }
   if (changes !== undefined) {
     const fresh = new Set();

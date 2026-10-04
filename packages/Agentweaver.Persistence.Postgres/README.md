@@ -1,4 +1,4 @@
-# PostgreSQL transactional outbox and consumer inbox (0.2.0)
+# PostgreSQL transactional outbox and consumer inbox (0.0.0)
 
 `PostgresOutbox` manages outbox tables within one service-owned PostgreSQL schema.
 Pass a shared `NpgsqlDataSource` and a lowercase, non-reserved schema identifier;

@@ -168,6 +168,8 @@ The Node tooling has no external dependencies; no npm installation is required.
 compute deterministic version bumps, apply them to the manifest and checked-in
 project mirrors, and prepare locked package and service-image artifacts with
 source-bound provenance. None of these commands publishes or deploys artifacts.
+Pass `--packages-only` to `release:pack` to prepare only the manifest's NuGet
+packages without rebuilding service images.
 The manual publication workflow requires a separate explicit choice.
 See [release planning and package preparation](releases/README.md#release-planning-and-package-preparation)
 for the full command contract and failure-mode guarantees.

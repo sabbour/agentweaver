@@ -510,12 +510,12 @@
       "agentweaver.foundationprobe": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.1.0, )",
-          "Agentweaver.ObjectStore.AzureBlob": "[0.1.0, )",
-          "Agentweaver.Persistence.Postgres": "[0.2.0, )",
-          "Agentweaver.Providers": "[0.1.0, )",
-          "Agentweaver.Secrets.AzureKeyVault": "[0.1.0, )",
-          "Agentweaver.Telemetry.AzureMonitor": "[0.1.0, )",
+          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.ObjectStore.AzureBlob": "[0.0.0, )",
+          "Agentweaver.Persistence.Postgres": "[0.0.0, )",
+          "Agentweaver.Providers": "[0.0.0, )",
+          "Agentweaver.Secrets.AzureKeyVault": "[0.0.0, )",
+          "Agentweaver.Telemetry.AzureMonitor": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Azure.Storage.Blobs": "[12.26.0, )",
           "Npgsql": "[10.0.3, )"
@@ -524,7 +524,7 @@
       "agentweaver.objectstore.azureblob": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.1.0, )",
+          "Agentweaver.Abstractions": "[0.0.0, )",
           "Azure.Storage.Blobs": "[12.26.0, )"
         }
       },
@@ -537,13 +537,13 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.1.0, )"
+          "Agentweaver.Abstractions": "[0.0.0, )"
         }
       },
       "agentweaver.secrets.azurekeyvault": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.1.0, )",
+          "Agentweaver.Abstractions": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Azure.Security.KeyVault.Secrets": "[4.8.0, )",
           "Microsoft.Identity.Client": "[4.78.0, )"
@@ -558,7 +558,7 @@
       "agentweaver.telemetry.azuremonitor": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Telemetry": "[0.1.0, )",
+          "Agentweaver.Telemetry": "[0.0.0, )",
           "Azure.Monitor.OpenTelemetry.Exporter": "[1.9.0, )"
         }
       }

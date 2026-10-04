@@ -1,20 +1,23 @@
 # Component releases
 
-`releases/foundation.json` is a draft component manifest. It does not describe a published package set or platform release.
+`releases/foundation.json` is a draft component manifest, not a platform release.
 
 | Component | Kind | Manifest version |
 | --- | --- | --- |
-| `Agentweaver.Abstractions` | Contract | `0.1.0` |
-| `Agentweaver.Providers` | Library | `0.1.0` |
-| `Agentweaver.Persistence.Postgres` | Library | `0.2.0` |
-| `Agentweaver.Secrets.AzureKeyVault` | Library | `0.1.0` |
-| `Agentweaver.Identity` | Library | `1.0.0` |
-| `Agentweaver.Telemetry` | Library | `0.1.0` |
-| `Agentweaver.Telemetry.AzureMonitor` | Library | `0.1.0` |
-| `Agentweaver.ObjectStore.AzureBlob` | Library | `0.1.0` |
-| `Agentweaver.Identity.Broker` | Service | `0.1.0` |
+| `Agentweaver.Abstractions` | Contract | `0.0.0` |
+| `Agentweaver.Providers` | Library | `0.0.0` |
+| `Agentweaver.Persistence.Postgres` | Library | `0.0.0` |
+| `Agentweaver.Secrets.AzureKeyVault` | Library | `0.0.0` |
+| `Agentweaver.Identity` | Library | `0.0.0` |
+| `Agentweaver.Telemetry` | Library | `0.0.0` |
+| `Agentweaver.Telemetry.AzureMonitor` | Library | `0.0.0` |
+| `Agentweaver.ObjectStore.AzureBlob` | Library | `0.0.0` |
+| `Agentweaver.Identity.Broker` | Service | `0.2.0` |
 
-The manifest pins exact project-reference compatibility. The broker entry has no image digest because no image has been published.
+The manifest pins exact project-reference compatibility. Its Broker entry does
+not pin an image digest; the existing f989 image remains separate from this
+package baseline.
+The eight NuGet packages use the 0.0.0 initial baseline. Their initial release notes come from the archived P0 changesets referenced by the prior release receipt.
 
 Each product component change needs a fresh `.changeset` record. The record names the manifest component ID and semver intent. Documentation-only changes do not need a changeset.
 

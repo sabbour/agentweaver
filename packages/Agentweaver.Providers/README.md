@@ -1,4 +1,4 @@
-# Provider foundation (0.1.0)
+# Provider foundation (0.0.0)
 
 `Agentweaver.Abstractions` defines the 15 approved seam identities, cardinalities,
 hosting patterns, immutable references, advertised capability descriptors, and

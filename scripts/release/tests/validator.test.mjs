@@ -46,6 +46,28 @@ test('the checked-in draft composition has a valid shape and references', () => 
   assert.equal(check(fixture).stage, 'draft');
 });
 
+test('the initial P0 NuGet baseline contains exactly the eight packages at 0.0.0', () => {
+  const packageIds = [
+    'Agentweaver.Abstractions',
+    'Agentweaver.Providers',
+    'Agentweaver.Persistence.Postgres',
+    'Agentweaver.Secrets.AzureKeyVault',
+    'Agentweaver.Identity',
+    'Agentweaver.Telemetry',
+    'Agentweaver.Telemetry.AzureMonitor',
+    'Agentweaver.ObjectStore.AzureBlob',
+  ].sort();
+  const packages = fixture.components.filter(({ kind }) => kind !== 'service');
+  assert.deepEqual(packages.map(({ id }) => id).sort(), packageIds);
+  assert.ok(packages.every(({ version }) => version === '0.0.0'));
+  assert.ok(fixture.compatibility.every(({ versions }) => versions.length === 1 && versions[0] === '0.0.0'));
+
+  const baseline = JSON.parse(readFileSync(path.join(root, 'releases', 'initial-baseline.json'), 'utf8'));
+  assert.equal(baseline.baselineVersion, '0.0.0');
+  assert.deepEqual([...baseline.components].sort(), packageIds);
+  assert.equal(baseline.changeset, '.changeset/initial-p0-baseline-1825.md');
+});
+
 test('the CLI accepts the checked-in composition and JSON schema is parseable', () => {
   const schema = JSON.parse(readFileSync(path.join(root, 'releases', 'manifest.schema.json'), 'utf8'));
   assert.equal(schema.$id, 'https://agentweaver.dev/schemas/release-manifest-v1');

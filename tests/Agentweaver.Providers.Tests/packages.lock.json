@@ -105,7 +105,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.1.0, )"
+          "Agentweaver.Abstractions": "[0.0.0, )"
         }
       }
     }

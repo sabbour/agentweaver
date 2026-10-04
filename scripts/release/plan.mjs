@@ -7,7 +7,7 @@ import { writeFileSync, mkdirSync, readFileSync as nativeReadFile } from 'node:f
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateFile } from './validate.mjs';
-import { collectChangesetEntries } from './changesets.mjs';
+import { collectChangesetEntries, readInitialBaseline } from './changesets.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BUMP_RANK = { patch: 0, minor: 1, major: 2 };
@@ -58,8 +58,10 @@ export function canonicalizeComponents(components) {
  * detects accidental or manual corruption of a plan file before `apply.mjs` trusts it. This is an
  * integrity guard, not a cryptographic signature.
  */
-export function planChecksum({ schemaVersion, sourceSha, components }) {
-  const canonical = JSON.stringify({ schemaVersion, sourceSha, components: canonicalizeComponents(components) });
+export function planChecksum({ schemaVersion, sourceSha, components, initialBaseline }) {
+  const decisions = { schemaVersion, sourceSha, components: canonicalizeComponents(components) };
+  if (initialBaseline !== undefined) decisions.initialBaseline = initialBaseline;
+  const canonical = JSON.stringify(decisions);
   return createHash('sha256').update(canonical).digest('hex');
 }
 
@@ -78,8 +80,11 @@ export function createPlan(manifest, {
   const records = collectChangesetEntries(root, ids, { readdirSync, readFileSync: readFile });
 
   const perComponent = new Map();
+  const initialBaseline = readInitialBaseline(manifest, { root, readFileSync: readFile });
   for (const [file, { entries }] of records) {
+    if (file === initialBaseline?.changeset) continue;
     for (const { id, bump } of entries) {
+      if (bump === 'baseline') fail(file, 'baseline intent is allowed only in the recorded initial baseline changeset');
       const existing = perComponent.get(id);
       if (!existing) {
         perComponent.set(id, { bump, files: [file] });
@@ -92,6 +97,17 @@ export function createPlan(manifest, {
 
   const sourceSha = git('rev-parse', 'HEAD');
   if (!sha.test(sourceSha)) fail('plan', 'cannot resolve a full 40-character commit SHA for HEAD');
+  if (initialBaseline) {
+    let source;
+    try {
+      source = readSource(sourceSha, initialBaseline.path);
+    } catch (error) {
+      fail(initialBaseline.path, `missing committed source baseline record: ${error.message}`);
+    }
+    if (source !== initialBaseline.text) {
+      fail(initialBaseline.path, 'baseline record bytes differ from source HEAD; commit edits or use a byte-preserving checkout');
+    }
+  }
   for (const file of records.keys()) {
     let source;
     try {
@@ -106,6 +122,14 @@ export function createPlan(manifest, {
 
   if (perComponent.size === 0) {
     const empty = { schemaVersion: 1, sourceSha, createdAt: new Date().toISOString(), components: [] };
+    if (initialBaseline) {
+      empty.initialBaseline = {
+        baselineVersion: initialBaseline.baselineVersion,
+        components: initialBaseline.components,
+        changeset: initialBaseline.changeset,
+        initialNotesReceipt: initialBaseline.initialNotesReceipt,
+      };
+    }
     empty.checksum = planChecksum(empty);
     return empty;
   }
@@ -124,6 +148,14 @@ export function createPlan(manifest, {
   components.sort((a, b) => a.id.localeCompare(b.id));
 
   const plan = { schemaVersion: 1, sourceSha, createdAt: new Date().toISOString(), components };
+  if (initialBaseline) {
+    plan.initialBaseline = {
+      baselineVersion: initialBaseline.baselineVersion,
+      components: initialBaseline.components,
+      changeset: initialBaseline.changeset,
+      initialNotesReceipt: initialBaseline.initialNotesReceipt,
+    };
+  }
   plan.checksum = planChecksum(plan);
   return plan;
 }
@@ -144,7 +176,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     const plan = createPlanFromFile(manifestArg, { root: repositoryRoot });
     if (plan.components.length === 0) {
-      console.log('No pending changesets; nothing to plan.');
+      if (plan.initialBaseline) {
+        console.log(`No version bumps pending; the initial ${plan.initialBaseline.baselineVersion} package baseline notes remain source-bound.`);
+      } else {
+        console.log('No pending changesets; nothing to plan.');
+      }
     } else {
       const outFile = path.resolve(repositoryRoot, out);
       mkdirSync(path.dirname(outFile), { recursive: true });

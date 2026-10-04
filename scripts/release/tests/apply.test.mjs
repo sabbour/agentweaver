@@ -29,7 +29,10 @@ function git(dir, ...args) {
   return execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
 }
 
-function initRepo(t, { changeset = '---\n"Pkg.A": minor\n---\n\nAdd a feature.\n' } = {}) {
+function initRepo(t, {
+  changeset = '---\n"Pkg.A": minor\n---\n\nAdd a feature.\n',
+  initialBaseline = false,
+} = {}) {
   const fixtureRoot = path.resolve('artifacts', 'release-tests');
   mkdirSync(fixtureRoot, { recursive: true });
   const dir = mkdtempSync(path.join(fixtureRoot, 'v1-apply-'));
@@ -38,9 +41,41 @@ function initRepo(t, { changeset = '---\n"Pkg.A": minor\n---\n\nAdd a feature.\n
   mkdirSync(path.join(dir, 'packages', 'Pkg.B'), { recursive: true });
   mkdirSync(path.join(dir, 'releases'));
   mkdirSync(path.join(dir, '.changeset'));
-  writeFileSync(path.join(dir, 'packages', 'Pkg.A', 'Pkg.A.csproj'), csproj('0.1.0', ['Pkg.B']));
-  writeFileSync(path.join(dir, 'packages', 'Pkg.B', 'Pkg.B.csproj'), csproj('0.1.0'));
-  writeFileSync(path.join(dir, 'releases', 'foundation.json'), JSON.stringify(manifestBase(), null, 2) + '\n');
+  const manifest = manifestBase();
+  if (initialBaseline) {
+    for (const component of manifest.components) component.version = '0.0.0';
+    manifest.compatibility[0].versions = ['0.0.0'];
+    const componentIds = manifest.components.map(({ id }) => id);
+    const baselineChangeset = [
+      '---',
+      ...componentIds.map((id) => `"${id}": baseline`),
+      '---',
+      '',
+      'Set the first package baseline without a version bump.',
+      '',
+    ].join('\n');
+    writeFileSync(path.join(dir, '.changeset', 'initial-baseline.md'), baselineChangeset);
+    mkdirSync(path.join(dir, 'releases', 'receipts'));
+    const receiptSha = 'a'.repeat(40);
+    writeFileSync(path.join(dir, 'releases', 'receipts', `${receiptSha}.json`), JSON.stringify({
+      schemaVersion: 1,
+      sourceSha: receiptSha,
+      components: componentIds.map((id) => ({ id })),
+      changesets: [{ sourcePath: '.changeset/old.md', archivedPath: '.changeset/archive/old.md', sha256: 'b'.repeat(64) }],
+    }));
+    writeFileSync(path.join(dir, 'releases', 'initial-baseline.json'), JSON.stringify({
+      schemaVersion: 1,
+      issue: 1825,
+      baselineVersion: '0.0.0',
+      components: componentIds,
+      changeset: '.changeset/initial-baseline.md',
+      initialNotesReceipt: `releases/receipts/${receiptSha}.json`,
+    }, null, 2) + '\n');
+  }
+  writeFileSync(path.join(dir, 'packages', 'Pkg.A', 'Pkg.A.csproj'),
+    csproj(manifest.components[0].version, ['Pkg.B']));
+  writeFileSync(path.join(dir, 'packages', 'Pkg.B', 'Pkg.B.csproj'), csproj(manifest.components[1].version));
+  writeFileSync(path.join(dir, 'releases', 'foundation.json'), JSON.stringify(manifest, null, 2) + '\n');
   if (changeset) writeFileSync(path.join(dir, '.changeset', 'add-feature.md'), changeset);
   git(dir, 'init', '-q');
   git(dir, 'config', 'core.autocrlf', 'false');
@@ -82,6 +117,36 @@ test('plans and applies a single-component bump, keeping mirrors and compatibili
 
   const changelog = readFileSync(path.join(dir, 'releases', 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, /Pkg\.A.*0\.1\.0 -> 0\.2\.0 \(minor\)/);
+});
+
+test('records the initial baseline without a bump, then plans later published changes with normal semver', (t) => {
+  const dir = initRepo(t, { initialBaseline: true, changeset: false });
+  const manifest = readManifest(dir);
+  const baselinePlan = createPlan(manifest, { root: dir });
+  assert.deepEqual(baselinePlan.components, []);
+  assert.equal(baselinePlan.initialBaseline.baselineVersion, '0.0.0');
+  assert.deepEqual(baselinePlan.initialBaseline.components, ['Pkg.A', 'Pkg.B']);
+  assert.deepEqual(applyPlan(baselinePlan, manifestPath(dir), { root: dir }), {
+    applied: [], skipped: [], message: 'initial baseline notes; no version changes',
+  });
+  assert.deepEqual(readManifest(dir).components.map(({ version }) => version), ['0.0.0', '0.0.0']);
+
+  writeFileSync(path.join(dir, '.changeset', 'later-api.md'),
+    '---\n"Pkg.A": minor\n---\n\nAdd a published API capability.\n');
+  git(dir, 'add', '.changeset/later-api.md');
+  git(dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'later published API change');
+  const laterPlan = createPlan(readManifest(dir), { root: dir });
+  assert.equal(laterPlan.components.length, 1);
+  assert.equal(laterPlan.components[0].fromVersion, '0.0.0');
+  assert.equal(laterPlan.components[0].toVersion, '0.1.0');
+  applyPlan(laterPlan, manifestPath(dir), { root: dir });
+  assert.equal(readManifest(dir).components[0].version, '0.1.0');
+});
+
+test('rejects baseline intent without the dedicated source record', (t) => {
+  const dir = initRepo(t, { changeset: '---\n"Pkg.A": baseline\n---\n\nUnrecorded baseline.\n' });
+  assert.throws(() => createPlan(readManifest(dir), { root: dir }),
+    /baseline intent is allowed only in the recorded initial baseline changeset/);
 });
 
 test('mixed bumps on one component use the highest severity, and independent components stay separate', (t) => {

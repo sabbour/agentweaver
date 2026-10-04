@@ -70,9 +70,12 @@ export function packComponents(manifest, {
   statSync: stat = statSync,
   now = () => new Date(),
   outDir,
+  packagesOnly = false,
 } = {}) {
   if (typeof outDir !== 'string' || outDir.trim() === '') fail('outDir', 'expected an output directory path');
-  const components = manifest.components;
+  const components = packagesOnly
+    ? manifest.components.filter((component) => component.kind !== 'service')
+    : manifest.components;
   if (components.length === 0) fail('manifest.components', 'no components to prepare');
 
   const before = status();
@@ -199,10 +202,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const manifestArg = args.find((arg) => !arg.startsWith('--'));
     const outIndex = args.indexOf('--out');
     const out = outIndex >= 0 ? args[outIndex + 1] : 'artifacts/release/pack';
+    const packagesOnly = args.includes('--packages-only');
     if (!manifestArg || (outIndex >= 0 && !args[outIndex + 1])) {
-      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--out <dir>]');
+      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only] [--out <dir>]');
     }
-    const provenance = packComponentsFromFile(manifestArg, { root: repositoryRoot, outDir: out });
+    const provenance = packComponentsFromFile(manifestArg, { root: repositoryRoot, outDir: out, packagesOnly });
     console.log(`Packed ${provenance.components.length} component(s) at source ${provenance.sourceSha} into ${out}`);
     for (const artifact of provenance.artifacts) {
       console.log(`  ${artifact.path} (${artifact.sha256})`);

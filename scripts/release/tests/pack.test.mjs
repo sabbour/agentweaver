@@ -81,6 +81,25 @@ test('packs every non-service component, hashing only the artifacts it produced'
   assert.deepEqual(onDisk, provenance);
 });
 
+test('packages-only preparation leaves service images out while retaining the full manifest hash', (t) => {
+  const dir = initRepo(t);
+  const manifest = manifestBase();
+  manifest.components.push({
+    id: 'Svc', kind: 'service', version: '0.1.0', project: 'services/Svc/Svc.csproj',
+  });
+  const outDir = path.join(dir, 'artifacts', 'release', 'packages');
+  const calls = [];
+  const provenance = packComponents(manifest, {
+    root: dir, dotnet: fakeDotnet(calls), outDir, packagesOnly: true,
+  });
+
+  assert.deepEqual(provenance.components.map(({ id }) => id), ['Pkg.A', 'Pkg.B']);
+  assert.deepEqual(provenance.artifacts.map(({ kind }) => kind), ['package', 'package']);
+  assert.deepEqual(calls.map(([verb]) => verb), ['restore', 'build', 'pack', 'restore', 'build', 'pack']);
+  assert.ok(!existsSync(path.join(outDir, 'Svc.0.1.0.tar.gz')));
+  assert.equal(provenance.manifestSha256, createHash('sha256').update(JSON.stringify(manifest)).digest('hex'));
+});
+
 test('never writes provenance.json when the working tree is dirty before packing', (t) => {
   const dir = initRepo(t);
   writeFileSync(path.join(dir, 'uncommitted.txt'), 'x');
