@@ -21,7 +21,7 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
     `/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
   if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(subscriptionId ?? '') ||
       !/^[a-zA-Z0-9._()-]{1,90}$/.test(resourceGroup ?? '') ||
-      typeof clusterId !== 'string' || clusterId !== expectedClusterId) {
+      typeof clusterId !== 'string' || clusterId.toLowerCase() !== expectedClusterId.toLowerCase()) {
     return blocked(name, 'The exact AKS resource ID from the successful source-bound deployment receipt is required.');
   }
 
@@ -42,7 +42,7 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
     return blocked(name, 'Observed AKS resource response is malformed.');
   }
   if (!cluster || typeof cluster !== 'object' || Array.isArray(cluster) ||
-      typeof cluster.id !== 'string' || cluster.id !== clusterId) {
+      typeof cluster.id !== 'string' || cluster.id.toLowerCase() !== clusterId.toLowerCase()) {
     return blocked(name, 'Observed AKS resource ID differs from the approved deployment receipt.');
   }
 
@@ -284,9 +284,10 @@ export function runAcceptance(config, {
   let identityEvidence;
   try {
     source = sourceResolver(config);
-    candidate = { sourceSha: source.sha, sourceTree: source.sourceTree, sourceHash: source.sourceHash, scope: source.scope };
+    candidate = { verifierSha: source.verifierSha ?? source.sha, sourceSha: source.sha,
+      sourceTree: source.sourceTree, sourceHash: source.sourceHash, scope: source.scope };
     if (config.expectedSha !== source.sha) throw new Error('Expected deployment SHA differs from reviewed HEAD.');
-    const target = guardAzureTarget({ ...config, ...source }, execAz);
+    const target = guardAzureTarget({ ...config, ...source, requireCompleteP0Evidence: true }, execAz);
     boundAz = target.execAz;
     const { group } = target;
     if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
@@ -303,6 +304,7 @@ export function runAcceptance(config, {
         return result;
       }
     };
+    check('target-inventory', () => configured('target-inventory', target.inventoryEvidence));
     const deploymentCheck = check('deployed-sha', () => checkDeployedSha({ ...config, sourceTree: source.sourceTree,
       sourceHash: source.sourceHash, appRoutingDnsZoneResourceIds: source.appRoutingDnsZoneResourceIds }, boundAz));
     deploymentEvidence = deploymentCheck.status === 'passed' ? deploymentCheck.evidence : undefined;
@@ -411,7 +413,7 @@ export function runAcceptance(config, {
   }
 
   const requiredChecks = [
-    'deployed-sha', 'aks-observed-network-security', 'workload-identity-oidc',
+    'target-inventory', 'deployed-sha', 'aks-observed-network-security', 'workload-identity-oidc',
     'kubernetes-target', 'foundation-probe-target', 'foundation-probe-workload-identity',
   ];
   const allRequired = config.collectRuntimeEvidence === true &&

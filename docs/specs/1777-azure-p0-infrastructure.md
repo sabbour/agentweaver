@@ -35,9 +35,38 @@ Every subsequent Azure command also includes the explicit subscription.
 The resource group must already exist after separately approved bootstrap.
 Its full resource ID and ownership tags must match the target.
 The resource inventory must contain only resources in that exact group with
-matching environment, manager, owner, and cost-center tags.
-Access denied, malformed JSON, null tags, and missing groups block execution.
+matching environment, manager, owner, and cost-center tags. The inventory
+reader projects raw JSON to identifiers, types, names, tag counts, and
+expected-value equality flags before returning it; it does not include tag
+values in the report.
+Access denied, malformed JSON, unapproved null tags, and missing groups block execution.
 No failed lookup permits creation or fallback to the default subscription.
+
+For the observed P0 target only, these seven exact Private DNS roots may be
+reported without tags when all seven are empty and ownership is proven by the
+selected successful SHA-derived deployment receipt, exactly one successful
+`Create` deployment operation per root, and the seven exact registration-
+disabled VNet links to the owned P0 VNet. The report explicitly sets
+`tagsPersisted: false`. This does not repair tags or authorize another write.
+Partial or nonempty incorrect tags, unknown zones, external links, incomplete
+receipts, and mismatched source SHA/tree/input hash remain blocking.
+The roots are `privatelink.vaultcore.azure.net`,
+`privatelink.blob.core.windows.net`, `privatelink.monitor.azure.com`,
+`privatelink.oms.opinsights.azure.com`, `privatelink.ods.opinsights.azure.com`,
+`privatelink.agentsvc.azure-automation.net`, and
+`privatelink.postgres.database.azure.com`.
+
+The target inventory also recognizes one exact inherited NRMS NSG and one
+exact owned Failure Anomalies Smart Detector. The NSG must match the observed
+eight inbound rule shapes, be attached reciprocally only to the AKS,
+PostgreSQL, and private-endpoints subnets, and have no NIC association. Each
+rule requires its exact compliant management-group policy state and one
+successful child `securityRules/write` Activity Log event. The detector must
+remain Enabled/Sev3, use the exact Failure Anomalies detector at PT1M on the
+P0 Application Insights scope, and have no action-group references or custom
+notification fields. These checks leave inherited policy, NSG rules, alert
+configuration, and external action groups unchanged; CorpNet service-tag
+membership is reported as a source label, not inferred as a trust claim.
 
 The P0 parameter example explicitly splits regions: `location` is
 `eastus2euap` for the VNet, AKS, PostgreSQL, Key Vault, Blob, and subnet-bound

@@ -91,6 +91,35 @@ test('run does not throw on non-zero exit when check is false', () => {
   assert.equal(result.status, 3);
 });
 
+test('run projects raw JSON before returning stdout and never exposes fields omitted by the projection', () => {
+  const sentinel = 'raw-secret-sentinel-82fbc9';
+  const result = run(process.execPath, ['-e',
+    `console.log(JSON.stringify({ tags: { owner: "team", token: "${sentinel}" }, resources: [1, 2] }))`],
+  { projectJson: value => ({
+    resourceCount: value.resources.length,
+    ownerMatches: value.tags.owner === 'team',
+  }) });
+
+  assert.deepEqual(JSON.parse(result.stdout), { resourceCount: 2, ownerMatches: true });
+  assert.ok(!JSON.stringify(result).includes(sentinel));
+});
+
+test('run fails closed when projected JSON is malformed or the projection throws', () => {
+  const sentinel = 'raw-secret-sentinel-82fbc9';
+  for (const [output, projectJson] of [
+    ['not-json', value => value],
+    [`{"token":"${sentinel}"}`, () => { throw new Error(sentinel); }],
+    ['{"token":"value"}', () => undefined],
+  ]) {
+    assert.throws(() => run(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(output)})`],
+      { projectJson }), error => {
+      assert.match(error.message, /JSON output could not be safely projected/);
+      assert.ok(!error.message.includes(sentinel));
+      return true;
+    });
+  }
+});
+
 test('run never shells out through a string (no injection surface)', () => {
   // If this were shell-interpreted, `; echo pwned` would execute a second
   // command. With shell:false and a literal argument array, it is passed

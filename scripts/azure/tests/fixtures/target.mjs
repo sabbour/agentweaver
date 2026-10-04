@@ -73,7 +73,11 @@ export const observedCluster = {
 };
 const ok = value => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
 export function fakeAzure(overrides = {}, calls = []) {
-  return args => {
+  return (args, options = {}) => {
+    const project = result => {
+      if (typeof options.projectJson !== 'function' || result.status !== 0) return result;
+      return { ...result, stdout: JSON.stringify(options.projectJson(JSON.parse(result.stdout))) };
+    };
     calls.push(args);
     if (args[0] === 'rest') return overrides.clusterResult ?? ok(observedCluster);
     if (args[0] === 'account') return overrides.accountResult ?? ok(overrides.account ??
@@ -82,13 +86,23 @@ export function fakeAzure(overrides = {}, calls = []) {
       tags, ...overrides.group });
     if (args[0] === 'resource' && args[1] === 'show') {
       const id = args[args.indexOf('--ids') + 1];
-      return overrides.detailResult ?? ok(overrides.details?.[id]);
+      return project(overrides.detailResult ?? ok(overrides.details?.[id]));
     }
-    if (args[0] === 'resource') return overrides.resourceResult ?? ok(overrides.resources ?? []);
+    if (args[0] === 'resource') return project(overrides.resourceResult ?? ok(overrides.resources ?? []));
+    if (args[0] === 'policy' && args[1] === 'state') {
+      return project(overrides.policyStateResult ?? ok(overrides.policyStates ?? []));
+    }
+    if (args[0] === 'monitor' && args[1] === 'activity-log') {
+      const id = args[args.indexOf('--resource-id') + 1];
+      return project(overrides.activityResult ?? ok(overrides.activityEvents?.[id] ?? []));
+    }
+    if (args[0] === 'deployment' && args[1] === 'operation') {
+      return project(overrides.deploymentOperationsResult ?? ok(overrides.deploymentOperations ?? []));
+    }
     if (args[2] === 'what-if') return overrides.whatIf ?? ok({ changes: [] });
-    if (args[0] === 'deployment') return overrides.create ?? ok({
+    if (args[0] === 'deployment') return project(overrides.create ?? ok({
       id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
-      properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } });
+      properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } }));
     if (args[0] === 'aks') return overrides.issuerResult ?? {
       status: 0,
       stdout: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',

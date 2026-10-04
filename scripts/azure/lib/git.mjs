@@ -38,16 +38,22 @@ export function resolveCleanHead(cwd, { execGit = runGit } = {}) {
   return { sha, branch };
 }
 
-export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId },
+export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId, expectedSha },
   { execGit = runGit, compareGitShow = gitShowMatches, readFile = readFileSync,
     realpath = realpathSync, validateRelease = validateFile } = {}) {
-  const { sha, branch } = resolveCleanHead(repoRoot, { execGit });
+  const { sha: headSha, branch } = resolveCleanHead(repoRoot, { execGit });
+  const sha = expectedSha ?? headSha;
+  if (!isFullSha(sha)) throw new Error('Selected source must be a full 40-character SHA.');
   const sourceTree = execGit(['rev-parse', `${sha}^{tree}`], { cwd: repoRoot }).stdout.trim();
   if (!isFullSha(sourceTree)) throw new Error('Source tree did not resolve to a full Git tree SHA.');
-  const ancestor = execGit(['merge-base', '--is-ancestor', 'origin/v1', sha], { cwd: repoRoot, check: false });
+  const ancestor = execGit(['merge-base', '--is-ancestor', 'origin/v1', headSha], { cwd: repoRoot, check: false });
   if (ancestor.status !== 0) throw new Error('Source must contain the locally fetched current origin/v1 ancestry.');
   const admittedSha = execGit(['rev-parse', 'origin/v1'], { cwd: repoRoot }).stdout.trim();
-  if (sha !== admittedSha) throw new Error('Deployment source must be the locally fetched admitted origin/v1 tip, not an unreviewed descendant.');
+  if (headSha !== admittedSha) throw new Error('Verifier HEAD must be the locally fetched admitted origin/v1 tip, not an unreviewed descendant.');
+  const deploymentAncestor = execGit(['merge-base', '--is-ancestor', sha, headSha], { cwd: repoRoot, check: false });
+  if (deploymentAncestor.status !== 0) {
+    throw new Error('Selected deployment source must be an ancestor of the reviewed verifier HEAD.');
+  }
   const root = realpath(repoRoot);
   function trackedPath(file) {
     if (!file) throw new Error('Tracked template and JSON parameters are required.');
@@ -72,6 +78,11 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     { cwd: root });
   if (extras.stdout.trim()) throw new Error('Ignored/untracked infrastructure inputs are not exact source.');
   const files = execGit(['ls-files', '--', 'infra/bicep'], { cwd: root }).stdout.trim().split(/\r?\n/).sort();
+  const sourceFiles = execGit(['ls-tree', '-r', '--name-only', sha, '--', 'infra/bicep'], { cwd: root })
+    .stdout.trim().split(/\r?\n/).sort();
+  if (!sourceFiles.length || sourceFiles.join('\n') !== files.join('\n')) {
+    throw new Error('Selected source has a different tracked infrastructure input set.');
+  }
   const hash = createHash('sha256');
   for (const file of files) {
     const tracked = trackedPath(file);
@@ -103,7 +114,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     values.appRoutingDnsZoneResourceIds?.value, subscriptionId,
   );
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
-  return { sha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
+  return { sha, verifierSha: headSha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner: values.owner.value, costCenter: values.costCenter.value,
     location, monitorLocation, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
     postgresEntraAdminPrincipalType,

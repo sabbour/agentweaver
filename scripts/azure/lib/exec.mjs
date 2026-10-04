@@ -111,7 +111,7 @@ function spawnPlatformSafe(command, args, spawnOptions) {
  * process exits non-zero or fails to spawn.
  */
 export function run(command, args, options = {}) {
-  const { check = true, cwd, env, input, timeout } = options;
+  const { check = true, cwd, env, input, timeout, projectJson } = options;
   const result = spawnPlatformSafe(command, args, {
     cwd,
     env,
@@ -121,14 +121,31 @@ export function run(command, args, options = {}) {
     windowsHide: true,
   });
 
-  const stdout = redact(result.stdout ?? '');
   const stderr = redact(result.stderr ?? '');
 
   if (result.error) {
     throw new Error(`Failed to start ${command}: ${redact(result.error.message)}`);
   }
 
+  let stdout;
+  if (projectJson === undefined) {
+    stdout = redact(result.stdout ?? '');
+  } else {
+    if (typeof projectJson !== 'function') throw new TypeError('projectJson must be a function.');
+    try {
+      const projected = projectJson(JSON.parse(result.stdout ?? ''));
+      const serialized = JSON.stringify(projected);
+      if (typeof serialized !== 'string') throw new Error('projection is not JSON serializable');
+      stdout = redact(serialized);
+    } catch {
+      throw new Error(`${command} JSON output could not be safely projected.`);
+    }
+  }
+
   if (check && result.status !== 0) {
+    if (projectJson !== undefined) {
+      throw new Error(`${command} exited with status ${result.status}; raw JSON output was omitted.`);
+    }
     throw new Error(
       redact(`${command} ${args.join(' ')} exited with status ${result.status}.\n${stderr || stdout}`.trim()),
     );

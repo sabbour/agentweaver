@@ -14,6 +14,7 @@ test('isFullSha accepts exactly 40 lowercase hex characters', () => {
 
 function sourceFixture(overrides = {}) {
   const root = process.cwd();
+  const selectedSha = overrides.config?.expectedSha ?? source.sha;
   const template = 'infra/bicep/main.bicep';
   const parameterPath = 'infra/bicep/parameters/approved.json';
   const parameterValues = { namePrefix: { value: 'aw-v1-p0' },
@@ -32,23 +33,26 @@ function sourceFixture(overrides = {}) {
     readFile: path => files[relative(root, path).replaceAll('\\', '/')],
     validateRelease: () => ({}),
     compareGitShow: (revision, file, expected) => {
-      assert.equal(revision, source.sha);
+      assert.equal(revision, selectedSha);
       return !overrides.changed && Buffer.from(files[file]).equals(Buffer.from(expected));
     },
     execGit: args => {
       if (args[0] === 'status') return { status: 0, stdout: overrides.dirty ?? '' };
-      if (args[0] === 'rev-parse') return { status: 0, stdout: args[1].endsWith('^{tree}') ? overrides.sourceTree ?? source.sourceTree :
+      if (args[0] === 'rev-parse') return { status: 0, stdout: args[1].endsWith('^{tree}') ?
+        args[1].startsWith(`${selectedSha}^{tree}`) ? overrides.deploymentTree ?? overrides.sourceTree ?? source.sourceTree :
+          source.sourceTree :
         args[1] === 'HEAD' ? source.sha :
         args[1] === 'origin/v1' ? overrides.unadmitted ? 'f'.repeat(40) : source.sha : 'candidate' };
       if (args[0] === 'merge-base') {
-        assert.equal(args[2], 'origin/v1');
-        return { status: overrides.wrongAncestry ? 1 : 0, stdout: '' };
+        return { status: args[2] === 'origin/v1' ? overrides.wrongAncestry ? 1 : 0 :
+          overrides.wrongDeploymentAncestry ? 1 : 0, stdout: '' };
       }
       if (args[0] === 'ls-files' && args.includes('--error-unmatch')) return {
         status: overrides.untracked ? 1 : 0, stdout: args.at(-1),
       };
       if (args[0] === 'ls-files' && args.includes('--others')) return { status: 0, stdout: overrides.ignored ?? '' };
       if (args[0] === 'ls-files') return { status: 0, stdout: Object.keys(files).join('\n') };
+      if (args[0] === 'ls-tree') return { status: 0, stdout: overrides.sourceFiles ?? Object.keys(files).join('\n') };
       throw new Error(`Unexpected git command ${args.join(' ')}`);
     },
     ...overrides.deps,
@@ -71,6 +75,29 @@ test('exact source hashes tracked reviewed inputs and binds JSON parameters to t
   assert.equal(receipt.postgresEntraAdminPrincipalName, source.postgresEntraAdminPrincipalName);
   assert.equal(receipt.postgresEntraAdminPrincipalType, 'User');
   assert.deepEqual(receipt.appRoutingDnsZoneResourceIds, []);
+});
+
+test('acceptance pins an ancestor deployment source separately from the reviewed verifier HEAD', () => {
+  const deployedSha = 'd'.repeat(40);
+  const deployedTree = 'e'.repeat(40);
+  const current = sourceFixture();
+  const currentReceipt = resolveSource(current.config, current.deps);
+  const { config, deps } = sourceFixture({ config: { expectedSha: deployedSha }, deploymentTree: deployedTree });
+  const receipt = resolveSource(config, deps);
+  assert.equal(receipt.sha, deployedSha);
+  assert.equal(receipt.verifierSha, currentReceipt.sha);
+  assert.equal(receipt.sourceTree, deployedTree);
+  assert.equal(receipt.sourceHash, currentReceipt.sourceHash);
+
+  for (const overrides of [
+    { config: { expectedSha: 'short' } },
+    { config: { expectedSha: 'f'.repeat(40) }, wrongDeploymentAncestry: true },
+    { config: { expectedSha: deployedSha }, changed: true },
+    { config: { expectedSha: deployedSha }, sourceFiles: 'infra/bicep/removed-from-verifier.bicep' },
+  ]) {
+    const invalid = sourceFixture({ ...overrides, deploymentTree: deployedTree });
+    assert.throws(() => resolveSource(invalid.config, invalid.deps));
+  }
 });
 
 test('source parameters require a supported Entra administrator and separate Monitor region', () => {

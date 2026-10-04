@@ -7,6 +7,7 @@ import { checkAksNetworkSecurity, checkBlobRoundtrip, checkDeployedSha, checkKey
   checkServiceDigests, checkWorkloadIdentity, runAcceptance } from '../verify-acceptance.mjs';
 import { fixture, source, fakeAzure, ids, deploymentOutputs, observedCluster } from './fixtures/target.mjs';
 import { makeRuntimeFixture, completedAt as probeCompletedAt } from './fixtures/foundation-probe-runtime.mjs';
+import { postDeploymentAzure } from './fixtures/post-deployment.mjs';
 
 test('AKS network preflight reads the exact observed cluster and reports enabled security configuration', () => {
   const calls = [];
@@ -39,8 +40,6 @@ test('AKS network preflight fails closed for missing target, failed/malformed GE
     { status: 0, stdout: 'malformed' },
     { status: 0, stdout: 'null' },
     { status: 0, stdout: JSON.stringify({ ...observedCluster, id: `${observedCluster.id}-other` }) },
-    { status: 0, stdout: JSON.stringify({ ...observedCluster,
-      id: observedCluster.id.replace('aw-v1-p0-aks', 'AW-v1-p0-aks') }) },
     { status: 0, stdout: JSON.stringify(altered({ properties: { kubernetesVersion: '1.28.9' } })) },
     ...['not-a-version', '1.29.0-preview'].map(kubernetesVersion =>
       ({ status: 0, stdout: JSON.stringify(altered({ properties: { kubernetesVersion } })) })),
@@ -66,12 +65,18 @@ test('AKS network preflight fails closed for missing target, failed/malformed GE
   assert.equal(queried, false);
   assert.equal(checkAksNetworkSecurity({ ...fixture, clusterId: `${observedCluster.id}-other` },
     () => { queried = true; }).status, 'blocked');
-  assert.equal(checkAksNetworkSecurity({ ...fixture,
-    clusterId: observedCluster.id.replace('aw-v1-p0-aks', 'AW-v1-p0-aks') },
-  () => { queried = true; }).status, 'blocked');
   assert.equal(queried, false);
   assert.equal(checkAksNetworkSecurity({ ...fixture, clusterId: observedCluster.id },
     () => { throw new Error('AuthorizationFailed'); }).status, 'blocked');
+});
+
+test('AKS resource IDs compare case-insensitively without widening target scope', () => {
+  const id = observedCluster.id.replace('aw-v1-p0-aks', 'AW-V1-P0-AKS');
+  const resource = { ...observedCluster, id: id.toUpperCase() };
+  const result = checkAksNetworkSecurity({ ...fixture, clusterId: id },
+    () => ({ status: 0, stdout: JSON.stringify(resource), stderr: '' }));
+  assert.equal(result.status, 'passed');
+  assert.equal(result.evidence.clusterId, resource.id);
 });
 
 test('deployment reader requires exact successful Bicep output receipt, not fictitious deployment tags', () => {
@@ -254,14 +259,14 @@ test('Blob default performs no write effects', () => {
 
 test('FULL REPORT regression: original false full success remains BLOCKED, even with plausible caller evidence', () => {
   const calls = [];
-  const azure = fakeAzure({}, calls);
+  const azure = fakeAzure(postDeploymentAzure, calls);
   const config = { ...fixture, clusterName: 'aw-v1-p0-aks',
     secretVersion: undefined, services: { broker: `sha256:${'a'.repeat(64)}` }, executeProbes: true,
     query: 'AppTraces | take 1', monitorQuery: 'AppTraces | take 1',
     runtimeEvidence: { verified: true, status: 'passed', sourceSha: source.sha } };
   const report = runAcceptance(config, { sourceResolver: () => source,
     uuid: () => nonce,
-    execAz: args => args[0] === 'storage' ? blobFake({ cleanup: 'fail' })(args) : azure(args) });
+    execAz: (args, options) => args[0] === 'storage' ? blobFake({ cleanup: 'fail' })(args) : azure(args, options) });
   assert.equal(report.overall, 'blocked');
   assert.equal(report.scope, 'p0-integration');
   assert.equal(report.deployedAcceptance, false);
@@ -298,7 +303,7 @@ test('full report overrides caller federation checks with exact bound foundation
   ]) {
     const calls = [];
     const report = runAcceptance({ ...fixture, identityChecks: [{ identityName: 'wrong', expectedSubject: 'wrong' }] },
-      { sourceResolver: () => source, execAz: fakeAzure(overrides, calls) });
+      { sourceResolver: () => source, execAz: fakeAzure({ ...postDeploymentAzure, ...overrides }, calls) });
     const identity = report.checks.find(check => check.name === 'workload-identity-oidc');
     assert.equal(report.overall, 'blocked');
     assert.equal(report.deployedAcceptance, false);
@@ -333,9 +338,11 @@ test('acceptance account/source failure prevents probes and returns a structured
 test('AKS preflight does not query an ID when the deployment receipt is not successful', () => {
   const calls = [];
   const report = runAcceptance(fixture, { sourceResolver: () => source,
-    execAz: fakeAzure({ create: { status: 1, stdout: '', stderr: 'DeploymentNotFound' } }, calls) });
+    execAz: fakeAzure({ ...postDeploymentAzure,
+      create: { status: 1, stdout: '', stderr: 'DeploymentNotFound' } }, calls) });
   assert.equal(report.overall, 'blocked');
-  assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security').status, 'blocked');
+  assert.equal(report.checks.find(check => check.name === 'target-and-source').status, 'blocked');
+  assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security'), undefined);
   assert.ok(!calls.some(args => args[0] === 'rest'));
   assert.equal(report.checks.find(check => check.name === 'runtime-workload-evidence').status, 'blocked');
 });
@@ -367,7 +374,8 @@ test('only independently collected complete runtime evidence can pass deployed a
       runtimeEvidence: { verified: true },
     }, {
       sourceResolver: () => source,
-      execAz: fakeAzure({ monitorResult: { status: 0, stdout: JSON.stringify([monitorRow]), stderr: '' } }, calls),
+      execAz: fakeAzure({ ...postDeploymentAzure,
+        monitorResult: { status: 0, stdout: JSON.stringify([monitorRow]), stderr: '' } }, calls),
       execKubectl: runtime.execKubectl,
       verifyImage: runtime.verifyImage,
       now: () => Date.parse('2026-10-03T12:02:00.000Z'),
@@ -393,7 +401,7 @@ test('only independently collected complete runtime evidence can pass deployed a
   assert.equal(stale.report.deployedAcceptance, false);
   assert.equal(stale.report.checks.find(check => check.name === 'foundation-probe-receipt').status, 'blocked');
   assert.equal(stale.report.checks.find(check => check.name === 'monitor-trace').status, 'blocked');
-  assert.equal(stale.calls.some(args => args[0] === 'monitor'), false);
+  assert.equal(stale.calls.some(args => args.includes('--analytics-query')), false);
 });
 
 test('CLI rejects mutation and caller-asserted runtime proof options before any target command', () => {

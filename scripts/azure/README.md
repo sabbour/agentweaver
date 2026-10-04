@@ -83,11 +83,15 @@ Allow-list strings and `--execute` are technical guards, not approval.
 
 The resource group must exist with matching ownership tags after approved bootstrap.
 The tools query its exact account, tenant, full ID, tags, and resource inventory.
-Access denied, missing targets, malformed responses, and untagged managed roots block.
+Access denied, missing targets, malformed responses, and untagged managed roots
+outside the exact seven-zone evidence path block.
 Every Azure command explicitly binds the selected subscription.
 
 The inventory guard checks exact resource IDs, types, and names.
 Declared child resources and module deployments do not require ownership tags.
+It projects raw inventory JSON to resource IDs/types/names and tag counts plus
+expected-value equality flags before returning data to the caller; tag values
+are not included in verifier output.
 The reviewed JSON parameters bind the existing PostgreSQL Entra administrator
 object ID, name, and supported type (`User`, `Group`, or `ServicePrincipal`);
 they do not require a new group. The P0 example keeps `location` for VNet/AKS/
@@ -101,6 +105,33 @@ Generated NICs require reciprocal links to an approved, tagged Private Endpoint.
 Both the endpoint and all NIC IP configurations must use the dedicated private-endpoints subnet.
 Other NICs, child names, scopes, and resource types block.
 
+The seven exact P0 Private DNS zone roots (`privatelink.vaultcore.azure.net`,
+`privatelink.blob.core.windows.net`, `privatelink.monitor.azure.com`,
+`privatelink.oms.opinsights.azure.com`, `privatelink.ods.opinsights.azure.com`,
+`privatelink.agentsvc.azure-automation.net`, and
+`privatelink.postgres.database.azure.com`) have one narrow tag-omission path:
+all seven must have zero tags, and the selected SHA-derived deployment must
+have matching source SHA/tree/input-hash outputs, exactly one successful
+`Create` operation for each root, and seven successful VNet links with
+registration disabled to the exact P0 VNet. The configuration report says
+`tagsPersisted: false`; it does not treat missing tags as a repair or write
+permission. Partial, conflicting, extra, or mismatched tags, unknown roots,
+external links, or a different deployment source still block.
+
+The target guard admits only the observed `NRMS-gxlttooqhupscaw-v1-p0-vnet`
+security group and `Failure Anomalies - aw-v1-p0-appi` Smart Detector. The
+security group must match all eight observed inbound rules, attach reciprocally
+to only the AKS, PostgreSQL, and private-endpoints subnets, report an empty NIC
+association array, and have one compliant exact management-group policy state plus
+one successful exact child `securityRules/write` Activity Log event per rule.
+The detector must remain Enabled/Sev3 with the exact Failure Anomalies
+detector, PT1M frequency, the P0 Application Insights scope, no action groups,
+and null custom notification fields. This guard reads policy states and exact
+Activity Log entries; it does not read inaccessible management-group
+assignments or change inherited policies, NSG rules, alerts, or external
+action groups. It records CorpNet service-tag names only; it does not assert
+their public membership or trust boundary.
+
 The source must be a clean full HEAD commit equal to the locally fetched
 admitted `origin/v1` tip. Unreviewed descendants fail closed.
 Only the tracked main template and tracked JSON parameters
@@ -110,6 +141,13 @@ The selected JSON parameters must bind prefix, tenant, owner, and cost center.
 The input hash covers all tracked infrastructure files.
 `sourceTree` is the 40-character Git tree SHA for the source commit.
 `sourceHash` is the separate SHA-256 infrastructure input hash.
+For acceptance, `--expected-sha` selects the deployed source commit and may name
+an ancestor of the clean verifier HEAD. The selected commit must exist in that
+reviewed history, and every tracked `infra/bicep` input must match its contents;
+the deployment name, tree, and input hash are then checked against that exact
+source. The report keeps `candidate.verifierSha` separate from the deployed
+`candidate.sourceSha`, so a docs-only verifier advance does not rewrite the
+provenance of an already deployed artifact.
 
 After separate approval, the operator command shape is:
 
