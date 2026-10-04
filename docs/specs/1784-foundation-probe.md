@@ -128,10 +128,10 @@ FQDN egress uses both Cilium `rules.dns` inspection for the exact allowed host
 names and matching `toFQDNs` destinations. AKS requires ACNS Container Network
 Security to enforce FQDN filtering
 ([Microsoft Learn](https://learn.microsoft.com/en-us/azure/aks/how-to-apply-fqdn-filtering-policies)).
-The existing #1777 Bicep enables Cilium but does not enable ACNS security. The
-overlay therefore requires a separately reviewed infrastructure update before
-it can run on a cluster created from the unchanged #1777 template; this issue
-does not modify that separately owned infrastructure or incur ACNS cost.
+The current v1 AKS template uses API `2024-09-01` and enables ACNS security
+without enabling observability; that separately owned infrastructure update
+landed in #1799. This probe issue does not modify AKS infrastructure or incur
+additional ACNS cost.
 The acceptance consumer performs a read-only ARM GET of the exact AKS resource
 ID from a successful source-bound deployment receipt (API version `2024-09-01`)
 and reports this configuration gate as passed only when the observed resource
