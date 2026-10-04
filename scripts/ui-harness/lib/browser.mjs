@@ -127,6 +127,7 @@ export async function openBrowserSession(opts, {
   loadStorageStateForOriginImpl = loadStorageStateForOrigin,
   loadSessionStorageSeedImpl = loadSessionStorageSeed,
   resolveGoogleChromeExecutableFn = resolveGoogleChromeExecutable,
+  environment = process.env,
 } = {}) {
   let browserLaunchAttempted = false;
   let browser;
