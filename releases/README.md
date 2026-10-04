@@ -217,6 +217,13 @@ This change does not modify environment policy or branch protection.
 Configure `RELEASE_NUGET_SOURCE` and `RELEASE_REGISTRY` as environment variables.
 Configure `RELEASE_NUGET_API_KEY`, `RELEASE_REGISTRY_USER`, and
 `RELEASE_REGISTRY_PASSWORD` as environment secrets.
+`RELEASE_REGISTRY` is a lowercase registry host, optionally followed by a
+lowercase repository namespace/path. The host is used for Docker login; the full
+value prefixes each component image path. For example, `ghcr.io/sabbour`
+publishes `ghcr.io/sabbour/<component-id>:<version>`. A host-only value keeps
+the existing `registry.example/<component-id>:<version>` behavior. Schemes,
+credentials, query/fragment suffixes, empty path elements, and traversal
+segments are rejected.
 Feed URLs must use HTTPS without embedded credentials or query tokens.
 Feed fragments are also forbidden.
 The script suppresses subprocess output and passes the registry password through stdin.
