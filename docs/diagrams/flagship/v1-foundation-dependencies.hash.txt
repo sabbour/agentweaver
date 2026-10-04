@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-foundation-dependencies.json",
-    "sha256": "f924af31722a87249522f950761dc21b3942502f4795160ffd7d4ec0f1f37847"
+    "sha256": "37fa0953fbb95d77f09db7a851619b75d948d0424f00d3ce0f41ecdf228414f8"
   },
   "drawio": {
     "file": "v1-foundation-dependencies.drawio",
-    "sha256": "8f01ef2b645c4d38c9a32f3cb3704353983a6f4c253c0a68783a38e737b8a1a1"
+    "sha256": "1cc168296669faf253f62bcbd937d76910e57c6f7cec4c2313cf8473baa8e628"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-foundation-dependencies.png",
-    "sha256": "8e404f65e8627eea20e91ec1dc71450a5cd3fb5e851b189fbd005241dd71e030"
+    "sha256": "d9ce1d10cbe2c618b769b0c1ca789bea55d6e616ea50777c6cd7c6732374f859"
   }
 }
