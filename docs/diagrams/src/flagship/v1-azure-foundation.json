@@ -1,8 +1,8 @@
 {
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
-  "title": "Dedicated Azure definitions and App Routing",
-  "alt": "Verifier flow checks one completed Job and its owned pod, compares the Job image and pod imageID separately with a source-bound registry manifest, validates a distinct native #1784 receipt, and requires fresh correlated Monitor rows. Missing evidence blocks; this does not show P0 completion or a live deployment.",
+  "title": "Azure resource and evidence dependencies",
+  "alt": "Structural resource and evidence map: AKS hosts the Foundation Probe Job; the probe identity and egress policy support it; the external read-only gate depends on Job and pod observations, the native probe receipt, a source-bound registry manifest, and correlated Azure Monitor evidence. Edges show dependencies, not sequence order. No live deployment or P0 completion is claimed.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [],
@@ -71,7 +71,7 @@
     {
       "id": "monitor",
       "label": "Azure Monitor",
-      "subLabel": "Fresh AppDependencies/AppRequests query after Job completion",
+      "subLabel": "AppDependencies/AppRequests evidence target",
       "icon": "telemetry",
       "library": "azure",
       "shape": "image;image=img/lib/azure2/management_governance/Application_Insights.svg;imageAspect=1",
@@ -114,7 +114,7 @@
     {
       "id": "acceptance-consumer",
       "label": "External evidence gate",
-      "subLabel": "Complete evidence => deployedAcceptance; otherwise blocked",
+      "subLabel": "Read-only; requires complete independent evidence",
       "icon": "server",
       "fluentIcon": "test",
       "badge": { "text": "Evidence gate", "tone": "marigold" }
@@ -160,6 +160,6 @@
     { "from": "job", "to": "native-receipt", "label": "probe output" },
     { "from": "native-receipt", "to": "acceptance-consumer", "label": "strict receipt; not UID/pull/exit proof" },
     { "from": "image-receipt", "to": "acceptance-consumer", "label": "source-bound registry digest" },
-    { "from": "monitor", "to": "acceptance-consumer", "label": "post-completion SHA/tree/nonce/trace/span" }
+    { "from": "monitor", "to": "acceptance-consumer", "label": "fresh SHA/tree/nonce/trace/span correlation" }
   ]
 }

@@ -23,8 +23,18 @@
       "docs": ["docs/architecture/persistence-objects.md"]
     },
     {
+      "name": "v1-outbox-relay",
+      "concept": "Outbox relay lease and acknowledgment",
+      "docs": ["docs/architecture/persistence-objects.md"]
+    },
+    {
       "name": "v1-azure-foundation",
-      "concept": "Dedicated Azure definitions and probe overlay",
+      "concept": "Azure resource and evidence dependencies",
+      "docs": ["docs/architecture/azure.md"]
+    },
+    {
+      "name": "v1-azure-acceptance",
+      "concept": "Foundation Probe acceptance evidence",
       "docs": ["docs/architecture/azure.md"]
     }
   ]

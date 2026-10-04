@@ -1,93 +1,198 @@
 {
-  "$schema": "../graph-spec.schema.json",
-  "kind": "graph",
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
   "title": "Provider resolution and run pinning",
-  "alt": "Provider process from catalog registrations through cardinality-specific resolution, candidate bindings, caller-owned resource provisioning, capability negotiation, and immutable run pinning. Cost and per-application hosting resolution are not implemented.",
-  "direction": "TB",
-  "routing": "separate-ports",
-  "groups": [],
-  "nodes": [
+  "alt": "Sequence from the Foundation Probe host through ProviderCatalog and ProviderResolver to resolve probe registrations and pin immutable bindings from supplied target resource IDs and generation. It does not provision resources, perform live negotiation, or construct adapters.",
+  "autonumber": true,
+  "participants": [
     {
-      "id": "registration",
-      "label": "Provider registrations",
-      "subLabel": "Descriptors, defaults, and permitted overrides",
-      "icon": "box",
-      "fluentIcon": "package",
-      "badge": { "text": "Input", "tone": "lavender" }
-    },
-    {
-      "id": "catalog",
-      "label": "ProviderCatalog.Create",
-      "subLabel": "Validates IDs, seams, and selections",
-      "icon": "box",
-      "fluentIcon": "settings",
-      "badge": { "text": "Catalog", "tone": "teal" }
-    },
-    {
-      "id": "resolver",
-      "label": "ProviderResolver",
-      "subLabel": "Exclusive, singleton, ordered, and layered methods",
-      "icon": "box",
-      "fluentIcon": "workflow",
-      "badge": { "text": "Resolve", "tone": "teal" }
-    },
-    {
-      "id": "candidate",
-      "label": "Resolution candidate",
-      "subLabel": "Provider ID, versions, options revision, capabilities",
-      "icon": "box",
-      "fluentIcon": "document",
-      "badge": { "text": "Not provisioned", "tone": "lavender" }
-    },
-    {
-      "id": "provision",
-      "label": "Caller provisions resource",
-      "subLabel": "Outside the catalog and resolver libraries",
-      "icon": "box",
+      "id": "probe-host",
+      "label": "Foundation Probe host",
+      "subLabel": "ProbeRunner calls ProbeProviderBindings",
+      "icon": "server",
       "fluentIcon": "api",
       "badge": { "text": "Host", "tone": "neutral" }
     },
     {
-      "id": "negotiation",
-      "label": "Resource negotiation",
-      "subLabel": "Resource identity, generation, and capabilities",
+      "id": "provider-catalog",
+      "label": "ProviderCatalog",
+      "subLabel": "Agentweaver.Providers library",
       "icon": "box",
-      "fluentIcon": "test",
-      "badge": { "text": "Input", "tone": "lavender" }
+      "fluentIcon": "package",
+      "badge": { "text": "Library", "tone": "teal" }
     },
     {
-      "id": "pin",
-      "label": "Pin",
-      "subLabel": "Pin, PinOrdered, or PinNetworkPolicy",
+      "id": "provider-resolver",
+      "label": "ProviderResolver",
+      "subLabel": "Agentweaver.Providers library",
       "icon": "box",
-      "fluentIcon": "identity",
-      "badge": { "text": "Validate", "tone": "teal" }
-    },
-    {
-      "id": "binding",
-      "label": "Pinned run binding",
-      "subLabel": "Negotiated capabilities and resource generation",
-      "icon": "box",
-      "fluentIcon": "state",
-      "badge": { "text": "Immutable", "tone": "green" }
-    },
-    {
-      "id": "unsupported",
-      "label": "Unsupported cardinalities",
-      "subLabel": "Cost by meter and per-application hosting",
-      "icon": "box",
-      "fluentIcon": "security",
-      "badge": { "text": "Not implemented", "tone": "marigold" }
+      "fluentIcon": "workflow",
+      "badge": { "text": "Library", "tone": "teal" }
     }
   ],
-  "edges": [
-    { "from": "registration", "to": "catalog" },
-    { "from": "catalog", "to": "resolver" },
-    { "from": "resolver", "to": "candidate" },
-    { "from": "candidate", "to": "provision" },
-    { "from": "provision", "to": "negotiation" },
-    { "from": "negotiation", "to": "pin" },
-    { "from": "pin", "to": "binding" },
-    { "from": "resolver", "to": "unsupported", "dashed": true }
+  "steps": [
+    {
+      "type": "note",
+      "over": ["probe-host", "provider-resolver"],
+      "label": "ProbeTarget supplies resource IDs and generation 1 through ResourceNegotiation; no resource is provisioned."
+    },
+    {
+      "type": "message",
+      "from": "probe-host",
+      "to": "probe-host",
+      "label": "ProbeProviderBindings.ResolveAndPin(target, nonce)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "probe-host",
+      "to": "provider-catalog",
+      "label": "ProviderCatalog.Create(registrations, selections)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "provider-catalog",
+      "to": "probe-host",
+      "label": "ProviderResult<ProviderCatalog>",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Catalog result",
+      "sections": [
+        {
+          "label": "valid catalog",
+          "steps": [
+            {
+              "type": "message",
+              "from": "probe-host",
+              "to": "provider-resolver",
+              "label": "new ProviderResolver(catalog)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "probe-host",
+              "to": "provider-resolver",
+              "label": "Resolve(Secrets)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "provider-resolver",
+              "to": "probe-host",
+              "label": "Candidate or resolution failure",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "probe-host",
+              "to": "provider-resolver",
+              "label": "Pin(candidate, KeyVaultId, negotiation)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "provider-resolver",
+              "to": "probe-host",
+              "label": "Pinned binding or failure",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "probe-host",
+              "to": "provider-resolver",
+              "label": "Resolve(ObjectStore)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "provider-resolver",
+              "to": "probe-host",
+              "label": "Candidate or resolution failure",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "probe-host",
+              "to": "provider-resolver",
+              "label": "Pin(candidate, BlobContainerId, negotiation)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "provider-resolver",
+              "to": "probe-host",
+              "label": "Pinned binding or failure",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "probe-host",
+              "to": "provider-resolver",
+              "label": "ResolveOrdered(Telemetry)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "provider-resolver",
+              "to": "probe-host",
+              "label": "Ordered candidates or failure",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "probe-host",
+              "to": "provider-resolver",
+              "label": "PinOrdered(Telemetry, AppInsightsResourceId)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "provider-resolver",
+              "to": "probe-host",
+              "label": "Pinned ordered binding or failure",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "note",
+              "over": ["probe-host", "provider-resolver"],
+              "label": "ProbeProviderBindings supplies ResourceNegotiation; Pin validates it. Azure adapters are composed separately in AzureProbeOperations."
+            }
+          ]
+        },
+        {
+          "label": "invalid catalog, resolution, or pin",
+          "steps": [
+            {
+              "type": "message",
+              "from": "probe-host",
+              "to": "probe-host",
+              "label": "Throw operation-specific ProbeException",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    }
   ]
 }

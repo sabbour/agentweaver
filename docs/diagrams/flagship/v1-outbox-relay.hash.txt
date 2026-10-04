@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "v1-outbox-relay.json",
+    "sha256": "f8c6ad448744650d8eb6af7d020295aa1ae72e1857afae4b743e25c38c8adb31"
+  },
+  "drawio": {
+    "file": "v1-outbox-relay.drawio",
+    "sha256": "0f38d5e43e3c39d32295ee2b8b227ad4f92b4c7f2e51b087ff1e1d6f8d1a11ca"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "v1-outbox-relay.png",
+    "sha256": "c235e52f11e8bd502b42d0675e61505076d1f1ff785e48cbf031dcff2a63052f"
+  }
+}

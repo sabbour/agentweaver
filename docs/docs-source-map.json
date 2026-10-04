@@ -66,7 +66,8 @@
       ],
       "required": [
         "docs/architecture/persistence-objects.md",
-        "docs/diagrams/src/flagship/v1-outbox-inbox.json"
+        "docs/diagrams/src/flagship/v1-outbox-inbox.json",
+        "docs/diagrams/src/flagship/v1-outbox-relay.json"
       ]
     },
     {
@@ -92,7 +93,8 @@
         "docs/architecture/azure.md",
         "docs/reference/contracts.md",
         "docs/guide/azure-acceptance.md",
-        "docs/diagrams/src/flagship/v1-azure-foundation.json"
+        "docs/diagrams/src/flagship/v1-azure-foundation.json",
+        "docs/diagrams/src/flagship/v1-azure-acceptance.json"
       ]
     },
     {
@@ -103,6 +105,16 @@
       ],
       "required": [
         "docs/reference/releases.md"
+      ]
+    },
+    {
+      "name": "Sequence diagram schema",
+      "sourcePrefixes": [
+        "docs/diagrams/src/sequence-spec.schema.json"
+      ],
+      "required": [
+        "docs/diagrams/README.md",
+        "docs/diagrams/src/sequence-spec.schema.json"
       ]
     }
   ]

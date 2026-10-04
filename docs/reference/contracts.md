@@ -29,7 +29,7 @@ The service has no grant-administration HTTP endpoint. The browser consent UI is
 
 | Key | Requirement |
 | --- | --- |
-| `ConnectionStrings:IdentityBroker` | Identity-owned PostgreSQL database and schema migration access. |
+| `ConnectionStrings:IdentityBroker` | Identity-owned PostgreSQL database for runtime access. Use the separately bootstrapped Entra runtime role and omit a password; ordinary startup verifies but does not migrate. |
 | `IdentityBroker:Issuer` | Absolute HTTPS issuer. |
 | `IdentityBroker:Signing:PfxPath` | Mounted signing, encryption, and data-protection certificate. |
 | `IdentityBroker:Signing:PfxPassword` | Deployment secret. Do not store it in source control. |
@@ -44,6 +44,17 @@ The service has no grant-administration HTTP endpoint. The browser consent UI is
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected token-file path. |
 
 The host does not use ambient credentials or a development-certificate fallback.
+
+## Identity PostgreSQL access
+
+Runtime and schema migration use separate connection strings, projected workload identities, and Entra PostgreSQL roles. Both connections use passwordless async Npgsql token acquisition, `VerifyFull`, and the scope `https://ossrdbms-aad.database.windows.net/.default`.
+
+| Operation | Configuration | PostgreSQL role and boundary |
+| --- | --- | --- |
+| Ordinary runtime | `ConnectionStrings:IdentityBroker`; `IdentityBroker:SecretRedemption:WorkloadIdentityTenantId`, `WorkloadIdentityClientId`, and `WorkloadIdentityTokenFilePath`. | The operator-selected runtime Entra role has `CONNECT`, schema `USAGE`, DML on current Identity/OpenIddict tables, and `SELECT` on the migration history. It does not own the schema or apply migrations. |
+| Explicit migration | Run the executable with only `--migrate`; provide `ConnectionStrings:IdentityBrokerMigration` and `IdentityBroker:Migration:WorkloadIdentityTenantId`, `WorkloadIdentityClientId`, and `WorkloadIdentityTokenFilePath`. | A separate migration Entra role owns `identity_broker` and applies migrations. Its workload identity receives no Azure resource role. |
+
+The database bootstrap and reviewed grant SQL are operator-run steps. The ordinary host checks that the schema exists and no migrations are pending; it fails rather than creating roles or changing the schema.
 
 ## AKS Application Routing preview
 
