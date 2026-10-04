@@ -1,5 +1,140 @@
 # Changelog
 
+## 0.34.0
+
+### Minor Changes
+
+- 1335c23: Add a durable addressed-message mailbox with run-bound sending, threaded replies, fenced receipt tracking, diagnostics, and project message inspection. Automatic recipient delivery and idle wake are not yet supported.
+- e1e568d: Explain failed runs with attributable evidence, explicit unknowns and collection gaps, the effective denial gate when recorded, and safe non-mutating recovery guidance across REST, MCP, and the run UI.
+- 4dd2d54: Add immutable execution identity records with safe REST, MCP, diagnostics, and run-page inspection.
+- 25d485b: Add searchable, immutable memory and decision revisions with stale-write protection, lifecycle replacement links, exact context revision references, and safe restore/history experiences across REST, MCP, and the Memories page.
+- c102857: Enforce versioned effective agent permissions consistently in local and AgentHost execution, including fail-closed unknown operations, parent restriction inheritance, warm-pod refresh, and attributable denial evidence.
+- efe7703: Add authorized run permission inspection across REST, MCP, and the web app, including configured and effective policy differences, current revocations, enforcement coverage, and safe denial provenance.
+- 41c6952: Allow workflow generation to create prompt-only static fan branches when explicit independent outputs are provably disjoint, while keeping uncertain or overlapping work sequential. PM Discovery now researches customer signals and technical feasibility concurrently before synthesis.
+- 0de296c: Add durable workflow child-plan correlation, restart-safe continuation fencing, and fail-closed validation for static parallel workflow regions.
+- 5f426c0: Remove the unsupported `serial` workflow node type from authoring surfaces and reject legacy `serial` YAML with guidance to use ordinary workflow edges for sequential execution.
+- 3826091: Keep ordinary run review diffs as immutable database-backed revisions and bind human approval and final merge to the reviewed revision. Authorized API clients can list and retrieve exact historical diffs even after workspace cleanup.
+- 1349936: Run validated static `fan_out` and `fan_in` workflow regions as durable concurrent child runs with restart-safe, ordered wait-all joins and existing API, diagnostics, MCP, and web topology projections.
+- 87886e2: Make backlog prerequisites executable after accepted coordinator outcomes, filter before pickup limits, prevent cyclic derived edges, and expose revisioned atomic dependency editing with previews across the board, REST API, and MCP.
+
+### Patch Changes
+
+- 42ce642: Build the API image for ARM64 as well as AMD64 local Kubernetes hosts, with verified architecture-matched Copilot and GitHub CLI binaries.
+- 46b694b: Preserve the complete reviewed artifact tree when assembly asks a child to revise its
+  work. Fresh revisions and their infrastructure retries now start from the same pinned
+  files instead of rebuilding an application from an empty project workspace.
+- edd5341: Block dependent work and collective assembly when required child output is missing or unverified. Integrate only verified immutable child commits, and record both contributors when independent file or directory/file edits conflict instead of silently accepting the later child.
+- 8a10e70: Launch selected workflow branches on GitHub-backed projects with the parent's run-bound repository grant, including when a custom-key model provider is active. Reject a new run before creation with a reconnect instruction if the repository grant is no longer available.
+- e92eb42: Keep originating-branch Squad bookkeeping during collective integration, without blocking child application changes or weakening application conflict detection. Stop repeating non-retryable final Scribe failures while retaining their diagnostic result.
+- b9322a7: Add a versioned Harness challenge catalog plus a fail-closed post-deployment release
+  acceptance boundary with integrity-verified canonical evidence bundles and
+  coordinator-authenticated repair records. Cover conservative workflow fan generation
+  and the complete dependency, concurrency, conflict-resolution, validation, preview,
+  and launch-content Product Management lifecycle.
+- cd5f430: Prevent startup recovery from failing in-progress work that still has a live peer execution lease, and stop superseded watch-loop owners from publishing terminal transitions.
+- a416f52: Stop active static fan branch runs when their parent is cancelled, while preserving pending branches and suppressing the parent join across retries and restarts.
+- 277caac: Cancel active children owned by a top-level fan work plan, including children launched across the cancellation boundary.
+- 71abf32: Default API images built by classic Azure Container Registry builders to AMD64 while preserving automatic ARM64 selection in buildx builds.
+- 210eace: Remove stale recovered coordinator registry entries after ownership cancellation while preserving newer successor runs.
+- 8595393: Stop coordinator planning before it saves a single generic task when a goal explicitly lists separate deliverables that the plan does not cover. Show a clear failure with guidance to retry or clarify the deliverable names, while keeping one-task plans available for small, atomic goals.
+- 2ae1d7e: Retain output file bytes and diffs in immutable generation-fenced revisions alongside terminal publication, and admit confirmed no-change receipts as dependency identities. Expose revision history, exact file retrieval, and comparison through REST, MCP, and the run UI. Backlog pickup now composes claimed revisions in dependency order, rejects ambiguous conflicts or unavailable content, persists a deterministic execution-input identity, and launches or recovers the run from the exact materialized commit without changing its publication branch.
+- 1a1b572: Keep collective output manifests complete when their captured tree is valid but the
+  coordinator has no executable-workflow digest, including after repeated revisions
+  and through preview, approval, and final assembly.
+- bc586dc: Prevent concurrent database updates from permanently failing composed workflow planning. Recover eligible PostgreSQL planning failures under their original run identities, preserving completed branch outputs and resuming at the saved composed stage instead of starting a replacement execution.
+- 98be47d: Return the typed coordinator failure diagnostic on the first read even when the
+  terminal run status becomes visible before its durable failure event is projected.
+- d2b18f1: Recover coordinator Git finalization from durable merge intent and exact commit evidence without blindly replaying merges or Scribe.
+- aea4a80: Refresh Build & Test preview evidence for the current assembled revision before
+  escalating to human review. Do not present a preview from an older tree or replaced
+  sandbox as a ready preview.
+  Keep the operator's live manual preview available after reload without counting
+  its URL as Build & Test readiness.
+- 39d7ba9: Select the latest persisted child-work node plan for parent workflow work-plan and children reads while preserving exact coordinator plan lookup.
+- 28add37: Make direct orchestrations with an explicit static fan workflow override execute the pinned authored topology instead of replacing it with a generic coordinator plan.
+- 639d37b: Persist static fan `child_work_ready` events exactly once when hosted workers prepare parent continuation, including durable workflow, fan, join, work-plan, and ordered-output correlation.
+- 329facd: Reserve GitHub-origin projects before repository cloning so request cancellation cannot discard all project state, expose explicit creating and failed states, and make retries with the same repository selection code idempotent.
+- fc6266f: Keep collective assembly review decisions durable before waking the coordinator, so
+  human-requested changes are not incorrectly reported as superseded during a live review.
+- a5c9b2b: Fix durable generation workers so they can verify execution contexts prepared by API replicas.
+- c929617: Require representative integration and feature-specific API/UI acceptance against an exact committed candidate deployment before preparing or publishing a release. Remove the local k3s release gate command and its release guidance.
+- e27621a: Prevent a second API replica from re-arming and corrupting an active collective assembly by fencing each attempt with the coordinator run lease.
+- 18f522d: Fence AgentHost claims with the durable run lease so API restart recovery replaces stale pods before replaying active or pending coordinator branches.
+- 6577997: Let a recovered run publish a healthy preview without waiting out an obsolete API
+  request's Gateway-convergence window. The previous lifecycle loses its publication
+  lease on renewal, while the replacement can safely publish one ready outcome.
+- fb66a25: Bind GitHub projects to the exact Repo App installation and repository grant used during repository selection, so newly created projects are immediately ready for repository-backed coordinator work while retries and revoked selections remain fail-closed.
+- 6933f36: Fence pending review delivery so deferred decisions survive owner-replica crashes before workflow resume.
+- be20f39: Add instrumented .NET, web, and Node coverage reports for the existing test families, with explicit source scope and partial-run status.
+- 6d03e8f: Retry an unusable coordinator outcome-spec response once, and report persistent model refusals or malformed drafts with actionable retryable diagnostics instead of an opaque internal exception.
+- 961a34e: Keep observing post-turn child finalization past the initial grace while a recovered worker holds a live execution lease, with a hard cap for abandoned finalization.
+- 44e8bc6: Persist the original workflow request kind and pin current review output so run detail distinguishes an actionable manual review from automatic fan-out waits. MCP clients poll the existing run through child continuation instead of suggesting approval or starting a duplicate run.
+- 102d7a7: Allow an assembly attempt to publish its integration branch when an older run left a
+  flat integration branch at the same path. Preserve the previous branch under a
+  legacy-integration name so retries and later attempts can proceed without losing it.
+- 3d63ed1: Add a bounded, deterministic Oracle release acceptance driver that captures both rendered preview gates, one grounded revision, and scoped cleanup evidence.
+- 51f3455: Use the current pending-approvals read model when Oracle acceptance attaches to an existing run, so completed or expired shell requests are not approved again. Keep explicit opt-in for actionable commands and fail safely on unresolved approval conflicts.
+- 5e7dee0: Send the operator preview API's `targetPort` field from Oracle acceptance, so valid preview requests reach the application instead of failing validation. Report non-transient preview rejections with their actual status and diagnostic.
+- ffd2b40: Keep Oracle acceptance running through brief read timeouts by retrying temporary
+  GET failures within the existing attempt and phase limits. Review decisions and
+  other writes still run only once.
+- 764f0c1: Restore PostgreSQL-backed coordinator checkpoints after JSON storage reorders polymorphic metadata, including checkpoints already persisted before this fix.
+- 6f22dad: Keep outcome-spec confirmation and revision available when the coordinator moves between API replicas or restarts. Recover the persisted gate under its run lease, report unsafe recovery with an attributable error, and distinguish decisions queued for another replica from completed work.
+- 2b8ab64: Preserve the exact reviewed assembly files when rubber-duck, Build & Test, or human feedback redirects a coordinator without an executable workflow digest.
+- c590208: Pin each run's resolved executable workflow definition with a content digest before execution so resume uses the workflow graph the run started with instead of today's project default.
+- 0d1c640: Recover pinned static fan runs from the pre-plan crash window and transfer the startup recovery lease to the restarted watch loop.
+- 3ec410a: Read merged run files and workspace listings from the recorded commit only; return an explicit error when its content is unavailable rather than showing newer branch or worktree output.
+- dc12e7b: Reconcile child assemble-ready completion for a bounded window after an observed agent turn ends, instead of falsely failing post-turn finalization at the stall deadline.
+- 8695e01: Preserve parent-attributed cancellation events for active fan children even when worker failure wins the terminal-status race.
+- f910aee: Promote mechanically proven sequential content tasks into a validated static fan when an explicit safe generation request requires parallel branches.
+- aeb899e: Fence coordinator outcome-spec gate delivery with the durable pending-request delivery state machine and mark the legacy destructive drain as human-only.
+- 0534b6f: Keep effective-permission inspection read-only and admit authorized MCP broker and run-capability callers.
+- ed18a58: Expose a verified current sandbox binding for run previews without confusing historical launch pods with the currently configured claim.
+- c60b960: Share ephemeral Copilot role runtime and Copilot override tool decoration implementations without changing behavior.
+- 0b856dd: Let signed-in project contributors queue backlog work with an accepted BYOK or Copilot provider, and stop older unconfirmed tasks before drafting instead of silently selecting a different provider.
+- 707fac3: Persist verified assembly commit/tree identities with the terminal run outcome and block dependent backlog pickup when an integrated producer lacks either identity.
+- 20bee92: Recover reserved pending fan-out branches under their original child IDs when the API coordinator changes pods, without waiting for an obsolete dispatch lease or mistaking an unstarted branch for a stalled agent.
+- 7959b88: Return an existing healthy preview on retry when its ready outcome committed before an
+  API restart, without creating another Gateway route or duplicate ready events. Otherwise
+  reclaim an expired publication attempt while fencing stale publishing and process cleanup;
+  concurrent live attempts remain mutually exclusive.
+- e4b1dd8: Keep GitHub repository selection working when a connected Repo App user's access token expires or is rejected. Renew it through the authorized refresh path, distinguish temporary provider failures from lost authorization, and preserve the connection during temporary refresh failures.
+- 99b04a1: Enable one coordinator-composed workflow stage for runtime-derived dependent work plans. The parent now suspends durably while child tasks execute, receives a typed assembled result, and installs the verified tree into its isolated run branch with restart-safe, fail-closed recovery.
+- d2f56b5: Keep a recovered composed workflow bound to the lease that launched it, preventing a
+  stale worker from publishing output after ownership changes.
+- 3d0277d: Retain declared files from independent parallel branches as immutable child revisions and project their original bytes onto the isolated parent branch before a joined workflow continues, without making agents repeat artifact content. Carry pinned predecessor context into composed coordinator planning and dispatched child tasks, and retain verified composed terminal results instead of reporting an unknown workflow output.
+- aa0b4e5: Allow API and worker recovery sweeps to proceed independently after rolling restarts while protecting child dispatch through durable plan and run ownership.
+- 3ffba43: Show workflow names, IDs, status, and descriptions across the card above the source and action controls, with wrapping for long text and narrow screens.
+- 4cd0861: Make workflow-library Run now actions execute saved static fan graphs directly and expose durable parent, branch, join, and ordered-output correlation through run observation APIs.
+- f6d8a5d: Require explicitly independent generation requests with exact, disjoint content outputs to produce a validated fan region instead of silently returning a sequential workflow.
+- 75972f2: Show Kubernetes scheduling reasons during sandbox provisioning and fail blocked AgentHost launches after a bounded wait instead of reporting indefinite progress.
+- a5c62b2: Keep coordinator review steps and fresh retries tied to the saved workflow selected for the run, even if the project workflow changes or is deleted while work is in progress.
+- 3fd18b3: Keep joined fan parents active across API-only restarts, reconcile their durable resume claims, and avoid duplicate authored prompt step events before downstream review.
+- 2048caa: Share one startup recovery leader across API and worker replicas and keep its
+  lease until shutdown, so neither role repeats a successful sweep over new
+  coordinator runs. Stop retrying failed or timed-out leader sweeps after three
+  attempts per process; followers can still take over if the leader exits.
+- 8b36af2: Stop coordinator outcome drafting from remaining in progress after a provider disconnect or worker restart, while preserving partial trace evidence and preventing duplicate model effects.
+- 5936fcf: Restore recorder-session authentication acceptance for protected API runs.
+- 148e53a: Let API replicas answer liveness probes while interrupted runs recover. Postgres
+  replicas coordinate takeover and completed sweeps under an advisory lock; interrupted
+  sweeps honor shutdown without failing resumed runs. Readiness and OAuth requests stay
+  fail-closed until initial static-client reconciliation succeeds, while transient
+  reconciliation errors are retried without stopping the listener.
+- ee36f76: Keep backlog dependents blocked unless a confirmed prerequisite retained a valid immutable
+  no-change receipt, instead of accepting a collective output carrying an incompatible flag.
+- bce070f: Release terminal coordinator children's AgentHost sandboxes after completion or stop,
+  and reconcile leaked child claims on startup and subsequent heartbeats without
+  interrupting active execution, review, or previews.
+- 708a5e1: Verify deployment warm-pool membership through the controller's live selector, require
+  the exact configured Pod Ready set, and check every selected pod's AgentHost image.
+- 6fda1a1: Preserve committed parent agent output when entering composed planning, and recover an original failed composed plan only when its captured worktree tree is proven to descend from the retained parent input.
+- bb340e7: Preserve durable workflow-generation failure evidence and add job-correlated validation diagnostics.
+- 0126c3d: Keep in-progress workflow branches and their parent run intact when an API replica restarts while the parent is waiting for its fan join. Reconnect to the saved work plan instead of treating one closed watch connection as a failed run. Repeated unexpected stream completions fail explicitly after three durable closures, and stale watchers cannot publish terminal outcomes after a lease handoff.
+- ecbfa1a: Allow PostgreSQL worker replicas to resume composed workflow parents after their fan
+  children finish. The worker now shares the active-run claim needed to project child
+  artifacts before delivering the parent continuation.
+
 ## 0.33.2
 
 ### Patch Changes
