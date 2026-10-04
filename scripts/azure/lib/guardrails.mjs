@@ -421,8 +421,10 @@ export function guardAzureTarget(config, execAz) {
   const inventoryEvidence = {};
 
   if (validatePrivateDns) {
+    if (privateDnsLinkIds.some(id => !seen.has(id.toLowerCase()))) {
+      throw new Error('Existing P0 Private DNS roots are missing expected VNet links.');
+    }
     for (const [index, linkId] of privateDnsLinkIds.entries()) {
-      if (!seen.has(linkId.toLowerCase())) continue;
       const link = readResource(linkId, value => ({
         id: value?.id,
         type: value?.type,

@@ -182,6 +182,13 @@ test('an observed private DNS VNet link still rejects an external or registratio
   assert.throws(() => guardPopulatedTarget(enabledRegistration), /registration-disabled P0 link/);
 });
 
+test('existing private DNS roots require all seven approved VNet links', () => {
+  const missingLinks = clonePostDeployment();
+  missingLinks.resources = missingLinks.resources.filter(item =>
+    !item.type.endsWith('/virtualNetworkLinks'));
+  assert.throws(() => guardPopulatedTarget(missingLinks), /missing expected VNet links/);
+});
+
 test('inventory rejects wrong root IDs, root ownership, arbitrary children and unreviewed admin IDs', () => {
   const root = postDeploymentInventory[0];
   const child = postDeploymentInventory.find(resource => resource.type.endsWith('/containers'));
