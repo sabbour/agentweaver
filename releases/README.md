@@ -88,6 +88,8 @@ Run `npm run release:validate` to check the draft against checked-in projects
 and validate all `.changeset/*.md` records. Run
 `npm run release:validate -- --base <full-base-commit-sha>` to additionally require
 an added or modified changeset in that diff for every changed product component.
+Generated `packages.lock.json` updates by themselves do not require a component
+changeset; project and source changes still do.
 CI supplies the PR base SHA (or the previous push SHA) and checks their common
 ancestor against HEAD. An absent or unavailable base is an error, not an
 exemption. Run `npm run test:release` for validator tests. Neither command installs
