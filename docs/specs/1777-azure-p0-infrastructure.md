@@ -319,10 +319,10 @@ No unscoped deletion occurs.
 Neither command contacts a deployed target.
 The tooling has no new npm dependency.
 
-No versioned release-manifest component changes in this slice.
-The fresh changeset has empty frontmatter because these are infrastructure
-definitions and tooling, not a new service or library release.
-No manual version bump or publishing pipeline occurs.
+The Identity broker source change has a component-scoped minor changeset:
+`.changeset/identity-broker-runtime.md`. It records release intent only; it
+does not bump a version, change the draft release manifest, publish an image,
+or establish deployed acceptance. No publishing pipeline ran.
 
 ## Vendor references
 
