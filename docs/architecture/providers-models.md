@@ -6,11 +6,11 @@
 
 `ProviderCatalog.Create` validates registrations, defaults, allowed overrides, ordered sets, and network-policy layers. `ProviderResolver` checks cardinality, versions, options schemas, and capabilities.
 
-<figure class="aw-diagram">
+<figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'" alt="Provider flow from catalog registrations to a resolution candidate, provisioned resource negotiation, and immutable run binding. Ordered providers and network policy layers use separate resolution and pinning methods." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'" alt="Foundation Probe flow: ProbeProviderBindings supplies existing target resource IDs and generation. ProviderCatalog.Create builds the catalog; ProviderResolver resolves candidates and pins immutable bindings against supplied ResourceNegotiation. No provisioning, live negotiation, adapter construction, or product AgentHost is shown." />
   </a>
-  <figcaption>Resolution returns a candidate. The caller provisions a resource and supplies negotiated capabilities before pinning.</figcaption>
+  <figcaption>The Probe supplies existing target IDs, generation, and ResourceNegotiation. The resolver selects and pins against those values; it does not provision or live-negotiate a resource.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.drawio'">Open editable draw.io source</a></p>
 

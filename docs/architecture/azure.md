@@ -4,13 +4,23 @@
 
 PostgreSQL, Key Vault, and Blob use private networking. Azure Monitor uses a private workspace path for queries and an explicit ingestion path. The definitions do not prove private DNS resolution or live access.
 
-<figure class="aw-diagram">
+<figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Verifier flow checks one completed Job and its owned pod, compares the Job image and pod imageID separately with a source-bound registry manifest, validates a distinct native #1784 receipt, and requires fresh correlated Monitor rows. Missing evidence blocks; this does not show P0 completion or a live deployment." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure resource and evidence dependency map. AKS hosts the Foundation Probe Job; its identity and egress policy support it. The read-only evidence gate depends on Job and pod observations, the native receipt, a source-bound registry manifest, and correlated Azure Monitor evidence. Edges are not a time sequence; no live deployment or P0 completion is claimed." />
   </a>
-  <figcaption>Bicep defines Azure resources and identities; Kustomize defines the probe Job and egress policy. The external read-only consumer independently checks the completed Job and owned pod, source-bound image, strict native receipt, and fresh correlated Monitor rows. Only complete evidence sets <code>deployedAcceptance</code>; missing evidence remains blocked. This does not close #1801, confirm P0 completion, or show a live deployment. Intended P0 region placement is summarized below.</figcaption>
+  <figcaption>Structural resource and evidence dependencies. Bicep and Kustomize definitions are not a deployment record; the figure does not claim live readiness or P0 completion.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.drawio'">Open editable draw.io source</a></p>
+
+The following sequence shows the verifier's time-ordered, read-only checks after the probe Job completes. It does not launch the Job or deploy resources.
+
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier observes the Job and owned pod, independently checks the source-bound registry digest and receipt, then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked." />
+  </a>
+  <figcaption>Ordered acceptance evidence checks, not a deployment sequence. Only complete source-, target-, image-, identity-, receipt-, and telemetry-bound evidence sets <code>deployedAcceptance</code>; this does not claim broader P0 readiness.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.drawio'">Open editable draw.io source</a></p>
 
 ## P0 region placement
 
@@ -22,6 +32,18 @@ The intended v1 P0 placement is:
 | Log Analytics workspace and Application Insights | `eastus2` | Provider metadata advertises these Monitor resources in East US 2, not East US 2 EUAP. |
 | Azure Monitor Private Link Scope (AMPLS) | `global` | Monitor resources can link to the global AMPLS. |
 | AMPLS Private Endpoint | `eastus2euap` | It is in the EUAP VNet/subnet; the endpoint region follows its VNet. |
+
+The root Bicep parameters bind that placement and the Entra administrator:
+
+| Input | Requirement |
+| --- | --- |
+| `location` | Set to `eastus2euap` for the VNet and core resources. The Bicep default is the resource-group location; reviewed P0 parameters must select the intended region. |
+| `monitorLocation` | Required; set to `eastus2` for Log Analytics and Application Insights. |
+| `postgresEntraAdminObjectId` | Required directory object ID for the PostgreSQL Entra administrator. |
+| `postgresEntraAdminPrincipalName` | Required directory principal name for that administrator. |
+| `postgresEntraAdminPrincipalType` | Required; `User`, `Group`, or `ServicePrincipal`. `Unknown` is rejected, and a group is not required. |
+
+Supply real administrator values only through reviewed operator parameters; documentation and checked-in examples keep placeholders.
 
 Provider metadata advertises AKS, including API version `2026-07-02-preview`, Key Vault, Storage, VNets, Private Endpoints, and PostgreSQL `Standard_B2s` in `eastus2euap`. East US 2 EUAP has no Retail Prices API meters, so this page makes no EUAP cost quote; standard `eastus2` rates are only a planning proxy. This region map is not deployment evidence and adds no 0.x product scope.
 

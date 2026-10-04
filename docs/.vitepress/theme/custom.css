@@ -31,7 +31,18 @@
     overscroll-behavior-x: contain;
   }
 
-  .vp-doc .aw-diagram img {
+  .vp-doc .aw-diagram > a {
+    display: block;
+    width: max-content;
+  }
+
+  .vp-doc figure.aw-diagram img {
+    width: 960px;
     max-width: none;
+  }
+
+  .vp-doc .aw-diagram:focus-visible {
+    outline: 2px solid var(--vp-c-brand-1);
+    outline-offset: 2px;
   }
 }

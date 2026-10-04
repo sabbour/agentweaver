@@ -2,19 +2,27 @@
 
 `Agentweaver.Persistence.Postgres` stores outbox events and consumer inbox receipts in a service-owned schema. It does not create domain tables or a relay service.
 
-<figure class="aw-diagram">
+<figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'" alt="PostgreSQL delivery flow. A caller writes domain state and an outbox event in one transaction. A relay publishes leased events and acknowledges with a fencing token. Consumers admit a message receipt with domain effects in one transaction." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'" alt="Independent caller-owned producer and consumer transactions using PostgresOutbox. EnqueueAsync stores the event with producer state; AdmitAsync applies effects only for Admitted, skips duplicates, and acknowledges consumer delivery after commit. The shared caller lane does not imply one product host." />
   </a>
-  <figcaption>PostgreSQL transactions couple local state to outbox writes and inbox admission. Transport delivery remains at least once.</figcaption>
+  <figcaption>Separate producer and consumer transactions couple local state to outbox writes and inbox admission. The host-driven relay is shown separately; transport delivery remains at least once.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.drawio'">Open editable draw.io source</a></p>
+
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-outbox-relay.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-outbox-relay.png'" alt="A caller invokes OutboxRelay.RelayOnceAsync. It claims leased events from PostgresOutbox, publishes through IOutboxPublisher, and acknowledges confirmed publishes with the current lease token. Failed or cancelled publishes are not acknowledged and remain reclaimable." />
+  </a>
+  <figcaption>The library does not start a daemon. Relay lease acknowledgment follows confirmed publication and is distinct from a consumer acknowledging delivery after its transaction commits.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-outbox-relay.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-outbox-relay.drawio'">Open editable draw.io source</a></p>
 
 Call `EnqueueAsync` with the same open connection and transaction as the domain state change. PostgreSQL assigns stream sequence numbers and enforces stable event IDs and idempotency keys.
 
 `ClaimAsync` leases the earliest undelivered event per stream. `AcknowledgeAsync` accepts only a current, unexpired lease token.
 
-`OutboxRelay` publishes through an injected `IOutboxPublisher`, then acknowledges the lease. The host calls `RelayOnceAsync`. The library does not start a daemon or provide exactly-once delivery.
+`OutboxRelay` publishes through an injected `IOutboxPublisher`, then acknowledges only confirmed publishes with the current lease token. A failed, cancelled, or fenced publish remains unacknowledged and can be reclaimed; a publish may still have completed externally before a failure. The host calls `RelayOnceAsync`. The library does not start a daemon or provide exactly-once delivery.
 
 Call `AdmitAsync` with the same transaction as consumer state and any new outbox event. Apply effects only for `InboxAdmission.Admitted`. Skip effects for `InboxAdmission.Duplicate`. Acknowledge delivery after commit.
 

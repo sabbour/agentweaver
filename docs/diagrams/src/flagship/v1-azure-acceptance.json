@@ -1,0 +1,185 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Foundation Probe acceptance evidence",
+  "alt": "After a Foundation Probe Job completes, the read-only verifier observes its Job and owned pod, independently checks the source-bound registry image and native receipt, then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "verifier",
+      "label": "Read-only verifier",
+      "subLabel": "verify-acceptance.mjs",
+      "icon": "server",
+      "fluentIcon": "test",
+      "badge": {
+        "text": "Evidence gate",
+        "tone": "marigold"
+      }
+    },
+    {
+      "id": "aks",
+      "label": "AKS Job / Pod",
+      "subLabel": "Completed Job and owned pod",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "Observed",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "registry",
+      "label": "OCI registry",
+      "subLabel": "Source-bound image manifest",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "Evidence source",
+        "tone": "neutral"
+      }
+    },
+    {
+      "id": "monitor",
+      "label": "Azure Monitor",
+      "subLabel": "Fresh dependency or request rows",
+      "icon": "server",
+      "fluentIcon": "telemetry",
+      "badge": {
+        "text": "Evidence source",
+        "tone": "neutral"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": [
+        "verifier",
+        "aks"
+      ],
+      "label": "The verifier is read-only. A probe receipt alone does not prove Job ownership, image pull, or process exit."
+    },
+    {
+      "type": "message",
+      "from": "verifier",
+      "to": "aks",
+      "label": "Observe one completed Job and its owned pod",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "aks",
+      "to": "verifier",
+      "label": "Namespace, owner UIDs, ServiceAccount, projected identity, success/timestamps, images and receipt",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "verifier",
+      "to": "registry",
+      "label": "Verify source-bound image manifest digest",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "registry",
+      "to": "verifier",
+      "label": "Verified registry digest",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "verifier",
+      "to": "verifier",
+      "label": "Compare Job image, observed Pod image and pulled imageID separately with manifest",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "verifier",
+      "to": "verifier",
+      "label": "Validate one bounded native receipt against source, deployment, identity and target",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Job, image and receipt checks",
+      "sections": [
+        {
+          "label": "all checks valid",
+          "steps": [
+            {
+              "type": "message",
+              "from": "verifier",
+              "to": "monitor",
+              "label": "Query exact workspace for fresh AppDependencies/AppRequests",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "monitor",
+              "to": "verifier",
+              "label": "Fresh rows correlated by source SHA, Git tree, nonce, trace and span",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "fragment",
+              "operator": "alt",
+              "label": "Independent evidence result",
+              "sections": [
+                {
+                  "label": "all required evidence matches",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "verifier",
+                      "to": "verifier",
+                      "label": "Set deployedAcceptance; acceptance only for this source and target",
+                      "line": "solid",
+                      "arrow": "filled"
+                    }
+                  ]
+                },
+                {
+                  "label": "evidence missing or mismatched",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "verifier",
+                      "to": "verifier",
+                      "label": "Remain blocked; do not claim deployed readiness",
+                      "line": "solid",
+                      "arrow": "filled"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "evidence missing or mismatched",
+          "steps": [
+            {
+              "type": "message",
+              "from": "verifier",
+              "to": "verifier",
+              "label": "Remain blocked; skip Monitor query",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

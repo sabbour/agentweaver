@@ -1,93 +1,248 @@
 {
-  "$schema": "../graph-spec.schema.json",
-  "kind": "graph",
-  "title": "Identity and exact-version secret redemption",
-  "alt": "Identity flow from validated external OIDC through active project-run grant checks, broker-issued claims, authenticated secret redemption, explicit workload identity, exact-version Key Vault access, and a post-acquisition grant check.",
-  "direction": "TB",
-  "groups": [],
-  "nodes": [
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Identity broker secret redemption",
+  "alt": "Identity.Broker validates bearer and required claims. Invalid tokens return 401 and invalid requests return 400 without redemption; valid requests build trusted actor context, check the exact grant around exact-version Key Vault access, and invalidate credentials on postcheck failure or after the response.",
+  "autonumber": true,
+  "participants": [
     {
-      "id": "oidc",
-      "label": "External OIDC provider",
-      "subLabel": "Issuer, signature, audience, expiry, and nonce",
-      "icon": "globe",
+      "id": "identity-broker",
+      "label": "Identity.Broker",
+      "subLabel": "TrustedActorContext from claims; host supplies IGrantAuthority",
+      "icon": "server",
       "fluentIcon": "identity",
-      "badge": { "text": "Upstream", "tone": "lavender" }
+      "badge": {
+        "text": "Host",
+        "tone": "neutral"
+      }
     },
     {
-      "id": "broker",
-      "label": "Identity Broker",
-      "subLabel": "OpenIddict, consent, S256 PKCE",
-      "icon": "box",
-      "fluentIcon": "identity",
-      "badge": { "text": "Unpublished candidate", "tone": "marigold" }
-    },
-    {
-      "id": "grants",
-      "label": "Identity-owned PostgreSQL grants",
-      "subLabel": "Append-only project and run revisions",
-      "icon": "database",
-      "fluentIcon": "state",
-      "badge": { "text": "Authority", "tone": "teal" }
-    },
-    {
-      "id": "token",
-      "label": "Broker-issued access token",
-      "subLabel": "Validated sub, project_id, and run_id",
-      "icon": "key",
-      "fluentIcon": "identity",
-      "badge": { "text": "Claims", "tone": "lavender" }
-    },
-    {
-      "id": "endpoint",
-      "label": "POST /secrets/redeem",
-      "subLabel": "Bearer plus exact ID, version, purpose, and run",
-      "icon": "api",
-      "fluentIcon": "api",
-      "badge": { "text": "HTTP", "tone": "teal" }
-    },
-    {
-      "id": "authorize",
+      "id": "authorized-redemption",
       "label": "AuthorizedSecretRedemption",
-      "subLabel": "Exact grant check before acquisition",
+      "subLabel": "Agentweaver.Identity library",
       "icon": "box",
       "fluentIcon": "security",
-      "badge": { "text": "Trust boundary", "tone": "green" }
+      "badge": {
+        "text": "Library",
+        "tone": "teal"
+      }
     },
     {
-      "id": "keyvault",
+      "id": "keyvault-adapter",
+      "label": "AzureKeyVaultSecretRedemption",
+      "subLabel": "Agentweaver.Secrets.AzureKeyVault library",
+      "icon": "box",
+      "fluentIcon": "identity",
+      "badge": {
+        "text": "Library",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "key-vault",
       "label": "Azure Key Vault",
-      "subLabel": "Exact secret version via explicit WorkloadIdentityCredential",
+      "subLabel": "External resource; exact secret version",
       "icon": "key",
       "library": "azure",
       "shape": "image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=1",
-      "badge": { "text": "Azure", "tone": "green" }
-    },
-    {
-      "id": "recheck",
-      "label": "Grant revision recheck",
-      "subLabel": "Invalidate the credential if the grant changed",
-      "icon": "box",
-      "fluentIcon": "security",
-      "badge": { "text": "After acquisition", "tone": "teal" }
-    },
-    {
-      "id": "response",
-      "label": "Credential response",
-      "subLabel": "At most five minutes, then invalidate after response",
-      "icon": "box",
-      "fluentIcon": "identity",
-      "badge": { "text": "Short-lived", "tone": "marigold" }
+      "badge": {
+        "text": "Azure resource",
+        "tone": "green"
+      }
     }
   ],
-  "edges": [
-    { "from": "oidc", "to": "broker" },
-    { "from": "broker", "to": "grants" },
-    { "from": "grants", "to": "token" },
-    { "from": "token", "to": "endpoint" },
-    { "from": "endpoint", "to": "authorize" },
-    { "from": "authorize", "to": "keyvault" },
-    { "from": "keyvault", "to": "recheck" },
-    { "from": "recheck", "to": "response" }
+  "steps": [
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Bearer and request validation",
+      "sections": [
+        {
+          "label": "invalid bearer or required claims",
+          "steps": [
+            {
+              "type": "message",
+              "from": "identity-broker",
+              "to": "identity-broker",
+              "label": "HTTP 401; no wrapper or backend call",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "valid bearer; invalid request",
+          "steps": [
+            {
+              "type": "message",
+              "from": "identity-broker",
+              "to": "identity-broker",
+              "label": "HTTP 400; no wrapper or Key Vault call",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "valid bearer and exact request",
+          "steps": [
+            {
+              "type": "message",
+              "from": "identity-broker",
+              "to": "authorized-redemption",
+              "label": "RedeemAsync(TrustedActorContext, exact request)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "authorized-redemption",
+              "to": "authorized-redemption",
+              "label": "FindGrantsAsync(actor, exact request)",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "authorized-redemption",
+              "to": "authorized-redemption",
+              "label": "One fresh active exact grant / denial",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "fragment",
+              "operator": "alt",
+              "label": "Fresh exact-grant precheck",
+              "sections": [
+                {
+                  "label": "no active exact grant",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "authorized-redemption",
+                      "to": "identity-broker",
+                      "label": "Denied before backend",
+                      "line": "dashed",
+                      "arrow": "open"
+                    },
+                    {
+                      "type": "message",
+                      "from": "identity-broker",
+                      "to": "identity-broker",
+                      "label": "HTTP 403; no Key Vault call",
+                      "line": "solid",
+                      "arrow": "filled"
+                    }
+                  ]
+                },
+                {
+                  "label": "exact grant is active",
+                  "steps": [
+                    {
+                      "type": "message",
+                      "from": "authorized-redemption",
+                      "to": "keyvault-adapter",
+                      "label": "ISecretRedemption.RedeemAsync(request)",
+                      "line": "solid",
+                      "arrow": "filled"
+                    },
+                    {
+                      "type": "message",
+                      "from": "keyvault-adapter",
+                      "to": "key-vault",
+                      "label": "GetSecretAsync(id, exact version)",
+                      "line": "solid",
+                      "arrow": "filled"
+                    },
+                    {
+                      "type": "message",
+                      "from": "key-vault",
+                      "to": "keyvault-adapter",
+                      "label": "Exact-version secret",
+                      "line": "dashed",
+                      "arrow": "open"
+                    },
+                    {
+                      "type": "message",
+                      "from": "keyvault-adapter",
+                      "to": "authorized-redemption",
+                      "label": "Short-lived SecretCredential",
+                      "line": "dashed",
+                      "arrow": "open"
+                    },
+                    {
+                      "type": "message",
+                      "from": "authorized-redemption",
+                      "to": "authorized-redemption",
+                      "label": "FindGrantsAsync again; compare exact revision",
+                      "line": "solid",
+                      "arrow": "filled"
+                    },
+                    {
+                      "type": "fragment",
+                      "operator": "alt",
+                      "label": "Post-acquisition grant check",
+                      "sections": [
+                        {
+                          "label": "grant changed, postcheck errors, or cancellation",
+                          "steps": [
+                            {
+                              "type": "message",
+                              "from": "authorized-redemption",
+                              "to": "authorized-redemption",
+                              "label": "Invalidate acquired credential",
+                              "line": "solid",
+                              "arrow": "filled"
+                            },
+                            {
+                              "type": "message",
+                              "from": "authorized-redemption",
+                              "to": "identity-broker",
+                              "label": "Throw denial or propagate error/cancellation",
+                              "line": "dashed",
+                              "arrow": "open"
+                            }
+                          ]
+                        },
+                        {
+                          "label": "same exact active grant",
+                          "steps": [
+                            {
+                              "type": "message",
+                              "from": "authorized-redemption",
+                              "to": "authorized-redemption",
+                              "label": "LimitLifetime(grant expiry)",
+                              "line": "solid",
+                              "arrow": "filled"
+                            },
+                            {
+                              "type": "message",
+                              "from": "authorized-redemption",
+                              "to": "identity-broker",
+                              "label": "Return credential",
+                              "line": "dashed",
+                              "arrow": "open"
+                            },
+                            {
+                              "type": "message",
+                              "from": "identity-broker",
+                              "to": "identity-broker",
+                              "label": "Write response; finally invalidate credential",
+                              "line": "solid",
+                              "arrow": "filled"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
   ]
 }
