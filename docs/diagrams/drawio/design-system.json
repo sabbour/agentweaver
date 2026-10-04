@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "name": "Agentweaver draw.io design system",
+  "drawioCliVersion": "31.4.5",
+  "canonicalFormat": "uncompressed editable draw.io XML",
+  "renderer": "official draw.io Desktop CLI",
+  "calibration": {
+    "profile": "react-optical-v1",
+    "referenceRevision": "a46721ae77efeba505d2fbfa58c69cdae8b4f3eb",
+    "reference": "docs/diagrams/reviews/canonical-default-workflow/style-calibration/original-react.png",
+    "note": "Optical raster authority supersedes nominal 400/28 source tokens. No font scaling hidden inside HTML."
+  },
+  "palette": {
+    "canvas": "#efeae7",
+    "surface": "#fdfbf8",
+    "groupTier1": "#f8f4f1",
+    "groupTier2": "#efeae7",
+    "stroke": "#ece7e3",
+    "foreground1": "#272320",
+    "foreground2": "#3f3935",
+    "foreground3": "#635c57",
+    "foreground4": "#746d68",
+    "connector": "#746d68",
+    "loopback": "#d39300"
+  },
+  "typography": {
+    "family": "Segoe UI",
+    "monospaceFamily": "Cascadia Code",
+    "titlePx": 20,
+    "subtitlePx": 16,
+    "metaPx": 12,
+    "badgePx": 12,
+    "connectorLabelPx": 16,
+    "titleWeight": 600,
+    "titleLineHeight": 1.15,
+    "subtitleLineHeight": 1.2
+  },
+  "cards": {
+    "widthPx": 340,
+    "minimumHeightPx": 104,
+    "threeLineHeightPx": 132,
+    "radiusPx": 16,
+    "semanticAccentPx": 5,
+    "shadow": true,
+    "shadowLayers": [{"offsetY": 3, "opacity": 2}, {"offsetY": 1, "opacity": 3}],
+    "paddingPx": 18,
+    "iconInsetPx": 27,
+    "textInsetPx": 71,
+    "iconPx": 28,
+    "badgeVisibleByDefault": false
+  },
+  "layout": {
+    "columnGap": 56,
+    "rowGap": 62,
+    "groupPaddingX": 48,
+    "groupPaddingTop": 64,
+    "groupPaddingBottom": 44,
+    "canvasMargin": 80
+  },
+  "badges": {
+    "lavender": { "background": "#d2ccf8", "foreground": "#3f3682" },
+    "teal": { "background": "#a6e9ed", "foreground": "#00666d" },
+    "green": { "background": "#9fd89f", "foreground": "#0e700e" },
+    "marigold": { "background": "#f9e2ae", "foreground": "#835b00" },
+    "neutral": { "background": "#e7e1dc", "foreground": "#635c57" }
+  },
+  "connectors": {
+    "routing": "orthogonal",
+    "rounded": true,
+    "labelBackground": "#fdfbf8",
+    "lineJumps": "arc",
+    "junctionDiameterPx": 5,
+    "strokeWidthPx": 1.8,
+    "cornerRadiusPx": 10,
+    "bridgeRadiusPx": 7,
+    "arrowType": "classicThin",
+    "arrowSizePx": 8,
+    "loopback": { "stroke": "#d39300", "dashPattern": "8 6" }
+  },
+  "nativeLibraries": {
+    "azure": "mxgraph.azure2",
+    "kubernetes": "mxgraph.kubernetes",
+    "c4": "mxgraph.c4",
+    "uml": "uml",
+    "flowchart": "flowchart",
+    "bpmn": "mxgraph.bpmn",
+    "networking": "mxgraph.cisco19",
+    "database": "cylinder3",
+    "cloud": "cloud"
+  }
+}

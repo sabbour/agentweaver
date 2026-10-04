@@ -1,0 +1,93 @@
+{
+  "$schema": "../graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Identity and exact-version secret redemption",
+  "alt": "Identity flow from validated external OIDC through active project-run grant checks, broker-issued claims, authenticated secret redemption, explicit workload identity, exact-version Key Vault access, and a post-acquisition grant check.",
+  "direction": "TB",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "oidc",
+      "label": "External OIDC provider",
+      "subLabel": "Issuer, signature, audience, expiry, and nonce",
+      "icon": "globe",
+      "fluentIcon": "identity",
+      "badge": { "text": "Upstream", "tone": "lavender" }
+    },
+    {
+      "id": "broker",
+      "label": "Identity Broker",
+      "subLabel": "OpenIddict, consent, S256 PKCE",
+      "icon": "box",
+      "fluentIcon": "identity",
+      "badge": { "text": "Unpublished candidate", "tone": "marigold" }
+    },
+    {
+      "id": "grants",
+      "label": "Identity-owned PostgreSQL grants",
+      "subLabel": "Append-only project and run revisions",
+      "icon": "database",
+      "fluentIcon": "state",
+      "badge": { "text": "Authority", "tone": "teal" }
+    },
+    {
+      "id": "token",
+      "label": "Broker-issued access token",
+      "subLabel": "Validated sub, project_id, and run_id",
+      "icon": "key",
+      "fluentIcon": "identity",
+      "badge": { "text": "Claims", "tone": "lavender" }
+    },
+    {
+      "id": "endpoint",
+      "label": "POST /secrets/redeem",
+      "subLabel": "Bearer plus exact ID, version, purpose, and run",
+      "icon": "api",
+      "fluentIcon": "api",
+      "badge": { "text": "HTTP", "tone": "teal" }
+    },
+    {
+      "id": "authorize",
+      "label": "AuthorizedSecretRedemption",
+      "subLabel": "Exact grant check before acquisition",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": { "text": "Trust boundary", "tone": "green" }
+    },
+    {
+      "id": "keyvault",
+      "label": "Azure Key Vault",
+      "subLabel": "Exact secret version via explicit WorkloadIdentityCredential",
+      "icon": "key",
+      "library": "azure",
+      "shape": "image;image=img/lib/azure2/security/Key_Vaults.svg;imageAspect=1",
+      "badge": { "text": "Azure", "tone": "green" }
+    },
+    {
+      "id": "recheck",
+      "label": "Grant revision recheck",
+      "subLabel": "Invalidate the credential if the grant changed",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": { "text": "After acquisition", "tone": "teal" }
+    },
+    {
+      "id": "response",
+      "label": "Credential response",
+      "subLabel": "At most five minutes, then invalidate after response",
+      "icon": "box",
+      "fluentIcon": "identity",
+      "badge": { "text": "Short-lived", "tone": "marigold" }
+    }
+  ],
+  "edges": [
+    { "from": "oidc", "to": "broker" },
+    { "from": "broker", "to": "grants" },
+    { "from": "grants", "to": "token" },
+    { "from": "token", "to": "endpoint" },
+    { "from": "endpoint", "to": "authorize" },
+    { "from": "authorize", "to": "keyvault" },
+    { "from": "keyvault", "to": "recheck" },
+    { "from": "recheck", "to": "response" }
+  ]
+}

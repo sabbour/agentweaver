@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "v1-outbox-inbox.json",
+    "sha256": "ea117922dce26a03766bfd17986a327cd0bd66df935300cf5186bcb16ad2fb25"
+  },
+  "drawio": {
+    "file": "v1-outbox-inbox.drawio",
+    "sha256": "415381016e3959b5507eb0aa9652ed9785a1f5580f40562eaffa20fa72957129"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "v1-outbox-inbox.png",
+    "sha256": "6b96b98bb4cfc6a70acd33e180b6e7027dd479812fbe37092f88a6ccd8b9b027"
+  }
+}

@@ -18,3 +18,9 @@ branch (`v1` by default), existing `type:` and `area:` labels, milestone, and
 durable run result and resume the same run ID after a resolvable interruption.
 Do not treat a completed rehearsal as delivery proof. The run is bound to its
 initiating session, not shared across project sessions. There is no auto-run hook.
+
+## Documentation as you go
+
+Update affected v1 documentation and diagrams in the same PR as each behavior,
+interface, provider, model-support, or configuration change. Run
+`npm run docs:build`, `npm run docs:check-links`, and the diagram checks.

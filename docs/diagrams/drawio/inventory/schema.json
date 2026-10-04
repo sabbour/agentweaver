@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agentweaver documentation diagram inventory area",
+  "type": "object",
+  "required": ["version", "area", "diagrams"],
+  "properties": {
+    "version": { "const": 1 },
+    "area": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "diagrams": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "area", "disposition", "owner", "replacement", "notes", "paths"],
+        "properties": {
+          "name": { "type": "string" },
+          "area": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "disposition": {
+            "type": "string",
+            "enum": ["unreviewed", "retain", "reuse", "merge", "remove", "redesign"]
+          },
+          "owner": { "type": ["string", "null"] },
+          "replacement": { "type": ["string", "null"] },
+          "notes": { "type": "string" },
+          "paths": {
+            "type": "object",
+            "required": ["input", "drawio", "png", "hash"],
+            "properties": {
+              "input": { "type": "string" },
+              "drawio": { "type": "string" },
+              "png": { "type": "string" },
+              "hash": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

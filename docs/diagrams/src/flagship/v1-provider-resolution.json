@@ -1,0 +1,93 @@
+{
+  "$schema": "../graph-spec.schema.json",
+  "kind": "graph",
+  "title": "Provider resolution and run pinning",
+  "alt": "Provider process from catalog registrations through cardinality-specific resolution, candidate bindings, caller-owned resource provisioning, capability negotiation, and immutable run pinning. Cost and per-application hosting resolution are not implemented.",
+  "direction": "TB",
+  "routing": "separate-ports",
+  "groups": [],
+  "nodes": [
+    {
+      "id": "registration",
+      "label": "Provider registrations",
+      "subLabel": "Descriptors, defaults, and permitted overrides",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": { "text": "Input", "tone": "lavender" }
+    },
+    {
+      "id": "catalog",
+      "label": "ProviderCatalog.Create",
+      "subLabel": "Validates IDs, seams, and selections",
+      "icon": "box",
+      "fluentIcon": "settings",
+      "badge": { "text": "Catalog", "tone": "teal" }
+    },
+    {
+      "id": "resolver",
+      "label": "ProviderResolver",
+      "subLabel": "Exclusive, singleton, ordered, and layered methods",
+      "icon": "box",
+      "fluentIcon": "workflow",
+      "badge": { "text": "Resolve", "tone": "teal" }
+    },
+    {
+      "id": "candidate",
+      "label": "Resolution candidate",
+      "subLabel": "Provider ID, versions, options revision, capabilities",
+      "icon": "box",
+      "fluentIcon": "document",
+      "badge": { "text": "Not provisioned", "tone": "lavender" }
+    },
+    {
+      "id": "provision",
+      "label": "Caller provisions resource",
+      "subLabel": "Outside the catalog and resolver libraries",
+      "icon": "box",
+      "fluentIcon": "api",
+      "badge": { "text": "Host", "tone": "neutral" }
+    },
+    {
+      "id": "negotiation",
+      "label": "Resource negotiation",
+      "subLabel": "Resource identity, generation, and capabilities",
+      "icon": "box",
+      "fluentIcon": "test",
+      "badge": { "text": "Input", "tone": "lavender" }
+    },
+    {
+      "id": "pin",
+      "label": "Pin",
+      "subLabel": "Pin, PinOrdered, or PinNetworkPolicy",
+      "icon": "box",
+      "fluentIcon": "identity",
+      "badge": { "text": "Validate", "tone": "teal" }
+    },
+    {
+      "id": "binding",
+      "label": "Pinned run binding",
+      "subLabel": "Negotiated capabilities and resource generation",
+      "icon": "box",
+      "fluentIcon": "state",
+      "badge": { "text": "Immutable", "tone": "green" }
+    },
+    {
+      "id": "unsupported",
+      "label": "Unsupported cardinalities",
+      "subLabel": "Cost by meter and per-application hosting",
+      "icon": "box",
+      "fluentIcon": "security",
+      "badge": { "text": "Not implemented", "tone": "marigold" }
+    }
+  ],
+  "edges": [
+    { "from": "registration", "to": "catalog" },
+    { "from": "catalog", "to": "resolver" },
+    { "from": "resolver", "to": "candidate" },
+    { "from": "candidate", "to": "provision" },
+    { "from": "provision", "to": "negotiation" },
+    { "from": "negotiation", "to": "pin" },
+    { "from": "pin", "to": "binding" },
+    { "from": "resolver", "to": "unsupported", "dashed": true }
+  ]
+}

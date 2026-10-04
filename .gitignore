@@ -4,3 +4,5 @@
 .vs/
 node_modules/
 artifacts/
+docs/.vitepress/dist/
+docs/public/diagrams/

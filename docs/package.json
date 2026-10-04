@@ -1,0 +1,14 @@
+{
+  "name": "agentweaver-v1-docs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node ../scripts/docs/prepare-v1-diagrams.mjs && vitepress dev .",
+    "build": "node ../scripts/docs/prepare-v1-diagrams.mjs && vitepress build .",
+    "preview": "node ../scripts/docs/prepare-v1-diagrams.mjs && vitepress preview ."
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}
