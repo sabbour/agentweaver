@@ -6,6 +6,7 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { validateFile } from '../../release/validate.mjs';
+import { validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
@@ -35,7 +36,7 @@ export function resolveCleanHead(cwd, { execGit = runGit } = {}) {
   return { sha, branch };
 }
 
-export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, tenantId },
+export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId },
   { execGit = runGit, readFile = readFileSync, realpath = realpathSync, validateRelease = validateFile } = {}) {
   const { sha, branch } = resolveCleanHead(repoRoot, { execGit });
   const sourceTree = execGit(['rev-parse', `${sha}^{tree}`], { cwd: repoRoot }).stdout.trim();
@@ -85,9 +86,13 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
       /unassigned|CHANGEME|00000000-0000/i.test(JSON.stringify(document))) {
     throw new Error('Parameters do not bind the exact dedicated target or contain placeholders.');
   }
+  const appRoutingDnsZoneResourceIds = validateAppRoutingDnsZoneResourceIds(
+    values.appRoutingDnsZoneResourceIds?.value, subscriptionId,
+  );
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
   return { sha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner: values.owner.value, costCenter: values.costCenter.value,
     postgresEntraAdminObjectId: values.postgresEntraAdminObjectId?.value,
+    appRoutingDnsZoneResourceIds,
     scope: 'infrastructure-only' };
 }

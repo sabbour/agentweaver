@@ -14,8 +14,19 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     resource.name === "[format('{0}-aks', parameters('namePrefix'))]");
   const aks = aksDeployment.properties.template;
   const cluster = aks.resources.find(resource => resource.type === 'Microsoft.ContainerService/managedClusters');
-  assert.equal(cluster.apiVersion, '2024-09-01');
+  assert.equal(cluster.apiVersion, '2026-07-02-preview');
   assert.equal(cluster.properties.disableLocalAccounts, true);
+  assert.equal(cluster.properties.ingressProfile.webAppRouting.enabled, true);
+  assert.equal(cluster.properties.ingressProfile.webAppRouting.nginx.defaultIngressControllerType, 'None');
+  assert.match(cluster.properties.ingressProfile.webAppRouting.dnsZoneResourceIds, /appRoutingDnsZoneResourceIds/);
+  assert.equal(cluster.properties.ingressProfile.webAppRouting.defaultDomain.enabled,
+    "[variables('managedDefaultDomainRequested')]");
+  assert.equal(aks.variables.managedDefaultDomainRequested,
+    "[empty(parameters('appRoutingDnsZoneResourceIds'))]");
+  assert.deepEqual(cluster.properties.addonProfiles.azureKeyvaultSecretsProvider, {
+    enabled: true,
+    config: { enableSecretRotation: 'true', rotationPollInterval: '2m' },
+  });
   assert.deepEqual(cluster.properties.networkProfile.advancedNetworking, {
     enabled: true,
     security: { enabled: true },
@@ -26,7 +37,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   });
   assert.equal(aksDeployment.properties.parameters.tenantId.value, "[parameters('tenantId')]");
   const assignment = aks.resources.find(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
-  const principal = "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), '2024-09-01', 'full').identity.principalId]";
+  const principal = "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), '2026-07-02-preview', 'full').identity.principalId]";
   assert.equal(aks.outputs.controlPlanePrincipalId.value, principal);
   assert.equal(assignment.properties.principalId, principal);
   assert.equal(assignment.properties.principalType, 'ServicePrincipal');
@@ -38,10 +49,17 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.deepEqual(assignment.dependsOn, ["[resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName'))]"]);
   assert.ok(aksDeployment.dependsOn.some(dependency => dependency.includes("'-network'") ||
     dependency.includes("{0}-network")));
+  assert.ok(!aksDeployment.dependsOn.some(dependency => dependency.includes("{0}-identity")));
   assert.equal(assignment.name,
     "[guid(parameters('nodeSubnetId'), resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), variables('networkContributorRoleId'))]");
-  const identities = template.resources.find(resource =>
-    resource.name === "[format('{0}-identity', parameters('namePrefix'))]").properties.template;
+  const identityDeployment = template.resources.find(resource =>
+    resource.name === "[format('{0}-identity', parameters('namePrefix'))]");
+  const identities = identityDeployment.properties.template;
+  assert.ok(identityDeployment.dependsOn.some(dependency => dependency.includes("{0}-aks")));
+  assert.ok(identityDeployment.dependsOn.some(dependency => dependency.includes("{0}-keyvault")));
+  assert.deepEqual(Object.keys(identities.outputs.foundationProbeIdentity.value).sort(), [
+    'clientId', 'name', 'namespace', 'principalObjectId', 'resourceId', 'serviceAccount',
+  ]);
   for (const [name, roleId, scope] of [
     ['monitorQueryRoleAssignments', '73c42c96-874c-492b-b04d-ab87d138a893',
       "[resourceId('Microsoft.OperationalInsights/workspaces', last(split(parameters('monitorWorkspaceResourceId'), '/')))]"],
@@ -56,11 +74,59 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     assert.match(role.properties.principalId, /userAssignedIdentities/);
     assert.doesNotMatch(role.properties.principalId, /clientId/);
   }
-  for (const field of ['foundationProbeIdentity', 'foundationResources', 'sourceTree']) assert.ok(template.outputs[field]);
+  const appRoutingRole = identities.resources.find(resource =>
+    resource.type === 'Microsoft.Authorization/roleAssignments' &&
+    resource.name === "[guid(parameters('keyVaultId'), parameters('aksClusterId'), variables('keyVaultCertificateUserRoleId'))]");
+  assert.ok(appRoutingRole);
+  assert.equal(appRoutingRole.properties.principalType, 'ServicePrincipal');
+  assert.equal(appRoutingRole.properties.principalId, "[parameters('appRoutingIdentityObjectId')]");
+  assert.equal(appRoutingRole.scope,
+    "[resourceId('Microsoft.KeyVault/vaults', last(split(parameters('keyVaultId'), '/')))]");
+  assert.equal(appRoutingRole.name,
+    "[guid(parameters('keyVaultId'), parameters('aksClusterId'), variables('keyVaultCertificateUserRoleId'))]");
+  assert.equal(identities.variables.keyVaultCertificateUserRoleId, 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba');
+  assert.equal(aks.outputs.appRoutingIdentity.type, 'object');
+  assert.match(aks.outputs.appRoutingIdentity.value.resourceId, /webAppRouting.*identity.*resourceId/);
+  assert.match(aks.outputs.appRoutingIdentity.value.clientId, /webAppRouting.*identity.*clientId/);
+  assert.match(aks.outputs.appRoutingIdentity.value.objectId, /webAppRouting.*identity.*objectId/);
+  assert.match(identityDeployment.properties.parameters.appRoutingIdentityObjectId.value,
+    /outputs\.appRoutingIdentity\.value\.objectId/);
+  assert.doesNotMatch(identityDeployment.properties.parameters.appRoutingIdentityObjectId.value, /clientId/);
+  assert.match(aks.outputs.appRoutingDomain.value.domainName, /domainName/);
+  assert.doesNotMatch(aks.outputs.appRoutingDomain.value.domainName, /dnsPrefix|fqdn/);
+  const aksSource = readFileSync('infra/bicep/modules/aks.bicep', 'utf8');
+  assert.match(aksSource,
+    /domainName: managedDefaultDomainRequested[\s\S]*?aks\.properties\.ingressProfile\.webAppRouting\.defaultDomain\.domainName/);
+  assert.match(template.outputs.appRoutingDomain.value, /outputs\.appRoutingDomain\.value/);
+  const appRoutingDnsDeployment = template.resources.find(resource => resource.copy?.name === 'appRoutingDnsRoles');
+  assert.ok(appRoutingDnsDeployment);
+  assert.ok(appRoutingDnsDeployment.dependsOn.some(dependency => dependency.includes("{0}-aks")));
+  assert.equal(appRoutingDnsDeployment.resourceGroup,
+    "[split(parameters('appRoutingDnsZoneResourceIds')[copyIndex()], '/')[4]]");
+  assert.match(appRoutingDnsDeployment.properties.parameters.appRoutingIdentityObjectId.value,
+    /outputs\.appRoutingIdentity\.value\.objectId/);
+  const appRoutingDns = appRoutingDnsDeployment.properties.template;
+  assert.equal(appRoutingDns.variables.dnsZoneContributorRoleId, 'befefa01-2a29-4197-83a8-272ff33ce314');
+  assert.equal(appRoutingDns.variables.privateDnsZoneContributorRoleId, 'b12aa53e-6015-4669-85d0-8515ebb3ae7f');
+  const publicDnsRole = appRoutingDns.resources.find(resource => resource.name.includes('dnsZoneContributorRoleId'));
+  const privateDnsRole = appRoutingDns.resources.find(resource => resource.name.includes('privateDnsZoneContributorRoleId'));
+  assert.ok(publicDnsRole && privateDnsRole);
+  assert.equal(publicDnsRole.scope, "[resourceId('Microsoft.Network/dnsZones', variables('zoneName'))]");
+  assert.equal(privateDnsRole.scope,
+    "[resourceId('Microsoft.Network/privateDnsZones', variables('zoneName'))]");
+  for (const role of [publicDnsRole, privateDnsRole]) {
+    assert.equal(role.properties.principalId, "[parameters('appRoutingIdentityObjectId')]");
+    assert.equal(role.properties.principalType, 'ServicePrincipal');
+    assert.match(role.name, /parameters\('zoneResourceId'\).*parameters\('aksClusterId'\).*variables/);
+  }
+  for (const field of ['appRoutingIdentity', 'appRoutingDomain', 'foundationProbeIdentity', 'foundationResources', 'sourceTree']) {
+    assert.ok(template.outputs[field]);
+  }
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/base']).stdout;
   assert.match(rendered, /kind: ServiceAccount/);
   assert.match(rendered, /foundation-probe/);
   assert.doesNotMatch(rendered, /kind: (Deployment|StatefulSet|Job|Service)\r?\n/);
+  assert.doesNotMatch(rendered, /^kind: (Ingress|IngressClass|Deployment|StatefulSet|DaemonSet|Job|Service)$/m);
   const dnsPolicy = rendered.split('---').find(document => document.includes('name: allow-dns-egress'));
   assert.match(dnsPolicy, /namespaceSelector:\s+matchLabels:\s+kubernetes\.io\/metadata\.name: kube-system/);
   assert.match(dnsPolicy, /podSelector:\s+matchLabels:\s+k8s-app: kube-dns/);

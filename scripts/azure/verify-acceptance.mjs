@@ -68,7 +68,10 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
   });
 }
 
-export function checkDeployedSha({ resourceGroup, subscriptionId, deploymentName, expectedSha, sourceTree, sourceHash }, execAz) {
+export function checkDeployedSha({
+  resourceGroup, subscriptionId, deploymentName, expectedSha, sourceTree, sourceHash,
+  appRoutingDnsZoneResourceIds = [],
+}, execAz) {
   const name = 'deployed-sha';
   if (!isFullSha(expectedSha) || !isFullSha(sourceTree) || !/^[0-9a-f]{64}$/.test(sourceHash ?? '') ||
       deploymentName !== `${resourceGroup}-${expectedSha.slice(0, 12)}`) {
@@ -88,7 +91,7 @@ export function checkDeployedSha({ resourceGroup, subscriptionId, deploymentName
     }
     return configured(name, { deployedSha: expectedSha, sourceTree, sourceHash, deploymentId: deployment.id,
       scope: 'infrastructure-only', servicesDeployed: false,
-      ...readFoundationOutputs(outputs, { resourceGroup, subscriptionId }) });
+      ...readFoundationOutputs(outputs, { resourceGroup, subscriptionId, appRoutingDnsZoneResourceIds }) });
   } catch (error) {
     return blocked(name, `Deployment evidence is missing, malformed or mismatched: ${error.message}`);
   }
@@ -246,7 +249,8 @@ export function runAcceptance(config, { execAz = runAz, sourceResolver = resolve
     const check = (name, operation) => {
       try { checks.push(operation()); } catch (error) { checks.push(blocked(name, error.message)); }
     };
-    check('deployed-sha', () => checkDeployedSha({ ...config, sourceTree: source.sourceTree, sourceHash: source.sourceHash }, boundAz));
+    check('deployed-sha', () => checkDeployedSha({ ...config, sourceTree: source.sourceTree,
+      sourceHash: source.sourceHash, appRoutingDnsZoneResourceIds: source.appRoutingDnsZoneResourceIds }, boundAz));
     const receipt = checks.find(item => item.name === 'deployed-sha' && item.status === 'passed')?.evidence;
     const clusterName = `${config.resourceGroup}-aks`;
     const accountName = `${config.resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);

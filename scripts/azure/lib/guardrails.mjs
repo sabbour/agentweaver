@@ -4,6 +4,7 @@
 // caller has passed `--execute` on the CLI explicitly; every entry point
 // defaults to a read-only plan.
 import { createHash } from 'node:crypto';
+import { parseAppRoutingDnsZoneResourceId, validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
 
 // Dedicated v1 P0 resources must use this naming convention. Anything else
 // (including any 0.x resource group, however named) is rejected: this is
@@ -79,12 +80,15 @@ function jsonResult(result, label) {
 }
 
 // Deployment outputs select configuration, never prove a workload ran.
-export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId }) {
+export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, appRoutingDnsZoneResourceIds = [] }) {
+  const zoneIds = validateAppRoutingDnsZoneResourceIds(appRoutingDnsZoneResourceIds, subscriptionId);
   const groupId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}`;
   const id = (type, name) => `${groupId}/providers/${type}/${name}`;
   const storageName = `${resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
   const resources = outputs?.foundationResources?.value;
   const identity = outputs?.foundationProbeIdentity?.value;
+  const appRoutingIdentity = outputs?.appRoutingIdentity?.value;
+  const appRoutingDomain = outputs?.appRoutingDomain?.value;
   const expected = {
     clusterId: id('Microsoft.ContainerService/managedClusters', `${resourceGroup}-aks`),
     keyVaultId: id('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`),
@@ -104,19 +108,35 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId }
     if (!matches) throw new Error(`Deployment output ${key} is not the exact dedicated target.`);
   }
   const guid = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  const routingIdentityResourceIdPattern =
+    /^\/subscriptions\/[0-9a-f-]{36}\/resourceGroups\/[^/]+\/providers\/Microsoft\.ManagedIdentity\/userAssignedIdentities\/[^/]+$/i;
+  const dnsNamePattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+  const managedDefaultRequested = zoneIds.length === 0;
+  const validDomainName = typeof appRoutingDomain?.domainName === 'string' &&
+    dnsNamePattern.test(appRoutingDomain.domainName) &&
+    !appRoutingDomain.domainName.toLowerCase().startsWith('privatelink.');
   if (!guid.test(resources?.monitorWorkspaceId ?? '') ||
       outputs.monitorWorkspaceId?.value !== resources.monitorWorkspaceId ||
       outputs.aksClusterName?.value !== `${resourceGroup}-aks` ||
       outputs.storageAccountName?.value !== storageName ||
+      typeof appRoutingIdentity?.resourceId !== 'string' ||
+      !routingIdentityResourceIdPattern.test(appRoutingIdentity.resourceId) ||
+      !appRoutingIdentity.resourceId.toLowerCase().startsWith(`/subscriptions/${subscriptionId.toLowerCase()}/`) ||
+      !guid.test(appRoutingIdentity?.clientId ?? '') || !guid.test(appRoutingIdentity?.objectId ?? '') ||
+      appRoutingIdentity.clientId.toLowerCase() === appRoutingIdentity.objectId.toLowerCase() ||
+      appRoutingIdentity.objectId.toLowerCase() === outputs.aksControlPlanePrincipalId?.value?.toLowerCase() ||
+      appRoutingIdentity.objectId.toLowerCase() === identity?.principalObjectId?.toLowerCase() ||
+      appRoutingDomain?.managedDefaultRequested !== managedDefaultRequested ||
+      (managedDefaultRequested ? !validDomainName : appRoutingDomain?.domainName !== null) ||
       identity?.resourceId?.toLowerCase() !== id('Microsoft.ManagedIdentity/userAssignedIdentities',
         `${resourceGroup}-id-foundation-probe`).toLowerCase() ||
       identity?.name !== 'foundation-probe' || identity?.namespace !== 'agentweaver-v1-p0' ||
       identity?.serviceAccount !== 'foundation-probe' ||
       !guid.test(identity?.clientId ?? '') || !guid.test(identity?.principalObjectId ?? '') ||
       identity.clientId.toLowerCase() === identity.principalObjectId.toLowerCase()) {
-    throw new Error('Deployment outputs lack the exact named probe principal or workspace GUID.');
+    throw new Error('Deployment outputs lack the exact App Routing identity, named probe principal, or workspace GUID.');
   }
-  return { resources, foundationProbeIdentity: identity };
+  return { resources, foundationProbeIdentity: identity, appRoutingIdentity, appRoutingDomain };
 }
 
 // ARM guid() uses UUID v5 with this namespace and hyphen-joined arguments.
@@ -132,6 +152,9 @@ function armGuid(...values) {
 // Shared by plan, deploy and acceptance. A caller's ID is not account evidence.
 export function guardAzureTarget(config, execAz) {
   const { resourceGroup, subscriptionId, tenantId, allowedSubscriptionId, allowedTenantId } = config;
+  const appRoutingDnsZoneResourceIds = validateAppRoutingDnsZoneResourceIds(
+    config.appRoutingDnsZoneResourceIds, subscriptionId,
+  );
   assertDedicatedTarget(resourceGroup);
   assertSubscription(subscriptionId, allowedSubscriptionId);
   assertTenant(tenantId, allowedTenantId);
@@ -219,6 +242,7 @@ export function guardAzureTarget(config, execAz) {
   // Extension resources retain their exact parent scope and ARM-generated name.
   for (const [scope, principalResource, role] of [
     [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), identityId, '4633458b-17de-408a-b874-0445c86b69e6'],
+    [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), aksId, 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'],
     [resourceId('Microsoft.Storage/storageAccounts', storageName), identityId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'],
     [resourceId('Microsoft.OperationalInsights/workspaces', `${resourceGroup}-law`), identityId, '73c42c96-874c-492b-b04d-ab87d138a893'],
     [resourceId('Microsoft.Insights/components', `${resourceGroup}-appi`), identityId, '3913510d-42f4-4e42-8a64-420c390055eb'],
@@ -227,6 +251,22 @@ export function guardAzureTarget(config, execAz) {
     const name = armGuid(scope, principalResource, role);
     expectedIds.set(`${scope}/providers/Microsoft.Authorization/roleAssignments/${name}`.toLowerCase(),
       { type: 'microsoft.authorization/roleassignments', name, tagged: false });
+  }
+  for (const [index, zoneId] of appRoutingDnsZoneResourceIds.entries()) {
+    const zone = parseAppRoutingDnsZoneResourceId(zoneId);
+    const zoneType = zone.zoneIsPrivate
+      ? 'microsoft.network/privatednszones'
+      : 'microsoft.network/dnszones';
+    expectedIds.set(zone.resourceId.toLowerCase(), {
+      type: zoneType, name: zone.zoneName, tagged: false,
+    });
+    const name = armGuid(zone.resourceId, aksId, zone.roleDefinitionId);
+    expectedIds.set(`${zone.resourceId}/providers/Microsoft.Authorization/roleAssignments/${name}`.toLowerCase(),
+      { type: 'microsoft.authorization/roleassignments', name, tagged: false });
+    const deploymentName = `${resourceGroup}-app-routing-dns-${index}`;
+    const zoneGroupId = `/subscriptions/${subscriptionId}/resourceGroups/${zone.resourceGroup}`;
+    expectedIds.set(`${zoneGroupId}/providers/Microsoft.Resources/deployments/${deploymentName}`.toLowerCase(),
+      { type: 'microsoft.resources/deployments', name: deploymentName, tagged: false });
   }
   const readResource = id => jsonResult(boundAz(['resource', 'show', '--ids', id, '-o', 'json'],
     { check: false }), 'Resource relationship lookup');
@@ -287,6 +327,23 @@ export function guardAzureTarget(config, execAz) {
           resource.tags['agentweaver:cost-center'] !== group.tags['agentweaver:cost-center']) {
         throw new Error('Resource ownership differs from the dedicated resource group.');
       }
+    }
+  }
+  for (const zoneId of appRoutingDnsZoneResourceIds) {
+    const zone = parseAppRoutingDnsZoneResourceId(zoneId);
+    if (zone.resourceGroup.toLowerCase() === resourceGroup.toLowerCase()) {
+      if (!seen.has(zone.resourceId.toLowerCase())) {
+        throw new Error('Custom App Routing DNS zone is missing from the dedicated resource inventory.');
+      }
+      continue;
+    }
+    const zoneResource = readResource(zone.resourceId);
+    const expectedType = zone.zoneIsPrivate
+      ? 'microsoft.network/privatednszones'
+      : 'microsoft.network/dnszones';
+    if (!sameId(zoneResource.id, zone.resourceId) || zoneResource.type?.toLowerCase() !== expectedType ||
+        zoneResource.name?.toLowerCase() !== zone.zoneName.toLowerCase()) {
+      throw new Error('Custom App Routing DNS zone is not the exact existing zone resource.');
     }
   }
   return { execAz: boundAz, group };

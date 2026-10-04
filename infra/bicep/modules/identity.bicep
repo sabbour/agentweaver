@@ -18,6 +18,12 @@ param tags object
 @description('AKS OIDC issuer URL (from the aks module output). Federated credentials trust only this issuer.')
 param oidcIssuerUrl string
 
+@description('AKS-generated Application Routing identity object ID.')
+param appRoutingIdentityObjectId string
+
+@description('Exact AKS cluster resource ID used to name the Application Routing role assignment.')
+param aksClusterId string
+
 @description('Key Vault resource ID identities may be granted secrets-user access to.')
 param keyVaultId string
 
@@ -48,6 +54,7 @@ param services array = [
 ]
 
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+var keyVaultCertificateUserRoleId = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var logAnalyticsReaderRoleId = '73c42c96-874c-492b-b04d-ab87d138a893'
 var monitoringMetricsPublisherRoleId = '3913510d-42f4-4e42-8a64-420c390055eb'
@@ -103,6 +110,16 @@ resource keyVaultRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-0
     }
   }
 ]
+
+resource appRoutingKeyVaultCertificateRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVaultId, aksClusterId, keyVaultCertificateUserRoleId)
+  scope: existingKeyVault
+  properties: {
+    principalId: appRoutingIdentityObjectId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', keyVaultCertificateUserRoleId)
+  }
+}
 
 // Scoped to the exact storage account resource for the same reason.
 resource blobRoleAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [

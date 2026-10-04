@@ -9,7 +9,7 @@ export const tags = { 'agentweaver:environment': 'v1-p0', 'agentweaver:managed-b
 export const source = { sha: 'a'.repeat(40), sourceTree: 'c'.repeat(40), sourceHash: 'b'.repeat(64), branch: 'candidate',
   template: 'infra/bicep/main.bicep', parametersFile: 'infra/bicep/parameters/approved.json',
   owner: 'team', costCenter: 'p0', scope: 'infrastructure-only',
-  postgresEntraAdminObjectId: '33333333-3333-3333-3333-333333333333' };
+  postgresEntraAdminObjectId: '33333333-3333-3333-3333-333333333333', appRoutingDnsZoneResourceIds: [] };
 export const fixture = { ...ids, resourceGroup: 'aw-v1-p0', repoRoot: process.cwd(),
   template: source.template, parametersFile: source.parametersFile, expectedSha: source.sha,
   deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}`,
@@ -17,6 +17,12 @@ export const fixture = { ...ids, resourceGroup: 'aw-v1-p0', repoRoot: process.cw
 export const deploymentOutputs = {
   sourceSha: { value: source.sha }, sourceTree: { value: source.sourceTree }, sourceHash: { value: source.sourceHash },
   aksClusterName: { value: 'aw-v1-p0-aks' }, storageAccountName: { value: 'awv1p0blob' },
+  aksControlPlanePrincipalId: { value: '66666666-6666-6666-6666-666666666666' },
+  appRoutingDomain: { value: { managedDefaultRequested: true, domainName: 'test-only.invalid' } },
+  appRoutingIdentity: { value: {
+    resourceId: `/subscriptions/${ids.subscriptionId}/resourceGroups/MC_aw-v1-p0_eastus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-aks-app-routing`,
+    clientId: '77777777-7777-7777-7777-777777777777', objectId: '88888888-8888-8888-8888-888888888888',
+  } },
   monitorWorkspaceId: { value: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
   foundationProbeIdentity: { value: {
     name: 'foundation-probe', resourceId: `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-foundation-probe`,

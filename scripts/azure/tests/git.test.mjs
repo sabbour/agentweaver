@@ -16,9 +16,11 @@ function sourceFixture(overrides = {}) {
   const root = process.cwd();
   const template = 'infra/bicep/main.bicep';
   const parameterPath = 'infra/bicep/parameters/approved.json';
-  const parameters = JSON.stringify({ parameters: { namePrefix: { value: 'aw-v1-p0' },
+  const parameterValues = { namePrefix: { value: 'aw-v1-p0' },
     tenantId: { value: ids.tenantId }, owner: { value: 'team' }, costCenter: { value: 'p0' },
-    postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId } } });
+    postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId } };
+  if (!overrides.omitZones) parameterValues.appRoutingDnsZoneResourceIds = { value: overrides.zoneIds ?? [] };
+  const parameters = JSON.stringify({ parameters: parameterValues });
   const files = { [template]: 'targetScope = \'resourceGroup\'\n', [parameterPath]: parameters };
   const config = { ...fixture, repoRoot: root, template, parametersFile: parameterPath, ...overrides.config };
   const deps = {
@@ -57,6 +59,43 @@ test('exact source hashes tracked reviewed inputs and binds JSON parameters to t
   assert.equal(receipt.scope, 'infrastructure-only');
   assert.equal(receipt.owner, 'team');
   assert.equal(receipt.postgresEntraAdminObjectId, source.postgresEntraAdminObjectId);
+  assert.deepEqual(receipt.appRoutingDnsZoneResourceIds, []);
+});
+
+test('custom App Routing DNS zones are optional and bind approved public or private zones', () => {
+  const zoneIds = [
+    `/subscriptions/${ids.subscriptionId}/resourceGroups/public-dns/providers/Microsoft.Network/dnsZones/apps.example.com`,
+    `/subscriptions/${ids.subscriptionId}/resourceGroups/private-dns/providers/Microsoft.Network/privateDnsZones/apps.internal.example`,
+  ];
+  const { config, deps } = sourceFixture({ zoneIds });
+  assert.deepEqual(resolveSource(config, deps).appRoutingDnsZoneResourceIds, zoneIds);
+
+  const omitted = sourceFixture({ omitZones: true });
+  assert.deepEqual(resolveSource(omitted.config, omitted.deps).appRoutingDnsZoneResourceIds, []);
+});
+
+test('custom App Routing DNS zones reject invalid, duplicate, cross-subscription and ungrouped inputs', () => {
+  const validPublic = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/dns-a/providers/Microsoft.Network/dnsZones/apps.example.com';
+  const validPrivate = '/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/dns-a/providers/Microsoft.Network/privateDnsZones/apps.internal.example';
+  const anotherPublicGroup = validPublic.replace('/dns-a/', '/dns-b/');
+  const anotherPrivateGroup = validPrivate.replace('/dns-a/', '/dns-b/');
+  const invalidSets = [
+    'not-an-array',
+    ['not-an-arm-id'],
+    [validPublic.replace('11111111-1111-1111-1111-111111111111', '99999999-9999-9999-9999-999999999999')],
+    [validPublic.replace('apps.example.com', 'privatelink.example.com')],
+    [validPublic.replace('apps.example.com', 'apps_bad.example.com')],
+    [validPublic, validPublic.toUpperCase()],
+    [validPublic, anotherPublicGroup],
+    [validPrivate, anotherPrivateGroup],
+    Array.from({ length: 6 }, (_, i) => validPublic.replace('apps.example.com', `app${i}.example.com`)),
+  ];
+  for (const zoneIds of invalidSets) {
+    const { config, deps } = sourceFixture({ zoneIds });
+    assert.throws(() => resolveSource(config, deps));
+  }
+  const { config, deps } = sourceFixture({ zoneIds: [validPublic] });
+  assert.throws(() => resolveSource({ ...config, subscriptionId: undefined }, deps), /authorized subscription/);
 });
 
 test('clean full HEAD alone cannot authorize untracked/outside/0.x/changed/ignored inputs', () => {

@@ -50,6 +50,10 @@ param sourceTree string
 @description('SHA-256 receipt of tracked infrastructure inputs supplied by deployment tooling.')
 param sourceHash string
 
+@maxLength(5)
+@description('Optional IDs of existing application DNS zones for custom routing domains.')
+param appRoutingDnsZoneResourceIds array = []
+
 var tags = {
   'agentweaver:environment': 'v1-p0'
   'agentweaver:managed-by': 'bicep'
@@ -75,6 +79,7 @@ module aks 'modules/aks.bicep' = {
     tags: tags
     nodeSubnetId: network.outputs.aksSubnetId
     tenantId: tenantId
+    appRoutingDnsZoneResourceIds: appRoutingDnsZoneResourceIds
   }
 }
 
@@ -273,6 +278,8 @@ module identity 'modules/identity.bicep' = {
     namePrefix: namePrefix
     tags: tags
     oidcIssuerUrl: aks.outputs.oidcIssuerUrl
+    appRoutingIdentityObjectId: aks.outputs.appRoutingIdentity.objectId
+    aksClusterId: aks.outputs.clusterId
     keyVaultId: keyVault.outputs.vaultId
     storageAccountId: storage.outputs.storageAccountId
     monitorWorkspaceResourceId: monitor.outputs.workspaceId
@@ -280,9 +287,22 @@ module identity 'modules/identity.bicep' = {
   }
 }
 
+module appRoutingDnsRoles 'modules/app-routing-dns.bicep' = [for (zoneId, i) in appRoutingDnsZoneResourceIds: {
+  name: '${namePrefix}-app-routing-dns-${i}'
+  scope: resourceGroup(subscription().subscriptionId, split(zoneId, '/')[4])
+  params: {
+    zoneResourceId: zoneId
+    zoneIsPrivate: toLower(split(zoneId, '/')[7]) == 'privatednszones'
+    aksClusterId: aks.outputs.clusterId
+    appRoutingIdentityObjectId: aks.outputs.appRoutingIdentity.objectId
+  }
+}]
+
 output aksClusterName string = aks.outputs.clusterName
 output aksControlPlanePrincipalId string = aks.outputs.controlPlanePrincipalId
 output aksOidcIssuerUrl string = aks.outputs.oidcIssuerUrl
+output appRoutingIdentity object = aks.outputs.appRoutingIdentity
+output appRoutingDomain object = aks.outputs.appRoutingDomain
 output keyVaultName string = keyVault.outputs.vaultName
 output storageAccountName string = storage.outputs.storageAccountName
 output postgresServerName string = postgres.outputs.serverName

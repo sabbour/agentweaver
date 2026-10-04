@@ -10,6 +10,7 @@ param namePrefix = 'aw-v1-p0'
 param tenantId = '00000000-0000-0000-0000-000000000000'
 param postgresEntraAdminObjectId = '00000000-0000-0000-0000-000000000000'
 param postgresEntraAdminPrincipalName = 'agentweaver-v1-p0-admins'
+param appRoutingDnsZoneResourceIds = []
 param owner = 'agentweaver-v1-platform'
 param costCenter = 'unassigned'
 param sourceSha = '0000000000000000000000000000000000000000'
