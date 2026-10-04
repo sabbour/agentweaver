@@ -47,8 +47,8 @@ export async function viewportEvidence(page, responsiveTargets = null) {
       && first.top < second.bottom
       && first.left < second.right;
 
-    const elementFacts = async (testId) => {
-      const element = document.querySelector(`[data-testid="${CSS.escape(testId)}"]`);
+    const elementFacts = async (testId, selectedElement = null) => {
+      const element = selectedElement ?? document.querySelector(`[data-testid="${CSS.escape(testId)}"]`);
       if (!element) {
         return {
           testId,
@@ -245,7 +245,35 @@ export async function viewportEvidence(page, responsiveTargets = null) {
 
     const navigation = await elementFacts(targets.navigationTestId);
     const focus = await elementFacts(targets.focusTestId);
+    if (targets.focusMode === 'not-applicable'
+      && (targets.focusTestId !== 'run-focus-toggle'
+        || !/^\/projects\/[^/]+\/workflows\/?$/.test(window.location.pathname) || focus.exists)) {
+      throw new Error('viewport --focus-mode not-applicable requires a workflow-list route without a run focus control');
+    }
     const content = await elementFacts(targets.contentTestId);
+    if (content.exists) {
+      const card = document.querySelector(`[data-testid="${CSS.escape(targets.contentTestId)}"]`);
+      const buttons = [];
+      for (const button of card.querySelectorAll('button')) {
+        const facts = await elementFacts(button.getAttribute('data-testid'), button);
+        buttons.push({
+          testId: facts.testId,
+          bounds: facts.bounds,
+          visible: facts.visible,
+          reachable: facts.reachable,
+        });
+      }
+      content.layout = {
+        clientWidth: card.clientWidth,
+        scrollWidth: card.scrollWidth,
+        horizontalOverflow: card.scrollWidth > card.clientWidth,
+        children: [...card.children].map((child) => ({
+          testId: child.getAttribute('data-testid'),
+          bounds: roundedRect(child.getBoundingClientRect()),
+        })),
+        buttons,
+      };
+    }
     const focusActive = focus.ariaPressed === 'true' || /^Exit focus mode$/i.test(focus.ariaLabel ?? '');
     const focusObserved = targets.focusMode === 'focused'
       ? focus.reachable && focusActive
@@ -257,7 +285,12 @@ export async function viewportEvidence(page, responsiveTargets = null) {
       overflow,
       responsive: {
         navigation,
-        focusMode: { ...focus, active: focusActive, expected: targets.focusMode },
+        focusMode: {
+          ...focus, active: focusActive, expected: targets.focusMode,
+          ...(targets.focusMode === 'not-applicable'
+            ? { status: 'not-applicable', reason: 'workflow list has no run-detail focus control' }
+            : {}),
+        },
         content,
       },
       assertions: [
@@ -286,8 +319,11 @@ export async function viewportEvidence(page, responsiveTargets = null) {
         {
           category: 'focus-mode',
           target: `${targets.focusTestId}:${targets.focusMode}`,
-          required: true,
+          required: targets.focusMode !== 'not-applicable',
           observed: focusObserved,
+          ...(targets.focusMode === 'not-applicable'
+            ? { status: 'not-applicable', reason: 'workflow list has no run-detail focus control' }
+            : {}),
         },
         {
           category: 'content-visibility',

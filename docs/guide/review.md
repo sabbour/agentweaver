@@ -13,6 +13,33 @@ the selected workflow's collective gates. Built-in software workflows run **RAI 
 Build & Test → Human Review** before merge and Scribe. These gates do not run per child.
 Feedback returns to coordinator steering and any required reassembly, not straight
 from an agent revision to another human-review screen.
+When an assembly gate (including rubber-duck or Build & Test) or a human reviewer
+requests a fresh revision, its workspace starts from the exact integrated tree
+reviewed at that gate. The revised output retains those files alongside the new edits;
+retrying that revision keeps the same pinned input.
+Collective revisions retain the complete integrated file tree across repeated
+corrections, including when the coordinator has no executable-workflow pin.
+The current tree's captured files must still validate before review approval
+and merge; a missing or corrupt capture is not treated as complete.
+
+The coordinator verifies each file-producing child's recorded tree against its Git
+branch and assembles from that exact verified commit, even if the branch moves later.
+A missing child run, branch, or recorded tree blocks assembly
+instead of quietly reducing its inputs. A task explicitly declaring no file outputs
+(`[]`) and with no recorded Git output needs no branch; any recorded branch or tree
+must still verify. A committed no-change child with a matching tree remains valid.
+Dependent work also waits for a base containing every required upstream commit; if
+verification fails, recover or retry the named producer rather than launching from the
+original branch. Independent edits to the same path, including a rename, deletion,
+or directory/file collision, stop integration for explicit resolution. The conflict
+event identifies the affected paths and both contributors' commit identities; no
+later child silently overwrites an earlier one. An unresolved
+build leaves the previous integration revision unchanged.
+
+This verification does not yet provide a durable immutable output receipt, approval
+binding to an exact revision, or an in-product conflict-resolution record. Those
+capabilities are tracked separately in [#1396](https://github.com/sabbour/agentweaver/issues/1396)
+and [#1401](https://github.com/sabbour/agentweaver/issues/1401).
 
 The single-run default below makes the review, revision, merge and PR-publication
 branches explicit. It is not the collective workflow definition: collective input,
@@ -37,6 +64,19 @@ For projects that produce a browser preview, the run tree shows the preview stat
 - **Preview unavailable** includes the reason and does not block human review; you can still inspect the diff and approve, request changes, or decline.
 
 The same preview status appears in the human-review file panel so you do not have to search the event timeline for the URL.
+If autonomous review exhausts its correction budget before reaching an applicable
+Build & Test gate, the coordinator runs that gate and records a preview outcome for
+the current assembled tree before opening human review. Documentation-only work
+without a Build & Test gate remains preview-not-applicable; no app server is started.
+An earlier revision's preview URL is not evidence
+for the current tree. A ready URL is shown only while its published session still
+belongs to the current sandbox and its supervised app process is healthy. Preview
+failures remain visible and do not prevent a human decision; the platform discovers
+the application's actual port rather than assuming port 3000.
+Pending approvals and failures for the current tree appear while assembly is still
+running, before the human-review card opens. A manually started sandbox preview is a
+separate operator view: a still-active manual session can be reopened after a page
+reload, but its URL never counts as Build & Test readiness for the current candidate.
 
 For the full contract behind this stage, see [Decoupled live-preview provisioning](../experience/live-preview-provisioning.md).
 
@@ -80,7 +120,41 @@ approval remains.
 
 When review feedback asks for changes, it goes through the coordinator's unified steering path. The timeline shows the feedback source and then the coordinator's decision: steer the existing child in place, dispatch fresh work, proceed, or record an advisory no-op. See [Unified autonomous steering](../experience/unified-steering.md).
 
+When the coordinator dispatches a fresh child to revise assembled work, that child starts
+from the exact integrated file tree reviewed by the gate. Existing files remain in its
+workspace for a focused edit; they do not need to be recreated from the feedback text.
+An infrastructure retry starts in a new workspace from the same pinned tree, without
+carrying over the failed attempt's uncommitted changes. If the reviewed tree cannot be
+verified, the coordinator reports an input error instead of dispatching against the
+project's original base.
+
 ## The file panel
+
+### Stored review diffs (ordinary runs)
+
+For an ordinary run that reaches review, Agentweaver stores the UTF-8 diff bytes
+and reviewed Git tree as an immutable output revision in the run database.
+`GET /api/runs/{id}/output-revisions` lists revision identities, digests,
+generation and predecessor links; `GET /api/runs/{id}/output-revisions/{revisionId}`
+returns the exact stored diff. Both require current viewer access to the run.
+Requesting changes creates a new revision without replacing the old diff.
+Storage lasts as long as the run database and its backups; there is no independent
+expiry job. Unknown IDs return `404`; missing or corrupt stored content and
+unsupported schemas return `410` rather than substituting live workspace data.
+
+`POST /api/runs/{id}/review` accepts optional `output_revision_id` on approval.
+When omitted, the server binds approval to the current stored revision before
+queuing it; a stale explicit ID is rejected. The bound ID is checked again at
+merge, including after a deferred workflow resumes. `/commit` similarly binds
+the current revision before staging and refuses to merge if the committed tree
+differs. Runs created before revision storage retain the legacy review path
+without pretending to have a stored revision; new revisions with no executable
+workflow pin are marked `manifest_incomplete`.
+
+This slice stores **diff bytes**, not independent copies of every file. The
+ordinary file panel still reads workspace or, after merge, the recorded Git
+commit. Collective assembly, independent full-file retention, and MCP/UI
+revision-history readers are not yet covered by the output-revision contract.
 
 When a run reaches the review stage, the **file panel** on the left side of the run detail page automatically expands to show the review controls.
 

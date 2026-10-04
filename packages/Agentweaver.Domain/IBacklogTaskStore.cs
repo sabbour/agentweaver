@@ -35,6 +35,17 @@ public interface IBacklogTaskStore
         IReadOnlyCollection<BacklogTaskId> taskIds,
         CancellationToken ct = default);
 
+    Task<long> GetDependencyRevisionAsync(ProjectId projectId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically previews or changes one task's prerequisite set. Claimed, archived, and
+    /// provisional tasks cannot have their inputs edited. The expected project graph revision
+    /// is checked under a project lock before graph validation; a successful change advances it.
+    /// </summary>
+    Task<BacklogDependencyEditResult> EditDependenciesAsync(
+        ProjectId projectId, long expectedRevision, BacklogDependencyEdit edit,
+        bool preview = false, CancellationToken ct = default);
+
     /// <summary>Ready, unclaimed tasks for a project ordered by (order_key ASC, committed_at ASC,
     /// task_id ASC), capped at <paramref name="limit"/>. Deterministic top-N claim candidates.</summary>
     Task<IReadOnlyList<BacklogTask>> ListReadyForClaimAsync(
@@ -67,11 +78,13 @@ public interface IBacklogTaskStore
     Task<bool> TryArchiveAsync(
         ProjectId projectId, BacklogTaskId id, DateTimeOffset archivedAt, CancellationToken ct = default);
 
-    /// <summary>Atomic contributor Backlog -> Ready. Sets committed_at and the destination order_key.
-    /// Gated on project_id, state = 'backlog', and no pending automation invocation. Retries on
-    /// order_key UNIQUE conflict.</summary>
+    /// <summary>Atomic Backlog -> Ready. A human acceptance writes its signed provider key and
+    /// Ready subject together with state, order and time. A server-created manual workflow
+    /// may omit them to retain its previously signed key. Gated on project and non-provisional
+    /// Backlog state; retries on order-key conflicts.</summary>
     Task<bool> TryMoveToReadyAsync(
-        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt, CancellationToken ct = default);
+        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt,
+        CancellationToken ct = default, string? providerKey = null, string? readyByUserId = null);
 
     /// <summary>Atomic server-owned publication of a task held by a trusted automation invocation.
     /// Clears the provisional marker as it moves Backlog -> Ready.</summary>
@@ -82,14 +95,16 @@ public interface IBacklogTaskStore
     /// Atomic bulk contributor Backlog -> Ready for an ENTIRE project. Moves every non-provisional
     /// state='backlog' task to state='ready' in ONE transaction, appended AFTER existing Ready items
     /// while preserving the tasks' relative backlog order, stamping committed_at =
-    /// <paramref name="committedAt"/> on each. Idempotent: returns 0 when no contributor-manageable
+    /// <paramref name="committedAt"/> and the accepted provider/actor on each. Idempotent: returns 0 when no contributor-manageable
     /// task is in the backlog bucket. Returns the count of tasks moved.
     /// </summary>
     Task<int> MoveAllBacklogToReadyAsync(
-        ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default);
+        ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default,
+        string? providerKey = null, string? readyByUserId = null);
 
     /// <summary>Atomic Ready -> Backlog, permitted only while unclaimed. Gated on project_id AND
-    /// state = 'ready' AND run_id IS NULL. Returns false if already claimed or not found.</summary>
+    /// state = 'ready' AND run_id IS NULL. Clears the queued provider key and Ready actor
+    /// in the same update. Returns false if already claimed or not found.</summary>
     Task<bool> TryMoveToBacklogAsync(
         ProjectId projectId, BacklogTaskId id, string newOrderKey, CancellationToken ct = default);
 
@@ -108,7 +123,8 @@ public interface IBacklogTaskStore
 
     /// <summary>
     /// Atomic, exactly-once claim + coordinator-run reservation. In ONE transaction:
-    /// (a) Ready -> Claimed gated on project_id AND state='ready' AND run_id IS NULL, binding run_id;
+    /// (a) Ready -> Claimed gated on project_id, state, run_id, and the exact validated
+    ///     provider-key/Ready-subject snapshot (null-safe for legacy tasks), binding run_id;
     /// (b) INSERT the coordinator <paramref name="coordinatorRun"/> row gated on the project being
     ///     active, stamping the durable run-origin marker origin='backlog_pickup'.
     /// Returns Won/Lost/ProjectUnavailable. The reserved run is identity-shaped EXACTLY like an
@@ -131,7 +147,9 @@ public interface IBacklogTaskStore
         BacklogTaskId id,
         Run coordinatorRun,
         DateTimeOffset claimedAt,
-        CancellationToken ct = default) =>
+        CancellationToken ct = default,
+        string? expectedProviderKey = null,
+        string? expectedReadyByUserId = null) =>
         new(
             await TryClaimAndReserveCoordinatorRunAsync(
                 projectId, id, coordinatorRun, claimedAt, ct).ConfigureAwait(false));

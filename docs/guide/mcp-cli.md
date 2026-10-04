@@ -193,9 +193,27 @@ settings.
   `coordinator_outcome_spec_get` → `coordinator_outcome_spec_confirm` (or revise) →
   observation → artifact inspection → review when gated.
 
+When a composed workflow is waiting for fan-out children or parent continuation,
+`run_task` may return `timed_out` with the existing run ID, an empty artifacts
+array, and a progress hint, even if the embedded run's API `status` is
+`awaiting_review`. Inspect
+`coordinator_work_plan_get` / `coordinator_children_get` and poll that same ID
+with `run_status`; use `run_watch` only when a live stream is requested. This
+wait is not a human review gate; a workflow parent can have a fan work plan
+even when its run detail reports `is_coordinator_plan: false`. Call `run_review`
+only when the current run reports `pending_request_kind: workflow_review`:
+this is an advisory signal for a current, undecided review request with pinned
+output; approval is always manual and the review endpoint rechecks the gate.
+An absent or unknown kind is not evidence of human review, even if the run
+reports `awaiting_review` or a previous work plan is complete. Never repeat
+`run_task` to resume a run: it starts a new execution.
+
 ## Poll vs. stream
 
 - Use `run_status` for quick snapshots.
+- `run_status` preserves the API's `sandbox.current_binding` projection. Use its
+  `verified` claim and Pod UIDs for current ownership; the legacy sandbox pod and
+  executor backend describe launch history, not a current preview.
 - Use `run_watch` only when the operator explicitly wants a live stream.
 - Tell the operator that `run_watch` blocks while waiting; that is expected, not a hang.
 
@@ -206,7 +224,8 @@ If a tool returns `-32001 Request timed out`:
 1. Call `diagnostics_get` (or `heartbeat_status`).
 2. If the server looks healthy, retry **once** with brief backoff.
 3. Safe-to-retry tools are read-only calls such as `run_status`, `coordinator_work_plan_get`, `coordinator_children_get`, `run_show_artifacts`, and `run_get_file`.
-4. Do **not** blindly retry non-idempotent calls such as `coordinator_start`, `run_task`, `run_review`, `project_create`, or `project_delete` until you verify whether the first attempt already took effect.
+4. Do **not** blindly retry non-idempotent calls such as `coordinator_start`, `run_task`, `run_review`, or `project_delete` until you verify whether the first attempt already took effect.
+5. A timed-out GitHub-origin `project_create` may be retried with the same unexpired `repository_selection_code`. The server returns the same reserved project and its `creating`, `active`, or `failed` state rather than creating a duplicate workspace. Blank-project creation is not covered by this retry guarantee.
 
 ## Run and project consistency
 

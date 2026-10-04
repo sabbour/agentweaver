@@ -12,6 +12,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Auth;
 
@@ -38,6 +39,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             JsonSerializer.Serialize(persisted).Should().NotContain(issued.Code!);
             persisted.EntraObjectId.Should().Be("entra-one");
             persisted.RepoAppAuthorizationId.Should().NotBeNullOrWhiteSpace();
+            persisted.InstallationId.Should().Be(72);
             persisted.RepositoryId.Should().Be(42);
         }
 
@@ -50,12 +52,234 @@ public sealed class GitHubRepositorySelectionBrokerTests
         first.Should().BeEquivalentTo(new
         {
             EntraObjectId = "entra-one",
+            InstallationId = 72L,
             RepositoryId = 42L,
         });
 
         var second = await CreateBroker(options, secrets, Repositories(42))
             .TryConsumeAsync(issued.Code!, "entra-one", CancellationToken.None);
         second.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task BrowseAndIssue_RenewExpiredRepoAppCredentialBeforeRepositoryLookup()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        }));
+        var handler = new RefreshingRepositoryHandler();
+        var broker = CreateBroker(options, secrets, handler);
+
+        var browse = await broker.ListAsync("entra-one", CancellationToken.None);
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+        var resolved = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None);
+
+        browse.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        browse.Candidates.Should().ContainSingle();
+        issued.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        resolved.Should().NotBeNull();
+        handler.RefreshCount.Should().Be(1);
+        handler.RepositoryTokens.Should().OnlyContain(token => token == "renewed-token");
+    }
+
+    [Fact]
+    public async Task Browse_RenewsOnceWhenGitHubRejectsAnUnexpiredCachedToken()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        }));
+        var handler = new RefreshingRepositoryHandler();
+
+        var browse = await CreateBroker(options, secrets, handler)
+            .ListAsync("entra-one", CancellationToken.None);
+
+        browse.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        browse.Candidates.Should().ContainSingle();
+        handler.RefreshCount.Should().Be(1);
+        handler.RepositoryTokens.Should().Contain("stale-token").And.Contain("renewed-token");
+    }
+
+    [Fact]
+    public async Task Browse_StopsAfterOneRenewalWhenGitHubStillRejectsTheToken()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        }));
+        var handler = new RefreshingRepositoryHandler(rejectRenewedToken: true);
+
+        var browse = await CreateBroker(options, secrets, handler)
+            .ListAsync("entra-one", CancellationToken.None);
+
+        browse.Outcome.Should().Be(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable);
+        handler.RefreshCount.Should().Be(1);
+        handler.RepositoryTokens.Should().Equal("stale-token", "renewed-token");
+    }
+
+    [Fact]
+    public async Task SelectionCodeResolution_RenewsTheSameAuthorizationIfGitHubRejectsItAfterIssuance()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddHours(1),
+        }));
+        var handler = new RefreshingRepositoryHandler { RejectStaleToken = false };
+        var broker = CreateBroker(options, secrets, handler);
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+        issued.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
+        handler.RejectStaleToken = true;
+
+        var resolved = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None);
+
+        resolved.Should().NotBeNull();
+        resolved!.AccessToken.Should().Be("renewed-token");
+        resolved.RepositoryId.Should().Be(42);
+        handler.RefreshCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable, false)]
+    [InlineData(HttpStatusCode.BadRequest, true)]
+    public async Task Browse_ReportsRefreshFailureWithoutUsingTheRejectedToken(
+        HttpStatusCode refreshStatus,
+        bool reauthorizationRequired)
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        await secrets.SetSecretAsync("repo-app-user-credential-version", JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        }));
+        var handler = new RefreshingRepositoryHandler(refreshStatus);
+
+        var browse = await CreateBroker(options, secrets, handler)
+            .ListAsync("entra-one", CancellationToken.None);
+
+        browse.Outcome.Should().Be(reauthorizationRequired
+            ? GitHubRepositorySelectionOutcome.GitHubBindingUnavailable
+            : GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError);
+        handler.RefreshCount.Should().Be(1);
+        handler.RepositoryTokens.Should().BeEmpty();
+        await using var inspect = new MemoryDbContext(options);
+        var revokedAt = (await inspect.GitHubAppAuthorizations.SingleAsync()).RevokedAt;
+        revokedAt.HasValue.Should().Be(reauthorizationRequired);
+    }
+
+    [Fact]
+    public async Task ProjectCreationClaim_AllowsOnlySameCallerRetryWithinExpiry()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var broker = CreateBroker(options, secrets, Repositories(42));
+        var issued = await broker.IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+
+        var first = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None);
+        var retry = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None);
+        var wrongCaller = await broker.TryClaimForProjectCreationAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-two", EntraObjectId = "entra-two" },
+            CancellationToken.None);
+
+        first.Should().NotBeNull();
+        first!.IsRetry.Should().BeFalse();
+        retry.Should().NotBeNull();
+        retry!.IsRetry.Should().BeTrue();
+        retry.ProjectId.Should().Be(first.ProjectId);
+        retry.InstallationId.Should().Be(72);
+        retry.FullName.Should().Be(first.FullName);
+        wrongCaller.Should().BeNull();
+        (await broker.TryConsumeAndResolveAsync(
+            issued.Code!,
+            new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+            CancellationToken.None)).Should().BeNull(
+            "repository attachment must retain strict single-use selection semantics");
+    }
+
+    [Fact]
+    public async Task ProjectCreationClaim_RejectsRepositoryMovedToAnotherInstallation()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var issued = await CreateBroker(options, secrets, RepositoriesAndInstallations(42, 72))
+            .IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+
+        var resolved = await CreateBroker(options, secrets, RepositoriesAndInstallations(42, 73))
+            .TryClaimForProjectCreationAndResolveAsync(
+                issued.Code!,
+                new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+                CancellationToken.None);
+
+        resolved.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ProjectCreationClaim_RejectsRepositoryRemovedAfterSelection()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        var options = Options(connection);
+        var secrets = new InMemorySecretStore();
+        await SeedLiveAuthorizationAsync(options, secrets, "entra-one");
+        var issued = await CreateBroker(options, secrets, Repositories(42))
+            .IssueAsync("entra-one", "octo/secure-repo", CancellationToken.None);
+
+        var resolved = await CreateBroker(options, secrets, RepositoriesAndInstallations(null, 72))
+            .TryClaimForProjectCreationAndResolveAsync(
+                issued.Code!,
+                new CallerContext { User = "entra-one", EntraObjectId = "entra-one" },
+                CancellationToken.None);
+
+        resolved.Should().BeNull();
     }
 
     [Fact]
@@ -132,7 +356,7 @@ public sealed class GitHubRepositorySelectionBrokerTests
             .ListAsync("entra-one", CancellationToken.None);
         listed.Outcome.Should().Be(GitHubRepositorySelectionOutcome.Issued);
         listed.Candidates.Should().ContainSingle().Which.Should().BeEquivalentTo(new GitHubRepositorySelectionCandidate(
-            42, "octo/secure-repo", "octo", true, "main",
+            72, 42, "octo/secure-repo", "octo", true, "main",
             "https://github.com/octo/secure-repo", "https://github.com/octo/secure-repo.git", null));
     }
 
@@ -234,7 +458,19 @@ public sealed class GitHubRepositorySelectionBrokerTests
             new GitHubConnectionsCredentialVault(secrets),
             new GitHubRepositorySelectionClient(
                 new StubHttpClientFactory(handler),
-                Config()));
+                Config()),
+            new RepoAppInstallationTokenService(
+                Config(),
+                new MemoryDbContext(options),
+                secrets,
+                new StubHttpClientFactory(handler)),
+            new MemoryDbContext(options),
+            new RepoAppUserAuthorizationService(
+                Config(),
+                new GitHubConnectionsPersistenceStore(new MemoryDbContext(options)),
+                secrets,
+                new StubHttpClientFactory(handler),
+                NullLogger<RepoAppUserAuthorizationService>.Instance));
 
     private static async Task SeedLiveAuthorizationAsync(
         DbContextOptions<MemoryDbContext> options,
@@ -266,17 +502,55 @@ public sealed class GitHubRepositorySelectionBrokerTests
         ["Auth:RepoApp:AppId"] = "123",
         ["Auth:RepoApp:PrivateKeySecretName"] = "repo-app-pem",
         ["Auth:RepoApp:ApiUrl"] = "https://api.github.test",
+        ["Auth:RepoApp:ClientId"] = "repo-client",
+        ["Auth:RepoApp:ClientSecret"] = "test-secret",
     }).Build();
 
-    private static HttpMessageHandler Repositories(long id) => RepositoriesAndInstallations(id);
+    private static HttpMessageHandler Repositories(long id) => RepositoriesAndInstallations(id, 72);
 
-    private static HttpMessageHandler RepositoriesAndInstallations(long id) => new RouteHttpHandler(request =>
+    private static HttpMessageHandler RepositoriesAndInstallations(long? id, long installationId = 72) =>
+        new RouteHttpHandler(request =>
         request.RequestUri!.AbsolutePath switch
         {
-            "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repository_selection":"selected","html_url":"https://github.com/settings/installations/72","permissions":{"administration":"write"}}]}""",
-            "/user/installations/72/repositories" => $$"""{"repositories":[{"id":{{id}},"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+            "/user/installations" => InstallationPayload(installationId),
+            var path when path == $"/user/installations/{installationId}/repositories" =>
+                id is null
+                    ? """{"repositories":[]}"""
+                    : RepositoryPayload(id.Value),
             _ => "{}",
         });
+
+    private static string InstallationPayload(long installationId) => JsonSerializer.Serialize(new
+    {
+        installations = new[]
+        {
+            new
+            {
+                id = installationId,
+                account = new { login = "octo" },
+                target_type = "User",
+                repository_selection = "selected",
+                html_url = $"https://github.com/settings/installations/{installationId}",
+                permissions = new { administration = "write" },
+            },
+        },
+    });
+
+    private static string RepositoryPayload(long repositoryId) => JsonSerializer.Serialize(new
+    {
+        repositories = new[]
+        {
+            new
+            {
+                id = repositoryId,
+                full_name = "octo/secure-repo",
+                owner = new { login = "octo" },
+                @private = true,
+                default_branch = "main",
+                clone_url = "https://github.com/octo/secure-repo.git",
+            },
+        },
+    });
 
     private static async Task<SqliteConnection> OpenDatabaseAsync()
     {
@@ -313,6 +587,44 @@ public sealed class GitHubRepositorySelectionBrokerTests
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
             throw new HttpRequestException("Simulated transient network failure reaching GitHub.");
+    }
+
+    private sealed class RefreshingRepositoryHandler(
+        HttpStatusCode refreshStatus = HttpStatusCode.OK,
+        bool rejectRenewedToken = false) : HttpMessageHandler
+    {
+        public int RefreshCount { get; private set; }
+        public List<string?> RepositoryTokens { get; } = [];
+        public bool RejectStaleToken { get; set; } = true;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/login/oauth/access_token")
+            {
+                RefreshCount++;
+                return Task.FromResult(Response(refreshStatus,
+                    refreshStatus == HttpStatusCode.BadRequest
+                        ? """{"error":"bad_refresh_token"}"""
+                        : """{"access_token":"renewed-token","refresh_token":"rotated-token","expires_in":3600}"""));
+            }
+
+            var token = request.Headers.Authorization?.Parameter;
+            RepositoryTokens.Add(token);
+            if (token != "renewed-token" && (token != "stale-token" || RejectStaleToken) ||
+                token == "renewed-token" && rejectRenewedToken)
+                return Task.FromResult(Response(HttpStatusCode.Unauthorized, "{}"));
+
+            return Task.FromResult(Response(HttpStatusCode.OK, path switch
+            {
+                "/user/installations" => InstallationPayload(72),
+                "/user/installations/72/repositories" => RepositoryPayload(42),
+                _ => "{}",
+            }));
+        }
+
+        private static HttpResponseMessage Response(HttpStatusCode status, string body) =>
+            new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
     }
 
 }

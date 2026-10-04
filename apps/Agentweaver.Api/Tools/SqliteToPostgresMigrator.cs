@@ -1,5 +1,8 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using Agentweaver.Api.Memory;
+using Agentweaver.Domain;
 using Agentweaver.Domain.BlueprintPackages;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -69,17 +72,27 @@ public sealed class SqliteToPostgresMigrator
             .Options;
         await using var source = new MemoryDbContext(sourceOptions);
         await PrepareGitHubConnectionsSourceSchemaAsync(source, ct).ConfigureAwait(false);
+        var revisionSchema = await PrepareKnowledgeRevisionSourceSchemaAsync(source, ct)
+            .ConfigureAwait(false);
 
         List<AgentMemory> memories;
         List<Decision> decisions;
+        List<AgentMemoryRevision> memoryRevisions;
+        List<DecisionRevision> decisionRevisions;
         List<DecisionInboxEntry> inbox;
         List<SessionContext> sessions;
+        List<AddressedMessage> addressedMessages;
         try
         {
             memories = await source.AgentMemory.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             decisions = await source.Decisions.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            memoryRevisions = await source.AgentMemoryRevisions.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            decisionRevisions = await source.DecisionRevisions.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             inbox = await source.DecisionInbox.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
             sessions = await source.SessionContexts.AsNoTracking().ToListAsync(ct).ConfigureAwait(false);
+            addressedMessages = await HasTableAsync(source, "addressed_messages", ct).ConfigureAwait(false)
+                ? await source.AddressedMessages.AsNoTracking().ToListAsync(ct).ConfigureAwait(false)
+                : [];
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 1 &&
                                         ex.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase))
@@ -88,13 +101,85 @@ public sealed class SqliteToPostgresMigrator
             return;
         }
 
-        if (memories.Count + decisions.Count + inbox.Count + sessions.Count == 0)
+        if (!revisionSchema.MemoryRevisionsPresent)
+        {
+            memoryRevisions = memories.Select(memory =>
+            {
+                var revisionId = LegacyRevisionId("memory", memory.Id);
+                memory.Revision = 1;
+                memory.CurrentRevisionId = revisionId;
+                return new AgentMemoryRevision
+                {
+                    RevisionId = revisionId,
+                    MemoryId = memory.Id,
+                    ProjectId = memory.ProjectId,
+                    Revision = 1,
+                    Actor = memory.AgentName,
+                    SourceRunId = memory.SourceRunId,
+                    Reason = "legacy import",
+                    AgentName = memory.AgentName,
+                    SessionId = memory.SessionId,
+                    Type = memory.Type,
+                    Importance = memory.Importance,
+                    Content = memory.Content,
+                    Tags = memory.Tags,
+                    Status = memory.Status,
+                    ReplacedById = memory.ReplacedById,
+                    SourceKind = memory.SourceKind,
+                    SourceIdentityFingerprint = Fingerprint(memory.SourceIdentity),
+                    SourceRunReference = memory.SourceRunId,
+                    TrustState = memory.TrustState,
+                    ApprovedByFingerprint = Fingerprint(memory.ApprovedBy),
+                    ApprovedAt = memory.ApprovedAt,
+                    CreatedAt = memory.UpdatedAt,
+                };
+            }).ToList();
+        }
+
+        if (!revisionSchema.DecisionRevisionsPresent)
+        {
+            decisionRevisions = decisions.Select(decision =>
+            {
+                var revisionId = LegacyRevisionId("decision", decision.Id);
+                decision.Revision = 1;
+                decision.CurrentRevisionId = revisionId;
+                return new DecisionRevision
+                {
+                    RevisionId = revisionId,
+                    DecisionId = decision.Id,
+                    ProjectId = decision.ProjectId,
+                    Revision = 1,
+                    Actor = decision.AgentName,
+                    SourceRunId = decision.SourceRunId,
+                    Reason = "legacy import",
+                    AgentName = decision.AgentName,
+                    Type = decision.Type,
+                    Status = decision.Status,
+                    Title = decision.Title,
+                    Content = decision.Content,
+                    Rationale = decision.Rationale,
+                    Tags = decision.Tags,
+                    SupersededById = decision.SupersededById,
+                    SourceKind = decision.SourceKind,
+                    SourceIdentityFingerprint = Fingerprint(decision.SourceIdentity),
+                    SourceRunReference = decision.SourceRunId,
+                    TrustState = decision.TrustState,
+                    ApprovedByFingerprint = Fingerprint(decision.ApprovedBy),
+                    ApprovedAt = decision.ApprovedAt,
+                    CreatedAt = decision.UpdatedAt,
+                };
+            }).ToList();
+        }
+
+        if (memories.Count + decisions.Count + memoryRevisions.Count + decisionRevisions.Count
+            + inbox.Count + sessions.Count + addressedMessages.Count == 0)
             return;
 
         var projectIds = memories.Select(x => x.ProjectId)
             .Concat(decisions.Select(x => x.ProjectId))
             .Concat(inbox.Select(x => x.ProjectId))
             .Concat(sessions.Select(x => x.ProjectId))
+            .Concat(addressedMessages.Select(x => x.ProjectId))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var destinationProjectIds = await destination.Projects.AsNoTracking()
@@ -110,7 +195,9 @@ public sealed class SqliteToPostgresMigrator
         var migratedDecisions = 0;
         var migratedInbox = 0;
         var migratedSessions = 0;
+        var migratedMessages = 0;
         await using var transaction = await destination.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        destination.SuppressKnowledgeRevisionCapture = true;
         try
         {
             foreach (var memory in memories)
@@ -160,6 +247,28 @@ public sealed class SqliteToPostgresMigrator
             }
             await destination.SaveChangesAsync(ct).ConfigureAwait(false);
 
+            foreach (var revision in memoryRevisions)
+            {
+                if (!await destination.AgentMemoryRevisions.AsNoTracking()
+                        .AnyAsync(x => x.RevisionId == revision.RevisionId, ct)
+                        .ConfigureAwait(false))
+                {
+                    revision.Memory = null;
+                    destination.AgentMemoryRevisions.Add(revision);
+                }
+            }
+            foreach (var revision in decisionRevisions)
+            {
+                if (!await destination.DecisionRevisions.AsNoTracking()
+                        .AnyAsync(x => x.RevisionId == revision.RevisionId, ct)
+                        .ConfigureAwait(false))
+                {
+                    revision.Decision = null;
+                    destination.DecisionRevisions.Add(revision);
+                }
+            }
+            await destination.SaveChangesAsync(ct).ConfigureAwait(false);
+
             foreach (var entry in inbox)
             {
                 var existing = await destination.DecisionInbox.AsNoTracking()
@@ -192,6 +301,21 @@ public sealed class SqliteToPostgresMigrator
                         $"Memory state transfer aborted: SessionContext id {session.Id} conflicts with the destination.");
                 }
             }
+            foreach (var message in addressedMessages)
+            {
+                var existing = await destination.AddressedMessages.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Id == message.Id, ct).ConfigureAwait(false);
+                if (existing is null)
+                {
+                    destination.AddressedMessages.Add(message);
+                    migratedMessages++;
+                }
+                else if (!AddressedMessageMatches(message, existing))
+                {
+                    throw new InvalidOperationException(
+                        $"Memory state transfer aborted: AddressedMessage id {message.Id} conflicts with the destination.");
+                }
+            }
             await destination.SaveChangesAsync(ct).ConfigureAwait(false);
 
             if (destination.Database.IsNpgsql())
@@ -208,13 +332,18 @@ public sealed class SqliteToPostgresMigrator
             await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+        finally
+        {
+            destination.SuppressKnowledgeRevisionCapture = false;
+        }
 
         _logger.LogInformation(
-            "  Memory state migrated: {Memories} memories, {Decisions} decisions, {Inbox} inbox entries, {Sessions} sessions.",
+            "  Memory state migrated: {Memories} memories, {Decisions} decisions, {Inbox} inbox entries, {Sessions} sessions, {Messages} messages.",
             migratedMemories,
             migratedDecisions,
             migratedInbox,
-            migratedSessions);
+            migratedSessions,
+            migratedMessages);
     }
 
     private static Task ResetPostgresIdentityAsync(
@@ -241,6 +370,8 @@ public sealed class SqliteToPostgresMigrator
         source.Importance == destination.Importance &&
         source.Content == destination.Content &&
         source.Tags == destination.Tags &&
+        source.Status == destination.Status &&
+        source.ReplacedById == destination.ReplacedById &&
         source.SourceKind == destination.SourceKind &&
         source.SourceIdentity == destination.SourceIdentity &&
         source.SourceRunId == destination.SourceRunId &&
@@ -248,6 +379,8 @@ public sealed class SqliteToPostgresMigrator
         source.ApprovedBy == destination.ApprovedBy &&
         NormalizeTimestamp(source.ApprovedAt) == NormalizeTimestamp(destination.ApprovedAt) &&
         source.IdentityKey == destination.IdentityKey &&
+        source.Revision == destination.Revision &&
+        source.CurrentRevisionId == destination.CurrentRevisionId &&
         NormalizeTimestamp(source.CreatedAt) == NormalizeTimestamp(destination.CreatedAt) &&
         NormalizeTimestamp(source.UpdatedAt) == NormalizeTimestamp(destination.UpdatedAt);
 
@@ -268,6 +401,8 @@ public sealed class SqliteToPostgresMigrator
         source.ApprovedBy == destination.ApprovedBy &&
         NormalizeTimestamp(source.ApprovedAt) == NormalizeTimestamp(destination.ApprovedAt) &&
         source.IdentityKey == destination.IdentityKey &&
+        source.Revision == destination.Revision &&
+        source.CurrentRevisionId == destination.CurrentRevisionId &&
         NormalizeTimestamp(source.CreatedAt) == NormalizeTimestamp(destination.CreatedAt) &&
         NormalizeTimestamp(source.UpdatedAt) == NormalizeTimestamp(destination.UpdatedAt);
 
@@ -297,6 +432,29 @@ public sealed class SqliteToPostgresMigrator
         source.SerializedState == destination.SerializedState &&
         NormalizeTimestamp(source.StartedAt) == NormalizeTimestamp(destination.StartedAt) &&
         NormalizeTimestamp(source.EndedAt) == NormalizeTimestamp(destination.EndedAt);
+
+    private static bool AddressedMessageMatches(AddressedMessage source, AddressedMessage destination) =>
+        source.ProjectId == destination.ProjectId &&
+        source.Sender == destination.Sender &&
+        source.SenderIdentity == destination.SenderIdentity &&
+        source.Recipient == destination.Recipient &&
+        source.SourceRunId == destination.SourceRunId &&
+        source.TargetRunId == destination.TargetRunId &&
+        source.ThreadId == destination.ThreadId &&
+        source.ReplyToId == destination.ReplyToId &&
+        source.ReferenceKind == destination.ReferenceKind &&
+        source.ReferenceId == destination.ReferenceId &&
+        source.IdempotencyKey == destination.IdempotencyKey &&
+        source.Content == destination.Content &&
+        source.Status == destination.Status &&
+        source.ClaimOwner == destination.ClaimOwner &&
+        source.Fence == destination.Fence &&
+        source.FailureReason == destination.FailureReason &&
+        source.CreatedAt == destination.CreatedAt &&
+        source.ExpiresAt == destination.ExpiresAt &&
+        source.ClaimedUntil == destination.ClaimedUntil &&
+        source.DeliveredAt == destination.DeliveredAt &&
+        source.AcknowledgedAt == destination.AcknowledgedAt;
 
     private async Task MigrateGitHubConnectionsRecordsAsync(string memoryDbPath, MemoryDbContext destination, CancellationToken ct)
     {
@@ -560,6 +718,75 @@ public sealed class SqliteToPostgresMigrator
             """, ct).ConfigureAwait(false);
     }
 
+    internal static async Task<(bool MemoryRevisionsPresent, bool DecisionRevisionsPresent)>
+        PrepareKnowledgeRevisionSourceSchemaAsync(
+        MemoryDbContext source,
+        CancellationToken ct)
+    {
+        if (!await HasTableAsync(source, "AgentMemory", ct).ConfigureAwait(false))
+            return (true, true);
+
+        var memoryRevisionsPresent = await HasTableAsync(source, "agent_memory_revisions", ct)
+            .ConfigureAwait(false);
+        var decisionRevisionsPresent = await HasTableAsync(source, "decision_revisions", ct)
+            .ConfigureAwait(false);
+
+        if (!await HasColumnAsync(source, "AgentMemory", "CurrentRevisionId", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "AgentMemory" ADD COLUMN "CurrentRevisionId" TEXT NOT NULL DEFAULT '';""", ct);
+        if (!await HasColumnAsync(source, "AgentMemory", "Revision", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "AgentMemory" ADD COLUMN "Revision" INTEGER NOT NULL DEFAULT 1;""", ct);
+        if (!await HasColumnAsync(source, "AgentMemory", "Status", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "AgentMemory" ADD COLUMN "Status" TEXT NOT NULL DEFAULT 'active';""", ct);
+        if (!await HasColumnAsync(source, "AgentMemory", "ReplacedById", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "AgentMemory" ADD COLUMN "ReplacedById" INTEGER NULL;""", ct);
+        if (!await HasColumnAsync(source, "Decisions", "CurrentRevisionId", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "Decisions" ADD COLUMN "CurrentRevisionId" TEXT NOT NULL DEFAULT '';""", ct);
+        if (!await HasColumnAsync(source, "Decisions", "Revision", ct).ConfigureAwait(false))
+            await source.Database.ExecuteSqlRawAsync(
+                """ALTER TABLE "Decisions" ADD COLUMN "Revision" INTEGER NOT NULL DEFAULT 1;""", ct);
+
+        await source.Database.ExecuteSqlRawAsync("""
+            CREATE TABLE IF NOT EXISTS "agent_memory_revisions" (
+                "RevisionId" TEXT NOT NULL PRIMARY KEY, "MemoryId" INTEGER NOT NULL,
+                "ProjectId" TEXT NOT NULL, "Revision" INTEGER NOT NULL,
+                "PreviousRevisionId" TEXT NULL, "Actor" TEXT NOT NULL,
+                "SourceRunId" TEXT NULL, "Reason" TEXT NOT NULL, "AgentName" TEXT NOT NULL,
+                "SessionId" TEXT NULL, "Type" TEXT NOT NULL, "Importance" TEXT NOT NULL,
+                "Content" TEXT NOT NULL, "Tags" TEXT NULL, "Status" TEXT NOT NULL,
+                "ReplacedById" INTEGER NULL, "SourceKind" TEXT NOT NULL,
+                "SourceIdentityFingerprint" TEXT NULL, "SourceRunReference" TEXT NULL,
+                "TrustState" TEXT NOT NULL, "ApprovedByFingerprint" TEXT NULL,
+                "ApprovedAt" TEXT NULL, "CreatedAt" TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS "decision_revisions" (
+                "RevisionId" TEXT NOT NULL PRIMARY KEY, "DecisionId" INTEGER NOT NULL,
+                "ProjectId" TEXT NOT NULL, "Revision" INTEGER NOT NULL,
+                "PreviousRevisionId" TEXT NULL, "Actor" TEXT NOT NULL,
+                "SourceRunId" TEXT NULL, "Reason" TEXT NOT NULL, "AgentName" TEXT NOT NULL,
+                "Type" TEXT NOT NULL, "Status" TEXT NOT NULL, "Title" TEXT NOT NULL,
+                "Content" TEXT NOT NULL, "Rationale" TEXT NULL, "Tags" TEXT NULL,
+                "SupersededById" INTEGER NULL, "SourceKind" TEXT NOT NULL,
+                "SourceIdentityFingerprint" TEXT NULL, "SourceRunReference" TEXT NULL,
+                "TrustState" TEXT NOT NULL, "ApprovedByFingerprint" TEXT NULL,
+                "ApprovedAt" TEXT NULL, "CreatedAt" TEXT NOT NULL);
+            """, ct);
+
+        return (memoryRevisionsPresent, decisionRevisionsPresent);
+    }
+
+    private static string LegacyRevisionId(string kind, int id) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{kind}:{id}")))[..32]
+            .ToLowerInvariant();
+
+    private static string? Fingerprint(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
     private static async Task<bool> HasMigrationHistoryAsync(MemoryDbContext source, CancellationToken ct) =>
         await HasTableAsync(source, "__EFMigrationsHistory", ct).ConfigureAwait(false);
 
@@ -657,6 +884,140 @@ public sealed class SqliteToPostgresMigrator
         await db.SaveChangesAsync(ct);
         _logger.LogInformation("  Runs: {Migrated}/{Total} migrated, {Skipped} skipped.",
             runsMigrated, runs.Count, runs.Count - runsMigrated);
+
+        if (await HasTableAsync(conn, "run_output_revisions", ct))
+        {
+            var hasCollectiveColumns = await HasColumnAsync(conn, "run_output_revisions", "output_kind", ct);
+            var hasRetainedTree = await HasColumnAsync(conn, "run_output_revisions", "tree_content", ct);
+            await using var outputCommand = conn.CreateCommand();
+            outputCommand.CommandText =
+                $"""
+                SELECT revision_id, schema_version, run_id, lifecycle_generation, workflow_digest,
+                       manifest_incomplete, tree_hash, diff_sha256, predecessor_revision_id, diff_bytes, created_at,
+                       {(hasCollectiveColumns
+                           ? "output_kind, merged_commit_hash, work_plan_id, merge_effect_id, accepted_no_change"
+                           : "NULL, NULL, NULL, NULL, 0")},
+                        {(hasRetainedTree ? "tree_content, tree_content_sha256" : "NULL, NULL")}
+                FROM run_output_revisions ORDER BY run_id, lifecycle_generation;
+                """;
+            var outputRevisions = new List<RunOutputRevisionRecord>();
+            await using (var reader = await outputCommand.ExecuteReaderAsync(ct))
+            {
+                while (await reader.ReadAsync(ct))
+                {
+                    var revision = new RunOutputRevision(
+                        reader.GetString(0), reader.GetInt32(1), new RunId(Guid.Parse(reader.GetString(2))),
+                        reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetInt32(5) != 0,
+                        reader.GetString(6), reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8),
+                        reader.IsDBNull(9) ? null : reader.GetFieldValue<byte[]>(9), ParseTs(reader.GetString(10)),
+                        reader.IsDBNull(11) ? null : reader.GetString(11),
+                        reader.IsDBNull(12) ? null : reader.GetString(12),
+                        reader.IsDBNull(13) ? null : reader.GetString(13),
+                        reader.IsDBNull(14) ? null : reader.GetString(14), reader.GetInt32(15) != 0,
+                        reader.IsDBNull(16) ? null : reader.GetFieldValue<byte[]>(16),
+                        reader.IsDBNull(17) ? null : reader.GetString(17));
+                    outputRevisions.Add(new RunOutputRevisionRecord
+                    {
+                        RevisionId = revision.RevisionId,
+                        SchemaVersion = revision.SchemaVersion,
+                        RunId = revision.RunId.ToString(),
+                        LifecycleGeneration = revision.LifecycleGeneration,
+                        WorkflowDigest = revision.WorkflowDigest,
+                        ManifestIncomplete = revision.ManifestIncomplete,
+                        TreeHash = revision.TreeHash,
+                        DiffSha256 = revision.DiffSha256,
+                        PredecessorRevisionId = revision.PredecessorRevisionId,
+                        OutputKind = revision.OutputKind,
+                        MergedCommitHash = revision.MergedCommitHash,
+                        WorkPlanId = revision.WorkPlanId,
+                        MergeEffectId = revision.MergeEffectId,
+                        AcceptedNoChange = revision.AcceptedNoChange,
+                        DiffBytes = revision.DiffBytes,
+                        TreeContent = revision.TreeContent,
+                        TreeContentSha256 = revision.TreeContentSha256,
+                        CreatedAt = revision.CreatedAt
+                    });
+                }
+            }
+            var sourceRunsById = runs.ToDictionary(r => r.RunId, StringComparer.Ordinal);
+            foreach (var sourceRun in runs)
+            {
+                if (sourceRun.CurrentOutputRevisionId is not null
+                    && !outputRevisions.Any(r => r.RunId == sourceRun.RunId
+                        && r.RevisionId == sourceRun.CurrentOutputRevisionId))
+                    throw new InvalidOperationException(
+                        $"Source run {sourceRun.RunId} has no current output revision to migrate.");
+            }
+            foreach (var revision in outputRevisions)
+            {
+                var destinationRun = await db.Runs.AsNoTracking()
+                    .SingleOrDefaultAsync(r => r.RunId == revision.RunId, ct);
+                if (!sourceRunsById.TryGetValue(revision.RunId, out var sourceRun)
+                    || destinationRun is null
+                    || destinationRun.LifecycleGeneration != sourceRun.LifecycleGeneration
+                    || destinationRun.Status != sourceRun.Status
+                    || destinationRun.CurrentOutputRevisionId != sourceRun.CurrentOutputRevisionId
+                    || destinationRun.ApprovedOutputRevisionId != sourceRun.ApprovedOutputRevisionId
+                    || destinationRun.TreeHash != sourceRun.TreeHash
+                    || destinationRun.Diff != sourceRun.Diff
+                    || revision.LifecycleGeneration > destinationRun.LifecycleGeneration
+                    || (revision.LifecycleGeneration == destinationRun.LifecycleGeneration
+                        && destinationRun.CurrentOutputRevisionId != revision.RevisionId))
+                    throw new InvalidOperationException(
+                        $"Destination run {revision.RunId} does not match output revision {revision.RevisionId}; rerun migration against a consistent run snapshot.");
+                var existing = await db.RunOutputRevisions.AsNoTracking()
+                    .SingleOrDefaultAsync(r => r.RevisionId == revision.RevisionId, ct);
+                if (existing is not null)
+                {
+                    var verified = new RunOutputRevision(
+                        existing.RevisionId, existing.SchemaVersion, new RunId(Guid.Parse(existing.RunId)),
+                        existing.LifecycleGeneration, existing.WorkflowDigest, existing.ManifestIncomplete,
+                        existing.TreeHash, existing.DiffSha256, existing.PredecessorRevisionId,
+                        existing.DiffBytes, existing.CreatedAt, existing.OutputKind,
+                        existing.MergedCommitHash, existing.WorkPlanId,
+                        existing.MergeEffectId, existing.AcceptedNoChange,
+                        existing.TreeContent, existing.TreeContentSha256);
+                    if (verified.RunId.ToString() != revision.RunId
+                        || existing.LifecycleGeneration != revision.LifecycleGeneration
+                        || existing.DiffSha256 != revision.DiffSha256
+                        || existing.TreeHash != revision.TreeHash
+                        || existing.WorkflowDigest != revision.WorkflowDigest
+                        || existing.ManifestIncomplete != revision.ManifestIncomplete
+                        || existing.PredecessorRevisionId != revision.PredecessorRevisionId
+                        || existing.OutputKind != revision.OutputKind
+                        || existing.MergedCommitHash != revision.MergedCommitHash
+                        || existing.WorkPlanId != revision.WorkPlanId
+                        || existing.MergeEffectId != revision.MergeEffectId
+                        || existing.AcceptedNoChange != revision.AcceptedNoChange
+                        || existing.TreeContentSha256 != revision.TreeContentSha256
+                        || !(existing.TreeContent ?? []).AsSpan().SequenceEqual(revision.TreeContent ?? [])
+                        || existing.CreatedAt != revision.CreatedAt
+                        || !verified.DiffBytes.AsSpan().SequenceEqual(revision.DiffBytes))
+                        throw new InvalidOperationException("Conflicting output revision in destination database.");
+                    continue;
+                }
+                db.RunOutputRevisions.Add(revision);
+            }
+            await db.SaveChangesAsync(ct);
+        }
+
+        var executionIdentities = await ReadExecutionIdentitiesAsync(conn, ct);
+        _logger.LogInformation("Migrating {Count} execution identities...", executionIdentities.Count);
+        var executionIdentitiesMigrated = 0;
+        foreach (var rec in executionIdentities)
+        {
+            if (!await db.ExecutionIdentities.AnyAsync(
+                    identity => identity.DescriptorId == rec.DescriptorId, ct))
+            {
+                db.ExecutionIdentities.Add(rec);
+                executionIdentitiesMigrated++;
+            }
+        }
+        await db.SaveChangesAsync(ct);
+        _logger.LogInformation("  ExecutionIdentities: {Migrated}/{Total} migrated, {Skipped} skipped.",
+            executionIdentitiesMigrated,
+            executionIdentities.Count,
+            executionIdentities.Count - executionIdentitiesMigrated);
 
         var revisions = await ReadRunRevisionsAsync(conn, ct);
         _logger.LogInformation("Migrating {Count} run revisions...", revisions.Count);
@@ -1001,12 +1362,31 @@ public sealed class SqliteToPostgresMigrator
         return false;
     }
 
+    private static async Task<bool> HasTableAsync(
+        SqliteConnection conn,
+        string table,
+        CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT 1
+              FROM sqlite_master
+             WHERE type = 'table' AND name = $table;
+            """;
+        cmd.Parameters.AddWithValue("$table", table);
+        return await cmd.ExecuteScalarAsync(ct).ConfigureAwait(false) is not null;
+    }
+
     private static async Task<List<ProjectRecord>> ReadProjectsAsync(SqliteConnection conn, CancellationToken ct)
     {
         var results = new List<ProjectRecord>();
         var teamRevision = await HasColumnAsync(conn, "projects", "team_revision", ct)
             ? "team_revision"
             : "0 AS team_revision";
+        var graphRevision = await HasColumnAsync(conn, "projects", "backlog_graph_revision", ct)
+            ? "backlog_graph_revision"
+            : "0 AS backlog_graph_revision";
         var webhookSecret = await HasColumnAsync(conn, "projects", "webhook_secret", ct)
             ? "webhook_secret"
             : "NULL AS webhook_secret";
@@ -1032,7 +1412,7 @@ public sealed class SqliteToPostgresMigrator
                    default_workflow_id, active_review_policy_name, sandbox_profile,
                    source_blueprint_id, source_blueprint_type,
                    blueprint_generation_model, workflow_generation_model, outcome_spec_generation_model,
-                   allowed_workflow_ids, {webhookSecret}, {teamRevision}
+                   allowed_workflow_ids, {webhookSecret}, {teamRevision}, {graphRevision}
               FROM projects;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1070,6 +1450,7 @@ public sealed class SqliteToPostgresMigrator
                 AllowedWorkflowIds = reader.IsDBNull(27) ? null : reader.GetString(27),
                 WebhookSecret = reader.IsDBNull(28) ? null : reader.GetString(28),
                 TeamRevision = reader.GetInt64(29),
+                BacklogGraphRevision = reader.GetInt64(30),
             });
         }
         return results;
@@ -1081,6 +1462,51 @@ public sealed class SqliteToPostgresMigrator
         var approvalGenerationColumn = await HasColumnAsync(conn, "runs", "approval_generation", ct)
             ? "COALESCE(approval_generation, 1)"
             : "1";
+        var executableWorkflowPinRequired = await HasColumnAsync(conn, "runs", "executable_workflow_pin_required", ct)
+            ? "COALESCE(executable_workflow_pin_required, 0)"
+            : "0 AS executable_workflow_pin_required";
+        var executableWorkflowManifestSchemaVersion = await HasColumnAsync(conn, "runs", "executable_workflow_manifest_schema_version", ct)
+            ? "executable_workflow_manifest_schema_version"
+            : "NULL AS executable_workflow_manifest_schema_version";
+        var executableWorkflowDefinitionId = await HasColumnAsync(conn, "runs", "executable_workflow_definition_id", ct)
+            ? "executable_workflow_definition_id"
+            : "NULL AS executable_workflow_definition_id";
+        var executableWorkflowDefinitionVersion = await HasColumnAsync(conn, "runs", "executable_workflow_definition_version", ct)
+            ? "executable_workflow_definition_version"
+            : "NULL AS executable_workflow_definition_version";
+        var executableWorkflowSource = await HasColumnAsync(conn, "runs", "executable_workflow_source", ct)
+            ? "executable_workflow_source"
+            : "NULL AS executable_workflow_source";
+        var executableWorkflowContentDigest = await HasColumnAsync(conn, "runs", "executable_workflow_content_digest", ct)
+            ? "executable_workflow_content_digest"
+            : "NULL AS executable_workflow_content_digest";
+        var executableWorkflowDefinitionYaml = await HasColumnAsync(conn, "runs", "executable_workflow_definition_yaml", ct)
+            ? "executable_workflow_definition_yaml"
+            : "NULL AS executable_workflow_definition_yaml";
+        var executableWorkflowPinnedAt = await HasColumnAsync(conn, "runs", "executable_workflow_pinned_at", ct)
+            ? "executable_workflow_pinned_at"
+            : "NULL AS executable_workflow_pinned_at";
+        var approvedRevisionId = await HasColumnAsync(conn, "runs", "approved_output_revision_id", ct)
+            ? "approved_output_revision_id"
+            : "NULL AS approved_output_revision_id";
+        var currentOutputRevisionId = await HasColumnAsync(conn, "runs", "current_output_revision_id", ct)
+            ? "current_output_revision_id"
+            : "NULL AS current_output_revision_id";
+        var lifecycleGeneration = await HasColumnAsync(conn, "runs", "lifecycle_generation", ct)
+            ? "lifecycle_generation"
+            : "1 AS lifecycle_generation";
+        var executionInputRequired = await HasColumnAsync(conn, "runs", "execution_input_required", ct)
+            ? "COALESCE(execution_input_required, 0)"
+            : "0 AS execution_input_required";
+        var executionInputSourceCommitHash = await HasColumnAsync(conn, "runs", "execution_input_source_commit_hash", ct)
+            ? "execution_input_source_commit_hash"
+            : "NULL AS execution_input_source_commit_hash";
+        var executionInputCommitHash = await HasColumnAsync(conn, "runs", "execution_input_commit_hash", ct)
+            ? "execution_input_commit_hash"
+            : "NULL AS execution_input_commit_hash";
+        var executionInputCompositeId = await HasColumnAsync(conn, "runs", "execution_input_composite_id", ct)
+            ? "execution_input_composite_id"
+            : "NULL AS execution_input_composite_id";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
             $"""
@@ -1091,7 +1517,22 @@ public sealed class SqliteToPostgresMigrator
                   reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
                   COALESCE(origin,'interactive'), retried_from, review_ready_at, archived_at,
                   sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace,
-                  {approvalGenerationColumn}
+                  {approvalGenerationColumn},
+                  {executableWorkflowPinRequired},
+                  {executableWorkflowManifestSchemaVersion},
+                  {executableWorkflowDefinitionId},
+                  {executableWorkflowDefinitionVersion},
+                  {executableWorkflowSource},
+                  {executableWorkflowContentDigest},
+                  {executableWorkflowDefinitionYaml},
+                  {executableWorkflowPinnedAt},
+                  {approvedRevisionId},
+                  {lifecycleGeneration},
+                  {currentOutputRevisionId},
+                  {executionInputRequired},
+                  {executionInputSourceCommitHash},
+                  {executionInputCommitHash},
+                  {executionInputCompositeId}
               FROM runs;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1132,6 +1573,71 @@ public sealed class SqliteToPostgresMigrator
                 SandboxPodName = reader.IsDBNull(30) ? null : reader.GetString(30),
                 SandboxNamespace = reader.IsDBNull(31) ? null : reader.GetString(31),
                 ApprovalGeneration = reader.GetInt32(32),
+                ExecutableWorkflowPinRequired = reader.GetInt32(33) != 0,
+                ExecutableWorkflowManifestSchemaVersion = reader.IsDBNull(34) ? null : reader.GetInt32(34),
+                ExecutableWorkflowDefinitionId = reader.IsDBNull(35) ? null : reader.GetString(35),
+                ExecutableWorkflowDefinitionVersion = reader.IsDBNull(36) ? null : reader.GetString(36),
+                ExecutableWorkflowSource = reader.IsDBNull(37) ? null : reader.GetString(37),
+                ExecutableWorkflowContentDigest = reader.IsDBNull(38) ? null : reader.GetString(38),
+                ExecutableWorkflowDefinitionYaml = reader.IsDBNull(39) ? null : reader.GetString(39),
+                ExecutableWorkflowPinnedAt = reader.IsDBNull(40) ? null : ParseTs(reader.GetString(40)),
+                ApprovedOutputRevisionId = reader.IsDBNull(41) ? null : reader.GetString(41),
+                LifecycleGeneration = reader.GetInt32(42),
+                CurrentOutputRevisionId = reader.IsDBNull(43) ? null : reader.GetString(43),
+                ExecutionInputRequired = reader.GetInt32(44) != 0,
+                ExecutionInputSourceCommitHash = reader.IsDBNull(45) ? null : reader.GetString(45),
+                ExecutionInputCommitHash = reader.IsDBNull(46) ? null : reader.GetString(46),
+                ExecutionInputCompositeId = reader.IsDBNull(47) ? null : reader.GetString(47),
+            });
+        }
+        return results;
+    }
+
+    private static async Task<List<ExecutionIdentityRecord>> ReadExecutionIdentitiesAsync(
+        SqliteConnection conn,
+        CancellationToken ct)
+    {
+        if (!await HasTableAsync(conn, "execution_identities", ct))
+            return [];
+
+        var results = new List<ExecutionIdentityRecord>();
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT descriptor_id, schema_version, run_id, attempt, project_id,
+                   initiating_principal_id, executing_service_id, agent_assignment_id,
+                   agent_role, agent_display_name, parent_run_id, parent_descriptor_id,
+                   retry_of_run_id, retry_of_descriptor_id, workflow_run_id, subtask_id,
+                   approval_policy_snapshot_id, executable_workflow_content_digest, created_at
+              FROM execution_identities;
+            """;
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new ExecutionIdentityRecord
+            {
+                DescriptorId = reader.GetString(0),
+                SchemaVersion = reader.GetInt32(1),
+                RunId = reader.GetString(2),
+                Attempt = reader.GetInt32(3),
+                ProjectId = reader.IsDBNull(4) ? null : reader.GetString(4),
+                InitiatingPrincipalId = reader.GetString(5),
+                ExecutingServiceId = reader.GetString(6),
+                AgentAssignmentId = reader.GetString(7),
+                AgentRole = reader.IsDBNull(8) ? null : reader.GetString(8),
+                AgentDisplayName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                ParentRunId = reader.IsDBNull(10) ? null : reader.GetString(10),
+                ParentDescriptorId = reader.IsDBNull(11) ? null : reader.GetString(11),
+                RetryOfRunId = reader.IsDBNull(12) ? null : reader.GetString(12),
+                RetryOfDescriptorId = reader.IsDBNull(13) ? null : reader.GetString(13),
+                WorkflowRunId = reader.IsDBNull(14) ? null : reader.GetString(14),
+                SubtaskId = reader.IsDBNull(15) ? null : reader.GetString(15),
+                ApprovalPolicySnapshotId = reader.IsDBNull(16) ? null : reader.GetString(16),
+                ExecutableWorkflowContentDigest = reader.IsDBNull(17) ? null : reader.GetString(17),
+                CreatedAt = DateTimeOffset.Parse(
+                    reader.GetString(18),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind),
             });
         }
         return results;
@@ -1185,14 +1691,23 @@ public sealed class SqliteToPostgresMigrator
     private static async Task<List<BacklogTaskRecord>> ReadBacklogTasksAsync(SqliteConnection conn, CancellationToken ct)
     {
         var results = new List<BacklogTaskRecord>();
+        var claimRevision = await HasColumnAsync(conn, "backlog_tasks", "claimed_graph_revision", ct)
+            ? "claimed_graph_revision"
+            : "NULL AS claimed_graph_revision";
+        var claimInputs = await HasColumnAsync(conn, "backlog_tasks", "claimed_prerequisites_json", ct)
+            ? "claimed_prerequisites_json"
+            : "NULL AS claimed_prerequisites_json";
+        var readyByUserId = await HasColumnAsync(conn, "backlog_tasks", "ready_by_user_id", ct)
+            ? "ready_by_user_id"
+            : "NULL AS ready_by_user_id";
         await using var cmd = conn.CreateCommand();
         cmd.CommandText =
-            """
+            $"""
             SELECT task_id, project_id, title, description, state, order_key,
                    captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
                    workflow_override_id, archived_at, source_file_path,
                    parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending,
-                   ai_execution_provider_key
+                   ai_execution_provider_key, {claimRevision}, {claimInputs}, {readyByUserId}
               FROM backlog_tasks;
             """;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1220,6 +1735,9 @@ public sealed class SqliteToPostgresMigrator
                 PromotionReason = reader.IsDBNull(17) ? null : reader.GetString(17),
                 IsAutomationInvocationPending = reader.GetInt64(18) != 0,
                 AiExecutionProviderKey = reader.IsDBNull(19) ? null : reader.GetString(19),
+                ClaimedGraphRevision = reader.IsDBNull(20) ? null : reader.GetInt64(20),
+                ClaimedPrerequisitesJson = reader.IsDBNull(21) ? null : reader.GetString(21),
+                ReadyByUserId = reader.IsDBNull(22) ? null : reader.GetString(22),
             });
         }
         return results;

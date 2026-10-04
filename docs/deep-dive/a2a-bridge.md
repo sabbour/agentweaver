@@ -38,6 +38,8 @@ The claim/configure sequence distinguishes listener liveness from configured rea
 
 Production launch supplies a fresh turn bearer. The A2A middleware compares it when a nonempty token is configured; the optional request field is not unconditional endpoint enforcement. `/configure` cannot authenticate with the token it delivers. NetworkPolicy and configured transport protections are separate controls; the additive preview ingress range also includes port 8088 (see [network-policy limitations](./infra-deployment.md#network-policy-model)).
 
+The claim is also stamped with the active durable run-lease fencing token. After process recovery or child-dispatch takeover increments that token, a new API worker rejects the older claim, stops its pod, and configures a replacement before delivering another turn. This prevents two AgentHost turns from sharing one run identity or publishing competing worktree results.
+
 ## Security boundary
 
 The sandbox pod has no database connection and does not hold an `ICheckpointStore`. It cannot retrieve ambient user credentials from Key Vault, CSI volumes, shared storage, or host configuration.

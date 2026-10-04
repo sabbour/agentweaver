@@ -168,6 +168,55 @@ public sealed class AuthenticationSchemeCutoverTests : IClassFixture<EntraWebApp
     }
 
     [Fact]
+    public void PermissionInspection_SelectsRunCapabilityAuthentication()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var context = new DefaultHttpContext { RequestServices = scope.ServiceProvider };
+        context.SetEndpoint(new Endpoint(
+            _ => Task.CompletedTask,
+            new EndpointMetadataCollection(
+                new EndpointAuthorizationMetadata(
+                    EndpointAuthorizationKind.PlatformMcpOrRunCapability)),
+            "effective-permissions"));
+        context.Request.Headers.Authorization = "Bearer run-capability-token";
+        context.Request.Headers[RunAuthorshipHeaders.RunId] = "run-id";
+        context.Request.Headers[RunAuthorshipHeaders.RunToken] = "run-capability-token";
+
+        AgentweaverAuthentication.SelectScheme(context)
+            .Should().Be(AgentweaverAuthenticationSchemes.RunCapability);
+    }
+
+    [Fact]
+    public async Task PermissionInspection_SelectsMcpBrokerAuthentication()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var token = await scope.ServiceProvider
+            .GetRequiredService<IOperatorAssistantBrokerTokenIssuer>()
+            .IssueAsync(
+                new Agentweaver.Api.Security.CallerContext
+                {
+                    User = "permission-inspector",
+                    AuthenticationScheme = AgentweaverAuthenticationSchemes.Entra,
+                    PlatformRoles = [PlatformRoles.Contributor],
+                    PrimaryPlatformRole = PlatformRoles.Contributor,
+                },
+                runId: "run-id",
+                projectId: null,
+                CancellationToken.None);
+        var context = new DefaultHttpContext { RequestServices = scope.ServiceProvider };
+        context.SetEndpoint(new Endpoint(
+            _ => Task.CompletedTask,
+            new EndpointMetadataCollection(
+                new EndpointAuthorizationMetadata(
+                    EndpointAuthorizationKind.PlatformMcpOrRunCapability)),
+            "effective-permissions"));
+        context.Request.Headers.Authorization = $"Bearer {token}";
+
+        AgentweaverAuthentication.SelectScheme(context)
+            .Should().Be(AgentweaverAuthenticationSchemes.BrokerBearer);
+    }
+
+    [Fact]
     public async Task ForgedHostHeaders_DoNotSteerEntraValidation()
     {
         using var client = _factory.CreateClient();

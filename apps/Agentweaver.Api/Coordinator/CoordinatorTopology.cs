@@ -77,6 +77,8 @@ public static class CoordinatorTopology
                 childRunId = s.ChildRunId,
                 phase = (string?)s.Phase,
                 isolation = (string?)s.IsolationStrategy,
+                workflowBranchNodeId = s.WorkflowBranchNodeId,
+                workflowBranchOrdinal = s.WorkflowBranchOrdinal,
                 executionPodName = string.IsNullOrEmpty(s.ChildRunId) ? null : podRegistry?.TryGet(s.ChildRunId),
             });
         }
@@ -136,6 +138,8 @@ public static class CoordinatorTopology
         agent = (string?)s.AssignedAgent,
         model = (string?)s.SelectedModelId,
         childRunId = s.ChildRunId,
+        workflowBranchNodeId = s.WorkflowBranchNodeId,
+        workflowBranchOrdinal = s.WorkflowBranchOrdinal,
         executionPodName = string.IsNullOrEmpty(s.ChildRunId) ? null : podRegistry?.TryGet(s.ChildRunId),
     };
 

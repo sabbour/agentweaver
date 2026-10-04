@@ -9,6 +9,7 @@ import { chromium } from '@playwright/test';
 import { openBrowserSession } from '../lib/browser.mjs';
 import { attachPageCapture } from '../lib/evidence.mjs';
 import { executeUiAction } from '../lib/ui-actions.mjs';
+import { computeDriverP0 } from '../lib/reporter-ui.mjs';
 
 const fixture = `<!doctype html>
 <html>
@@ -22,7 +23,7 @@ const fixture = `<!doctype html>
   </head>
   <body>
     <nav data-testid="app-navigation-menu">Runs</nav>
-    <main>
+    <main aria-label="Main content">
       <button data-testid="run-focus-toggle" aria-label="Enter focus mode" aria-pressed="false">Focus</button>
       <section data-testid="run-operator-console">Run content</section>
     </main>
@@ -50,7 +51,7 @@ const reachabilityFixture = `<!doctype html>
   <body>
     <nav data-testid="app-navigation-menu">Runs</nav>
     <button data-testid="run-focus-toggle" aria-label="Enter focus mode" aria-pressed="false">Focus</button>
-    <main>
+    <main aria-label="Main content">
       <section data-testid="reachable-content">Reachable content</section>
       <div data-testid="clipped-container">
         <section data-testid="clipped-content">Clipped content</section>
@@ -69,14 +70,45 @@ const rootOverflowFixture = (overflowY) => `<!doctype html>
   <body>
     <nav data-testid="app-navigation-menu">Runs</nav>
     <button data-testid="run-focus-toggle" aria-label="Enter focus mode" aria-pressed="false">Focus</button>
-    <main data-testid="run-operator-console">Run content</main>
+    <main aria-label="Main content" data-testid="run-operator-console">Run content</main>
+  </body>
+</html>`;
+const workflowListFixture = `<!doctype html>
+<html>
+  <head>
+    <style>
+      html, body { margin: 0; }
+      nav { height: 40px; }
+      main { padding: 12px; }
+      [data-testid^="workflow-card-"] { box-sizing: border-box; width: 100%; padding: 8px; }
+      [data-testid="workflow-card-custom-fan-coordinator-demo"] > div { display: flex; flex-wrap: wrap; gap: 4px; }
+      button { min-height: 32px; }
+    </style>
+  </head>
+  <body>
+    <nav data-testid="app-navigation-menu">Workflows</nav>
+    <main aria-label="Main content">
+      <article data-testid="workflow-card-other"><button>View graph</button><input aria-label="Instructions"></article>
+      <article data-testid="workflow-card-custom-fan-coordinator-demo">
+        <div data-testid="workflow-summary">Summary</div>
+        <div data-testid="workflow-controls">
+          <button>View graph</button><button>Run</button><button>Edit</button>
+          <button>Copy</button><button>History</button><button>Delete</button>
+          <input aria-label="Instructions">
+        </div>
+      </article>
+    </main>
+    <script>
+      document.querySelectorAll('button').forEach((button) =>
+        button.addEventListener('click', () => button.setAttribute('data-clicked', 'true')));
+    </script>
   </body>
 </html>`;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const TEST_BROWSER_ENV = {
+const TEST_BROWSER_ENVIRONMENT = Object.freeze({
   NODE_ENV: 'test',
   AGENTWEAVER_UI_HARNESS_TEST_BROWSER: '1',
-};
+});
 
 async function listen(server) {
   await new Promise((resolve, reject) => {
@@ -88,6 +120,23 @@ async function listen(server) {
 
 async function close(server) {
   await new Promise((resolve) => server.close(resolve));
+}
+
+async function cleanupFixture(runtime, directory, server) {
+  const errors = [];
+  for (const cleanup of [
+    () => runtime?.close(),
+    () => rm(directory, { recursive: true, force: true }),
+    () => close(server),
+  ]) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'failed to clean responsive viewport fixture');
 }
 
 test('desktop, constrained-height, and mobile viewport evidence is deterministic', { timeout: 180_000 }, async () => {
@@ -107,7 +156,7 @@ test('desktop, constrained-height, and mobile viewport evidence is deterministic
     runtime = await openBrowserSession({
       baseUrl: `http://127.0.0.1:${port}`,
       headless: true,
-    }, { chromium, environment: TEST_BROWSER_ENV });
+    }, { chromium, environment: TEST_BROWSER_ENVIRONMENT });
     const capture = attachPageCapture(runtime.page);
     const session = { persona: { text: 'Test persona' } };
     const execute = (eventId, args) => executeUiAction({
@@ -151,9 +200,7 @@ test('desktop, constrained-height, and mobile viewport evidence is deterministic
     assert.equal(mobile.assertions.every((assertion) => assertion.observed), true);
     assert.equal(JSON.stringify([desktop, constrained, mobile]).includes('viewport-canary'), false);
   } finally {
-    if (runtime) await runtime.close();
-    await rm(directory, { recursive: true, force: true });
-    await close(server);
+    await cleanupFixture(runtime, directory, server);
   }
 });
 
@@ -174,7 +221,7 @@ test('target-specific scrolling distinguishes reachable and nested-clipped conte
     runtime = await openBrowserSession({
       baseUrl: `http://127.0.0.1:${port}`,
       headless: true,
-    }, { chromium, environment: TEST_BROWSER_ENV });
+    }, { chromium, environment: TEST_BROWSER_ENVIRONMENT });
     const capture = attachPageCapture(runtime.page);
     const session = { persona: { text: 'Test persona' } };
     const execute = (eventId, args) => executeUiAction({
@@ -221,10 +268,104 @@ test('target-specific scrolling distinguishes reachable and nested-clipped conte
       false,
     );
   } finally {
-    if (runtime) await runtime.close();
-    await rm(directory, { recursive: true, force: true });
-    await close(server);
+    await cleanupFixture(runtime, directory, server);
   }
+});
+
+test('workflow list scoping and declared focus N/A retain measured card layout and P0 truth', { timeout: 180_000 }, async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { connection: 'close', 'content-type': 'text/html; charset=utf-8' });
+      response.end(workflowListFixture);
+    });
+    const port = await listen(server);
+    const directory = path.join(HERE, `.responsive-${randomUUID()}`);
+    let runtime;
+    try {
+      runtime = await openBrowserSession({
+        baseUrl: `http://127.0.0.1:${port}`, headless: true,
+      }, { chromium, environment: TEST_BROWSER_ENVIRONMENT });
+      const capture = attachPageCapture(runtime.page);
+      const execute = (id, args) => executeUiAction({
+        runtime, capture, session: { persona: { text: 'Test persona' } },
+        args, eventId: id, transcriptDirectory: directory,
+      });
+      await runtime.goto('/projects/project-1/workflows?private=redacted');
+      const click = await execute(1, {
+        _: ['click'], 'within-test-id': 'workflow-card-custom-fan-coordinator-demo',
+        role: 'button', name: 'View graph',
+      });
+      assert.equal(click.target.withinTestId, 'workflow-card-custom-fan-coordinator-demo');
+      assert.equal(await runtime.page.locator('[data-testid="workflow-card-other"] button[data-clicked]').count(), 0);
+      assert.equal(await runtime.page.locator('[data-testid="workflow-card-custom-fan-coordinator-demo"] button[data-clicked]').count(), 1);
+      await assert.rejects(execute(2, {
+        _: ['click'], 'within-test-id': 'workflow-card-absent', role: 'button', name: 'View graph',
+        timeout: '200',
+      }), /Timeout|waiting for/);
+      const typed = await execute(8, {
+        _: ['type-coordinator'], 'within-test-id': 'workflow-card-custom-fan-coordinator-demo',
+        role: 'textbox', name: 'Instructions', text: 'fixture-only',
+      });
+      assert.equal(typed.target.withinTestId, 'workflow-card-custom-fan-coordinator-demo');
+      assert.equal(await runtime.page.locator('[data-testid="workflow-card-other"] input').inputValue(), '');
+      assert.equal(await runtime.page.locator('[data-testid="workflow-card-custom-fan-coordinator-demo"] input').inputValue(), 'fixture-only');
+      const undeclared = await execute(9, {
+        _: ['viewport'], width: '1920', height: '1080',
+        'content-test-id': 'workflow-card-custom-fan-coordinator-demo',
+      });
+      assert.equal(undeclared.assertions.find((entry) => entry.category === 'focus-mode').required, true);
+      assert.equal(computeDriverP0([undeclared]).pass, false);
+
+      const steps = [];
+      for (const [index, size] of [{ width: '1920', height: '1080' }, { mobile: true }].entries()) {
+        const step = await execute(index + 3, {
+          _: ['viewport'], ...size, 'focus-mode': 'not-applicable',
+          'content-test-id': 'workflow-card-custom-fan-coordinator-demo',
+        });
+        steps.push(step);
+        assert.equal(step.responsive.focusMode.exists, false);
+        assert.equal(step.responsive.focusMode.reachable, false);
+        assert.equal(step.responsive.focusMode.status, 'not-applicable');
+        const focusAssertion = step.assertions.find((entry) => entry.category === 'focus-mode');
+        assert.deepEqual([focusAssertion.required, focusAssertion.observed, focusAssertion.status],
+          [false, false, 'not-applicable']);
+        assert.equal(step.responsive.content.layout.horizontalOverflow, false);
+        assert(step.responsive.content.layout.clientWidth > 0);
+        assert(step.responsive.content.layout.scrollWidth <= step.responsive.content.layout.clientWidth);
+        assert.equal(step.responsive.content.layout.children.length, 2);
+        assert(step.responsive.content.layout.children[0].bounds.bottom
+          <= step.responsive.content.layout.children[1].bounds.top);
+        assert.equal(step.responsive.content.layout.buttons.length, 6);
+        assert(step.responsive.content.layout.buttons.every((button) => button.reachable && button.bounds.width > 0));
+        assert.equal(step.overflow.horizontal, false);
+        assert.equal(computeDriverP0([step]).pass, true);
+        assert.equal(JSON.stringify(step).includes('private=redacted'), false);
+      }
+      assert.deepEqual(steps.map((step) => step.viewport.width), [1920, 390]);
+      assert.equal(computeDriverP0([{
+        ...steps[0], assertions: steps[0].assertions.map((entry) =>
+          entry.category === 'overflow' && entry.target === 'horizontal-overflow-contained'
+            ? { ...entry, observed: false } : entry),
+      }]).pass, false);
+      await runtime.goto('/runs/fixture');
+      await assert.rejects(execute(5, {
+        _: ['viewport'], width: '1280', height: '720', 'focus-mode': 'not-applicable',
+      }), /workflow-list route/);
+      await runtime.goto('/projects/project-1/workflows');
+      await runtime.page.locator('main').evaluate((main) => {
+        const toggle = document.createElement('button');
+        toggle.dataset.testid = 'run-focus-toggle';
+        main.append(toggle);
+      });
+      await assert.rejects(execute(6, {
+        _: ['viewport'], width: '1280', height: '720', 'focus-mode': 'not-applicable',
+      }), /without a run focus control/);
+      await assert.rejects(execute(7, {
+        _: ['viewport'], width: '1280', height: '720', 'focus-mode': 'not-applicable',
+        'focus-test-id': 'missing-toggle',
+      }), /without a run focus control/);
+    } finally {
+      await cleanupFixture(runtime, directory, server);
+    }
 });
 
 test('root vertical overflow requires a reversible user-scrollable overflow mode', { timeout: 180_000 }, async () => {
@@ -249,7 +390,7 @@ test('root vertical overflow requires a reversible user-scrollable overflow mode
     runtime = await openBrowserSession({
       baseUrl: `http://127.0.0.1:${port}`,
       headless: true,
-    }, { chromium, environment: TEST_BROWSER_ENV });
+    }, { chromium, environment: TEST_BROWSER_ENVIRONMENT });
     const capture = attachPageCapture(runtime.page);
     const session = { persona: { text: 'Test persona' } };
     const execute = (eventId, args) => executeUiAction({
@@ -282,8 +423,6 @@ test('root vertical overflow requires a reversible user-scrollable overflow mode
       assert.equal(overflowAssertion(results[mode]).observed, false);
     }
   } finally {
-    if (runtime) await runtime.close();
-    await rm(directory, { recursive: true, force: true });
-    await close(server);
+    await cleanupFixture(runtime, directory, server);
   }
 });

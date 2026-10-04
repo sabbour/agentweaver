@@ -1,10 +1,15 @@
+using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using System.Text.Json;
 using static Agentweaver.Tests.Backlog.BacklogTestData;
 
 namespace Agentweaver.Tests.PostgresIntegration;
@@ -18,6 +23,52 @@ namespace Agentweaver.Tests.PostgresIntegration;
 [Trait("Category", "PostgresIntegration")]
 public sealed class MigrationValidityTests(PostgresFixture pg)
 {
+    [PostgresFact]
+    public async Task CoordinatorPin_CommitsWithRunLock_AndRollsBackWithPlanTransaction()
+    {
+        var runId = Guid.NewGuid().ToString();
+        await using var db = await pg.CreateDbContextAsync();
+        db.Runs.Add(new RunRecord
+        {
+            RunId = runId,
+            RepositoryPath = "/r",
+            OriginatingBranch = "main",
+            ModelSource = "github_copilot",
+            Task = "draft",
+            SubmittingUser = "u",
+            Status = "in_progress",
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var definition = BuiltInWorkflows.Default.Definition!;
+        var pin = ExecutableWorkflowSnapshots.Create(definition, "coordinator-selection");
+
+        await using (var tx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, runId, null, CancellationToken.None, null, lockUnfenced: true))
+        {
+            await CoordinatorOrchestratorExecutor.PinSelectedWorkflowAsync(
+                db, tx!, runId, pin, CancellationToken.None);
+        }
+
+        await using (var verify = await pg.CreateDbContextAsync())
+            (await verify.Runs.SingleAsync(r => r.RunId == runId))
+                .ExecutableWorkflowDefinitionYaml.Should().BeNull();
+
+        db.ChangeTracker.Clear();
+        await using (var tx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, runId, null, CancellationToken.None, null, lockUnfenced: true))
+        {
+            await CoordinatorOrchestratorExecutor.PinSelectedWorkflowAsync(
+                db, tx!, runId, pin, CancellationToken.None);
+            await tx!.CommitAsync(CancellationToken.None);
+        }
+
+        await using var committed = await pg.CreateDbContextAsync();
+        var row = await committed.Runs.SingleAsync(r => r.RunId == runId);
+        row.ExecutableWorkflowDefinitionId.Should().Be(definition.Id);
+        row.ExecutableWorkflowContentDigest.Should().Be(ExecutableWorkflowSnapshots.Digest(row.ExecutableWorkflowDefinitionYaml!));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 1. MIGRATION: schema applied cleanly, all tables / indexes / triggers exist
     // ─────────────────────────────────────────────────────────────────────────
@@ -38,6 +89,7 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         migrations.Should().Contain("20260717003000_AddSkillProjectOwnershipCascades");
         migrations.Should().Contain("20260921182700_AddTerminalRunOutcomes");
         migrations.Should().Contain("20260922030000_AddTerminalProjectionEventSequence");
+        migrations.Should().Contain("20260925165110_AddExecutableWorkflowPins");
     }
 
     [PostgresFact]
@@ -186,6 +238,203 @@ public sealed class MigrationValidityTests(PostgresFixture pg)
         var (claimed2, token2) = await store.TryClaimAsync(runId, "worker-B", TimeSpan.FromSeconds(30));
         claimed2.Should().BeTrue("worker-B should reclaim the expired lease");
         token2.Should().BeGreaterThan(token1, "fencing token must be strictly increasing");
+        (await store.GetActiveClaimAsync(runId)).Should().Be(
+            new RunLeaseClaim("worker-B", token2, 1),
+            "AgentHost adoption must bind to the same durable lease generation");
+    }
+
+    [PostgresFact]
+    public async Task Lease_ExpiredLease_CannotBeRenewedByStaleOwner()
+    {
+        var runId = "run-stale-renew-" + Guid.NewGuid().ToString("N")[..8];
+        await using var db = await pg.CreateDbContextAsync();
+        db.Runs.Add(new Agentweaver.Api.Memory.RunRecord
+        {
+            RunId = runId,
+            RepositoryPath = "/r",
+            OriginatingBranch = "main",
+            ModelSource = "github_copilot",
+            Task = "t",
+            SubmittingUser = "u",
+            Status = "in_progress",
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var store = new PostgresRunLeaseStore(pg.Factory);
+        var (claimed, token) = await store.TryClaimAsync(
+            runId,
+            "worker-A",
+            TimeSpan.FromMilliseconds(100));
+        claimed.Should().BeTrue();
+
+        await Task.Delay(TimeSpan.FromMilliseconds(250));
+
+        var renewed = await store.TryRenewAsync(
+            runId,
+            "worker-A",
+            token,
+            TimeSpan.FromSeconds(30));
+        renewed.Should().BeFalse("an expired fencing claim must not be resurrected");
+    }
+
+    [PostgresFact]
+    public async Task Lease_Takeover_FencesStaleTerminalAndEventWrites()
+    {
+        var runId = RunId.New().ToString();
+        await using var db = await pg.CreateDbContextAsync();
+        db.Runs.Add(new Agentweaver.Api.Memory.RunRecord
+        {
+            RunId = runId,
+            RepositoryPath = "/r",
+            OriginatingBranch = "main",
+            ModelSource = "github-copilot",
+            Task = "t",
+            SubmittingUser = "u",
+            Status = "in_progress",
+            StartedAt = DateTimeOffset.UtcNow,
+            LifecycleGeneration = 1,
+        });
+        await db.SaveChangesAsync();
+
+        var leaseStore = new PostgresRunLeaseStore(pg.Factory);
+        var runStore = new EfRunStore(pg.Factory);
+        var eventStream = new EfRunEventStream(pg.Factory);
+        var (claimedA, tokenA) = await leaseStore.TryClaimAsync(
+            runId,
+            "worker-A",
+            TimeSpan.FromMilliseconds(100));
+        claimedA.Should().BeTrue();
+        await Task.Delay(TimeSpan.FromMilliseconds(250));
+        var (claimedB, _) = await leaseStore.TryClaimAsync(
+            runId,
+            "worker-B",
+            TimeSpan.FromSeconds(30));
+        claimedB.Should().BeTrue();
+
+        var staleFence = new RunLeaseFence("worker-A", tokenA, 1);
+        var terminalized = await runStore.TryMutateTerminalOutcomeAsync(
+            RunId.Parse(runId),
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(
+                    RunStatus.Failed,
+                    EventTypes.RunFailed,
+                    new { reason = "stale" },
+                    DateTimeOffset.UtcNow,
+                    1),
+                "stale",
+                RequiredLease: staleFence));
+        var events = await eventStream.AppendWhileRunLeaseOwnedAsync(
+            runId,
+            [new RunEvent(0, EventTypes.AgentMessageDelta, new { text = "stale" })],
+            runStore,
+            staleFence);
+
+        terminalized.Should().BeFalse();
+        events.Should().BeEmpty();
+        (await runStore.GetAsync(RunId.Parse(runId)))!.Status.Should().Be(RunStatus.InProgress);
+        (await eventStream.GetPersistedEventsAsync(runId)).Should().BeEmpty();
+    }
+
+    [PostgresFact]
+    public async Task Lease_CurrentTokenWithReopenedGeneration_FencesClosureAndTerminalWrites()
+    {
+        var runId = RunId.New().ToString();
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            db.Runs.Add(new Agentweaver.Api.Memory.RunRecord
+            {
+                RunId = runId,
+                RepositoryPath = "/r",
+                OriginatingBranch = "main",
+                ModelSource = "github-copilot",
+                Task = "reopened watcher",
+                SubmittingUser = "u",
+                Status = "in_progress",
+                StartedAt = DateTimeOffset.UtcNow,
+                LifecycleGeneration = 1,
+            });
+            await db.SaveChangesAsync();
+        }
+        var leases = new PostgresRunLeaseStore(pg.Factory);
+        var runs = new EfRunStore(pg.Factory);
+        var stream = new EfRunEventStream(pg.Factory);
+        var (claimed, token) = await leases.TryClaimAsync(runId, "same-owner", TimeSpan.FromMinutes(5));
+        claimed.Should().BeTrue();
+        await using (var db = await pg.CreateDbContextAsync())
+            await db.Runs.Where(r => r.RunId == runId)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.LifecycleGeneration, 2));
+
+        var marker = new RunEvent(0, "watch.stream_closed_without_terminal_event",
+            new { lifecycleGeneration = 1 });
+        var stale = new RunLeaseFence("same-owner", token, 1);
+        (await stream.AppendWhileRunLeaseOwnedAsync(runId, [marker], runs, stale)).Should().BeEmpty();
+        var outcome = TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+            new { reason = "stale" }, DateTimeOffset.UtcNow, 1);
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(runId),
+            new TerminalRunMutation(outcome, "stale", RequiredLease: stale))).Should().BeFalse();
+        (await stream.GetPersistedEventsAsync(runId)).Should().BeEmpty();
+
+        var current = new RunLeaseFence("same-owner", token, 2);
+        (await stream.AppendWhileRunLeaseOwnedAsync(runId,
+            [marker with { Payload = new { lifecycleGeneration = 2 } }], runs, current))
+            .Should().ContainSingle();
+        outcome = TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+            new { reason = "current" }, DateTimeOffset.UtcNow, 2);
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(runId),
+            new TerminalRunMutation(outcome, "current", RequiredLease: current))).Should().BeTrue();
+        (await runs.GetAsync(RunId.Parse(runId)))!.Status.Should().Be(RunStatus.Failed);
+    }
+
+    [PostgresFact]
+    public async Task RecoveryTerminal_ParentGenerationAndCompetingOwner_AreCheckedAtWrite()
+    {
+        var parentId = RunId.New().ToString();
+        var childId = RunId.New().ToString();
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            foreach (var id in new[] { parentId, childId })
+                db.Runs.Add(new RunRecord
+                {
+                    RunId = id, RepositoryPath = "/r", OriginatingBranch = "main",
+                    ModelSource = ModelSource.GitHubCopilot.ToApiString(), Task = "t", SubmittingUser = "u",
+                    Status = "in_progress", StartedAt = DateTimeOffset.UtcNow,
+                    LifecycleGeneration = 1, ParentRunId = id == childId ? parentId : null,
+                });
+            await db.SaveChangesAsync();
+        }
+
+        var leases = new PostgresRunLeaseStore(pg.Factory);
+        var runs = new EfRunStore(pg.Factory);
+        var (claimed, token) = await leases.TryClaimAsync(childId, "owner", TimeSpan.FromMinutes(1));
+        claimed.Should().BeTrue();
+        var outcome = TerminalRunOutcome.Create(
+            RunStatus.Failed, EventTypes.RunFailed, new { reason = "failure" }, DateTimeOffset.UtcNow, 1);
+        var owned = new TerminalRunMutation(outcome, "failure",
+            RequiredLease: new RunLeaseFence("owner", token, 1),
+            ExpectedParentLifecycleGeneration: 1);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            await db.Runs.Where(r => r.RunId == parentId)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.LifecycleGeneration, 2));
+        }
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(childId), owned)).Should().BeFalse();
+        (await runs.GetAsync(RunId.Parse(childId)))!.Status.Should().Be(RunStatus.InProgress);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            await db.Runs.Where(r => r.RunId == parentId)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.LifecycleGeneration, 1));
+        }
+        await leases.ReleaseAsync(childId, "owner", token);
+        var (reclaimed, newToken) = await leases.TryClaimAsync(childId, "successor", TimeSpan.FromMinutes(1));
+        reclaimed.Should().BeTrue();
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(childId), owned)).Should().BeFalse();
+        (await runs.TryMutateTerminalOutcomeAsync(RunId.Parse(childId), owned with
+        {
+            RequiredLease = new RunLeaseFence("successor", newToken, 1)
+        })).Should().BeTrue();
+        (await runs.GetUnprojectedTerminalOutcomesAsync()).Should().Contain(
+            pending => pending.RunId == RunId.Parse(childId));
     }
 }
 
@@ -329,14 +578,18 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
-        var first = await store.TryStartMergingAsync(runId);
+        (await store.TryStartMergingAsync(runId)).Should().BeFalse(
+            "a published revision cannot be approved through the legacy CAS");
+        var first = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         first.Should().BeTrue("first CAS must win on awaiting_review run");
 
         var afterFirst = await store.GetAsync(runId);
         afterFirst!.Status.Should().Be(RunStatus.Merging);
+        afterFirst.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
 
-        var second = await store.TryStartMergingAsync(runId);
+        var second = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         second.Should().BeFalse("second CAS must lose because run is already merging");
 
         var afterSecond = await store.GetAsync(runId);
@@ -349,13 +602,16 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
-        await store.TryStartMergingAsync(runId);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         var reverted = await store.RevertMergingAsync(runId);
         reverted.Should().BeTrue();
 
         var run = await store.GetAsync(runId);
         run!.Status.Should().Be(RunStatus.AwaitingReview);
+        run.ApprovedOutputRevisionId.Should().BeNull();
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
     }
 
     [PostgresFact]
@@ -363,7 +619,8 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
-        await store.TryStartMergingAsync(runId);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         var endedAt = DateTimeOffset.UtcNow;
         var result = "merged:abc1234";
@@ -373,6 +630,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
         var run = await store.GetAsync(runId);
         run!.Status.Should().Be(RunStatus.Merged);
         run.Result.Should().Be(result);
+        run.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
         run.EndedAt.Should().NotBeNull();
     }
 
@@ -381,7 +639,8 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     {
         var store = new EfRunStore(pg.Factory);
         var runId = await InsertAwaitingReviewRunAsync(store);
-        await store.TryStartMergingAsync(runId);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         var act = () => store.TrySetTerminalStatusAsync(
             runId, RunStatus.Failed, DateTimeOffset.UtcNow, "send_response_failed");
@@ -457,7 +716,9 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
     // Dormancy CAS (HITL resumability v2): InProgress -> Idle park and
     // Idle -> InProgress wake, each single-winner across replicas.
     // ─────────────────────────────────────────────────────────────────────────
-    private async Task<RunId> InsertInProgressRunAsync(EfRunStore store)
+    private async Task<RunId> InsertInProgressRunAsync(
+        EfRunStore store,
+        bool executionInputRequired = false)
     {
         var runId = RunId.New();
         await store.InsertAsync(new Run
@@ -465,6 +726,7 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
             Id = runId,
             RepositoryPath = "/repo",
             OriginatingBranch = "main",
+            ExecutionInputRequired = executionInputRequired,
             ModelSource = ModelSource.GitHubCopilot,
             Task = "idle cas test",
             SubmittingUser = "alice",
@@ -472,6 +734,27 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
             StartedAt = DateTimeOffset.UtcNow,
         });
         return runId;
+    }
+
+    [PostgresFact]
+    public async Task ExecutionInputBindingIsDurableIdempotentAndConflictSafe()
+    {
+        var store = new EfRunStore(pg.Factory);
+        var runId = await InsertInProgressRunAsync(store, executionInputRequired: true);
+        var generation = (await store.GetAsync(runId))!.LifecycleGeneration;
+
+        (await store.TryBindExecutionInputAsync(
+            runId, generation, "source", "materialized", "sha256:composite")).Should().BeTrue();
+        (await store.TryBindExecutionInputAsync(
+            runId, generation, "source", "materialized", "sha256:composite")).Should().BeTrue();
+        (await store.TryBindExecutionInputAsync(
+            runId, generation, "other", "other", "sha256:other")).Should().BeFalse();
+
+        var persisted = await store.GetAsync(runId);
+        persisted!.ExecutionInputRequired.Should().BeTrue();
+        persisted.ExecutionInputSourceCommitHash.Should().Be("source");
+        persisted.ExecutionInputCommitHash.Should().Be("materialized");
+        persisted.ExecutionInputCompositeId.Should().Be("sha256:composite");
     }
 
     [PostgresFact]
@@ -513,6 +796,31 @@ public sealed class EfRunStoreCasTests(PostgresFixture pg)
 [Trait("Category", "PostgresIntegration")]
 public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
 {
+    [PostgresFact]
+    public async Task ReReady_FencesOldActorAndKeyAndPersistsBothTogether()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var task = MakeBacklogTask(project.Id, "ready-actor");
+        await store.InsertAsync(task);
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "ready-actor", DateTimeOffset.UtcNow,
+            providerKey: "first-key", readyByUserId: "first-human")).Should().BeTrue();
+        (await store.TryMoveToBacklogAsync(project.Id, task.Id, "ready-actor")).Should().BeTrue();
+        var cleared = (await store.GetAsync(project.Id, task.Id))!;
+        cleared.ReadyByUserId.Should().BeNull();
+        cleared.AiExecutionProviderKey.Should().BeNull();
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "ready-actor", DateTimeOffset.UtcNow,
+            providerKey: "second-key", readyByUserId: "second-human")).Should().BeTrue();
+        var staleRun = MakeCoordinatorRun(project.Id, RunId.New());
+        (await store.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            project.Id, task.Id, staleRun, DateTimeOffset.UtcNow,
+            expectedProviderKey: "first-key", expectedReadyByUserId: "first-human"))
+            .Result.Should().Be(ClaimReserveResult.Lost);
+        var current = (await store.GetAsync(project.Id, task.Id))!;
+        current.AiExecutionProviderKey.Should().Be("second-key");
+        current.ReadyByUserId.Should().Be("second-human");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 4. PARTIAL UNIQUE INDEX + CONCURRENT CLAIM
     // ─────────────────────────────────────────────────────────────────────────
@@ -554,6 +862,11 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
         var claimResult = await store.TryClaimAndReserveCoordinatorRunAsync(
             project.Id, readyTask.Id, coordinatorRun, DateTimeOffset.UtcNow);
         claimResult.Should().Be(ClaimReserveResult.Won);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            (await db.ExecutionIdentities.CountAsync(identity => identity.RunId == runId.ToString()))
+                .Should().Be(1);
+        }
 
         // Insert a second task with the same key in 'ready' — allowed because the first is now 'claimed'
         var newReadyTask = MakeReadyTask(project.Id, "key-x");
@@ -590,6 +903,186 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
     }
 
     [PostgresFact]
+    public async Task Claim_HoldsPrerequisiteOutcomeThroughDependentWrite()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var runs = new EfRunStore(pg.Factory);
+        var prerequisite = MakeReadyTask(project.Id, "prerequisite");
+        var dependent = MakeReadyTask(project.Id, "dependent");
+        await store.InsertAsync(prerequisite);
+        await store.InsertAsync(dependent);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            db.BacklogTaskDependencies.Add(new Agentweaver.Api.Memory.BacklogTaskDependencyRecord
+            {
+                ProjectId = project.Id.ToString(),
+                TaskId = dependent.Id.ToString(),
+                DependsOnTaskId = prerequisite.Id.ToString(),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var prerequisiteRunId = RunId.New();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id, prerequisite.Id, MakeCoordinatorRun(project.Id, prerequisiteRunId),
+            DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Won);
+        await runs.PinDefaultExecutableWorkflowForTestAsync(prerequisiteRunId);
+        var producer = (await runs.GetAsync(prerequisiteRunId))!;
+        (await runs.TryMutateTerminalOutcomeAsync(prerequisiteRunId, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, "run.completed",
+                new { result = "confirmed" }, DateTimeOffset.UtcNow, producer.LifecycleGeneration),
+            "confirmed", NoChangeOutput: new NoChangeOutputPublication(
+                "accepted-commit", "accepted-tree", RunOutputTree.Encode([]))))).Should().BeTrue();
+
+        var gate = "aw_claim_gate_" + Guid.NewGuid().ToString("N");
+        var lockKey = Random.Shared.NextInt64(1, long.MaxValue);
+        await using var blocker = new NpgsqlConnection(pg.ConnectionString);
+        await blocker.OpenAsync();
+        await using (var setup = new NpgsqlCommand(
+            $"""
+             CREATE FUNCTION {gate}() RETURNS trigger AS $$
+             BEGIN
+                 PERFORM pg_advisory_xact_lock({lockKey});
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql;
+             CREATE TRIGGER {gate} BEFORE UPDATE ON backlog_tasks
+             FOR EACH ROW WHEN (OLD.task_id = '{dependent.Id}')
+             EXECUTE FUNCTION {gate}();
+             """, blocker))
+            await setup.ExecuteNonQueryAsync();
+
+        Task<ClaimReserveResult>? claim = null;
+        try
+        {
+            await using (var hold = new NpgsqlCommand($"SELECT pg_advisory_lock({lockKey})", blocker))
+                await hold.ExecuteNonQueryAsync();
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var dependentRunId = RunId.New();
+            claim = store.TryClaimAndReserveCoordinatorRunAsync(
+                project.Id, dependent.Id, MakeCoordinatorRun(project.Id, dependentRunId),
+                DateTimeOffset.UtcNow, timeout.Token);
+
+            var waiting = false;
+            for (var attempt = 0; attempt < 200 && !waiting; attempt++)
+            {
+                await using var observer = new NpgsqlConnection(pg.ConnectionString);
+                await observer.OpenAsync();
+                await using var check = new NpgsqlCommand(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'advisory' AND query LIKE '%backlog_tasks%')",
+                    observer);
+                waiting = (bool)(await check.ExecuteScalarAsync())!;
+                if (!waiting)
+                    await Task.Delay(25);
+            }
+            waiting.Should().BeTrue("the dependent claim must reach its exact UPDATE boundary");
+
+            await using (var writer = new NpgsqlConnection(pg.ConnectionString))
+            {
+                await writer.OpenAsync();
+                await using var change = new NpgsqlCommand(
+                    "SET lock_timeout = '400ms'; UPDATE runs SET status = 'failed', result = 'failed' WHERE run_id = @runId",
+                    writer);
+                change.Parameters.AddWithValue("runId", prerequisiteRunId.ToString());
+                var attempt = () => change.ExecuteNonQueryAsync();
+                (await attempt.Should().ThrowAsync<PostgresException>())
+                    .Which.SqlState.Should().Be(PostgresErrorCodes.LockNotAvailable,
+                        "the prerequisite cannot change while the dependent claim is at its write boundary");
+            }
+
+            await using (var release = new NpgsqlCommand($"SELECT pg_advisory_unlock({lockKey})", blocker))
+                await release.ExecuteNonQueryAsync();
+            (await claim).Should().Be(ClaimReserveResult.Won);
+
+            var claimed = await store.GetAsync(project.Id, dependent.Id);
+            var snapshot = JsonSerializer.Deserialize<BacklogClaimedPrerequisite[]>(
+                claimed!.ClaimedPrerequisitesJson!)!;
+            snapshot.Should().ContainSingle().Which.Should().Match<BacklogClaimedPrerequisite>(
+                input => input.RunId == prerequisiteRunId.ToString()
+                    && input.LifecycleGeneration == producer.LifecycleGeneration);
+            await using var db = await pg.CreateDbContextAsync();
+            (await db.Runs.CountAsync(r => r.RunId == dependentRunId.ToString())).Should().Be(1);
+        }
+        finally
+        {
+            await using (var release = new NpgsqlCommand($"SELECT pg_advisory_unlock({lockKey})", blocker))
+                await release.ExecuteNonQueryAsync();
+            if (claim is not null)
+            {
+                try { await claim; } catch (OperationCanceledException) { }
+            }
+            await using var cleanup = new NpgsqlCommand(
+                $"DROP TRIGGER {gate} ON backlog_tasks; DROP FUNCTION {gate}()", blocker);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
+    public async Task IntegratedRunWithoutTree_BlocksDependentBeforeLimitAndAtClaim()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var source = MakeReadyTask(project.Id, "a");
+        var dependent = MakeReadyTask(project.Id, "b");
+        await store.InsertAsync(source);
+        await store.InsertAsync(dependent);
+        await store.EditDependenciesAsync(project.Id, 0,
+            new BacklogDependencyEdit(dependent.Id, [source.Id], []));
+        var runId = RunId.New();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id, source.Id, MakeCoordinatorRun(project.Id, runId),
+            DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Won);
+        await using (var db = await pg.CreateDbContextAsync())
+            await db.Runs.Where(r => r.RunId == runId.ToString())
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "completed")
+                    .SetProperty(r => r.Result, "assembly_complete")
+                    .SetProperty(r => r.MergedCommitHash, "accepted-commit"));
+
+        (await store.ListDependencyStatusesAsync(project.Id, [dependent.Id]))
+            .Should().ContainSingle(s => !s.IsSatisfied && s.Reason == "upstream_output_identity_unavailable");
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Should().BeEmpty();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(
+            project.Id, dependent.Id, MakeCoordinatorRun(project.Id, RunId.New()),
+            DateTimeOffset.UtcNow)).Should().Be(ClaimReserveResult.Lost);
+    }
+
+    [PostgresFact]
+    public async Task ConfirmedNoChangeWithRetainedReceiptCanBeClaimed()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var runs = new EfRunStore(pg.Factory);
+        var source = MakeReadyTask(project.Id, "no-change-source");
+        var dependent = MakeReadyTask(project.Id, "no-change-dependent");
+        await store.InsertAsync(source);
+        await store.InsertAsync(dependent);
+        await store.EditDependenciesAsync(project.Id, 0,
+            new BacklogDependencyEdit(dependent.Id, [source.Id], []));
+        var id = RunId.New();
+        (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, source.Id,
+            MakeCoordinatorRun(project.Id, id), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Won);
+        await runs.PinDefaultExecutableWorkflowForTestAsync(id);
+        var producer = (await runs.GetAsync(id))!;
+        (await runs.TryMutateTerminalOutcomeAsync(id, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, "run.completed",
+                new { result = "confirmed" }, DateTimeOffset.UtcNow, producer.LifecycleGeneration),
+            "confirmed", NoChangeOutput: new NoChangeOutputPublication(
+                "base-commit", "base-tree", RunOutputTree.Encode([]))))).Should().BeTrue();
+
+        (await store.ListDependencyStatusesAsync(project.Id, [dependent.Id]))
+            .Should().ContainSingle(status => status.IsSatisfied && status.Reason == "accepted_no_change");
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id)
+            .Should().Contain(dependent.Id);
+        (await store.TryClaimAndReserveCoordinatorRunAsync(project.Id, dependent.Id,
+            MakeCoordinatorRun(project.Id, RunId.New()), DateTimeOffset.UtcNow))
+            .Should().Be(ClaimReserveResult.Won);
+    }
+
+    [PostgresFact]
     public async Task ListReadyForClaim_ReturnsByOrderKey_TopN()
     {
         var project = await InsertProjectAsync();
@@ -602,6 +1095,117 @@ public sealed class EfBacklogTaskStoreTests(PostgresFixture pg)
         var top3 = await store.ListReadyForClaimAsync(project.Id, 3);
         top3.Select(t => t.OrderKey).Should().Equal(new[] { "b", "c", "g" },
             "list must return top-N by ascending order_key");
+    }
+
+    [PostgresFact]
+    public async Task BlockedPrefixBeyondFourPickupWindows_FiltersBeforeLimit()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var initialReadyCount = await store.CountReadyForPickupAsync();
+        var prerequisite = MakeBacklogTask(project.Id, "prerequisite");
+        await store.InsertAsync(prerequisite);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            for (var i = 0; i < 25; i++)
+            {
+                var blocked = MakeReadyTask(project.Id, $"a{i:D3}");
+                await store.InsertAsync(blocked);
+                db.BacklogTaskDependencies.Add(new Agentweaver.Api.Memory.BacklogTaskDependencyRecord
+                {
+                    ProjectId = project.Id.ToString(),
+                    TaskId = blocked.Id.ToString(),
+                    DependsOnTaskId = prerequisite.Id.ToString(),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+            }
+
+            await db.SaveChangesAsync();
+        }
+        var ready = MakeReadyTask(project.Id, "z");
+        await store.InsertAsync(ready);
+
+        (await store.ListReadyForClaimAsync(project.Id, 3)).Select(t => t.Id).Should().Equal(ready.Id);
+        (await store.CountReadyForPickupAsync()).Should().Be(initialReadyCount + 1);
+    }
+
+    [PostgresFact]
+    public async Task ReverseIdTransitiveJoin_FiltersBeforeLimitAndOrdersEligibleTasks()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var ids = Enumerable.Range(0, 30).Select(_ => BacklogTaskId.New())
+            .OrderBy(id => id.ToString(), StringComparer.Ordinal).ToArray();
+        var upstream = MakeBacklogTask(project.Id, "source", ids[^1]);
+        var middle = MakeReadyTask(project.Id, "a000", ids[1]);
+        var downstream = MakeReadyTask(project.Id, "a001", ids[0]);
+        await store.InsertAsync(upstream);
+        await store.InsertAsync(middle);
+        await store.InsertAsync(downstream);
+        await using (var db = await pg.CreateDbContextAsync())
+        {
+            db.BacklogTaskDependencies.AddRange(new[] { (middle.Id, upstream.Id), (downstream.Id, middle.Id) }
+                .Select(edge => new BacklogTaskDependencyRecord
+                {
+                    ProjectId = project.Id.ToString(),
+                    TaskId = edge.Item1.ToString(),
+                    DependsOnTaskId = edge.Item2.ToString(),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                }));
+            for (var i = 2; i < 27; i++)
+            {
+                var blocked = MakeReadyTask(project.Id, $"a{i:D3}", ids[i]);
+                await store.InsertAsync(blocked);
+                db.BacklogTaskDependencies.Add(new BacklogTaskDependencyRecord
+                {
+                    ProjectId = project.Id.ToString(),
+                    TaskId = blocked.Id.ToString(),
+                    DependsOnTaskId = upstream.Id.ToString(),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+            }
+            await db.SaveChangesAsync();
+        }
+        var first = MakeReadyTask(project.Id, "z", ids[27]);
+        var second = MakeReadyTask(project.Id, "zz", ids[28]);
+        await store.InsertAsync(first);
+        await store.InsertAsync(second);
+
+        (await store.ListReadyForClaimAsync(project.Id, 1)).Select(t => t.Id).Should().Equal(first.Id);
+        (await store.ListReadyForClaimAsync(project.Id, 2)).Select(t => t.Id).Should().Equal(first.Id, second.Id);
+    }
+
+    [PostgresFact]
+    public async Task ConcurrentOppositeDependencyEdits_OnlyOneCommits()
+    {
+        var project = await InsertProjectAsync();
+        var store = new EfBacklogTaskStore(pg.Factory);
+        var a = MakeReadyTask(project.Id, "a");
+        var b = MakeReadyTask(project.Id, "b");
+        await store.InsertAsync(a);
+        await store.InsertAsync(b);
+
+        static async Task<bool> TryAddAsync(
+            EfBacklogTaskStore store, ProjectId projectId, BacklogTaskId target, BacklogTaskId source)
+        {
+            try
+            {
+                await store.EditDependenciesAsync(projectId, 0,
+                    new BacklogDependencyEdit(target, [source], []));
+                return true;
+            }
+            catch (BacklogDependencyEditException ex) when (ex.Message == "stale_graph_revision")
+            {
+                return false;
+            }
+        }
+
+        var outcomes = await Task.WhenAll(
+            TryAddAsync(store, project.Id, a.Id, b.Id),
+            TryAddAsync(store, project.Id, b.Id, a.Id));
+        outcomes.Should().ContainSingle(value => value);
+        (await store.GetDependencyRevisionAsync(project.Id)).Should().Be(1);
+        (await store.ListDependenciesAsync(project.Id, [a.Id, b.Id])).Should().ContainSingle();
     }
 
     [PostgresFact]

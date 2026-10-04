@@ -23,6 +23,7 @@ import type {
   AutoApproveResponse,
   AutopilotResponse,
   BacklogSettingsDto,
+  BacklogDependenciesResponse,
   BacklogTaskDto,
   ByokProviderConfig,
   ByokProviderListResponse,
@@ -338,6 +339,20 @@ export class AgentweaverApiClient {
     return this.request<RunDetail>('GET', `/runs/${encodeURIComponent(runId)}`);
   }
 
+  getRunEffectivePermissions(runId: string): Promise<import('./types').EffectivePermissionInspection> {
+    return this.request<import('./types').EffectivePermissionInspection>(
+      'GET',
+      `/runs/${encodeURIComponent(runId)}/effective-permissions`,
+    );
+  }
+
+  getRunExecutionIdentity(runId: string): Promise<import('./types').ExecutionIdentityProjection> {
+    return this.request<import('./types').ExecutionIdentityProjection>(
+      'GET',
+      `/runs/${encodeURIComponent(runId)}/execution-identity`,
+    );
+  }
+
   getRunTerminalDiagnostic(runId: string): Promise<import('./types').RunTerminalDiagnostic> {
     return this.request<import('./types').RunTerminalDiagnostic>(
       'GET',
@@ -429,6 +444,26 @@ export class AgentweaverApiClient {
   getRunFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return this.request<WorkspaceFileContent>('GET', `/runs/${encodeURIComponent(runId)}/files/${encoded}/content`);
+  }
+
+  getOutputRevisionHistory(runId: string): Promise<import('./types').OutputRevision[]> {
+    return this.request<import('./types').OutputRevision[]>('GET', `/runs/${encodeURIComponent(runId)}/output-revisions`);
+  }
+
+  getOutputRevision(runId: string, revisionId: string): Promise<import('./types').OutputRevision> {
+    return this.request<import('./types').OutputRevision>(
+      'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(revisionId)}`);
+  }
+
+  getOutputRevisionFile(runId: string, revisionId: string, path: string): Promise<import('./types').OutputRevisionFile> {
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return this.request<import('./types').OutputRevisionFile>(
+      'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(revisionId)}/files/${encoded}`);
+  }
+
+  compareOutputRevisions(runId: string, before: string, after: string): Promise<import('./types').OutputRevisionComparison> {
+    return this.request<import('./types').OutputRevisionComparison>(
+      'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(before)}/compare/${encodeURIComponent(after)}`);
   }
 
   getRunWorkspace(runId: string): Promise<WorkspaceNode[]> {
@@ -899,6 +934,40 @@ export class AgentweaverApiClient {
     );
   }
 
+  getAddressedMessages(projectId: string, runId?: string): Promise<import('./types').AddressedMessageDto[]> {
+    const query = runId ? `?run_id=${encodeURIComponent(runId)}` : '';
+    return this.request<import('./types').AddressedMessageDto[]>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/agent-messages${query}`,
+    );
+  }
+
+  getDecisionRevisions(
+    projectId: string,
+    decisionId: string,
+    options?: PagedRequestOptions,
+  ): Promise<PagedResult<import('./types').DecisionRevisionDto>> {
+    return this.request<PagedResult<import('./types').DecisionRevisionDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(decisionId)}/revisions${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
+  }
+
+  restoreDecision(
+    projectId: string,
+    decisionId: string,
+    expectedRevision: number,
+    revision: number,
+  ): Promise<import('./types').DecisionDto> {
+    return this.request(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(decisionId)}/restore`,
+      { expected_revision: expectedRevision, revision },
+    );
+  }
+
   mergeDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/merge`, {});
   }
@@ -920,10 +989,21 @@ export class AgentweaverApiClient {
     );
   }
 
-  getProjectMemory(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').AgentMemoryDto>> {
+  getProjectMemory(
+    projectId: string,
+    options?: PagedRequestOptions & { query?: string; type?: string; tags?: string; status?: string },
+  ): Promise<PagedResult<import('./types').AgentMemoryDto>> {
+    const query = new URLSearchParams();
+    if (options?.page != null) query.set('page', String(options.page));
+    if (options?.pageSize != null) query.set('page_size', String(options.pageSize));
+    if (options?.query) query.set('q', options.query);
+    if (options?.type) query.set('type', options.type);
+    if (options?.tags) query.set('tags', options.tags);
+    if (options?.status) query.set('status', options.status);
+    const qs = query.toString();
     return this.request<PagedResult<import('./types').AgentMemoryDto>>(
       'GET',
-      `/projects/${encodeURIComponent(projectId)}/memory${pagingQuery(options)}`,
+      `/projects/${encodeURIComponent(projectId)}/memory${qs ? `?${qs}` : ''}`,
       undefined,
       options?.signal,
     );
@@ -950,9 +1030,60 @@ export class AgentweaverApiClient {
     projectId: string,
     agentName: string,
     memoryId: string,
-    body: { type?: string; content?: string; importance?: string; tags?: string },
+    body: {
+      expected_revision: number;
+      type?: string;
+      content?: string;
+      importance?: string;
+      tags?: string;
+      status?: 'active' | 'superseded' | 'archived';
+      replaced_by_id?: number;
+      reason?: string;
+    },
   ): Promise<import('./types').AgentMemoryDto> {
     return this.request<import('./types').AgentMemoryDto>('PUT', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}`, body);
+  }
+
+  getAgentMemoryRevisions(
+    projectId: string,
+    agentName: string,
+    memoryId: string,
+    options?: PagedRequestOptions,
+  ): Promise<PagedResult<import('./types').AgentMemoryRevisionDto>> {
+    return this.request<PagedResult<import('./types').AgentMemoryRevisionDto>>(
+      'GET',
+      `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}/revisions${pagingQuery(options)}`,
+      undefined,
+      options?.signal,
+    );
+  }
+
+  compareAgentMemoryRevisions(
+    projectId: string,
+    agentName: string,
+    memoryId: string,
+    fromRevision: number,
+    toRevision: number,
+  ): Promise<{ from: import('./types').AgentMemoryRevisionDto; to: import('./types').AgentMemoryRevisionDto }> {
+    const query = new URLSearchParams({
+      from_revision: String(fromRevision),
+      to_revision: String(toRevision),
+    });
+    return this.request('GET', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}/compare?${query}`);
+  }
+
+  restoreAgentMemory(
+    projectId: string,
+    agentName: string,
+    memoryId: string,
+    expectedRevision: number,
+    revision: number,
+  ): Promise<import('./types').AgentMemoryDto> {
+    return this.request(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}/restore`,
+      { expected_revision: expectedRevision, revision },
+    );
   }
 
   // Skills (issues #51/#56) — per-project catalog + agent assignments.
@@ -1344,6 +1475,19 @@ export class AgentweaverApiClient {
 
   editBacklogTask(projectId: string, taskId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`, body);
+  }
+
+  editBacklogDependencies(
+    projectId: string,
+    taskId: string,
+    body: { expected_revision: number; add?: string[]; remove?: string[]; replace?: string[] },
+    preview = false,
+  ): Promise<BacklogDependenciesResponse> {
+    return this.request<BacklogDependenciesResponse>(
+      'POST',
+      `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/dependencies?preview=${preview}`,
+      body,
+    );
   }
 
   deleteBacklogTask(projectId: string, taskId: string): Promise<void> {

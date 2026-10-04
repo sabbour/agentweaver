@@ -292,16 +292,19 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var failedEvent = events.Should().NotBeNull().And.Subject
             .Single(e => e.GetProperty("type").GetString() == EventTypes.RunFailed);
         failedEvent.GetProperty("payload").GetProperty("errorCode").GetString()
-            .Should().Be("coordinator_execution_failed");
+            .Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        failedEvent.GetProperty("payload").GetProperty("retryable").GetBoolean().Should().BeTrue();
 
         var diagnostic = await _owner.GetFromJsonAsync<RunTerminalDiagnosticResponse>(
             $"/api/runs/{runId}/terminal-diagnostic");
         diagnostic.Should().NotBeNull();
-        diagnostic!.Code.Should().Be("coordinator_execution_failed");
-        diagnostic.Retryable.Should().BeFalse();
-        diagnostic.Message.Should().Be("Run failed with code 'coordinator_execution_failed'. Retry is not available.");
+        diagnostic!.Code.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        diagnostic.Retryable.Should().BeTrue();
+        diagnostic.Message.Should().Contain("stalled");
         diagnostic.CauseChain.Should().Contain("phase:coordinator-draft:failed");
         diagnostic.CauseChain.Should().Contain("reason:outcome_spec_draft_timeout");
+        diagnostic.ExecutionDescriptorId.Should().StartWith("execution-");
+        diagnostic.ExecutionIdentityEvidenceState.Should().BeOneOf("complete", "partial");
     }
 
     [Fact]
@@ -367,7 +370,8 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             .Subject;
         var payload = JsonSerializer.Deserialize<JsonElement>(failedEvent.PayloadJson);
         payload.GetProperty("errorCode").GetString()
-            .Should().Be("coordinator_execution_failed");
+            .Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
@@ -425,6 +429,172 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
             "Run failed with code 'github_copilot_models_unavailable'. Retry is not available.");
         payload.TryGetProperty("category", out _).Should().BeFalse();
         payload.GetProperty("retryable").GetBoolean().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Start_DraftProviderStreamStall_MapsToSingleRetryableCoordinatorTerminal()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ExceptionToThrow = new AgentProviderException(
+            ModelSource.GitHubCopilot,
+            AgentProviderFailureKind.ProviderUnavailable,
+            "github_copilot_turn_stalled",
+            "The provider stream stopped producing output.",
+            isRetryable: true);
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "A disconnected outcome-spec stream must become a typed terminal");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        run.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var durableFailures = await db.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+            .ToListAsync();
+        var payload = JsonSerializer.Deserialize<JsonElement>(
+            durableFailures.Should().ContainSingle().Subject.PayloadJson);
+        payload.GetProperty("errorCode").GetString()
+            .Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Start_Refusal_StatusPrecedesDiagnosticProjection()
+    {
+        using var factory = CoordinatorWebApplicationFactory.CreateWithPausedTerminalProjection();
+        using var owner = factory.CreateOwnerClient();
+        var dir = factory.NewWorkingDirectory();
+        var projectResponse = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Coordinator projection test {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = dir,
+        });
+        projectResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Coordinator Test");
+        var project = await projectResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var projectId = project.GetProperty("project_id").GetString()!;
+
+        factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject.ExceptionToThrow =
+            new AgentProviderException(
+                ModelSource.Byok,
+                AgentProviderFailureKind.ProviderUnavailable,
+                CoordinatorFailureCodes.OutcomeSpecModelRefused,
+                "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.",
+                isRetryable: true);
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var start = await owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations",
+            new { goal = "Draft a reviewable outcome spec", start_mode = "defineOutcome" });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var started = await start.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = started.GetProperty("runId").GetString()!;
+        var pause = factory.TerminalEventStream;
+        pause.Should().NotBeNull();
+        Task<RunTerminalDiagnosticResponse?>? diagnosticTask = null;
+        try
+        {
+            await pause.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var run = await GetRunAsync(owner, runId);
+            run.Should().NotBeNull();
+            run!.Status.Should().Be("failed");
+            run.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+
+            await using var scope = factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var terminalEvents = await db.RunEvents.AsNoTracking()
+                .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+                .ToListAsync();
+            terminalEvents.Should().BeEmpty("the typed terminal append is held before its durable write");
+
+            diagnosticTask = owner.GetFromJsonAsync<RunTerminalDiagnosticResponse>(
+                $"/api/runs/{runId}/terminal-diagnostic");
+            await pause.EnteredAgain.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            diagnosticTask.IsCompleted.Should().BeFalse(
+                "the first diagnostic must wait for the durable terminal event");
+        }
+        finally
+        {
+            pause.Resume.TrySetResult();
+        }
+        var firstDiagnostic = await diagnosticTask!.WaitAsync(TimeSpan.FromSeconds(10));
+        firstDiagnostic.Should().NotBeNull();
+        firstDiagnostic!.Code.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        firstDiagnostic.Retryable.Should().BeTrue();
+        firstDiagnostic.CauseChain.Should().Contain("reason:coordinator_outcome_spec_model_refused");
+
+        await using var finalScope = factory.Services.CreateAsyncScope();
+        var finalDb = finalScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var terminal = await finalDb.RunEvents.AsNoTracking()
+            .Where(e => e.RunId == runId && e.EventType == EventTypes.RunFailed)
+            .ToListAsync();
+        var payload = JsonSerializer.Deserialize<JsonElement>(
+            terminal.Should().ContainSingle().Subject.PayloadJson);
+        payload.GetProperty("errorCode").GetString()
+            .Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Start_RepeatedOutcomeSpecRefusal_EmitsActionableRetryableTerminal()
+    {
+        var projectId = await CreateProjectAsync();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        drafter.ExceptionToThrow = new AgentProviderException(
+            ModelSource.Byok,
+            AgentProviderFailureKind.ProviderUnavailable,
+            CoordinatorFailureCodes.OutcomeSpecModelRefused,
+            "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.",
+            isRetryable: true);
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "Plan a minimal multi-user task tracker with a reviewable implementation path, container " +
+            "packaging, Azure Container Apps deployment, and live verification. Stop before implementation.",
+            startMode: "defineOutcome");
+
+        RunResponse? run = null;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            run = await GetRunAsync(_owner, runId);
+            if (run?.Status == "failed")
+                break;
+            await Task.Delay(50);
+        }
+
+        run.Should().NotBeNull();
+        run!.Status.Should().Be("failed");
+        run.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        run.CoordinatorStatus.Should().Be("drafting");
+
+        var diagnostic = await _owner.GetFromJsonAsync<RunTerminalDiagnosticResponse>(
+            $"/api/runs/{runId}/terminal-diagnostic");
+        diagnostic.Should().NotBeNull();
+        diagnostic!.Code.Should().Be(CoordinatorFailureCodes.OutcomeSpecModelRefused);
+        diagnostic.Retryable.Should().BeTrue();
+        diagnostic.Message.Should().Contain("Retry the run or choose another model.");
+        diagnostic.CauseChain.Should().Contain("phase:coordinator-draft:failed");
+        diagnostic.CauseChain.Should().Contain("reason:coordinator_outcome_spec_model_refused");
+        diagnostic.CauseChain.Should().Contain(nameof(AgentProviderException));
+        diagnostic.CauseChain.Should().NotContain(nameof(InvalidOperationException));
     }
 
     [Fact]
@@ -796,7 +966,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // Drain the pending request directly, leaving the run live in the registry but with no
         // gate to consume. This is the precise condition the NoPendingGate branch guards.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        (await pendingStore.TryRemoveAsync(runId)).Should().NotBeNull("the gate must be pending before draining");
+        (await DrainPendingGateForTestAsync(pendingStore, runId)).Should().NotBeNull("the gate must be pending before draining");
 
         var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
         var outcome = await coordinator.ConfirmOutcomeSpecAsync(
@@ -828,7 +998,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // short delay (the watch loop would do this once the MAF runtime suspends). We re-arm with
         // the very same ExternalRequest so SendResponseAsync drives a real confirmation.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        var drained = await pendingStore.TryRemoveAsync(runId);
+        var drained = await DrainPendingGateForTestAsync(pendingStore, runId);
         drained.Should().NotBeNull("the gate must be pending before draining");
 
         const int reArmDelayMs = 350;
@@ -869,7 +1039,7 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         // Drain the gate (no re-arm) and advance the persisted spec out of awaiting_confirmation,
         // exactly as a completed confirm / dispatch hand-off would leave it.
         var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
-        (await pendingStore.TryRemoveAsync(runId)).Should().NotBeNull("the gate must be pending before draining");
+        (await DrainPendingGateForTestAsync(pendingStore, runId)).Should().NotBeNull("the gate must be pending before draining");
 
         var scopeFactory = _factory.Services.GetRequiredService<IServiceScopeFactory>();
         using (var scope = scopeFactory.CreateScope())
@@ -935,6 +1105,426 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         await WaitForGateAsync(runId);
         var run = await GetRunAsync(_owner, runId);
         run!.Status.Should().Be("in_progress", "revise must re-suspend, not dispatch or terminate");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NonResidentGate_RecoversAndAdvancesWithoutReplayingInitialDraft(bool revise)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Recover an outcome gate after its owner disappears");
+        await WaitForGateAsync(runId);
+        var workflow = _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        (await workflow.HasCheckpointAsync(runId)).Should().BeTrue("the suspended gate must have a durable checkpoint");
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var drafts = 0;
+        drafter.BeforeDraftAsync = _ =>
+        {
+            Interlocked.Increment(ref drafts);
+            return Task.CompletedTask;
+        };
+
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+
+        var response = revise
+            ? await _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+                new { feedback = "Limit the scope to one endpoint" })
+            : await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        if (revise)
+        {
+            await PollOutcomeSpecUntilAsync(runId,
+                spec => spec.Status == "awaiting_confirmation"
+                    && spec.ClarifyingQuestions?.Contains("one endpoint", StringComparison.Ordinal) == true);
+            drafts.Should().Be(1, "recovery resumes the gate, not the initial model draft");
+            await WaitForGateAsync(runId);
+        }
+        else
+        {
+            (await PollOutcomeSpecUntilAsync(runId, spec => spec.Status == "confirmed"))
+                .Should().NotBeNull();
+            drafts.Should().Be(0, "confirmation never invokes the outcome-spec model");
+            (await PollWorkPlanAsync(runId)).Should().NotBeNull();
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.WorkPlans.CountAsync(p => p.CoordinatorRunId == runId))
+                .Should().Be(1, "a recovered confirm must start planning only once");
+        }
+    }
+
+    [Fact]
+    public async Task NonResidentGate_MissingCheckpoint_ReturnsAttributableErrorWithoutConsumingGate()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var run = (await runStore.GetAsync(RunId.Parse(runId)))!;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = run.ProjectId!.Value.ToString(),
+                CoordinatorRunId = runId,
+                Goal = run.Task,
+                DesiredOutcome = "A reviewable outcome",
+                Scope = "One API endpoint",
+                Assumptions = "Existing permissions apply",
+                Status = "awaiting_confirmation",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", run.ProjectId!.Value.ToString(), runId);
+
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/runs/{runId}/outcome-spec/revise", new { feedback = "Clarify the endpoint" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var error = await response.Content.ReadFromJsonAsync<JsonElement>();
+        error.GetProperty("error").GetString().Should().Be("coordinator_gate_checkpoint_missing");
+        error.GetProperty("run_id").GetString().Should().Be(runId);
+        error.GetProperty("correlation_id").GetString().Should().NotBeNullOrWhiteSpace();
+        error.GetProperty("diagnostic_path").GetString().Should().Be($"/api/runs/{runId}/events");
+        (await GetOutcomeSpecAsync(_owner, runId))!.Status.Should().Be("awaiting_confirmation");
+
+        var forbidden = await _other.PostAsJsonAsync(
+            $"/api/runs/{runId}/outcome-spec/revise", new { feedback = "Read another project's gate" });
+        forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await forbidden.Content.ReadAsStringAsync()).Should().NotContain("coordinator_gate_checkpoint_missing");
+    }
+
+    [Fact]
+    public async Task NonResidentGate_AdvertisedWithoutPersistedSpec_ReturnsTypedDiagnostic()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Missing a previously advertised spec is inconsistent");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.OutcomeSpecs.Where(s => s.CoordinatorRunId == runId).ExecuteDeleteAsync();
+        }
+
+        var response = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("coordinator_gate_spec_missing");
+        (await GetWorkPlanAsync(runId)).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NonResidentGate_RejectsStaleGenerationOrCorruptGate(bool staleGeneration)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Do not replay a stale or corrupt gate");
+        await WaitForGateAsync(runId);
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+        if (staleGeneration)
+        {
+            await using var connection = await _factory.Services.GetRequiredService<SqliteDb>()
+                .OpenConnectionAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE runs SET lifecycle_generation = lifecycle_generation + 1 WHERE run_id = $runId";
+            command.Parameters.AddWithValue("$runId", runId);
+            (await command.ExecuteNonQueryAsync()).Should().Be(1);
+        }
+        else
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            await db.PendingRequests.Where(p => p.RunId == runId)
+                .ExecuteUpdateAsync(u => u.SetProperty(p => p.RequestJson, "{invalid"));
+        }
+
+        var response = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be(staleGeneration
+            ? "coordinator_gate_generation_changed" : "coordinator_gate_request_invalid");
+        (await GetOutcomeSpecAsync(_owner, runId))!.Status.Should().Be("awaiting_confirmation");
+        (await GetWorkPlanAsync(runId)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task NonResidentGate_ChangedProviderKeyRetry_RecoversOnce()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Keep provider and recovery decisions fenced");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+
+        await _factory.ChangePlatformProviderIdentityAsync("replacement-account");
+        var staleKey = await _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+            new { feedback = "A single deliverable" });
+        staleKey.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await staleKey.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("model_provider_changed");
+
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, runId, ensureProvider: false);
+        var retry = await _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+            new { feedback = "A single deliverable" });
+        retry.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PollOutcomeSpecUntilAsync(runId, spec =>
+            spec.ClarifyingQuestions?.Contains("A single deliverable", StringComparison.Ordinal) == true))
+            .Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task NonResidentGate_LifecycleInvalidationWithoutNextEvent_CleansUpRecoveredRegistry()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Clean up a recovered gate after lifecycle invalidation");
+        await WaitForGateAsync(runId);
+
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+        await WaitForLeaseReleasedAsync(runId);
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        await coordinator.RecoverInterruptedRunsAsync(CancellationToken.None);
+        registry.Get(runId).Should().NotBeNull("recovery must re-arm the gate before its lifecycle changes");
+
+        var leases = _factory.Services.GetRequiredService<IRunLeaseStore>();
+        var recoveredLease = await leases.GetActiveClaimAsync(runId);
+        recoveredLease.Should().NotBeNull();
+        var eventCountBeforeInvalidation = await CountRunEventsAsync(runId);
+
+        try
+        {
+            await using (var connection = await _factory.Services.GetRequiredService<SqliteDb>().OpenConnectionAsync())
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE runs SET lifecycle_generation = lifecycle_generation + 1 WHERE run_id = $runId";
+                command.Parameters.AddWithValue("$runId", runId);
+                (await command.ExecuteNonQueryAsync()).Should().Be(1);
+            }
+
+            // Recovery left the workflow parked at its confirmation request. No decision or other
+            // event is sent, so the ownership monitor must cancel the watcher before any next event.
+            await WaitForLeaseReleasedAsync(runId, recoveredLease);
+
+            registry.Get(runId).Should().BeNull(
+                "the runCt-cancelled watcher must abandon its registry entry even with no later event");
+            (await CountRunEventsAsync(runId)).Should().Be(eventCountBeforeInvalidation,
+                "lifecycle invalidation alone must not produce another workflow event");
+        }
+        finally
+        {
+            registry.Abandon(runId);
+        }
+    }
+
+    [Fact]
+    public async Task NonResidentGate_CancelledRecoveredGeneration_DoesNotAbandonRegistrySuccessor()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Preserve a newer registry successor during cleanup");
+        await WaitForGateAsync(runId);
+
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+        await WaitForLeaseReleasedAsync(runId);
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        await coordinator.RecoverInterruptedRunsAsync(CancellationToken.None);
+        var recoveredRun = registry.Get(runId);
+        recoveredRun.Should().NotBeNull();
+
+        var leases = _factory.Services.GetRequiredService<IRunLeaseStore>();
+        var recoveredLease = await leases.GetActiveClaimAsync(runId);
+        recoveredLease.Should().NotBeNull();
+        (await leases.IsLeaseOwnerAsync(runId, recoveredLease!.OwnerId, recoveredLease.FencingToken))
+            .Should().BeTrue();
+
+        var successorProjectId = await CreateProjectAsync();
+        var successorRunId = await StartOrchestrationAsync(
+            successorProjectId, "Use a distinct active workflow as the registry successor");
+        await WaitForGateAsync(successorRunId);
+        var successorRun = registry.Get(successorRunId);
+        successorRun.Should().NotBeNull().And.NotBeSameAs(recoveredRun);
+
+        try
+        {
+            registry.Register(runId, successorRun!, new CancellationTokenSource());
+
+            // Releasing this lease proves the old recovered watcher handled cancellation and
+            // completed its cleanup path; its compare-and-swap must leave the successor untouched.
+            await WaitForLeaseReleasedAsync(runId, recoveredLease);
+            registry.Get(runId).Should().BeSameAs(successorRun);
+        }
+        finally
+        {
+            registry.Abandon(runId);
+            registry.Abandon(successorRunId);
+        }
+    }
+
+    [Fact]
+    public async Task NonResidentGate_CancellationBeforeRecovery_DoesNotStartPlanning()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Cancellation takes precedence over gate recovery");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        await using (var connection = await _factory.Services.GetRequiredService<SqliteDb>().OpenConnectionAsync())
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE runs SET status = 'failed', result = 'cancelled' WHERE run_id = $runId";
+            command.Parameters.AddWithValue("$runId", runId);
+            (await command.ExecuteNonQueryAsync()).Should().Be(1);
+        }
+
+        var response = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("run_not_active");
+        (await GetWorkPlanAsync(runId)).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task NonResidentGate_LateLifecycleChange_BlocksRecoveredWrite(
+        bool revise, bool generationChanged)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A late run change must fence recovered work");
+        await WaitForGateAsync(runId);
+        var registry = _factory.Services.GetRequiredService<RunWorkflowRegistry>();
+        registry.Abandon(runId).Should().BeTrue();
+        await WaitForLeaseReleasedAsync(runId);
+        var factory = _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>();
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (revise)
+            drafter.BeforeDraftAsync = async _ =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            };
+        else
+            factory.BeforeFinalizeWriteAsync = async () =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+            };
+
+        try
+        {
+            var responseTask = revise
+                ? _owner.PostAsJsonAsync($"/api/runs/{runId}/outcome-spec/revise",
+                    new { feedback = "A late revision must not persist" })
+                : _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var fence = _factory.Services.GetRequiredService<RunLeaseFenceRegistry>().Get(runId);
+            fence.Should().NotBeNull();
+
+            await using (var connection = await _factory.Services.GetRequiredService<SqliteDb>().OpenConnectionAsync())
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = generationChanged
+                    ? "UPDATE runs SET lifecycle_generation = lifecycle_generation + 1 WHERE run_id = $runId"
+                    : "UPDATE runs SET status = 'failed', result = 'cancelled' WHERE run_id = $runId";
+                command.Parameters.AddWithValue("$runId", runId);
+                (await command.ExecuteNonQueryAsync()).Should().Be(1);
+            }
+            release.TrySetResult();
+            (await responseTask).StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.Conflict);
+
+            // The exact persistence predicate rejects this successor state, independently of the
+            // recovery monitor's polling interval or whether its cancellation callback has fired.
+            await using (var scope = _factory.Services.CreateAsyncScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                var write = () => CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+                    db, runId, fence, CancellationToken.None,
+                    _factory.Services.GetRequiredService<SqliteDb>());
+                await write.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
+            }
+
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (registry.Get(runId) is not null && DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            registry.Get(runId).Should().BeNull();
+            (await GetOutcomeSpecAsync(_owner, runId))!.Status.Should().Be(
+                revise ? "drafting" : "awaiting_confirmation");
+            (await GetWorkPlanAsync(runId)).Should().BeNull();
+        }
+        finally
+        {
+            release.TrySetResult();
+            factory.BeforeFinalizeWriteAsync = null;
+            drafter.BeforeDraftAsync = null;
+        }
+    }
+
+    [Fact]
+    public async Task DuplicateConcurrentRevisions_ConsumeOnlyOneGateAndDraftOnce()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Concurrent retries must not duplicate drafting");
+        await WaitForGateAsync(runId);
+        var drafter = _factory.Services.GetRequiredService<ICoordinatorSpecDrafter>()
+            .Should().BeOfType<FakeCoordinatorSpecDrafter>().Subject;
+        var drafts = 0;
+        drafter.BeforeDraftAsync = _ =>
+        {
+            Interlocked.Increment(ref drafts);
+            return Task.CompletedTask;
+        };
+
+        const string feedback = "Use a bounded single-step design";
+        var requests = Enumerable.Range(0, 2)
+            .Select(_ => _owner.PostAsJsonAsync(
+                $"/api/runs/{runId}/outcome-spec/revise", new { feedback }));
+        var responses = await Task.WhenAll(requests);
+        responses.Count(r => r.StatusCode == HttpStatusCode.OK).Should().Be(1);
+        responses.Count(r => r.StatusCode == HttpStatusCode.Conflict).Should().Be(1);
+        (await PollOutcomeSpecUntilAsync(runId, spec =>
+            spec.ClarifyingQuestions?.Contains(feedback, StringComparison.Ordinal) == true))
+            .Should().NotBeNull();
+        drafts.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("delivering", "coordinator_gate_delivery_uncertain")]
+    [InlineData("waiting", "coordinator_gate_request_invalid")]
+    public async Task NonResidentGate_ConflictingPendingRequest_FailsClosed(
+        string deliveryState, string expectedError)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "Reject an ambiguous pending request");
+        await WaitForGateAsync(runId);
+        _factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            if (deliveryState == "waiting")
+                await db.PendingRequests.Where(p => p.RunId == runId)
+                    .ExecuteUpdateAsync(u => u.SetProperty(p => p.RequestId, $"other-{runId}"));
+            else
+                await db.PendingRequests.Where(p => p.RunId == runId)
+                    .ExecuteUpdateAsync(u => u.SetProperty(p => p.DeliveryState, deliveryState));
+        }
+
+        var response = await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be(expectedError);
+        (await GetWorkPlanAsync(runId)).Should().BeNull();
     }
 
     // =========================================================================
@@ -1170,6 +1760,60 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         throw new TimeoutException($"Coordinator run {runId} did not suspend at the confirmation gate in time.");
     }
 
+    private async Task WaitForLeaseReleasedAsync(string runId, RunLeaseClaim? expectedClaim = null)
+    {
+        var leaseStore = _factory.Services.GetRequiredService<IRunLeaseStore>();
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (expectedClaim is null)
+            {
+                if (await leaseStore.GetActiveClaimAsync(runId) is null)
+                    return;
+            }
+            else if (await IsLeaseReleasedAsync(runId, expectedClaim))
+            {
+                return;
+            }
+
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException($"Coordinator run {runId} drafting lease was not released in time.");
+    }
+
+    private async Task<bool> IsLeaseReleasedAsync(string runId, RunLeaseClaim expectedClaim)
+    {
+        await using var connection = await _factory.Services
+            .GetRequiredService<SqliteDb>()
+            .OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        // ReleaseAsync expires this exact claim only after StartWatching reaches its finally block.
+        // A changed owner/token is not evidence that this recovered watcher completed cleanup.
+        command.CommandText =
+            """
+            SELECT EXISTS(
+                SELECT 1
+                  FROM run_execution_leases
+                 WHERE run_id = $runId
+                   AND owner_id = $ownerId
+                   AND fencing_token = $fencingToken
+                   AND lease_expires_at <= $now);
+            """;
+        command.Parameters.AddWithValue("$runId", runId);
+        command.Parameters.AddWithValue("$ownerId", expectedClaim.OwnerId);
+        command.Parameters.AddWithValue("$fencingToken", expectedClaim.FencingToken);
+        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+        return Convert.ToInt32(await command.ExecuteScalarAsync()) != 0;
+    }
+
+    private async Task<int> CountRunEventsAsync(string runId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.RunEvents.AsNoTracking().CountAsync(e => e.RunId == runId);
+    }
+
     private async Task<OutcomeSpecResponse?> GetOutcomeSpecAsync(HttpClient client, string runId)
     {
         var resp = await client.GetAsync($"/api/runs/{runId}/outcome-spec");
@@ -1238,6 +1882,11 @@ public sealed class CoordinatorOutcomeSpecTests : IDisposable
         var resp = await client.GetAsync($"/api/runs/{runId}");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         return await resp.Content.ReadFromJsonAsync<RunResponse>();
+    }
+
+    private static Task<PendingEntry?> DrainPendingGateForTestAsync(PendingRequestStore pendingStore, string runId)
+    {
+        return pendingStore.TryAbandonWaitingGateForHumanRevisionAsync(runId);
     }
 
     /// <summary>

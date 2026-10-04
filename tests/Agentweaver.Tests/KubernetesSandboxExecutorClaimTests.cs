@@ -7,8 +7,10 @@ using System.Text.Json;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Api.Sandbox.Preview;
+using Agentweaver.Api.Git;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -17,6 +19,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Repository = LibGit2Sharp.Repository;
+using Commands = LibGit2Sharp.Commands;
+using Signature = LibGit2Sharp.Signature;
 using AgentHostRuntimeState = agenthost::Agentweaver.AgentHost.AgentHostRuntimeState;
 using AgentHostCredentialProvider = agenthost::Agentweaver.AgentHost.AgentHostGitHubCapabilityCredentialProvider;
 using ConfigureRequest = agenthost::ConfigureRequest;
@@ -69,15 +74,60 @@ public sealed class KubernetesSandboxExecutorClaimTests
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
         Func<ProjectId?, CancellationToken, Task<EffectiveModelProviderResult>>? effectiveProviderResolver = null,
         IAgentHostReadinessProbe? readinessProbe = null,
-        ILogger<KubernetesSandboxExecutor>? logger = null) =>
-        new(ClientFor(handler), Options(), logger ?? NullLogger<KubernetesSandboxExecutor>.Instance,
+        ILogger<KubernetesSandboxExecutor>? logger = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null,
+        KubernetesSandboxOptions? options = null,
+        IRunEventStream? runEventStream = null) =>
+        new(ClientFor(handler), options ?? Options(), logger ?? NullLogger<KubernetesSandboxExecutor>.Instance,
             podRegistry: podRegistry, turnTokenRegistry: turnTokenRegistry, readinessProbe: readinessProbe,
             submittingUserResolver: submittingUserResolver,
-            httpClientFactory: httpClientFactory, runOptions: runOptions,
+            httpClientFactory: httpClientFactory, runOptions: runOptions, runEventStream: runEventStream,
             copilotCredentials: copilotCredentials ?? new FixedGitHubCopilotCapabilityCredentialProvider(),
             previewService: previewService,
             byokProviderConfiguration: byokProviderConfiguration,
-            effectiveProviderResolver: effectiveProviderResolver);
+            effectiveProviderResolver: effectiveProviderResolver,
+            permissionBindingProvider: permissionBindingProvider ?? new FixedPermissionBindingProvider());
+
+    private sealed class RecordingProvisioningStream : IRunEventStream
+    {
+        public List<RunEvent> Events { get; } = new();
+
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            Events.Add(evt);
+            return ValueTask.FromResult(Events.Count);
+        }
+
+        public IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<RunEvent>> GetPersistedEventsAsync(
+            string runId, int fromSequence = 0, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<RunEvent>>(Events);
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
+    }
+
+    private sealed class FixedPermissionBindingProvider : IEffectivePermissionBindingProvider
+    {
+        public Task<EffectivePermissionBinding> ResolveAsync(
+            string runId,
+            string repositoryPath,
+            EffectivePermissionBinding? ceiling = null,
+            CancellationToken ct = default)
+        {
+            var binding = EffectivePermissionBinding.Create(
+                runId,
+                1,
+                "test-policy",
+                "project:test",
+                SandboxPolicy.Default(repositoryPath));
+            return Task.FromResult(
+                ceiling is null ? binding : EffectivePermissionBinding.Intersect(binding, ceiling));
+        }
+    }
 
     private sealed class StubSubmittingUserResolver : IRunSubmittingUserResolver
     {
@@ -338,6 +388,178 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task AgentHostProvisioning_timeout_reports_pod_scheduling_reason_and_releases_claim()
+    {
+        const string runId = "run-capacity-blocked";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"False"}],"sandbox":{"name":"pending-agent-pod"}}}""");
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods/pending-agent-pod",
+            """{"kind":"Pod","status":{"conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable","message":"0/5 nodes are available: 5 Insufficient memory."}]}}""");
+        var events = new RecordingProvisioningStream();
+        var options = new KubernetesSandboxOptions
+        {
+            Namespace = "agentweaver",
+            AgentHostProvisioningTimeoutSeconds = 1,
+            ProvisioningHeartbeatInterval = TimeSpan.FromMilliseconds(100),
+            RequireMtls = false,
+        };
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            options: options, runEventStream: events);
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        var failure = await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        failure.Which.Message.Should().Contain("within 1s")
+            .And.Contain("Unschedulable")
+            .And.Contain("5 Insufficient memory");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+        events.Events.Should().Contain(e =>
+            e.Type == EventTypes.SandboxProvisioningPending
+            && JsonSerializer.Serialize(e.Payload).Contains("Insufficient memory", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AgentHostProvisioning_timeout_without_pod_details_is_explicit_and_releases_claim()
+    {
+        const string runId = "run-capacity-no-pod";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"False"}]}}""");
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            options: new KubernetesSandboxOptions { AgentHostProvisioningTimeoutSeconds = 1 });
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        var failure = await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        failure.Which.Message.Should().Contain("scheduling details are unavailable");
+        handler.Requests.Should().Contain(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}"));
+    }
+
+    [Fact]
+    public async Task AgentHostProvisioning_unbound_claim_condition_reports_scheduling_reason_without_pod_name()
+    {
+        const string runId = "run-capacity-claim-condition";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var handler = new FakeKubeHandler();
+        handler.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            """{"status":{"conditions":[{"type":"Ready","status":"False","reason":"FailedScheduling","message":"0/5 nodes are available: 5 Insufficient memory."}]}}""");
+        var events = new RecordingProvisioningStream();
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            options: new KubernetesSandboxOptions
+            {
+                AgentHostProvisioningTimeoutSeconds = 1,
+                ProvisioningHeartbeatInterval = TimeSpan.FromMilliseconds(100),
+            }, runEventStream: events);
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        var failure = await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        failure.Which.Message.Should().Contain("FailedScheduling")
+            .And.Contain("Insufficient memory");
+        events.Events.Should().Contain(e =>
+            e.Type == EventTypes.SandboxProvisioningPending
+            && JsonSerializer.Serialize(e.Payload).Contains("FailedScheduling", StringComparison.Ordinal));
+        handler.Requests.Should().NotContain(r => r.Path.Contains("/pods/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AgentHostProvisioning_timeout_releases_reused_claim_with_uid_precondition()
+    {
+        const string runId = "run-capacity-reused";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path =
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var handler = new FakeKubeHandler();
+        handler.OnStatus("POST",
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims",
+            HttpStatusCode.Conflict,
+            """{"kind":"Status","status":"Failure","reason":"AlreadyExists","code":409}""");
+        handler.OnGet(path, JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                uid = "original-uid",
+                resourceVersion = "5",
+                annotations = new Dictionary<string, string>
+                {
+                    [SandboxClaimConventions.RunIdAnnotation] = runId,
+                    [KubernetesSandboxExecutor.HolderTokenAnnotation] = "holder-1",
+                },
+            },
+            status = new { conditions = new[] { new { type = "Ready", status = "False" } } },
+        }));
+        var tokens = new RecordingTurnTokenRegistry();
+        tokens.RegisterTurnToken(runId, "held-token");
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            turnTokenRegistry: tokens,
+            options: new KubernetesSandboxOptions { AgentHostProvisioningTimeoutSeconds = 1 });
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        var deleted = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "DELETE" && r.Path == path).Subject;
+        using var deleteBody = JsonDocument.Parse(deleted.Body!);
+        deleteBody.RootElement.GetProperty("preconditions").GetProperty("uid")
+            .GetString().Should().Be("original-uid");
+        tokens.TryGetTurnToken(runId).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task AgentHostProvisioning_replaced_reused_claim_preserves_new_owner_state()
+    {
+        const string runId = "run-capacity-replaced";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path =
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var handler = new FakeKubeHandler();
+        handler.OnStatus("POST",
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims",
+            HttpStatusCode.Conflict,
+            """{"kind":"Status","status":"Failure","reason":"AlreadyExists","code":409}""");
+        string Claim(string uid) => JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                uid,
+                resourceVersion = "5",
+                annotations = new Dictionary<string, string>
+                {
+                    [SandboxClaimConventions.RunIdAnnotation] = runId,
+                    [KubernetesSandboxExecutor.HolderTokenAnnotation] = "holder-1",
+                },
+            },
+            status = new { conditions = new[] { new { type = "Ready", status = "False" } } },
+        });
+        handler.OnSequence("GET", path,
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("original-uid")),
+            (HttpStatusCode.OK, Claim("replacement-uid")));
+        var tokens = new RecordingTurnTokenRegistry();
+        tokens.RegisterTurnToken(runId, "held-token");
+        var executor = NewExecutor(handler, new StubSubmittingUserResolver("sabbour"),
+            turnTokenRegistry: tokens,
+            options: new KubernetesSandboxOptions { AgentHostProvisioningTimeoutSeconds = 1 });
+
+        var act = () => executor.LaunchAgentHostPodAsync(runId);
+
+        await act.Should().ThrowAsync<AgentHostPodReconcilerErrorException>();
+        handler.Requests.Should().NotContain(r => r.Method == "DELETE");
+        tokens.TryGetTurnToken(runId).Should().Be("held-token");
+    }
+
+    [Fact]
     public async Task CreateClaim_generic_posts_v1beta1_warmPoolRef_body()
     {
         // Drive the private generic claim path directly (the public ExecuteAsync path also needs a
@@ -396,6 +618,11 @@ public sealed class KubernetesSandboxExecutorClaimTests
         body.GetProperty("userId").GetString().Should().Be("sabbour");
         body.GetProperty("turnBearerToken").GetString().Should().NotBeNullOrEmpty();
         body.GetProperty("toolApprovalApiBaseUrl").GetString().Should().Be("https://agentweaver-api.internal");
+        var permissionBinding = body.GetProperty("effectivePermissionBinding");
+        permissionBinding.GetProperty("schemaVersion").GetInt32()
+            .Should().Be(EffectivePermissionBinding.CurrentSchemaVersion);
+        permissionBinding.GetProperty("bindingId").GetString().Should().StartWith("epb-");
+        permissionBinding.GetProperty("version").GetString().Should().StartWith("sha256:");
         var credential = body.GetProperty("copilotCredential");
         credential.GetProperty("snapshotReference").GetString().Should().Be("snapshot-test");
         credential.GetProperty("accessToken").GetString().Should().NotBeNullOrEmpty();
@@ -972,6 +1199,55 @@ public sealed class KubernetesSandboxExecutorClaimTests
     }
 
     [Fact]
+    public async Task LaunchAgentHostPod_unattested_reused_assembly_claim_cannot_succeed()
+    {
+        const string runId = "run-claim-unattested-assembly";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            JsonSerializer.Serialize(new
+            {
+                metadata = new { uid = "existing-uid", resourceVersion = "42",
+                    annotations = new Dictionary<string, string>
+                {
+                    ["agentweaver.io/run-id"] = runId,
+                    ["agentweaver.io/working-directory"] = Path.GetFullPath("/workspace/reviewer"),
+                    ["agentweaver.io/agent-host-holder-token"] = "4",
+                } },
+                status = new { conditions = new[] { new { type = "Ready", status = "True" } },
+                    sandbox = new { name = "agent-pod-3" } },
+            }));
+        fake.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-3$",
+            """{"kind":"Pod","metadata":{"name":"agent-pod-3"},"status":{"podIP":"10.0.0.9"}}""");
+        var conflicts = new AlwaysConflictClaimHandler();
+        var turnTokens = new RecordingTurnTokenRegistry();
+        turnTokens.RegisterTurnToken(runId, "prior-turn-token");
+        var configure = new RecordingConfigureHandler();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflicts, fake), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            turnTokenRegistry: turnTokens,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configure),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        var launch = () => executor.LaunchAgentHostPodAsync(runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: "/workspace/reviewer",
+                SourceRepositoryPath: "/workspace/repository",
+                SourceRef: "integration",
+                BaseCommitSha: new string('1', 40),
+                ExpectedTreeHash: new string('2', 40),
+                WorkspaceMode: ExecutionWorkspaceMode.Shared,
+                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                HolderToken: "4",
+                LifecycleGeneration: 1));
+        var failure = await launch.Should().ThrowAsync<AgentHostConfigureException>();
+        failure.Which.Reason.Should().Be("assembly_binding_unverifiable");
+        configure.Body.Should().BeNull();
+    }
+
+    [Fact]
     public async Task LaunchAgentHostPod_recreates_existing_shared_claim_without_working_directory_when_claim_belongs_to_synthetic_run()
     {
         const string runId = "e14667fe-25cf-4476-8da4-e3b44d9ed289";
@@ -1073,52 +1349,256 @@ public sealed class KubernetesSandboxExecutorClaimTests
         turnTokens.TryGetTurnToken(runId).Should().Be("exact-run-turn-token");
     }
 
-    [Fact]
-    public async Task LaunchAgentHostPod_configure_body_carries_assembly_purpose_and_immutable_source_refs()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task LaunchAgentHostPod_configure_body_carries_assembly_purpose_and_immutable_source_refs(
+        bool failAttestation, bool forbidSandboxGet)
     {
         const string runId = "run-claim-assembly";
-        const string commitSha = "1111111111111111111111111111111111111111";
-        const string treeHash = "2222222222222222222222222222222222222222";
+        const string sourceRef = "agentweaver/integration/run-claim-assembly";
+        var repoPath = Path.Combine(Path.GetTempPath(), $"assembly-proof-repo-{Guid.NewGuid():N}");
+        var basePath = Path.Combine(Path.GetTempPath(), $"assembly-proof-wt-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoPath);
+        Repository.Init(repoPath);
+        string commitSha;
+        string treeHash;
+        using (var repository = new Repository(repoPath))
+        {
+            File.WriteAllText(Path.Combine(repoPath, "source.txt"), "assembled");
+            Commands.Stage(repository, "source.txt");
+            var signature = new Signature("Test", "test@example.org", DateTimeOffset.UtcNow);
+            var commit = repository.Commit("assembly", signature, signature, new LibGit2Sharp.CommitOptions());
+            repository.Branches.Add(sourceRef, commit);
+            commitSha = commit.Sha;
+            treeHash = commit.Tree.Sha;
+        }
+        var manager = new WorktreeManager(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Worktrees:BasePath"] = basePath,
+            }).Build(), NullLogger<WorktreeManager>.Instance);
+        var worktree = manager.AddDetachedWorktree(
+            repoPath, sourceRef, $"assembly-build-test-{runId}-attempt-4").WorktreePath;
+        try
+        {
         var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
 
         var handler = new FakeKubeHandler();
+        var events = new RecordingBindingEvents { FailAttestation = failAttestation };
         handler.OnGet(
             $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
-            """{"status":{"conditions":[{"type":"Ready","status":"True"}],"sandbox":{"name":"agent-pod-1"}}}""");
+            JsonSerializer.Serialize(new
+            {
+                metadata = new
+                {
+                    name = claimName, @namespace = "agentweaver", uid = "claim-uid", resourceVersion = "42",
+                    annotations = new Dictionary<string, string>
+                    {
+                        [SandboxClaimConventions.RunIdAnnotation] = runId,
+                        ["agentweaver.io/run-lifecycle-generation"] = "1",
+                        ["agentweaver.io/agent-host-holder-token"] = "4",
+                        ["agentweaver.io/working-directory"] = worktree,
+                        [CurrentSandboxBindingVerifier.SourceRepositoryAnnotation] = repoPath,
+                        [CurrentSandboxBindingVerifier.SourceRefAnnotation] = sourceRef,
+                        [CurrentSandboxBindingVerifier.SourceBaseCommitAnnotation] = commitSha,
+                        [CurrentSandboxBindingVerifier.SourceTreeAnnotation] = treeHash,
+                    },
+                },
+                status = new
+                {
+                    conditions = new[] { new { type = "Ready", status = "True" } },
+                    sandbox = new { name = "agent-pod-1" },
+                },
+            }));
+        var sandboxPath = "/apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/agent-pod-1";
+        if (forbidSandboxGet)
+            handler.OnStatus("GET", sandboxPath, HttpStatusCode.Forbidden,
+                """{"kind":"Status","status":"Failure","reason":"Forbidden","code":403}""");
+        else
+            handler.OnGet(sandboxPath, JsonSerializer.Serialize(new
+            {
+                metadata = new
+                {
+                    name = "agent-pod-1", @namespace = "agentweaver", uid = "sandbox-uid",
+                    labels = new Dictionary<string, string> { [CurrentSandboxBindingVerifier.ClaimUidLabel] = "claim-uid" },
+                    ownerReferences = new[] { new { kind = "SandboxClaim", name = claimName, uid = "claim-uid", controller = true } },
+                },
+            }));
         handler.OnAny(@"^/api/v1/namespaces/agentweaver/pods/agent-pod-1$",
-            """{"kind":"Pod","metadata":{"name":"agent-pod-1"},"status":{"podIP":"10.0.0.7"}}""");
+            """{"kind":"Pod","metadata":{"name":"agent-pod-1","namespace":"agentweaver","uid":"pod-uid","ownerReferences":[{"kind":"Sandbox","name":"agent-pod-1","uid":"sandbox-uid","controller":true}]},"status":{"podIP":"10.0.0.7","phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}""");
 
         var configureHandler = new RecordingConfigureHandler();
-        var executor = NewExecutor(
-            handler,
-            new StubSubmittingUserResolver("sabbour"),
+        var conflictFirst = new ConflictFirstClaimHandler();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflictFirst, handler), Options(), NullLogger<KubernetesSandboxExecutor>.Instance,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
             httpClientFactory: new StubHttpClientFactory(configureHandler),
-            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider(),
+            runEventStream: events);
 
-        await executor.LaunchAgentHostPodAsync(
+        var launch = () => executor.LaunchAgentHostPodAsync(
             runId,
             new AgentHostLaunchContext(
-                SharedWorkingDirectory: "/workspace/reviewer",
-                SourceRepositoryPath: "/workspace/repository",
-                SourceRef: "agentweaver/integration/run-claim-assembly",
+                SharedWorkingDirectory: worktree,
+                SourceRepositoryPath: repoPath,
+                SourceRef: sourceRef,
                 BaseCommitSha: commitSha,
                 ExpectedTreeHash: treeHash,
                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
                 Purpose: AgentHostPurpose.AssemblyBuildTest,
-                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot));
+                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot,
+                HolderToken: "4",
+                LifecycleGeneration: 1));
+
+        if (forbidSandboxGet)
+        {
+            var forbidden = await launch.Should().ThrowAsync<k8s.Autorest.HttpOperationException>();
+            forbidden.Which.Response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            configureHandler.Body.Should().NotBeNull();
+            handler.Requests.Should().Contain(r => r.Method == "GET" && r.Path == sandboxPath);
+            events.Events.Should().NotContain(e => e.Type == CurrentSandboxBindingVerifier.EventType);
+        }
+        else if (failAttestation)
+        {
+            var failure = await launch.Should().ThrowAsync<AgentHostConfigureException>();
+            failure.Which.Reason.Should().Be("assembly_binding_unverifiable");
+            failure.Which.Retryable.Should().BeTrue();
+            events.Events.Should().NotContain(e => e.Type == CurrentSandboxBindingVerifier.EventType);
+        }
+        else
+            await launch();
+        conflictFirst.ClaimCreateRequests.Should().Be(2,
+            "an existing owned claim must be fenced out and replaced for the LocalReadOnly launch");
+        var deleted = handler.Requests.First(r =>
+            r.Method == "DELETE" && r.Path.EndsWith($"/sandboxclaims/{claimName}", StringComparison.Ordinal));
+        using var deleteBody = JsonDocument.Parse(deleted.Body!);
+        deleteBody.RootElement.GetProperty("preconditions").GetProperty("uid").GetString().Should().Be("claim-uid");
+        var created = handler.Requests.Should().ContainSingle(r =>
+            r.Method == "POST" && r.Path.EndsWith("/sandboxclaims", StringComparison.Ordinal)).Which;
+        using var claim = JsonDocument.Parse(created.Body!);
+        var annotations = claim.RootElement.GetProperty("metadata").GetProperty("annotations");
+        annotations.GetProperty(CurrentSandboxBindingVerifier.SourceRepositoryAnnotation).GetString()
+            .Should().Be(repoPath);
+        annotations.GetProperty(CurrentSandboxBindingVerifier.SourceRefAnnotation).GetString()
+            .Should().Be(sourceRef);
+        annotations.GetProperty(CurrentSandboxBindingVerifier.SourceBaseCommitAnnotation).GetString()
+            .Should().Be(commitSha);
+        annotations.GetProperty(CurrentSandboxBindingVerifier.SourceTreeAnnotation).GetString()
+            .Should().Be(treeHash);
+        annotations.GetProperty("agentweaver.io/run-lifecycle-generation").GetString().Should().Be("1");
+        annotations.GetProperty("agentweaver.io/agent-host-holder-token").GetString().Should().Be("4");
+        annotations.GetProperty("agentweaver.io/working-directory").GetString()
+            .Should().Be(worktree);
+        if (failAttestation || forbidSandboxGet)
+            return;
+        var attestation = events.Events.Should().ContainSingle(e =>
+            e.Type == CurrentSandboxBindingVerifier.EventType).Which;
+        var proof = JsonSerializer.Deserialize<CurrentSandboxAttestation>(
+            JsonSerializer.Serialize(attestation.Payload));
+        proof!.ClaimUid.Should().Be("claim-uid");
+        proof.SandboxUid.Should().Be("sandbox-uid");
+        proof.PodUid.Should().Be("pod-uid");
+        proof.AssemblyAttempt.Should().Be("4");
+        proof.SourceWorktreeIdentity.Should().NotBeNullOrWhiteSpace();
 
         using var doc = JsonDocument.Parse(configureHandler.Body!);
         var body = doc.RootElement;
         body.GetProperty("purpose").GetString().Should().Be("AssemblyBuildTest");
         body.GetProperty("workspaceMode").GetString().Should().Be("LocalReadOnly");
         body.GetProperty("sharedWorkingDirectory").GetString().Should()
-            .Be(Path.GetFullPath("/workspace/reviewer"));
-        body.GetProperty("sourceRepositoryPath").GetString().Should().Be("/workspace/repository");
-        body.GetProperty("sourceRef").GetString().Should().Be("agentweaver/integration/run-claim-assembly");
+            .Be(worktree);
+        body.GetProperty("sourceRepositoryPath").GetString().Should().Be(repoPath);
+        body.GetProperty("sourceRef").GetString().Should().Be(sourceRef);
         body.GetProperty("baseCommitSha").GetString().Should().Be(commitSha);
         body.GetProperty("expectedTreeHash").GetString().Should().Be(treeHash);
         body.GetProperty("scratchRoot").GetString().Should()
             .Be(PodLocalExecutionWorkspace.DefaultScratchRoot);
+        }
+        finally
+        {
+            manager.RemoveDetachedWorktree(repoPath, worktree);
+            CurrentSandboxBindingTests.DeleteGitFixture(repoPath);
+            CurrentSandboxBindingTests.DeleteGitFixture(basePath);
+        }
+    }
+
+    private sealed class RecordingBindingEvents : Agentweaver.Api.Infrastructure.IRunEventStream
+    {
+        public bool FailAttestation { get; init; }
+        public List<RunEvent> Events { get; } = [];
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default)
+        {
+            if (FailAttestation && evt.Type == CurrentSandboxBindingVerifier.EventType)
+                throw new IOException("durable event store unavailable");
+            Events.Add(evt);
+            return ValueTask.FromResult(Events.Count);
+        }
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task LaunchAgentHostPod_olderAssemblyTokenCannotReplaceNewerClaim()
+    {
+        const string runId = "run-claim-stale-assembly";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path =
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}" +
+            $"/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var fake = new FakeKubeHandler();
+        fake.OnGet(path,
+            $$"""
+            {
+              "metadata": {
+                "name": "{{claimName}}",
+                "uid": "successor-uid",
+                "resourceVersion": "7",
+                "annotations": {
+                  "{{KubernetesSandboxExecutor.HolderTokenAnnotation}}": "6"
+                }
+              },
+              "status": {
+                "conditions": [{"type":"Ready","status":"True"}],
+                "sandbox":{"name":"successor-pod"}
+              }
+            }
+            """);
+        var conflict = new AlwaysConflictClaimHandler();
+        var configure = new RecordingConfigureHandler();
+        var executor = new KubernetesSandboxExecutor(
+            ClientFor(conflict, fake),
+            Options(),
+            NullLogger<KubernetesSandboxExecutor>.Instance,
+            readinessProbe: null,
+            submittingUserResolver: new StubSubmittingUserResolver("sabbour"),
+            httpClientFactory: new StubHttpClientFactory(configure),
+            copilotCredentials: new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        var act = () => executor.LaunchAgentHostPodAsync(
+            runId,
+            new AgentHostLaunchContext(
+                SharedWorkingDirectory: "/workspace/reviewer",
+                SourceRepositoryPath: "/workspace/repository",
+                SourceRef: "agentweaver/integration/run-claim-stale-assembly/attempt-5",
+                BaseCommitSha: new string('1', 40),
+                ExpectedTreeHash: new string('2', 40),
+                WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
+                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot,
+                HolderToken: "5"));
+
+        var exception = await act.Should().ThrowAsync<AgentHostConfigureException>();
+        exception.Which.Reason.Should().Be("assembly_attempt_superseded");
+        fake.Requests.Should().NotContain(request => request.Method == "DELETE");
+        configure.Body.Should().BeNull();
     }
 
     [Fact]
@@ -1153,7 +1633,7 @@ public sealed class KubernetesSandboxExecutorClaimTests
                 BaseCommitSha: new string('1', 40),
                 ExpectedTreeHash: new string('2', 40),
                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
-                Purpose: AgentHostPurpose.AssemblyBuildTest,
+                Purpose: AgentHostPurpose.Default,
                 ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot));
 
         podRegistry.TryGetEffectiveWorkingDirectory(runId).Should().Be(effectiveWorkingDirectory);
@@ -1476,12 +1956,150 @@ public sealed class KubernetesSandboxExecutorClaimTests
             Entries.Add((logLevel, formatter(state, exception)));
     }
 
-    private static string ClaimJsonWithHolder(string claimName, string? holderToken)
+    private static string ClaimJsonWithHolder(
+        string claimName, string? holderToken, string uid = "uid-1", string resourceVersion = "1")
     {
         var annotations = holderToken is null
             ? string.Empty
             : ",\"annotations\":{\"" + KubernetesSandboxExecutor.HolderTokenAnnotation + "\":\"" + holderToken + "\"}";
-        return "{\"metadata\":{\"name\":\"" + claimName + "\"" + annotations + "}}";
+        return "{\"metadata\":{\"name\":\"" + claimName
+            + "\",\"uid\":\"" + uid + "\",\"resourceVersion\":\"" + resourceVersion + "\"" + annotations + "}}";
+    }
+
+    private static string ClaimJsonWithDispatch(string claimName, string holder, string uid, string version) =>
+        JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                name = claimName, uid, resourceVersion = version,
+                annotations = new Dictionary<string, string>
+                {
+                    [KubernetesSandboxExecutor.HolderTokenAnnotation] = holder,
+                    [KubernetesSandboxExecutor.LifecycleGenerationAnnotation] = "2",
+                    [KubernetesSandboxExecutor.DispatchIdAnnotation] = "dispatch",
+                    [KubernetesSandboxExecutor.DispatchUserAnnotation] = "user",
+                    [KubernetesSandboxExecutor.ProviderSnapshotAnnotation] = "provider",
+                },
+            },
+        });
+
+    [Fact]
+    public async Task ClaimSnapshot_reads_annotations_and_identity_from_one_incarnation()
+    {
+        const string runId = "run-capture-replaced";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path = $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var first = JsonSerializer.Serialize(new
+        {
+            metadata = new
+            {
+                name = claimName, uid = "old-uid", resourceVersion = "11",
+                annotations = new Dictionary<string, string>
+                {
+                    [KubernetesSandboxExecutor.HolderTokenAnnotation] = "old-holder",
+                    [KubernetesSandboxExecutor.LifecycleGenerationAnnotation] = "2",
+                    [KubernetesSandboxExecutor.DispatchIdAnnotation] = "old-dispatch",
+                    [KubernetesSandboxExecutor.DispatchUserAnnotation] = "user",
+                    [KubernetesSandboxExecutor.ProviderSnapshotAnnotation] = "provider",
+                },
+            },
+        });
+        var fake = new FakeKubeHandler();
+        fake.OnSequence("GET", path, (HttpStatusCode.OK, first),
+            (HttpStatusCode.OK, ClaimJsonWithHolder(claimName, "new-holder", "new-uid", "12")));
+
+        var snapshot = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"))
+            .GetAgentHostClaimSnapshotAsync(runId);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Context.HolderToken.Should().Be("old-holder");
+        snapshot.Context.LifecycleGeneration.Should().Be(2);
+        snapshot.Uid.Should().Be("old-uid");
+        snapshot.ResourceVersion.Should().Be("11");
+        fake.Requests.Should().ContainSingle(r => r.Method == "GET");
+    }
+
+    [Fact]
+    public async Task CapturedClaim_replaced_before_validation_is_not_deleted()
+    {
+        const string runId = "run-claim-replaced-before-check";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path = $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var fake = new FakeKubeHandler();
+        fake.OnSequence("GET", path,
+            (HttpStatusCode.OK, ClaimJsonWithDispatch(claimName, "holder", "old", "3")),
+            (HttpStatusCode.OK, ClaimJsonWithDispatch(claimName, "holder", "replacement", "4")));
+        var executor = NewExecutor(fake, new StubSubmittingUserResolver("sabbour"));
+        var captured = await executor.GetAgentHostClaimSnapshotAsync(runId);
+        captured.Should().NotBeNull();
+        var released = await executor.TryReleaseHeldAgentHostPodAsync(runId, captured!);
+        released.Should().BeFalse();
+        fake.Requests.Should().NotContain(r => r.Method == "DELETE");
+    }
+
+    [Fact]
+    public async Task Claim_replaced_between_validation_and_delete_returns_false_with_preconditions()
+    {
+        const string runId = "run-claim-replaced-at-delete";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var path = $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}";
+        var fake = new FakeKubeHandler();
+        fake.OnGet(path, ClaimJsonWithHolder(claimName, "holder", "old-uid", "21"));
+        fake.OnStatus("DELETE", path, HttpStatusCode.Conflict,
+            """{"kind":"Status","status":"Failure","reason":"Conflict","code":409}""");
+        var released = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"))
+            .TryReleaseHeldAgentHostPodAsync(runId, "holder");
+
+        released.Should().BeFalse();
+        var delete = fake.Requests.Should().ContainSingle(r => r.Method == "DELETE").Which;
+        using var body = JsonDocument.Parse(delete.Body!);
+        body.RootElement.GetProperty("preconditions").GetProperty("uid").GetString().Should().Be("old-uid");
+        body.RootElement.GetProperty("preconditions").GetProperty("resourceVersion").GetString().Should().Be("21");
+    }
+
+    [Fact]
+    public async Task Fenced_release_retains_claim_while_preview_is_active()
+    {
+        const string runId = "run-fenced-preview-active";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, "holder"));
+        var preview = new StubPreviewService(hasActivePreview: true);
+
+        var released = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"), previewService: preview)
+            .TryReleaseHeldAgentHostPodAsync(runId, "holder");
+
+        released.Should().BeTrue("live preview retains the current pod until expiry");
+        preview.ReconciledRunIds.Should().ContainSingle().Which.Should().Be(runId);
+        fake.Requests.Should().NotContain(r => r.Method == "DELETE");
+    }
+
+    [Fact]
+    public async Task GetAgentHostDispatchContext_returns_claim_holder_for_terminal_child_cleanup()
+    {
+        const string runId = "run-terminal-child-fence";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var annotations = new Dictionary<string, string>
+        {
+            [KubernetesSandboxExecutor.HolderTokenAnnotation] = "child-holder",
+            [KubernetesSandboxExecutor.DispatchIdAnnotation] = "dispatch-1",
+            [KubernetesSandboxExecutor.LifecycleGenerationAnnotation] = "3",
+            [KubernetesSandboxExecutor.DispatchUserAnnotation] = "user-1",
+            [KubernetesSandboxExecutor.ProviderSnapshotAnnotation] = "provider-1",
+        };
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            JsonSerializer.Serialize(new { metadata = new { name = claimName, uid = "uid-1", resourceVersion = "1", annotations } }));
+
+        var context = await NewExecutor(fake, new StubSubmittingUserResolver("sabbour"))
+            .GetAgentHostDispatchContextAsync(runId);
+
+        context.Should().NotBeNull();
+        context!.HolderToken.Should().Be("child-holder");
+        context.LifecycleGeneration.Should().Be(3);
     }
 
     [Fact]
@@ -1573,7 +2191,8 @@ public sealed class KubernetesSandboxExecutorClaimTests
                     DispatchProjectId: "project-123",
                     DispatchUserId: "user-123",
                     DispatchAgentName: "link",
-                    ProviderSnapshotKey: "copilot:binding:v7"),
+                    ProviderSnapshotKey: "copilot:binding:v7",
+                    DispatchFencingToken: 42),
                 new CancellationTokenSource(TimeSpan.FromMilliseconds(50)).Token);
         }
         catch (Exception)
@@ -1589,10 +2208,35 @@ public sealed class KubernetesSandboxExecutorClaimTests
             .And.Contain(KubernetesSandboxExecutor.DispatchIdAnnotation)
             .And.Contain("dispatch-123")
             .And.Contain(KubernetesSandboxExecutor.LifecycleGenerationAnnotation)
+            .And.Contain(KubernetesSandboxExecutor.DispatchFencingTokenAnnotation)
+            .And.Contain("42")
             .And.Contain("project-123")
             .And.Contain("user-123")
             .And.Contain("link")
             .And.Contain("copilot:binding:v7");
+    }
+
+    [Fact]
+    public async Task Forced_takeover_release_deletes_matching_claim_even_with_active_preview()
+    {
+        const string runId = "run-force-takeover-preview";
+        var claimName = SandboxClaimConventions.DeriveAgentHostClaimName(runId);
+        var fake = new FakeKubeHandler();
+        fake.OnGet(
+            $"/apis/{SandboxClaimConventions.ApiGroup}/{SandboxClaimConventions.ApiVersion}/namespaces/agentweaver/sandboxclaims/{claimName}",
+            ClaimJsonWithHolder(claimName, "stale-dispatch"));
+        var executor = NewExecutor(
+            fake,
+            new StubSubmittingUserResolver("sabbour"),
+            previewService: new StubPreviewService(hasActivePreview: true));
+
+        var released = await executor.TryForceReleaseHeldAgentHostPodAsync(
+            runId, "stale-dispatch");
+
+        released.Should().BeTrue();
+        fake.Requests.Should().Contain(
+            request => request.Method == "DELETE"
+                && request.Path.EndsWith($"/sandboxclaims/{claimName}"));
     }
 
     // Minimal ISandboxPreviewService test double: only lifecycle reconciliation is exercised by the

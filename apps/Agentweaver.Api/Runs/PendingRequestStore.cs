@@ -1,23 +1,27 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Workflows;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Runs;
 
 /// <summary>
-/// Replica-safe store mapping <c>runId → pending ExternalRequest</c> for the human-in-the-loop
-/// (HITL) review/confirmation gate.
+/// Replica-safe store mapping <c>runId → pending ExternalRequest</c> plus fenced delivery state for
+/// the human-in-the-loop (HITL) review/confirmation gate.
 ///
 /// State lives in <see cref="MemoryDbContext"/> (Postgres in prod, SQLite in dev) rather than per-pod
 /// memory: the background watch loop arms the gate on one pod while a later HTTP review/confirm
-/// request may be served by a different pod (at <c>replicas:2</c>). <see cref="TryRemoveAsync"/> is an
-/// atomic single-consume (read-then-conditional <c>ExecuteDeleteAsync</c> on the unique run id), so two
-/// pods can never both consume the same gate — preserving at-most-once delivery (replay / double-POST
-/// protection).
+/// request may be served by a different pod (at <c>replicas:2</c>). A submitted decision/result is
+/// persisted against the exact MAF request id and claimed through waiting → ready → delivering →
+/// delivered transitions so a crash before send does not destroy the resume handoff.
 ///
 /// Registered as a singleton because it is consumed by singleton background services
 /// (<c>RunWatchLoopService</c>, <c>CoordinatorRunService</c>) as well as scoped HTTP endpoints; it
@@ -31,15 +35,23 @@ public sealed class PendingRequestStore
     public PendingRequestStore(IServiceScopeFactory scopeFactory) => _scopeFactory = scopeFactory;
 
     /// <summary>Arms (or re-arms) the pending gate for a run. Upserts by the unique run id.</summary>
-    public async Task SetAsync(string runId, ExternalRequest request, string ownerUser, CancellationToken ct = default)
+    public async Task SetAsync(
+        string runId, ExternalRequest request, string ownerUser, CancellationToken ct = default,
+        int? lifecycleGeneration = null, string? reviewOutputRevisionId = null)
     {
-        var json = SerializeRequest(request);
+        var requestId = request.RequestId;
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
 
         var existing = await db.PendingRequests
             .FirstOrDefaultAsync(p => p.RunId == runId, ct)
             .ConfigureAwait(false);
+        var previousDecisionHash = existing is { ResponseJson: not null }
+            ? HashDecision(existing.ResponseJson)
+            : existing is null ? null
+                : JsonSerializer.Deserialize<PendingRequestEnvelope>(
+                    existing.RequestJson, JsonDefaults.Options)?.PreviousDecisionHash;
+        var json = SerializeRequest(request, lifecycleGeneration, previousDecisionHash, reviewOutputRevisionId);
 
         if (existing is null)
         {
@@ -47,14 +59,30 @@ public sealed class PendingRequestStore
             {
                 RunId = runId,
                 RequestJson = json,
+                RequestId = requestId,
                 OwnerUser = ownerUser,
+                DeliveryState = PendingRequestDeliveryStates.Waiting,
                 CreatedAt = DateTimeOffset.UtcNow,
             });
         }
         else
         {
+            if (existing.RequestId == requestId
+                && (existing.DeliveryState == PendingRequestDeliveryStates.Ready
+                    || existing.DeliveryState == PendingRequestDeliveryStates.Delivering
+                    || existing.DeliveryState == PendingRequestDeliveryStates.Delivered))
+                return;
+
             existing.RequestJson = json;
+            existing.RequestId = requestId;
             existing.OwnerUser = ownerUser;
+            existing.DeliveryState = PendingRequestDeliveryStates.Waiting;
+            existing.DeliveryKind = null;
+            existing.DecisionIdentity = null;
+            existing.ResponseJson = null;
+            existing.DeliveryClaimOwner = null;
+            existing.DeliveryClaimedAt = null;
+            existing.DeliveredAt = null;
             existing.CreatedAt = DateTimeOffset.UtcNow;
         }
 
@@ -67,18 +95,415 @@ public sealed class PendingRequestStore
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var row = await db.PendingRequests.AsNoTracking()
-            .FirstOrDefaultAsync(p => p.RunId == runId, ct)
+            .FirstOrDefaultAsync(p => p.RunId == runId
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered
+                && p.DeliveryState != PendingRequestDeliveryStates.Ready
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivering, ct)
             .ConfigureAwait(false);
         return row is null ? null : new PendingEntry(DeserializeRequest(row.RequestJson), row.OwnerUser);
     }
 
+    public async Task<bool> ExistsForRequestAsync(string runId, string requestId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.PendingRequests.AsNoTracking()
+            .AnyAsync(p => p.RunId == runId
+                && p.RequestId == requestId, ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<(string? RequestId, string DeliveryState, int? LifecycleGeneration, RequestPortInfo PortInfo)?> GetRequestStateAsync(
+        string runId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .Where(p => p.RunId == runId)
+            .Select(p => new { p.RequestId, p.DeliveryState, p.RequestJson })
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        if (row is null) return null;
+        var envelope = JsonSerializer.Deserialize<PendingRequestEnvelope>(row.RequestJson, JsonDefaults.Options)
+            ?? throw new InvalidOperationException("Stored pending request could not be deserialized.");
+        if (row.RequestId is not null && row.RequestId != envelope.RequestId)
+            throw new InvalidOperationException("Stored pending request identity does not match its gate.");
+        return (row.RequestId ?? envelope.RequestId, row.DeliveryState, envelope.LifecycleGeneration, envelope.PortInfo);
+    }
+
+    public async Task<bool> MatchesRecentDecisionAsync<TResponse>(
+        string runId, TResponse response, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .Where(p => p.RunId == runId)
+            .Select(p => new { p.RequestJson, p.ResponseJson, p.DeliveryState })
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        if (row is null) return false;
+        var hash = HashDecision(JsonSerializer.Serialize(response, JsonDefaults.Options));
+        if (row.DeliveryState == PendingRequestDeliveryStates.Delivered
+            && row.ResponseJson is not null && HashDecision(row.ResponseJson) == hash)
+            return true;
+        var envelope = JsonSerializer.Deserialize<PendingRequestEnvelope>(
+            row.RequestJson, JsonDefaults.Options);
+        return envelope?.PreviousDecisionHash == hash;
+    }
+
+    public async Task<bool> ExistsUndeliveredAsync(string runId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.PendingRequests.AsNoTracking()
+            .AnyAsync(p => p.RunId == runId
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered, ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<string?> GetRequestKindAsync(string runId, CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .Where(p => p.RunId == runId
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered)
+            .Select(p => new { p.RequestJson, p.DeliveryKind })
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        if (row is null)
+            return null;
+        if (!string.IsNullOrWhiteSpace(row.DeliveryKind))
+            return row.DeliveryKind;
+
+        var envelope = JsonSerializer.Deserialize<PendingRequestEnvelope>(row.RequestJson, JsonDefaults.Options)
+            ?? throw new InvalidOperationException("Stored pending request could not be deserialized.");
+        if (!string.IsNullOrWhiteSpace(envelope.RequestKind))
+            return envelope.RequestKind;
+
+        var request = DeserializeRequest(row.RequestJson);
+        if (request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out _))
+            return PendingRequestDeliveryKinds.WorkflowChildWork;
+        if (request.TryGetDataAs<WorkflowReviewRequest>(out _))
+            return PendingRequestDeliveryKinds.WorkflowReview;
+        return null;
+    }
+
+    /// <summary>Advisory GET projection only; queued decisions retain their independent POST gate.</summary>
+    public async Task<string?> GetActionableRequestKindAsync(
+        Agentweaver.Domain.Run run, RunOutputRevision? latestReviewRevision, CancellationToken ct = default)
+    {
+        if (run.Status != Agentweaver.Domain.RunStatus.AwaitingReview)
+            return null;
+
+        var runId = run.Id.ToString();
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.RunId == runId, ct).ConfigureAwait(false);
+        if (row is null || row.DeliveryState != PendingRequestDeliveryStates.Waiting
+            || row.DecisionIdentity is not null || row.ResponseJson is not null)
+            return null;
+
+        var envelope = JsonSerializer.Deserialize<PendingRequestEnvelope>(row.RequestJson, JsonDefaults.Options)
+            ?? throw new InvalidOperationException("Stored pending request could not be deserialized.");
+        if (string.IsNullOrWhiteSpace(row.RequestId) || row.RequestId != envelope.RequestId
+            || envelope.LifecycleGeneration != run.LifecycleGeneration)
+            return null;
+
+        var plan = await db.WorkPlans.AsNoTracking()
+            .Where(p => p.ParentRunId == runId && p.ParentWorkflowNodeId != null)
+            .OrderByDescending(p => p.Id)
+            .Select(p => new { p.ParentResumeState, p.ParentResumeRequestId })
+            .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+        var activePlan = plan?.ParentResumeState is "committed" or "waiting" or "ready" or "delivering";
+        if (envelope.RequestKind == PendingRequestDeliveryKinds.WorkflowChildWork)
+            return activePlan && plan!.ParentResumeRequestId == row.RequestId
+                ? PendingRequestDeliveryKinds.WorkflowChildWork : null;
+        if (envelope.RequestKind != PendingRequestDeliveryKinds.WorkflowReview || activePlan
+            || string.IsNullOrWhiteSpace(envelope.ReviewOutputRevisionId)
+            || envelope.ReviewOutputRevisionId != run.CurrentOutputRevisionId)
+            return null;
+        return latestReviewRevision is not null
+            && latestReviewRevision.RevisionId == envelope.ReviewOutputRevisionId
+            && latestReviewRevision.RunId == run.Id
+            && latestReviewRevision.LifecycleGeneration == run.LifecycleGeneration
+            && latestReviewRevision.TreeHash == run.TreeHash ? PendingRequestDeliveryKinds.WorkflowReview : null;
+    }
+
+    public async Task<PendingDeliveryState?> GetDeliveryStateAsync(
+        string runId,
+        string deliveryKind,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .Where(p => p.RunId == runId && p.DeliveryKind == deliveryKind)
+            .Select(p => new PendingDeliveryState(
+                p.DeliveryState,
+                p.DecisionIdentity,
+                p.DeliveryClaimOwner,
+                p.DeliveryClaimedAt,
+                p.DeliveredAt))
+            .FirstOrDefaultAsync(ct)
+            .ConfigureAwait(false);
+        return row;
+    }
+
+    public async Task<bool> MatchesUndeliveredDeliveryAsync<TResponse>(
+        string runId,
+        string deliveryKind,
+        TResponse response,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var row = await db.PendingRequests.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.RunId == runId
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered, ct)
+            .ConfigureAwait(false);
+        if (row is null || !string.Equals(row.DeliveryKind, deliveryKind, StringComparison.Ordinal))
+            return false;
+
+        var request = DeserializeRequest(row.RequestJson);
+        var expectedIdentity = CreateDecisionIdentity(request.RequestId, response);
+        return string.Equals(row.DecisionIdentity, expectedIdentity, StringComparison.Ordinal);
+    }
+
+    public async Task<IReadOnlyList<string>> ListUndeliveredRunIdsAsync(
+        string deliveryKind,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.PendingRequests.AsNoTracking()
+            .Where(p => p.DeliveryKind == deliveryKind
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered)
+            .Select(p => p.RunId)
+            .ToListAsync(ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryQueueDeliveryAsync<TResponse>(
+        string runId,
+        string deliveryKind,
+        string decisionIdentity,
+        TResponse response,
+        string ownerUser,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+
+        var row = await db.PendingRequests
+            .FirstOrDefaultAsync(p => p.RunId == runId, ct)
+            .ConfigureAwait(false);
+        if (row is null || row.DeliveryState == PendingRequestDeliveryStates.Delivered)
+            return false;
+        if (!string.Equals(row.OwnerUser, ownerUser, StringComparison.Ordinal))
+            return false;
+
+        var request = DeserializeRequest(row.RequestJson);
+        var expectedIdentity = CreateDecisionIdentity(request.RequestId, response);
+        if (!string.Equals(expectedIdentity, decisionIdentity, StringComparison.Ordinal))
+            return false;
+
+        if (row.DecisionIdentity is not null)
+            return string.Equals(row.DecisionIdentity, decisionIdentity, StringComparison.Ordinal);
+
+        var responseJson = JsonSerializer.Serialize(response, JsonDefaults.Options);
+        var queued = await db.PendingRequests
+            .Where(p => p.RunId == runId
+                && (p.RequestId == request.RequestId || p.RequestId == null)
+                && p.OwnerUser == ownerUser
+                && p.DeliveryState == PendingRequestDeliveryStates.Waiting
+                && p.DecisionIdentity == null)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(p => p.RequestId, request.RequestId)
+                .SetProperty(p => p.DeliveryState, PendingRequestDeliveryStates.Ready)
+                .SetProperty(p => p.DeliveryKind, deliveryKind)
+                .SetProperty(p => p.DecisionIdentity, decisionIdentity)
+                .SetProperty(p => p.ResponseJson, responseJson)
+                .SetProperty(p => p.DeliveryClaimOwner, (string?)null)
+                .SetProperty(p => p.DeliveryClaimedAt, (DateTimeOffset?)null)
+                .SetProperty(p => p.DeliveredAt, (DateTimeOffset?)null), ct)
+            .ConfigureAwait(false);
+        if (queued == 1)
+            return true;
+
+        var current = await db.PendingRequests.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.RunId == runId, ct)
+            .ConfigureAwait(false);
+        return current is not null
+            && string.Equals(current.RequestId, request.RequestId, StringComparison.Ordinal)
+            && string.Equals(current.DecisionIdentity, decisionIdentity, StringComparison.Ordinal);
+    }
+
+    public async Task<PendingDelivery?> TryClaimDeliveryAsync(
+        string runId,
+        string claimOwner,
+        TimeSpan staleAfter,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var staleBefore = now - staleAfter;
+
+        var row = await db.PendingRequests
+            .FirstOrDefaultAsync(p => p.RunId == runId, ct)
+            .ConfigureAwait(false);
+        if (row is null
+            || row.DeliveryState == PendingRequestDeliveryStates.Delivered
+            || string.IsNullOrEmpty(row.ResponseJson)
+            || string.IsNullOrEmpty(row.DecisionIdentity)
+            || string.IsNullOrEmpty(row.DeliveryKind))
+            return null;
+        if (row.DeliveryState == PendingRequestDeliveryStates.Delivering
+            && row.DeliveryClaimedAt is not null
+            && row.DeliveryClaimedAt > staleBefore)
+            return null;
+        if (row.DeliveryState != PendingRequestDeliveryStates.Ready
+            && row.DeliveryState != PendingRequestDeliveryStates.Delivering)
+            return null;
+
+        int claimed;
+        var previousOwner = row.DeliveryClaimOwner;
+        var previousClaimedAt = row.DeliveryClaimedAt;
+        if (row.DeliveryState == PendingRequestDeliveryStates.Ready)
+        {
+            claimed = await db.PendingRequests
+                .Where(p => p.RunId == runId
+                    && p.DecisionIdentity == row.DecisionIdentity
+                    && p.DeliveryState == PendingRequestDeliveryStates.Ready)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(p => p.DeliveryState, PendingRequestDeliveryStates.Delivering)
+                    .SetProperty(p => p.DeliveryClaimOwner, claimOwner)
+                    .SetProperty(p => p.DeliveryClaimedAt, now), ct)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            if (previousClaimedAt is not null && previousClaimedAt > staleBefore)
+                claimed = 0;
+            else if (previousClaimedAt is null)
+            {
+                claimed = await db.PendingRequests
+                    .Where(p => p.RunId == runId
+                        && p.DecisionIdentity == row.DecisionIdentity
+                        && p.DeliveryState == PendingRequestDeliveryStates.Delivering
+                        && p.DeliveryClaimOwner == previousOwner
+                        && p.DeliveryClaimedAt == null)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(p => p.DeliveryClaimOwner, claimOwner)
+                        .SetProperty(p => p.DeliveryClaimedAt, now), ct)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                claimed = await db.PendingRequests
+                    .Where(p => p.RunId == runId
+                        && p.DecisionIdentity == row.DecisionIdentity
+                        && p.DeliveryState == PendingRequestDeliveryStates.Delivering
+                        && p.DeliveryClaimOwner == previousOwner
+                        && p.DeliveryClaimedAt == previousClaimedAt)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(p => p.DeliveryClaimOwner, claimOwner)
+                        .SetProperty(p => p.DeliveryClaimedAt, now), ct)
+                    .ConfigureAwait(false);
+            }
+        }
+        if (claimed == 0)
+            return null;
+
+        return new PendingDelivery(
+            DeserializeRequest(row.RequestJson),
+            row.OwnerUser,
+            row.DeliveryKind,
+            row.DecisionIdentity,
+            row.ResponseJson,
+            claimOwner,
+            now);
+    }
+
+    public async Task<bool> MarkDeliveredAsync(
+        string runId,
+        string decisionIdentity,
+        string claimOwner,
+        DateTimeOffset claimedAt,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var delivered = await db.PendingRequests
+            .Where(p => p.RunId == runId
+                && p.DecisionIdentity == decisionIdentity
+                && p.DeliveryState == PendingRequestDeliveryStates.Delivering
+                && p.DeliveryClaimOwner == claimOwner
+                && p.DeliveryClaimedAt == claimedAt)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(p => p.DeliveryState, PendingRequestDeliveryStates.Delivered)
+                .SetProperty(p => p.DeliveredAt, DateTimeOffset.UtcNow)
+                .SetProperty(p => p.DeliveryClaimOwner, (string?)null)
+                .SetProperty(p => p.DeliveryClaimedAt, (DateTimeOffset?)null), ct)
+            .ConfigureAwait(false);
+        return delivered == 1;
+    }
+
+    public async Task<bool> MarkObservedWorkflowAdvanceAsync(
+        string runId,
+        string? invokedExecutorId = null,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        // Buffered pre-pause events are not evidence that the fan response crossed
+        // the request port; the joined executor's invocation is.
+        var fanAdvanced = invokedExecutorId?.StartsWith("fan-in-", StringComparison.Ordinal) == true;
+        var delivered = await db.PendingRequests
+            .Where(p => p.RunId == runId
+                && p.DeliveryState == PendingRequestDeliveryStates.Delivering
+                && (p.DeliveryKind != PendingRequestDeliveryKinds.WorkflowChildWork || fanAdvanced))
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(p => p.DeliveryState, PendingRequestDeliveryStates.Delivered)
+                .SetProperty(p => p.DeliveredAt, DateTimeOffset.UtcNow)
+                .SetProperty(p => p.DeliveryClaimOwner, (string?)null)
+                .SetProperty(p => p.DeliveryClaimedAt, (DateTimeOffset?)null), ct)
+            .ConfigureAwait(false);
+        return delivered > 0;
+    }
+
+    public async Task<bool> ReleaseDeliveryAsync(
+        string runId,
+        string decisionIdentity,
+        string claimOwner,
+        DateTimeOffset claimedAt,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var released = await db.PendingRequests
+            .Where(p => p.RunId == runId
+                && p.DecisionIdentity == decisionIdentity
+                && p.DeliveryState == PendingRequestDeliveryStates.Delivering
+                && p.DeliveryClaimOwner == claimOwner
+                && p.DeliveryClaimedAt == claimedAt)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(p => p.DeliveryState, PendingRequestDeliveryStates.Ready)
+                .SetProperty(p => p.DeliveryClaimOwner, (string?)null)
+                .SetProperty(p => p.DeliveryClaimedAt, (DateTimeOffset?)null), ct)
+            .ConfigureAwait(false);
+        return released == 1;
+    }
+
     /// <summary>
-    /// Atomically removes and returns the pending gate, guaranteeing at-most-once delivery across
-    /// replicas. Reads the row, then conditionally deletes it by run id: the caller whose
-    /// <c>ExecuteDeleteAsync</c> affected the row wins; zero rows affected (already consumed on this or
-    /// another pod, or never armed) yields <c>null</c>.
+    /// Destructively removes a still-waiting gate because a human request-changes action has already
+    /// committed to abandoning the paused workflow and starting a fresh revision. Do not use for
+    /// automated resume, fan-in joins, or any path where losing the request before
+    /// <c>SendResponseAsync</c> can strand parent work.
     /// </summary>
-    public async Task<PendingEntry?> TryRemoveAsync(string runId, CancellationToken ct = default)
+    public async Task<PendingEntry?> TryAbandonWaitingGateForHumanRevisionAsync(
+        string runId,
+        CancellationToken ct = default)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -90,7 +515,8 @@ public sealed class PendingRequestStore
             return null;
 
         var deleted = await db.PendingRequests
-            .Where(p => p.RunId == runId)
+            .Where(p => p.RunId == runId
+                && p.DeliveryState == PendingRequestDeliveryStates.Waiting)
             .ExecuteDeleteAsync(ct).ConfigureAwait(false);
 
         // Lost the race to another consumer (this or another replica) — at-most-once preserved.
@@ -100,17 +526,78 @@ public sealed class PendingRequestStore
         return new PendingEntry(DeserializeRequest(row.RequestJson), row.OwnerUser);
     }
 
+    /// <summary>
+    /// Removes a queued delivery only after its owning workflow has been proven unable to consume it.
+    /// This is recovery cleanup, not a resume-delivery operation.
+    /// </summary>
+    public async Task<bool> DiscardUndeliverableDeliveryAsync(
+        string runId,
+        string deliveryKind,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var deleted = await db.PendingRequests
+            .Where(p => p.RunId == runId
+                && p.DeliveryKind == deliveryKind
+                && p.DeliveryState != PendingRequestDeliveryStates.Waiting
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+        return deleted == 1;
+    }
+
+    public async Task<bool> DiscardWorkflowChildWorkAsync(
+        string runId,
+        string requestId,
+        CancellationToken ct = default)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var deleted = await db.PendingRequests
+            .Where(p => p.RunId == runId
+                && p.RequestId == requestId
+                && (p.DeliveryKind == null
+                    || p.DeliveryKind == PendingRequestDeliveryKinds.WorkflowChildWork)
+                && p.DeliveryState != PendingRequestDeliveryStates.Delivered)
+            .ExecuteDeleteAsync(ct)
+            .ConfigureAwait(false);
+        return deleted == 1;
+    }
+
     // ── Serialization ──────────────────────────────────────────────────────────
     // Only PortInfo + RequestId are persisted: these are all that CreateResponse needs to build the
     // response and resume the suspended workflow. The original request Data (PortableValue) is not
     // round-tripped — it is never read after the gate is armed, and PortableValue requires MAF's
     // checkpoint converter to deserialize faithfully.
 
-    private sealed record PendingRequestEnvelope(RequestPortInfo PortInfo, string RequestId);
+    private sealed record PendingRequestEnvelope(
+        RequestPortInfo PortInfo, string RequestId, int? LifecycleGeneration = null,
+        string? PreviousDecisionHash = null, string? RequestKind = null,
+        string? ReviewOutputRevisionId = null);
 
-    private static string SerializeRequest(ExternalRequest request) =>
+    private static string HashDecision(string responseJson) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(responseJson)));
+
+    public static string CreateDecisionIdentity<TResponse>(string requestId, TResponse response)
+    {
+        var payload = JsonSerializer.Serialize(response, JsonDefaults.Options);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{requestId}\n{payload}")))
+            .ToLowerInvariant();
+        return $"{requestId}:{hash}";
+    }
+
+    private static string SerializeRequest(
+        ExternalRequest request, int? lifecycleGeneration, string? previousDecisionHash,
+        string? reviewOutputRevisionId) =>
         JsonSerializer.Serialize(
-            new PendingRequestEnvelope(request.PortInfo, request.RequestId), JsonDefaults.Options);
+            new PendingRequestEnvelope(
+                request.PortInfo, request.RequestId, lifecycleGeneration, previousDecisionHash,
+                request.TryGetDataAs<WorkflowChildWorkPauseRequest>(out _)
+                    ? PendingRequestDeliveryKinds.WorkflowChildWork
+                    : request.TryGetDataAs<WorkflowReviewRequest>(out _)
+                        ? PendingRequestDeliveryKinds.WorkflowReview : null,
+                reviewOutputRevisionId), JsonDefaults.Options);
 
     private static ExternalRequest DeserializeRequest(string json)
     {
@@ -123,3 +610,24 @@ public sealed class PendingRequestStore
 
 /// <summary>Pending request entry with owner for IDOR defense.</summary>
 public sealed record PendingEntry(ExternalRequest Request, string OwnerUser);
+
+public sealed record PendingDelivery(
+    ExternalRequest Request,
+    string OwnerUser,
+    string DeliveryKind,
+    string DecisionIdentity,
+    string ResponseJson,
+    string ClaimOwner,
+    DateTimeOffset ClaimedAt)
+{
+    public TResponse GetResponse<TResponse>() =>
+        JsonSerializer.Deserialize<TResponse>(ResponseJson, JsonDefaults.Options)
+        ?? throw new InvalidOperationException("Stored pending delivery response could not be deserialized.");
+}
+
+public sealed record PendingDeliveryState(
+    string State,
+    string? DecisionIdentity,
+    string? ClaimOwner,
+    DateTimeOffset? ClaimedAt,
+    DateTimeOffset? DeliveredAt);

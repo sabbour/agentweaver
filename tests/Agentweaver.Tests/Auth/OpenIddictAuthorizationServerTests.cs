@@ -143,9 +143,10 @@ public sealed class OpenIddictAuthorizationServerTests : IClassFixture<OpenIddic
         var reconciler = new OAuthStaticClientReconciler(
             factory.Services.GetRequiredService<IServiceScopeFactory>(),
             configuration,
+            factory.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>(),
             NullLogger<OAuthStaticClientReconciler>.Instance);
 
-        await reconciler.StartAsync(CancellationToken.None);
+        await reconciler.ReconcileAsync(CancellationToken.None);
 
         await using var scope = factory.Services.CreateAsyncScope();
         var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();

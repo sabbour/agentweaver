@@ -14,7 +14,7 @@ process arguments or borrows
 ### Browser-managed authentication for staging (Entra Conditional Access)
 
 Agentweaver staging uses Entra Conditional Access. Before an authenticated API run,
-run the documented UI-harness Chrome Default-profile login once for that target. The
+run the documented demo-recording session setup once for that target. The
 `recorder-session` provider reads its cached UI storage/session sidecar, verifies it
 belongs to the requested origin, and returns the complete `Authorization` value only in
 memory. Pass that value to the header unchanged; do not add another scheme. It never
@@ -27,15 +27,33 @@ node scripts/api-harness/run-persona.mjs `
   --target https://<host>.staging.<domain>
 ```
 
-The provider uses `scripts/ui-harness/.auth/` by default; use
-`--recorder-auth-root` only for an existing protected UI-harness auth root.
+The provider uses `scripts/demo-recording/.auth/recording.storageState.json` and
+its `.sessionStorage.json` sidecar by default; use `--recorder-auth-root` only
+for an explicitly chosen protected auth root. To reuse a supported UI login:
+
+```powershell
+node scripts/api-harness/run-persona.mjs --scenario generated-artifacts-seam --target https://<host>.staging.<domain> --recorder-auth-root scripts/ui-harness/.auth
+```
+
+`run-oracle-acceptance.mjs` accepts the same `--recorder-auth-root`; the context
+budget CLI uses `--auth-root scripts/ui-harness/.auth`. In an explicit root,
+`recording.storageState.json` takes precedence if both layouts exist; otherwise
+`staging.storageState.json` and its matching seed are used. No search in another
+directory or fallback after an invalid selected cache occurs.
 `--auth-provider recorder-session` remains accepted for clarity but is the default.
-If the cached UI session is absent, expired, or belongs to another origin, it fails
-with the exact `login-chrome-default.mjs --base-url <origin>` remediation. Microsoft
+If the cached recorder session is absent, expired, or belongs to another origin, it fails
+with `npm run demo:record -- open --base-url <origin>` for the recorder layout,
+or `node scripts/ui-harness/login-chrome-default.mjs --base-url <origin>` for the
+selected UI layout. Microsoft
 Entra account selection, credentials, MFA, and consent remain human-only.
+For a decoded JWT with an `exp` claim, a provider reuses the in-memory
+Authorization value only while it remains unexpired. After expiry it revalidates
+the same selected cache path and origin; a refreshed session can be reused without
+creating a new provider, but an expired or wrong-origin replacement fails before
+an API call. Tokens without a decodable expiry retain the existing behavior.
 Do not fall back to generic Playwright, direct CDP/DevTools, ad-hoc profile
 launch/copy, or manual browser automation; surface the provider's recovery error and
-use the UI-harness login/cached-session flow. That flow requires the installed literal
+use the demo-recording login/cached-session flow. That flow requires the installed literal
 Google Chrome `chrome.exe` on Playwright's `chrome` channel, never bundled Chromium.
 
 Before the seam mutations, the runner sends that bearer to the protected
@@ -78,6 +96,99 @@ Two traps make this easy to misdiagnose:
   [`scripts/demo-recording/README.md`](../demo-recording/README.md#microsoft-entra-boundary-for-agents).
 
 ## Driving a persona scenario (the only way — dynamic, no fixed scripts, no HTTP-calling wrapper)
+
+### Deterministic Oracle assembly/revision release acceptance
+
+Oracle **release acceptance** is the exception to free-form PersonaActor exploration:
+the lifecycle and preview safety checks are deterministic; Oracle's grounded review
+decision is supplied as bounded input, not inferred from a hard-coded transcript.
+Use `run-oracle-acceptance.mjs`, **not** an `agent-driver` command or
+`run-persona.mjs --scenario oracle`. Use a disposable repository-backed project with an executable app; the runtime
+discovers the actual listener port and publishes each automatic preview.
+Either attach to an already-started coordinator with `--run-id`, or provide
+`--goal` to launch a `direct` orchestration in that project.
+
+```powershell
+node scripts/api-harness/run-oracle-acceptance.mjs `
+  --target https://<staging-origin> `
+  --project-id <disposable-project-uuid> `
+  --goal "Build a working app with an executable server" `
+  --expected-text "Visible original app text" `
+  --corrected-text "Visible revised app text" `
+  --feedback "Observed missing behavior in the original preview; make the revised app show the corrected behavior" `
+  --target-files "src/App.tsx" `
+  --budget revisionProvisioning=15
+```
+
+The first authenticated request uses the cached recorder session provider.
+The driver checks version, OpenAPI and session **once**; never passes auth material
+on the command line. `--auth-provider local-test` is for local test targets.
+Polling uses exclusive `/events?after=<sequence>&limit=250` cursors per parent
+and child. Default budgets in minutes are: planning 6, claimProvisioning 6,
+implementation 18, initialPreview 5, buildTestReview 10, revisionProvisioning 12,
+correctedPreview 5, terminalCompletion 8. Override with repeatable
+`--budget phase=minutes`; `--poll-ms` defaults to 5000.
+An internal `coordinator.assembly_changes_requested` correction receives fresh
+revision-provisioning, implementation, and Build & Test/review phase budgets only
+after the event is paired with new child runs for every redispatched subtask, each
+assigned to the author selected by the current work plan; eligible-author rotation
+and same-author fallback are both supported. The replacement child and current
+work-plan subtask must both reach `assemble_ready`; stale `awaiting_assembly` or
+`in_review` projections alone are not completion evidence. The review lifecycle allows
+at most three verified internal correction generations and has one fixed overall deadline, computed once
+from the configured `buildTestReview`, `revisionProvisioning`, and `implementation`
+budgets (130 minutes with the defaults). A correction event without a new child
+dispatch does not reset any deadline.
+Idempotent GET polling retries at most two times after transient transport
+responses, thrown request timeouts or transport errors, or HTTP 502, 503, or
+504, within the same phase deadline. Expired phase budgets and cancellations
+fail explicitly; decisions and other writes are never retried.
+
+At each assembly review the driver verifies the current work-plan ID, review
+tree, immutable revision tree and source bytes, completed Build & Test event,
+and runtime-owned `sandbox.preview_ready` event (`source: preview-step`).
+It matches the event's run, tree, claim-bound pod, supervised runner session,
+actual target port, session token and URL against the current GET listing.
+Stale, manual, foreign, ambiguous, mismatched or failed sessions are never
+adopted or deleted. Missing automatic previews are polled read-only within
+the phase budget, then fail closed. HTTP 200 in Chrome, expected application
+text and absence of fatal browser errors are required before `request_changes`
+or approval. The route is rechecked after browser verification. The corrected
+revision must have different source content and rendered body. The driver
+does not publish manual previews or assume port 3000; `--port` is unsupported.
+
+Each assembly decision includes `output_revision_id` from the current parent
+`coordinator.assembly_review_requested` event (verified against parent output
+revision detail) and its own fresh orchestration execution context in
+`If-Model-Provider-Key`. Attached runs derive their `project_id` from the
+run detail, rejecting a mismatched explicit project. The second review must
+publish a new parent revision with a different `tree_content_sha256` (falling
+back to `tree_hash`); `/assembly/files` lists paths/statuses, **not** file
+content. Artifact readiness and browser verification share the single
+`correctedPreview` deadline. Each revision's file bytes are fetched read-only
+and checked against manifest size/SHA-256; expected visible text must also
+occur in the reviewed source. These checks do not substitute for the browser.
+
+Shell approvals fail fast by default; `--approve-shell` is an explicit opt-in
+**only for a disposable project**. Event deltas retain history for evidence;
+`GET /api/runs/{id}/pending-approvals` determines which shell requests are
+currently actionable in the tested run tree. Approvals use its `action_run_id`
+and `request_id` (the shell command hash), never old approval-required events.
+An HTTP 409 is not retried: only a "Run is not active." conflict followed by
+a fresh pending read confirming that request is gone is recorded as a
+resolution race; any still-pending request or other conflict fails. No
+speculative approvals are issued. Timeouts and terminal errors fail closed.
+The append-only redacted transcript (`--transcript`) and result JSON
+(`--result`) default to `transcripts/` and `verdicts/`; failure retains current
+phase, parent/child/revision IDs, recent events and diagnostic. Exit 0 means
+both objective preview gates and terminal completion passed; it is not an
+independent subjective Judge verdict. Cleanup deletes and confirms **only**
+manual preview session IDs actually created by this invocation (none in the
+automatic-only flow), including on failure; an unconfirmed cleanup changes
+the verdict to fail. A ready event or listed route alone is not proof of a
+working app. Failure results include per-attempt phase timings and the latest
+workplan/subtask/child statuses. This fixture-only contract does not establish
+live release acceptance; a deployed run needs its own browser and terminal evidence.
 
 Before choosing a persona for a dynamic API run, check
 `scripts/persona-briefs/catalog.json` through

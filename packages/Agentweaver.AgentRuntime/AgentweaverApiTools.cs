@@ -23,7 +23,9 @@ internal static class AgentweaverApiTools
         "submit_inbox_entry",
         "list_inbox",
         "list_decisions",
+        "get_decision_history",
         "get_memory",
+        "get_memory_history",
         "merge_inbox_entry",
         "export_memory",
         "project_get",
@@ -36,6 +38,12 @@ internal static class AgentweaverApiTools
         "coordinator_work_plan_get",
         "coordinator_children_get",
         "orchestration_topology",
+        "agent_message_send",
+        "agent_message_list",
+        "agent_message_get",
+        "agent_message_claim",
+        "agent_message_deliver",
+        "agent_message_acknowledge",
         // NOTE: start_preview does NOT belong here. It moved to PreviewRunnerToolProvider (#334)
         // and is never yielded by Build() below, but this stale entry lingered — causing the
         // permission handler to misclassify it as a "no governance" Agentweaver API tool. Now that
@@ -208,11 +216,15 @@ internal static class AgentweaverApiTools
             async (
                 [Description("Filter by decision type: architectural | scope | process | pattern | technical (optional — omit for all types)")] string? type = null,
                 [Description("Filter by status: active | superseded | archived (optional — defaults to active)")] string? status = null,
+                [Description("1-based page")] int page = 1,
+                [Description("Page size, maximum 100")] int pageSize = 25,
                 CancellationToken ct = default) =>
             {
                 var qs = new List<string>();
                 qs.Add($"status={Uri.EscapeDataString(!string.IsNullOrWhiteSpace(status) ? status : "active")}");
                 if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
+                qs.Add($"page={page}");
+                qs.Add($"page_size={pageSize}");
                 return await GetJsonAsync(http,
                     $"api/projects/{projectId}/decisions?{string.Join("&", qs)}", ct).ConfigureAwait(false);
             },
@@ -223,35 +235,107 @@ internal static class AgentweaverApiTools
 
         yield return AIFunctionFactory.Create(
             async (
+                [Description("Decision record ID")] int decisionId,
+                [Description("1-based page")] int page = 1,
+                [Description("Page size, maximum 100")] int pageSize = 25,
+                CancellationToken ct = default) =>
+            {
+                return await GetJsonAsync(http,
+                    $"api/projects/{projectId}/decisions/{decisionId}/revisions?page={page}&page_size={pageSize}",
+                    ct).ConfigureAwait(false);
+            },
+            "get_decision_history",
+            "Inspect immutable revisions of a decision, including provenance, approval, lifecycle, and predecessor metadata. Returns paginated JSON.");
+
+        yield return AIFunctionFactory.Create(
+            async (
                 [Description("Restrict to a specific agent's memory (optional — omit for all agents)")] string? agent = null,
                 [Description("Comma-separated tag filter (optional — omit for all tags)")] string? tags = null,
                 [Description("Filter by memory type: learning | pattern | core_context | update (optional)")] string? type = null,
+                [Description("Text to find in content, tags, or agent name (optional)")] string? query = null,
+                [Description("Lifecycle state: active | superseded | archived | all (optional — defaults to active)")] string? status = null,
+                [Description("1-based page")] int page = 1,
+                [Description("Page size, maximum 100")] int pageSize = 25,
                 CancellationToken ct = default) =>
             {
-                string path;
-                if (!string.IsNullOrWhiteSpace(agent))
-                {
-                    var qs = new List<string>();
-                    if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
-                    path = $"api/projects/{projectId}/agents/{Uri.EscapeDataString(agent)}/memory"
-                        + (qs.Count > 0 ? "?" + string.Join("&", qs) : string.Empty);
-                }
-
-                else
-                {
-                    var qs = new List<string>();
-                    if (!string.IsNullOrWhiteSpace(tags)) qs.Add($"tags={Uri.EscapeDataString(tags)}");
-                    if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
-                    path = $"api/projects/{projectId}/memory"
-                        + (qs.Count > 0 ? "?" + string.Join("&", qs) : string.Empty);
-                }
+                var qs = new List<string>();
+                if (!string.IsNullOrWhiteSpace(tags)) qs.Add($"tags={Uri.EscapeDataString(tags)}");
+                if (!string.IsNullOrWhiteSpace(type)) qs.Add($"type={Uri.EscapeDataString(type)}");
+                if (!string.IsNullOrWhiteSpace(query)) qs.Add($"q={Uri.EscapeDataString(query)}");
+                if (!string.IsNullOrWhiteSpace(status)) qs.Add($"status={Uri.EscapeDataString(status)}");
+                if (!string.IsNullOrWhiteSpace(agent)) qs.Add($"agent={Uri.EscapeDataString(agent)}");
+                qs.Add($"page={page}");
+                qs.Add($"page_size={pageSize}");
+                var path = $"api/projects/{projectId}/memory?{string.Join("&", qs)}";
                 return await GetJsonAsync(http, path, ct).ConfigureAwait(false);
             },
             "get_memory",
-            "Read agent memory for this project. Omit 'agent' to search across all agents (supports tag filter); " +
-            "supply 'agent' to fetch one agent's memory specifically. " +
+            "Search active agent memory for this project with agent, text, tag, type, lifecycle, and pagination filters. " +
             "Before making a notable implementation choice, call get_memory " +
             "(and list_decisions + list_inbox) to surface patterns, learnings, and gotchas peers have already recorded.");
+
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Agent that owns the memory record")] string agent,
+                [Description("Memory record ID")] int memoryId,
+                [Description("1-based page")] int page = 1,
+                [Description("Page size, maximum 100")] int pageSize = 25,
+                CancellationToken ct = default) =>
+            {
+                return await GetJsonAsync(http,
+                    $"api/projects/{projectId}/agents/{Uri.EscapeDataString(agent)}/memory/{memoryId}/revisions?page={page}&page_size={pageSize}",
+                    ct).ConfigureAwait(false);
+            },
+            "get_memory_history",
+            "Inspect immutable revisions of a memory record, including provenance, approval, lifecycle, and predecessor metadata. Returns paginated JSON.");
+
+        var messageRoute = $"api/projects/{Uri.EscapeDataString(projectId)}/agent-messages";
+        yield return AIFunctionFactory.Create(
+            async (
+                [Description("Active teammate's name")] string recipient,
+                [Description("Active recipient run ID")] string target_run_id,
+                [Description("Message content")] string content,
+                [Description("Stable idempotency key for retry")] string idempotency_key,
+                [Description("Acknowledged message ID when replying")] string? reply_to_id = null,
+                [Description("Optional backlog_task, work_plan, or finding")] string? reference_kind = null,
+                [Description("Optional referenced item ID")] string? reference_id = null,
+                CancellationToken ct = default) =>
+                await PostMessageAsync(http, messageRoute,
+                    new { recipient, target_run_id, content, idempotency_key, reply_to_id, reference_kind, reference_id },
+                    ct).ConfigureAwait(false),
+            "agent_message_send", "Persist a direct message to one teammate's active run. Retry with the same idempotency key.");
+
+        yield return AIFunctionFactory.Create(
+            async (CancellationToken ct = default) =>
+                await GetJsonAsync(http, messageRoute, ct).ConfigureAwait(false),
+            "agent_message_list", "List addressed messages visible to this run, including receipt and failure state.");
+
+        yield return AIFunctionFactory.Create(
+            async ([Description("Message ID")] string message_id, CancellationToken ct = default) =>
+                await GetJsonAsync(http, $"{messageRoute}/{Uri.EscapeDataString(message_id)}", ct).ConfigureAwait(false),
+            "agent_message_get", "Inspect a direct message's state, correlation and diagnostics.");
+
+        yield return AIFunctionFactory.Create(
+            async ([Description("Unique claim attempt owner")] string owner, CancellationToken ct = default) =>
+                await PostMessageAsync(http, $"{messageRoute}/claim", new { owner }, ct).ConfigureAwait(false),
+            "agent_message_claim", "Lease a pending message for this run. Only use at a safe turn boundary.");
+
+        yield return AIFunctionFactory.Create(
+            async ([Description("Message ID")] string message_id,
+                [Description("Claim owner")] string owner,
+                [Description("Claim fence")] long fence,
+                CancellationToken ct = default) =>
+                await PostMessageAsync(http,
+                    $"{messageRoute}/{Uri.EscapeDataString(message_id)}/deliver",
+                    new { owner, fence }, ct).ConfigureAwait(false),
+            "agent_message_deliver", "Record delivery only after showing the leased message to the recipient.");
+
+        yield return AIFunctionFactory.Create(
+            async ([Description("Message ID")] string message_id, CancellationToken ct = default) =>
+                await PostMessageAsync(http,
+                    $"{messageRoute}/{Uri.EscapeDataString(message_id)}/acknowledge",
+                    new { }, ct).ConfigureAwait(false),
+            "agent_message_acknowledge", "Confirm receipt only; does not complete tasks or approve decisions.");
 
         // NOTE (issue #334): `start_preview` used to be registered here, gated on both projectId AND
         // agentName being non-empty. Sandboxed subtask runs (e.g. dynamically-cast build/validation
@@ -469,6 +553,18 @@ internal static class AgentweaverApiTools
             return $"{toolName} failed: could not reach the Agentweaver API — {ex.Message}";
         }
         return await HandleWriteResponseAsync(toolName, response, successMessage, conflictMessage, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<string> PostMessageAsync(
+        HttpClient http, string path, object body, CancellationToken ct)
+    {
+        using var response = await http.PostAsJsonAsync(path, body, ct).ConfigureAwait(false);
+        var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Addressed message API returned HTTP {(int)response.StatusCode}: {content}",
+                null, response.StatusCode);
+        return content;
     }
 
     private static HttpClient CreateHttpClient(string apiBaseUrl, string? apiKey)

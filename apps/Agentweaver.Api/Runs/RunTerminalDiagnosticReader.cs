@@ -1,8 +1,8 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Memory;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.AspNetCore;
 using Agentweaver.Domain;
 using Microsoft.EntityFrameworkCore;
 
@@ -11,8 +11,6 @@ namespace Agentweaver.Api.Runs;
 /// <summary>Reads the single safe terminal-failure projection from the durable append-only event log.</summary>
 public sealed class RunTerminalDiagnosticReader(MemoryDbContext db)
 {
-    private const int MaxCauseCount = 4;
-    private const int DiagnosticLookbackEventCount = 80;
     private static readonly Regex ServerGeneratedId = new(
         @"\A[a-f0-9]{32}\z",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -29,8 +27,7 @@ public sealed class RunTerminalDiagnosticReader(MemoryDbContext db)
         foreach (var candidate in candidates)
         {
             if (TryRead(candidate.PayloadJson, candidate.CreatedAt, out var diagnostic))
-                return await EnrichFromPriorEventsAsync(runId, candidate.Sequence, diagnostic!, ct)
-                    .ConfigureAwait(false);
+                return diagnostic;
         }
 
         var assemblyState = await db.RunEvents.AsNoTracking()
@@ -139,150 +136,6 @@ public sealed class RunTerminalDiagnosticReader(MemoryDbContext db)
     private static bool IsSafeServerGeneratedId(string value) =>
         !SensitiveDataRedactor.ContainsSensitiveValue(value)
         && ServerGeneratedId.IsMatch(value);
-
-    private async Task<RunTerminalDiagnosticResponse> EnrichFromPriorEventsAsync(
-        string runId,
-        int terminalSequence,
-        RunTerminalDiagnosticResponse diagnostic,
-        CancellationToken ct)
-    {
-        var candidates = await db.RunEvents.AsNoTracking()
-            .Where(e => e.RunId == runId
-                && e.Sequence <= terminalSequence
-                && e.Sequence >= terminalSequence - DiagnosticLookbackEventCount
-                && (e.EventType == EventTypes.RunFailed
-                    || e.EventType == EventTypes.ToolCall
-                    || e.EventType == EventTypes.ToolError
-                    || e.EventType == EventTypes.WorkflowStep))
-            .OrderBy(e => e.Sequence)
-            .Select(e => new { e.Sequence, e.EventType, e.PayloadJson })
-            .ToListAsync(ct)
-            .ConfigureAwait(false);
-
-        var causes = new List<string>(diagnostic.CauseChain);
-        var toolNamesByCallId = new Dictionary<string, string>(StringComparer.Ordinal);
-        var toolFailureCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-        var toolFailureOrder = new List<string>();
-        string? lastActiveStepCause = null;
-        var foundTerminalStepCause = false;
-        string? terminalReasonCause = null;
-        foreach (var candidate in candidates)
-        {
-            if (!TryParsePayload(candidate.PayloadJson, out var payload))
-                continue;
-
-            switch (candidate.EventType)
-            {
-                case EventTypes.ToolCall:
-                    if (TryString(payload, "callId", out var callId)
-                        && TryString(payload, "toolName", out var toolName)
-                        && NormalizeIdentifier(toolName) is { } safeToolName)
-                        toolNamesByCallId[callId] = safeToolName;
-                    break;
-
-                case EventTypes.ToolError:
-                    var failedToolName = TryString(payload, "callId", out var failedCallId)
-                        && toolNamesByCallId.TryGetValue(failedCallId, out var correlatedToolName)
-                            ? correlatedToolName
-                            : TryString(payload, "toolName", out var directToolName)
-                                ? NormalizeIdentifier(directToolName)
-                                : null;
-                    var toolCause = failedToolName is null
-                        ? "tool:unknown:failed"
-                        : $"tool:{failedToolName}:failed";
-                    if (!toolFailureCounts.ContainsKey(toolCause))
-                        toolFailureOrder.Add(toolCause);
-                    toolFailureCounts[toolCause] = toolFailureCounts.GetValueOrDefault(toolCause) + 1;
-                    break;
-
-                case EventTypes.WorkflowStep:
-                    if (TryString(payload, "step", out var step)
-                        && TryString(payload, "status", out var status)
-                        && NormalizeIdentifier(step) is { } safeStep
-                        && NormalizeIdentifier(status) is { } safeStatus)
-                    {
-                        var stepCause = $"step:{safeStep}:{safeStatus}";
-                        if (IsFailureStepStatus(status))
-                        {
-                            foundTerminalStepCause = true;
-                            AddCause(causes, stepCause);
-                        }
-                        else if (IsActiveStepStatus(status))
-                        {
-                            lastActiveStepCause = stepCause;
-                        }
-                    }
-                    break;
-
-                case EventTypes.RunFailed when candidate.Sequence == terminalSequence:
-                    if (TryString(payload, "reason", out var reason)
-                        && NormalizeIdentifier(reason) is { } safeReason)
-                        terminalReasonCause = $"reason:{safeReason}";
-                    break;
-            }
-        }
-
-        if (!foundTerminalStepCause && lastActiveStepCause is not null)
-            AddCause(causes, lastActiveStepCause);
-        foreach (var toolCause in toolFailureOrder)
-        {
-            var count = toolFailureCounts[toolCause];
-            AddCause(causes, count > 1 ? $"{toolCause}:{count}" : toolCause);
-        }
-        if (terminalReasonCause is not null)
-            AddCause(causes, terminalReasonCause);
-
-        var normalized = StructuredRunFailureTerminal.NormalizeCauseChain(causes);
-        return diagnostic with
-        {
-            CauseChain = normalized,
-            Component = ComponentFor(diagnostic.Code, normalized),
-        };
-    }
-
-    private static bool TryParsePayload(string payloadJson, out JsonElement payload)
-    {
-        payload = default;
-        try
-        {
-            using var doc = JsonDocument.Parse(payloadJson);
-            payload = doc.RootElement.Clone();
-            return payload.ValueKind == JsonValueKind.Object;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private static void AddCause(List<string> causes, string cause)
-    {
-        if (causes.Count >= MaxCauseCount
-            || !StructuredRunFailureTerminal.IsSafeCauseEntry(cause)
-            || causes.Contains(cause, StringComparer.Ordinal))
-            return;
-
-        causes.Add(cause);
-    }
-
-    private static bool IsFailureStepStatus(string status) =>
-        status is "failed" or "blocked" or "revise" or "declined";
-
-    private static bool IsActiveStepStatus(string status) =>
-        status is "started" or "running" or "pending";
-
-    private static string? NormalizeIdentifier(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        var normalized = Regex.Replace(value.Trim(), @"[^A-Za-z0-9_.:-]+", "-", RegexOptions.CultureInvariant)
-            .Trim('-', '.', ':', '_');
-        return normalized is { Length: > 0 and <= 96 }
-            && !SensitiveDataRedactor.ContainsSensitiveValue(normalized)
-                ? normalized
-                : null;
-    }
 
     private static string ComponentFor(string code, IReadOnlyList<string> causeChain)
     {

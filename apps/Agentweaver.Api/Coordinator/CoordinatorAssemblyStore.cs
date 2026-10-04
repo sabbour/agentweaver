@@ -28,19 +28,53 @@ public sealed class CoordinatorAssemblyStore
     /// which precedes RAI, shows no node live yet). Returns <c>true</c> for the single winner;
     /// <c>false</c> if the plan already moved past <c>awaiting_assembly</c>.
     /// </summary>
-    public async Task<bool> TryStartAssemblyAsync(int workPlanId, string integrationBranch, CancellationToken ct)
+    public Task<bool> TryStartAssemblyAsync(
+        int workPlanId, string integrationBranch, CancellationToken ct) =>
+        TryStartAssemblyAsync(
+            workPlanId, integrationBranch, coordinatorPodId: null, fencingToken: null, ct);
+
+    public Task<bool> TryStartAssemblyAsync(
+        int workPlanId,
+        string integrationBranch,
+        string? coordinatorPodId,
+        CancellationToken ct) =>
+        TryStartAssemblyAsync(
+            workPlanId, integrationBranch, coordinatorPodId, fencingToken: null, ct);
+
+    public async Task<bool> TryStartAssemblyAsync(
+        int workPlanId,
+        string integrationBranch,
+        string? coordinatorPodId,
+        long? fencingToken,
+        CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
-        var rows = await db.WorkPlans
-            .Where(w => w.Id == workPlanId && w.Status == WorkPlanStatus.AwaitingAssembly)
+        var query = db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.AwaitingAssembly
+                     && (fencingToken == null || w.AssemblyFencingToken <= fencingToken));
+        var rows = fencingToken is { } token
+            ? await query
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.Assembling)
                 .SetProperty(w => w.IntegrationBranch, integrationBranch)
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
                 .SetProperty(w => w.AssemblyStatusReason, (string?)null)
                 .SetProperty(w => w.AssemblyStartedAt, now)
+                .SetProperty(w => w.CoordinatorPodId, coordinatorPodId)
+                .SetProperty(w => w.AssemblyFencingToken, token)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false)
+            : await query
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(w => w.Status, WorkPlanStatus.Assembling)
+                .SetProperty(w => w.IntegrationBranch, integrationBranch)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.AssemblyStartedAt, now)
+                .SetProperty(w => w.CoordinatorPodId, coordinatorPodId)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return rows > 0;
@@ -78,6 +112,21 @@ public sealed class CoordinatorAssemblyStore
     /// <see cref="TryStartAssemblyAsync"/> CAS re-establishes the exactly-once claim).
     /// </summary>
     public async Task<bool> TryReclaimStaleAssemblyAsync(int workPlanId, DateTimeOffset staleBefore, CancellationToken ct)
+        => await TryReclaimStaleAssemblyAsync(
+            workPlanId,
+            staleBefore,
+            coordinatorPodId: null,
+            fencingToken: null,
+            integrationBranch: null,
+            ct).ConfigureAwait(false);
+
+    public async Task<bool> TryReclaimStaleAssemblyAsync(
+        int workPlanId,
+        DateTimeOffset staleBefore,
+        string? coordinatorPodId,
+        long? fencingToken,
+        string? integrationBranch,
+        CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -94,10 +143,14 @@ public sealed class CoordinatorAssemblyStore
                        "AssemblyStage" = NULL,
                        "AssemblyTerminalStage" = NULL,
                        "AssemblyStatusReason" = NULL,
+                       "CoordinatorPodId" = COALESCE({coordinatorPodId}, "CoordinatorPodId"),
+                       "AssemblyFencingToken" = COALESCE({fencingToken}, "AssemblyFencingToken"),
+                       "IntegrationBranch" = COALESCE({integrationBranch}, "IntegrationBranch"),
                        "UpdatedAt" = {now}
                  WHERE "Id" = {workPlanId}
                    AND "Status" = {WorkPlanStatus.Assembling}
-                   AND ("AssemblyStartedAt" IS NULL OR "AssemblyStartedAt" < {staleBefore})
+                   AND "UpdatedAt" < {staleBefore}
+                   AND ({fencingToken} IS NULL OR "AssemblyFencingToken" < {fencingToken})
                 """, ct).ConfigureAwait(false);
             return rows > 0;
         }
@@ -105,12 +158,19 @@ public sealed class CoordinatorAssemblyStore
         var updated = await db.WorkPlans
             .Where(w => w.Id == workPlanId
                      && w.Status == WorkPlanStatus.Assembling
-                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore))
+                     && w.UpdatedAt < staleBefore
+                     && (fencingToken == null || w.AssemblyFencingToken < fencingToken))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
                 .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.CoordinatorPodId,
+                    w => coordinatorPodId ?? w.CoordinatorPodId)
+                .SetProperty(w => w.AssemblyFencingToken,
+                    w => fencingToken ?? w.AssemblyFencingToken)
+                .SetProperty(w => w.IntegrationBranch,
+                    w => integrationBranch ?? w.IntegrationBranch)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return updated > 0;
@@ -129,6 +189,21 @@ public sealed class CoordinatorAssemblyStore
     /// </summary>
     public async Task<bool> TryReclaimStaleAssemblySteeringAsync(
         int workPlanId, DateTimeOffset staleBefore, CancellationToken ct)
+        => await TryReclaimStaleAssemblySteeringAsync(
+            workPlanId,
+            staleBefore,
+            coordinatorPodId: null,
+            fencingToken: null,
+            integrationBranch: null,
+            ct).ConfigureAwait(false);
+
+    public async Task<bool> TryReclaimStaleAssemblySteeringAsync(
+        int workPlanId,
+        DateTimeOffset staleBefore,
+        string? coordinatorPodId,
+        long? fencingToken,
+        string? integrationBranch,
+        CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -142,10 +217,14 @@ public sealed class CoordinatorAssemblyStore
                        "AssemblyStage" = NULL,
                        "AssemblyTerminalStage" = NULL,
                        "AssemblyStatusReason" = NULL,
+                       "CoordinatorPodId" = COALESCE({coordinatorPodId}, "CoordinatorPodId"),
+                       "AssemblyFencingToken" = COALESCE({fencingToken}, "AssemblyFencingToken"),
+                       "IntegrationBranch" = COALESCE({integrationBranch}, "IntegrationBranch"),
                        "UpdatedAt" = {now}
                  WHERE "Id" = {workPlanId}
                    AND "Status" = {WorkPlanStatus.AssemblySteering}
                    AND ("AssemblyStartedAt" IS NULL OR "AssemblyStartedAt" < {staleBefore})
+                   AND ({fencingToken} IS NULL OR "AssemblyFencingToken" < {fencingToken})
                 """, ct).ConfigureAwait(false);
             return rows > 0;
         }
@@ -153,23 +232,35 @@ public sealed class CoordinatorAssemblyStore
         var updated = await db.WorkPlans
             .Where(w => w.Id == workPlanId
                      && w.Status == WorkPlanStatus.AssemblySteering
-                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore))
+                     && (w.AssemblyStartedAt == null || w.AssemblyStartedAt < staleBefore)
+                     && (fencingToken == null || w.AssemblyFencingToken < fencingToken))
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(w => w.Status, WorkPlanStatus.AwaitingAssembly)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
                 .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.CoordinatorPodId,
+                    w => coordinatorPodId ?? w.CoordinatorPodId)
+                .SetProperty(w => w.AssemblyFencingToken,
+                    w => fencingToken ?? w.AssemblyFencingToken)
+                .SetProperty(w => w.IntegrationBranch,
+                    w => integrationBranch ?? w.IntegrationBranch)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
         return updated > 0;
     }
-    public async Task SetStatusAsync(int workPlanId, string status, CancellationToken ct)
+    public async Task SetStatusAsync(
+        int workPlanId,
+        string status,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, status)
                 .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
@@ -182,13 +273,19 @@ public sealed class CoordinatorAssemblyStore
     /// Sets a parked/terminal assembly status and snapshots the current <see cref="WorkPlan.AssemblyStage"/>
     /// into <see cref="WorkPlan.AssemblyTerminalStage"/> before any cleanup/scribe stage advances it.
     /// </summary>
-    public async Task SetTerminalStatusAsync(int workPlanId, string status, string reason, CancellationToken ct)
+    public async Task SetTerminalStatusAsync(
+        int workPlanId,
+        string status,
+        string reason,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, status)
                 .SetProperty(w => w.AssemblyTerminalStage, w => w.AssemblyStage)
@@ -197,14 +294,73 @@ public sealed class CoordinatorAssemblyStore
             .ConfigureAwait(false);
     }
 
+    public async Task<bool> TrySetCancelledAfterAppliedMergeAsync(
+        int workPlanId,
+        string ownerId,
+        string effectId,
+        long lifecycleGeneration,
+        string reason,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.Assembling
+                     && w.CoordinatorPodId == ownerId
+                     && w.MergeEffectId == effectId
+                     && w.MergeLifecycleGeneration == lifecycleGeneration
+                     && w.MergeEffectState == MergeEffectState.Applied)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.Cancelled)
+                .SetProperty(w => w.AssemblyTerminalStage, w => w.AssemblyStage)
+                .SetProperty(w => w.AssemblyStatusReason, reason)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return rows == 1;
+    }
+
+    public async Task<bool> TryCompleteAfterAppliedMergeAsync(
+        int workPlanId,
+        string podId,
+        string effectId,
+        long lifecycleGeneration,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.Assembling
+                     && w.CoordinatorPodId == podId
+                     && w.MergeEffectId == effectId
+                     && w.MergeLifecycleGeneration == lifecycleGeneration
+                     && w.MergeEffectState == MergeEffectState.Applied)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(w => w.Status, WorkPlanStatus.Complete)
+                .SetProperty(w => w.AssemblyStage, AssemblyStage.Done)
+                .SetProperty(w => w.AssemblyTerminalStage, (string?)null)
+                .SetProperty(w => w.AssemblyStatusReason, (string?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return rows == 1;
+    }
+
     /// <summary>Advances the collective-assembly stage (drives the coordinator graph node-flip).</summary>
-    public async Task SetStageAsync(int workPlanId, string? stage, CancellationToken ct)
+    public async Task SetStageAsync(
+        int workPlanId,
+        string? stage,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.AssemblyStage, stage)
                 .SetProperty(w => w.UpdatedAt, now), ct)
@@ -212,13 +368,19 @@ public sealed class CoordinatorAssemblyStore
     }
 
     /// <summary>Sets status and stage together (e.g. in_review/review, assembling/merge).</summary>
-    public async Task SetStatusAndStageAsync(int workPlanId, string status, string? stage, CancellationToken ct)
+    public async Task SetStatusAndStageAsync(
+        int workPlanId,
+        string status,
+        string? stage,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, status)
                 .SetProperty(w => w.AssemblyStage, stage)
@@ -237,13 +399,17 @@ public sealed class CoordinatorAssemblyStore
     /// a crash mid-steering would otherwise look permanently stale (or, if left from a prior phase,
     /// permanently fresh). Using a dedicated stamp here makes the heartbeat the reclaim relies on real.
     /// </summary>
-    public async Task SetAssemblySteeringAsync(int workPlanId, CancellationToken ct)
+    public async Task SetAssemblySteeringAsync(
+        int workPlanId,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         await db.WorkPlans
-            .Where(w => w.Id == workPlanId)
+            .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId))
             .ExecuteUpdateAsync(s => s
                 .SetProperty(w => w.Status, WorkPlanStatus.AssemblySteering)
                 .SetProperty(w => w.AssemblyStage, (string?)null)
@@ -252,6 +418,175 @@ public sealed class CoordinatorAssemblyStore
                 .SetProperty(w => w.AssemblyStartedAt, now)
                 .SetProperty(w => w.UpdatedAt, now), ct)
             .ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryPrepareMergeEffectAsync(
+        int workPlanId,
+        string podId,
+        string effectId,
+        int lifecycleGeneration,
+        string intentJson,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var rows = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && (w.Status == WorkPlanStatus.Assembling || w.Status == WorkPlanStatus.InReview)
+                     && w.CoordinatorPodId == podId
+                     && w.MergeEffectId == null)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(w => w.Status, WorkPlanStatus.Assembling)
+                .SetProperty(w => w.AssemblyStage, AssemblyStage.Merge)
+                .SetProperty(w => w.MergeEffectId, effectId)
+                .SetProperty(w => w.MergeLifecycleGeneration, lifecycleGeneration)
+                .SetProperty(w => w.MergeIntentJson, intentJson)
+                .SetProperty(w => w.MergeEffectState, MergeEffectState.Prepared)
+                .SetProperty(w => w.MergeEvidenceJson, (string?)null)
+                .SetProperty(w => w.MergeRecoveryAction, "apply_prepared")
+                .SetProperty(w => w.MergePreparedAt, now)
+                .SetProperty(w => w.MergeObservedAt, (DateTimeOffset?)null)
+                .SetProperty(w => w.MergeAppliedAt, (DateTimeOffset?)null)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return rows == 1;
+    }
+
+    public async Task<bool> IsMergeAuthorizedAsync(
+        int workPlanId,
+        string podId,
+        string effectId,
+        int lifecycleGeneration,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        return await db.WorkPlans.AsNoTracking()
+            .AnyAsync(w => w.Id == workPlanId
+                        && w.Status == WorkPlanStatus.Assembling
+                        && w.CoordinatorPodId == podId
+                        && w.MergeEffectId == effectId
+                        && w.MergeLifecycleGeneration == lifecycleGeneration
+                        && (w.MergeEffectState == MergeEffectState.Prepared
+                            || w.MergeEffectState == MergeEffectState.NotApplied), ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<bool> SetMergeObservationAsync(
+        int workPlanId,
+        string podId,
+        string effectId,
+        int lifecycleGeneration,
+        string expectedState,
+        string state,
+        string evidenceJson,
+        string recoveryAction,
+        string? unknownReason,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var query = db.WorkPlans.Where(w => w.Id == workPlanId
+                                         && w.MergeEffectId == effectId
+                                         && w.MergeLifecycleGeneration == lifecycleGeneration);
+
+        int rows;
+        if (state == MergeEffectState.Applied)
+        {
+            rows = await query
+                .Where(w => w.MergeEffectState == expectedState)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(w => w.MergeEffectState, MergeEffectState.Applied)
+                    .SetProperty(w => w.MergeEvidenceJson, evidenceJson)
+                    .SetProperty(w => w.MergeRecoveryAction, recoveryAction)
+                    .SetProperty(w => w.MergeObservedAt, now)
+                    .SetProperty(w => w.MergeAppliedAt, w => w.MergeAppliedAt ?? now)
+                    .SetProperty(w => w.UpdatedAt, now), ct)
+                .ConfigureAwait(false);
+        }
+        else if (state == MergeEffectState.Unknown)
+        {
+            rows = await query
+                .Where(w => w.Status == WorkPlanStatus.Assembling
+                         && w.CoordinatorPodId == podId
+                         && w.MergeEffectState == expectedState)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(w => w.Status, WorkPlanStatus.AssemblyUnknown)
+                    .SetProperty(w => w.AssemblyTerminalStage, w => w.AssemblyStage)
+                    .SetProperty(w => w.AssemblyStatusReason, unknownReason)
+                    .SetProperty(w => w.MergeEffectState, MergeEffectState.Unknown)
+                    .SetProperty(w => w.MergeEvidenceJson, evidenceJson)
+                    .SetProperty(w => w.MergeRecoveryAction, recoveryAction)
+                    .SetProperty(w => w.MergeObservedAt, now)
+                    .SetProperty(w => w.UpdatedAt, now), ct)
+                .ConfigureAwait(false);
+        }
+        else
+        {
+            rows = await query
+                .Where(w => w.Status == WorkPlanStatus.Assembling
+                         && w.CoordinatorPodId == podId
+                         && w.MergeEffectState == expectedState)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(w => w.MergeEffectState, MergeEffectState.NotApplied)
+                    .SetProperty(w => w.MergeEvidenceJson, evidenceJson)
+                    .SetProperty(w => w.MergeRecoveryAction, recoveryAction)
+                    .SetProperty(w => w.MergeObservedAt, now)
+                    .SetProperty(w => w.UpdatedAt, now), ct)
+                .ConfigureAwait(false);
+        }
+        return rows == 1;
+    }
+
+    public async Task<bool> TryClaimMergeRecoveryAsync(
+        int workPlanId,
+        string podId,
+        long? fencingToken,
+        DateTimeOffset staleBefore,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+
+        if (db.Database.IsSqlite())
+        {
+            var rows = await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE "WorkPlans"
+                   SET "CoordinatorPodId" = {podId},
+                       "AssemblyFencingToken" = COALESCE({fencingToken}, "AssemblyFencingToken"),
+                       "UpdatedAt" = {now}
+                 WHERE "Id" = {workPlanId}
+                   AND "Status" = {WorkPlanStatus.Assembling}
+                   AND "MergeEffectId" IS NOT NULL
+                   AND "MergeEffectState" <> {MergeEffectState.Unknown}
+                   AND (({fencingToken} IS NULL
+                         AND ("CoordinatorPodId" = {podId} OR "UpdatedAt" < {staleBefore}))
+                     OR ({fencingToken} IS NOT NULL
+                         AND "UpdatedAt" < {staleBefore}
+                         AND "AssemblyFencingToken" < {fencingToken}))
+                """, ct).ConfigureAwait(false);
+            return rows == 1;
+        }
+
+        var updated = await db.WorkPlans
+            .Where(w => w.Id == workPlanId
+                     && w.Status == WorkPlanStatus.Assembling
+                     && w.MergeEffectId != null
+                     && w.MergeEffectState != MergeEffectState.Unknown
+                     && (fencingToken == null
+                         ? w.CoordinatorPodId == podId || w.UpdatedAt < staleBefore
+                         : w.UpdatedAt < staleBefore
+                           && w.AssemblyFencingToken < fencingToken))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(w => w.CoordinatorPodId, podId)
+                .SetProperty(w => w.AssemblyFencingToken,
+                    w => fencingToken ?? w.AssemblyFencingToken)
+                .SetProperty(w => w.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return updated == 1;
     }
 
     /// <summary>
@@ -266,13 +601,17 @@ public sealed class CoordinatorAssemblyStore
     /// finds the plan already <c>InReview</c> gets <c>false</c> and NO-OPs (prevents double-escalation
     /// from clobbering an already-open review record).
     /// </summary>
-    public async Task<bool> TryEscalateToInReviewAsync(int workPlanId, CancellationToken ct)
+    public async Task<bool> TryEscalateToInReviewAsync(
+        int workPlanId,
+        CancellationToken ct,
+        string? expectedOwnerId = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         var rows = await db.WorkPlans
             .Where(w => w.Id == workPlanId
+                     && (expectedOwnerId == null || w.CoordinatorPodId == expectedOwnerId)
                      && (w.Status == WorkPlanStatus.AssemblySteering
                          || w.Status == WorkPlanStatus.Assembling))
             .ExecuteUpdateAsync(s => s
@@ -327,7 +666,15 @@ public sealed class CoordinatorAssemblyStore
                 w.AssemblyStage,
                 w.IntegrationBranch,
                 w.AssemblyTerminalStage,
-                w.AssemblyStatusReason))
+                w.AssemblyStatusReason,
+                w.MergeEffectId,
+                w.MergeLifecycleGeneration,
+                w.MergeIntentJson,
+                w.MergeEffectState,
+                w.MergeEvidenceJson,
+                w.MergeRecoveryAction,
+                w.AssemblyFencingToken,
+                w.CoordinatorPodId))
             .FirstOrDefaultAsync(ct)
             .ConfigureAwait(false);
     }
@@ -439,4 +786,12 @@ public sealed record WorkPlanAssemblyState(
     string? AssemblyStage,
     string? IntegrationBranch,
     string? AssemblyTerminalStage = null,
-    string? AssemblyStatusReason = null);
+    string? AssemblyStatusReason = null,
+    string? MergeEffectId = null,
+    int? MergeLifecycleGeneration = null,
+    string? MergeIntentJson = null,
+    string? MergeEffectState = null,
+    string? MergeEvidenceJson = null,
+    string? MergeRecoveryAction = null,
+    long AssemblyFencingToken = 0,
+    string? CoordinatorPodId = null);

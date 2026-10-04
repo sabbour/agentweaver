@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Agentweaver.Api.Memory;
 
@@ -41,23 +43,21 @@ public static class MemoryWriteDeduplicator
             return (existing, false);
         }
 
-        var inserted = await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO "AgentMemory"
-                ("ProjectId", "AgentName", "SessionId", "Type", "Importance", "Content", "Tags",
-                 "SourceKind", "SourceIdentity", "SourceRunId", "TrustState", "ApprovedBy",
-                 "ApprovedAt", "IdentityKey", "CreatedAt", "UpdatedAt")
-            VALUES
-                ({candidate.ProjectId}, {candidate.AgentName}, {candidate.SessionId}, {candidate.Type},
-                 {candidate.Importance}, {candidate.Content}, {candidate.Tags}, {candidate.SourceKind},
-                 {candidate.SourceIdentity}, {candidate.SourceRunId}, {candidate.TrustState},
-                 {candidate.ApprovedBy}, {candidate.ApprovedAt}, {candidate.IdentityKey},
-                 {candidate.CreatedAt}, {candidate.UpdatedAt})
-            ON CONFLICT ("IdentityKey") DO NOTHING
-            """, ct).ConfigureAwait(false);
-
-        return (await db.AgentMemory.SingleAsync(
-            memory => memory.IdentityKey == candidate.IdentityKey, ct).ConfigureAwait(false),
-            inserted == 1);
+        db.AgentMemory.Add(candidate);
+        try
+        {
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            return (candidate, true);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            db.ChangeTracker.Clear();
+            var winner = await db.AgentMemory.SingleOrDefaultAsync(
+                memory => memory.IdentityKey == candidate.IdentityKey, ct).ConfigureAwait(false);
+            if (winner is null)
+                throw;
+            return (winner, false);
+        }
     }
 
     public static async Task<(Decision Record, bool Created)> GetOrCreateDecisionAsync(
@@ -96,33 +96,34 @@ public static class MemoryWriteDeduplicator
             return (existing, false);
         }
 
-        var inserted = await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO "Decisions"
-                ("ProjectId", "AgentName", "Type", "Status", "Title", "Content", "Rationale", "Tags",
-                 "SupersededById", "SourceKind", "SourceIdentity", "SourceRunId", "TrustState",
-                 "ApprovedBy", "ApprovedAt", "IdentityKey", "CreatedAt", "UpdatedAt")
-            VALUES
-                ({candidate.ProjectId}, {candidate.AgentName}, {candidate.Type}, {candidate.Status},
-                 {candidate.Title}, {candidate.Content}, {candidate.Rationale}, {candidate.Tags},
-                 {candidate.SupersededById}, {candidate.SourceKind}, {candidate.SourceIdentity},
-                 {candidate.SourceRunId}, {candidate.TrustState}, {candidate.ApprovedBy},
-                 {candidate.ApprovedAt}, {candidate.IdentityKey}, {candidate.CreatedAt},
-                 {candidate.UpdatedAt})
-            ON CONFLICT ("IdentityKey") DO NOTHING
-            """, ct).ConfigureAwait(false);
-
-        return (await db.Decisions.SingleAsync(
-            decision => decision.IdentityKey == candidate.IdentityKey, ct).ConfigureAwait(false),
-            inserted == 1);
+        db.Decisions.Add(candidate);
+        try
+        {
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            return (candidate, true);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            db.ChangeTracker.Clear();
+            var winner = await db.Decisions.SingleOrDefaultAsync(
+                decision => decision.IdentityKey == candidate.IdentityKey, ct).ConfigureAwait(false);
+            if (winner is null)
+                throw;
+            return (winner, false);
+        }
     }
 
     public static void RefreshDecisionIdentity(Decision decision) =>
         decision.IdentityKey = DecisionIdentity(decision);
 
+    public static void RefreshMemoryIdentity(AgentMemory memory) =>
+        memory.IdentityKey = MemoryIdentity(memory);
+
     private static string MemoryIdentity(AgentMemory memory) => Hash(
         "memory", memory.ProjectId, memory.AgentName, memory.SessionId, memory.Type,
         memory.Importance, memory.Content, memory.Tags, memory.SourceKind,
-        memory.SourceIdentity, memory.SourceRunId);
+        memory.SourceIdentity, memory.SourceRunId, memory.Status,
+        memory.ReplacedById?.ToString());
 
     private static string DecisionIdentity(Decision decision) => Hash(
         "decision", decision.ProjectId, decision.AgentName, decision.Type, decision.Status,
@@ -134,4 +135,16 @@ public static class MemoryWriteDeduplicator
     private static string Hash(params string?[] values) =>
         Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(JsonSerializer.Serialize(values))));
+
+    private static bool IsUniqueViolation(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation }
+                or SqliteException { SqliteErrorCode: 19 })
+                return true;
+        }
+
+        return false;
+    }
 }

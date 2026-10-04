@@ -30,7 +30,8 @@ public sealed class MergeCoordinator : IMergeCoordinator
     public Task<MergeLockResult> AcquireMergeLockAsync(string runId, string repositoryPath, CancellationToken ct) =>
         AcquireMergeLockAsync(runId, repositoryPath, ct, reviewer: null);
 
-    private async Task<MergeLockResult> AcquireMergeLockAsync(string runId, string repositoryPath, CancellationToken ct, string? reviewer)
+    private async Task<MergeLockResult> AcquireMergeLockAsync(
+        string runId, string repositoryPath, CancellationToken ct, string? reviewer, string? outputRevisionId = null)
     {
         string canonicalPath;
         try { canonicalPath = Path.GetFullPath(repositoryPath); }
@@ -47,11 +48,14 @@ public sealed class MergeCoordinator : IMergeCoordinator
         if (lockHandle is null)
             return MergeLockResult.Failed("repository_busy");
 
-        var casSucceeded = await _runStore.TryStartMergingAsync(RunId.Parse(runId), reviewer, ct: CancellationToken.None).ConfigureAwait(false);
+        var casSucceeded = outputRevisionId is null
+            ? await _runStore.TryStartMergingAsync(RunId.Parse(runId), reviewer, ct: CancellationToken.None).ConfigureAwait(false)
+            : await _runStore.TryStartMergingRevisionAsync(RunId.Parse(runId), outputRevisionId, reviewer, CancellationToken.None).ConfigureAwait(false);
         if (!casSucceeded)
         {
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
-            if (run?.Status != RunStatus.Merging)
+            if (run?.Status != RunStatus.Merging
+                || !string.Equals(run.ApprovedOutputRevisionId, outputRevisionId, StringComparison.Ordinal))
             {
                 lockHandle.Dispose();
                 return MergeLockResult.Failed("already_merging");
@@ -83,7 +87,8 @@ public sealed class MergeCoordinator : IMergeCoordinator
     /// <inheritdoc />
     public async Task<MergeExecutionResult> ExecuteMergeAsync(MergeInput input, CancellationToken ct)
     {
-        var lockResult = await AcquireMergeLockAsync(input.RunId, input.RepositoryPath, ct, input.ReviewedBy).ConfigureAwait(false);
+        var lockResult = await AcquireMergeLockAsync(
+            input.RunId, input.RepositoryPath, ct, input.ReviewedBy, input.OutputRevisionId).ConfigureAwait(false);
         if (!lockResult.Acquired)
         {
             _logger.LogWarning("Failed to acquire merge lock for run {RunId}: {Reason}", input.RunId, lockResult.Reason);
@@ -111,7 +116,7 @@ public sealed class MergeCoordinator : IMergeCoordinator
                         new { merged_commit_hash = result.CommitHash, previous_head_sha = result.PreviousHeadSha, merge_mode = result.MergeMode },
                         mergeResult, null, result.CommitHash, CancellationToken.None).ConfigureAwait(false);
                     if (!completedMerge)
-                        _logger.LogWarning("CompleteMergeAsync CAS returned false for run {RunId} — possible concurrency conflict", input.RunId);
+                        throw new InvalidOperationException($"Merge terminal publication was rejected for run {input.RunId}.");
 
                     _logger.LogInformation(
                         "Merge outcome: success. RunId={RunId} CommitHash={CommitHash} MergeMode={MergeMode} " +
@@ -149,7 +154,7 @@ public sealed class MergeCoordinator : IMergeCoordinator
                     var conflictResult = $"conflict:{result.Reason}";
                     var failedMerge = await FailMergeAsync(input.RunId, conflictResult, mergeConflictsJson, ct).ConfigureAwait(false);
                     if (!failedMerge)
-                        _logger.LogWarning("FailMergeAsync CAS returned false for run {RunId} — possible concurrency conflict", input.RunId);
+                        throw new InvalidOperationException($"Merge conflict publication was rejected for run {input.RunId}.");
                     _logger.LogInformation("Merge outcome: conflict. RunId={RunId} Details={Details}",
                         input.RunId, SanitizeReason(result.Reason));
 

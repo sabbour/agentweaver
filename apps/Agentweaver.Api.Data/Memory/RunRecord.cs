@@ -6,6 +6,10 @@ public sealed class RunRecord
     public string RunId { get; set; } = "";
     public string RepositoryPath { get; set; } = "";
     public string OriginatingBranch { get; set; } = "";
+    public bool ExecutionInputRequired { get; set; }
+    public string? ExecutionInputSourceCommitHash { get; set; }
+    public string? ExecutionInputCommitHash { get; set; }
+    public string? ExecutionInputCompositeId { get; set; }
     public string ModelSource { get; set; } = "";
     public string Task { get; set; } = "";
     public string SubmittingUser { get; set; } = "";
@@ -28,6 +32,8 @@ public sealed class RunRecord
     public string? WorkflowRunId { get; set; }
     public string? WorkflowSelectionReason { get; set; }
     public string? MergedCommitHash { get; set; }
+    public string? ApprovedOutputRevisionId { get; set; }
+    public string? CurrentOutputRevisionId { get; set; }
     public string? ParentRunId { get; set; }
     public string? SubtaskId { get; set; }
     public string Origin { get; set; } = "interactive";
@@ -50,6 +56,14 @@ public sealed class RunRecord
     public string? SandboxClaimName { get; set; }
     public string? SandboxPodName { get; set; }
     public string? SandboxNamespace { get; set; }
+    public bool ExecutableWorkflowPinRequired { get; set; }
+    public int? ExecutableWorkflowManifestSchemaVersion { get; set; }
+    public string? ExecutableWorkflowDefinitionId { get; set; }
+    public string? ExecutableWorkflowDefinitionVersion { get; set; }
+    public string? ExecutableWorkflowSource { get; set; }
+    public string? ExecutableWorkflowContentDigest { get; set; }
+    public string? ExecutableWorkflowDefinitionYaml { get; set; }
+    public DateTimeOffset? ExecutableWorkflowPinnedAt { get; set; }
 
     /// <summary>
     /// While set to a future instant, a preview publication is in flight for this run and every

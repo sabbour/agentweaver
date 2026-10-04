@@ -2,6 +2,19 @@
 
 The API harness drives Agentweaver's REST API and captures objective evidence. Persona cores and API adapters are loaded from `../persona-briefs`; end-of-run verdicts are rendered by `../harness-judge`.
 
+For deterministic Oracle **release acceptance** (one assembly review,
+one grounded revision, two browser-verified previews and scoped cleanup), run
+`node scripts/api-harness/run-oracle-acceptance.mjs --help`. Supply a disposable
+project, expected text for both versions, observed feedback and affected files.
+The driver observes the runtime-owned automatic preview for each reviewed tree;
+it never starts a server, guesses a port, posts a manual preview, or deletes
+automatic or unrelated sessions. Missing or unproven automatic previews fail
+acceptance rather than becoming a manual fallback.
+See [the API harness skill](SKILL.md#deterministic-oracle-assemblyrevision-release-acceptance)
+and [the validation guide](../../docs/guide/validation.md#oracle-release-acceptance).
+PersonaActor remains the free-form exploration path; do not substitute it for
+the bounded release gate.
+
 ## OpenAPI contract
 
 A running Agentweaver.Api instance serves the same machine-readable OpenAPI 3.1 document in both JSON and YAML:
@@ -25,7 +38,7 @@ The JSON and YAML variants describe the same live route surface. Prefer the YAML
 
 `PersonaActor` is dispatched after Harness resolves the target. It drives one real
 call at a time. Its recorder-session provider reuses the target-matched cached session
-created by `scripts/ui-harness/login-chrome-default.mjs`; it does not start another
+created by `scripts/demo-recording`; it does not start another
 Chrome sign-in. The provider returns the complete `Authorization` value, which callers
 pass to the header unchanged. Raw tokens never enter prompts, argv, or transcripts. Missing,
 expired, or wrong-origin UI state fails with the login command needed to refresh it.
@@ -46,6 +59,10 @@ console.log(await response.text());
 '@ | node --input-type=module -
 # ...append the real request+response to the transcript path, then repeat...
 ```
+
+The default provider reads `scripts/demo-recording/.auth/recording.storageState.json`
+and its `recording.storageState.json.sessionStorage.json` sidecar. Use
+`--recorder-auth-root` for an alternate protected recorder auth root.
 
 See `.github/agents/persona-actor.agent.md` for the full turn-by-turn contract
 (pushback grounding, never-blind-approve, stop-at-gate, transcript format).
@@ -88,6 +105,11 @@ codes, tokens, cookies, and installation identifiers must never be persisted.
 npm test
 node run-persona.mjs --scenario generated-artifacts-seam --target https://agentweaver.example.staging.example --batch-id batch-1 --seed seed-1
 ```
+
+Durable workflow output is analyzed only after the job reaches `completed` and its
+result endpoint returns HTTP 200 with nonempty YAML. The HTTP-200 job-status DTO is
+job evidence, not an artifact; failed, cancelled, or nonterminal jobs retain their
+job ID, status, and canonical failure while leaving workflow analysis null.
 
 `--target` is an alias for the legacy `--base-url`. The default rung is `scoping`; deeper approval driving remains opt-in through scenario configuration.
 
@@ -145,3 +167,22 @@ deletes owned projects, restores the exact prior deployment structures, waits fo
 rollouts, verifies restoration, and releases the Lease. `SIGINT` and `SIGTERM` request
 cancellation and unwind through the same restoration path; they never call
 `process.exit`. Any cleanup mismatch makes the command fail.
+
+## Retained issue #1603 cancellation acceptance
+
+The retained cancellation scenario requires the exact full deployment commit explicitly.
+The public `/api/version` response documents a 7-character Git SHA, so the harness
+accepts that value only when it is a valid prefix of the supplied commit:
+
+```powershell
+node scripts/api-harness/issue-1603-live-retest.mjs `
+  --expected-deployment-sha 0def5f6c0adf49117c3af6d37696ea14e9604f6c
+```
+
+Use `--recorder-auth-root scripts/ui-harness/.auth` to reuse a supported UI login's
+`staging.storageState.json` and matching sessionStorage sidecar, or
+`--recorder-auth-root <path>` for a selected protected recorder root. The default
+remains `scripts/demo-recording/.auth/recording.storageState.json`. When both layouts
+exist in an explicit root the recorder layout wins; an invalid selected cache never
+falls back to another directory. `run-context-budget-pressure.mjs` names this option
+`--auth-root`.

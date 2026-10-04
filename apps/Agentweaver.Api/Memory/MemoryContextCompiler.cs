@@ -14,7 +14,14 @@ public sealed record MemoryContextCompilation(
     string? Text,
     int OmittedMemoryCount,
     int OmittedSessionCount,
-    IReadOnlyList<string> OmissionCauses);
+    IReadOnlyList<string> OmissionCauses,
+    IReadOnlyList<KnowledgeRevisionReference> RevisionReferences);
+
+public sealed record KnowledgeRevisionReference(
+    string Kind,
+    int RecordId,
+    int Revision,
+    string RevisionId);
 
 public sealed class MandatoryContextBudgetExceededException(int budgetCharacters, int requiredCharacters)
     : InvalidOperationException(
@@ -127,6 +134,7 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             ? (await db.AgentMemory
                 .Where(m => m.ProjectId == projectId
                          && m.AgentName == agentName
+                         && m.Status == KnowledgeLifecycleStates.Active
                          && m.Type == "core_context"
                          && m.TrustState != MemoryTrustStates.Legacy)
                 .ToListAsync(ct))
@@ -138,6 +146,7 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
         //          + cross-team tagged memories from other agents
         var learnings = (await db.AgentMemory
             .Where(m => m.ProjectId == projectId
+                     && m.Status == KnowledgeLifecycleStates.Active
                      && m.Importance == "high"
                      && ((m.AgentName == agentName
                           && m.TrustState != MemoryTrustStates.Legacy)
@@ -210,7 +219,13 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
                     memoryOmissionCause,
                     omittedSessionCount > 0 ? "budget" : null,
                 }
-                .OfType<string>()]);
+                .OfType<string>()],
+            [
+                .. decisions.Select(d => new KnowledgeRevisionReference(
+                    "decision", d.Id, d.Revision, d.CurrentRevisionId)),
+                .. selected.Select(m => new KnowledgeRevisionReference(
+                    "memory", m.Memory.Id, m.Memory.Revision, m.Memory.CurrentRevisionId)),
+            ]);
     }
 
     private static OrderedMemories OrderMemories(
@@ -326,7 +341,13 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
         if (text.Length > maxChars)
             throw new MandatoryContextBudgetExceededException(maxChars, text.Length);
 
-        return new MemoryContextCompilation(text, 0, 0, []);
+        return new MemoryContextCompilation(
+            text,
+            0,
+            0,
+            [],
+            decisions.Select(d => new KnowledgeRevisionReference(
+                "decision", d.Id, d.Revision, d.CurrentRevisionId)).ToList());
     }
 
     private static string BuildUntrustedContext(
@@ -339,6 +360,9 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             schema = "agentweaver.untrusted-context.v1",
             decisions = decisions.Select(d => new
             {
+                record_id = d.Id,
+                revision = d.Revision,
+                revision_id = d.CurrentRevisionId,
                 d.Title,
                 d.Type,
                 d.AgentName,
@@ -347,6 +371,9 @@ public sealed class MemoryContextCompiler(MemoryDbContext db, IConfiguration? co
             }),
             memory = memories.Select(m => new
             {
+                record_id = m.Memory.Id,
+                revision = m.Memory.Revision,
+                revision_id = m.Memory.CurrentRevisionId,
                 m.Label,
                 m.Memory.Type,
                 m.Memory.AgentName,

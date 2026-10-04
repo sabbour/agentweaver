@@ -13,6 +13,14 @@ Agentweaver uses Changesets and the protected
 `dev → release/vX.Y.Z → main` flow. `release:prepare` generates the version
 mirrors and changelog on the release branch.
 
+Before preparing or publishing, deploy the exact committed candidate with
+`npm run azure:deploy-from-commit -- <candidate-sha>`. Run representative
+integration and feature-specific API/UI E2E acceptance against that deployment
+and record passing results bound to the SHA. A changed candidate must be
+redeployed and retested.
+
+Only after that acceptance passes, prepare and promote the release as described
+in [RELEASING.md](https://github.com/sabbour/agentweaver/blob/dev/RELEASING.md).
 From the exact promoted `main` SHA, publication and deployment are independent:
 
 ```bash
@@ -143,6 +151,72 @@ sandboxes normally run with `kata-vm-isolation` and the `agentweaver-exec` sidec
 the Kata node pool, while non-sandbox control-plane workloads run with the default runc
 runtime.
 
+### API restart recovery and health probes
+
+API and worker restart recovery run after their listeners start. A shared
+Postgres advisory lock serializes sweeps across both roles. A successful
+API or worker leader holds it until that process stops, so no other replica
+can repeat a completed startup sweep over newly created runs. Followers
+retry acquiring leadership without a fixed attempt limit; if the leader
+exits or dies, either role can take over recovery. A failed or timed-out
+leader sweep releases the lock and retries up to three total sweep attempts
+per process. After the third failure, that process stops startup recovery
+and logs exhaustion; another replica can still acquire the lock. The advisory lock
+does not authorize mutations: durable run leases, coordinator plan claims, and
+child-dispatch reservations fence work across API and worker roles. Healthy child
+work on a surviving replica remains associated with its existing run identity.
+An expired coordinator child is restarted under that same child run ID after
+claiming its execution lease; a fresh lease held by another replica is skipped.
+When a coordinator terminates, its assemble-ready child and revision sandboxes
+are released after the final Scribe turn. A stopped coordinator releases them
+after the stop settles. On API startup and each coordinator heartbeat, a bounded
+page of terminal coordinators is revisited to recover claims left by interrupted
+cleanup. A child with a current durable execution lease or pending review is
+preserved; a terminal-parent child stuck Pending/InProgress without a live lease
+is reclaimed. A live preview retains its pod until preview expiry. Release reads
+one claim snapshot and uses Kubernetes UID/resourceVersion delete preconditions
+alongside the holder and lifecycle generation, so a replacement claim cannot be
+deleted by an older cleanup. Failures are logged as `Terminal child cleanup`
+warnings for retry rather than changing the coordinator's outcome. If a new
+revision stays pending on Kata, inspect these warnings and the child claim
+inventory before considering cluster capacity changes.
+An unbound AgentHost claim emits `sandbox.provisioning_pending` with the pod's
+`PodScheduled=False` reason when available; the coordinator displays that reason.
+If a pod cannot schedule before `Sandbox:Kubernetes:AgentHostProvisioningTimeoutSeconds`
+(default 600 seconds), the launch fails with the latest scheduling diagnosis and
+releases its claim. Check the pending pod's scheduler condition and node-pool
+autoscaler before retrying. Do not stop unrelated users' previews to free capacity.
+For a current preview, inspect `GET /api/runs/{id}` `sandbox.current_binding`:
+`verified` identifies the configured claim UID, Pod UID, namespace, generation,
+attempt, and source tree; `unavailable` or `conflict` includes a reason and must
+not be replaced with the historical `sandbox.pod_name`. A released execution
+lease and a retained child-owned preview are distinct lifecycle facts. A
+child's claim, Pod, and preview session do not attest its coordinator parent's
+claim or automatic preview. Older claims lacking the post-configure attestation
+remain explicitly unavailable.
+After a durable `agent.turn.end`, coordinator observation first waits
+`Coordinator:PostTurnFinalizationGraceSeconds` (default 10 seconds, clamped to
+0.1–30 seconds) for assemble-ready or another terminal event. If the recovered
+child still owns an unexpired execution lease, it rechecks durable completion
+while that lease remains active, up to
+`Coordinator:PostTurnFinalizationMaxWaitSeconds` (default five minutes, clamped
+between the grace and ten minutes). An absent/expired lease or exhausted cap
+restores normal stall recovery; neither setting changes lease fencing. Inspect
+the child's execution lease and terminal run events before increasing the cap.
+Both API replicas can answer `/api/ping` without waiting for a sweep.
+A sweep has a five-minute deadline; followers and failed leader sweeps retry
+after 30 seconds, but a successful leader does not resweep. Look for
+`Startup recovery sweep started`, `completed`, `exceeded`, `failed`, or
+`exhausted` in API logs
+when diagnosing a restart. Readiness reflects workspace availability and successful initial static OAuth client
+reconciliation, not completion of the recovery backlog: operators should
+check the sweep log before assuming every interrupted run has been re-armed. `/api/health`,
+`/healthz/workspace`, and `/oauth/*` return 503 until the initial static OAuth client
+reconciliation succeeds; `/api/ping` stays responsive throughout. Failed reconciliations
+are logged and retried every five seconds after a 30-second attempt deadline without
+terminating the host. Database migrations and the bounded Copilot App registration
+validation still precede serving traffic.
+
 ### AgentHost pre-delivery recovery diagnostics
 
 Project agents, Assembly RAI, and Build & Test use warm-pool AgentHost claims. Before
@@ -194,16 +268,26 @@ the normal steering and human-review paths.
 
 To investigate:
 
-1. Inspect the persisted run events with `GET /api/runs/{id}/events` and record the
-   `errorCode`, `retryable`, message, and diagnostic fields.
-2. Correlate the run id with worker and AgentHost logs to determine whether the pod,
-   transport, or turn failed.
-3. Retry or redispatch through the normal run/coordinator controls only after confirming
-   that the task is still valid.
+1. Read `GET /api/runs/{id}/terminal-diagnostic` or `run_failure_diagnostic`.
+2. Start with `observed_facts`, then review `supported_interpretations`. Do not treat a
+   nearby or repeated tool error as causal unless the terminal evidence directly
+   references the same call or gate.
+3. Check `evidence_sources` and `completeness`. Missing telemetry does not erase durable
+   terminal evidence, but partial or unavailable sources are not a healthy result.
+4. If `denial_gate` is present, repair the named authorization/configuration gate before
+   retrying. A pending human approval is waiting, not denial.
+5. Follow the structured `next_actions`; they describe preconditions and effects but do
+   not mutate the run, policy, or authorization.
 
 Diagnostics in the run event are deliberately bounded, flattened to one line, and
 credential-redacted. They are safe context for triage, not a replacement for
 restricted server-side logs.
+
+Cluster inventory collection uses the same explicit absence rule. Each
+`inventory_sources` entry reports `available`, `no_resources`, `forbidden`, `timeout`,
+`unsupported`, `malformed`, or `collection_error`. Only `no_resources` means collection
+completed successfully and found nothing. The Cluster page warns when any source is
+incomplete instead of presenting an unavailable inventory as an empty healthy one.
 
 ## Related scripts
 

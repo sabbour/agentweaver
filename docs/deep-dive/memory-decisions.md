@@ -11,6 +11,7 @@ Think of the design as a **shared ledger with a drop-box in front of it**:
 3. **Promotion creates canonical decisions**. Accepted entries become active decisions in the project ledger.
 4. **Memory stays lower priority than decisions**. Memory helps an agent work; decisions constrain what the whole team is allowed to do.
 5. **Exports mirror the ledger to files** so humans and agents can inspect the current state in `.squad/` and `.agentweaver/context/`.
+6. **Immutable revisions preserve the audit trail**. Updates and restores append snapshots instead of rewriting history.
 
 The key governance idea is separation: agents may propose, but only accepted decisions
 become authoritative boundaries. Acceptance is provenance-aware: a project owner or a
@@ -44,6 +45,10 @@ The inbox exists because agents are useful observers but noisy policymakers. A r
 Agent memory is reusable context associated with a named agent. It stores core context,
 learnings, patterns, and updates with an importance level and optional tags. Approved
 memory tagged `cross-team` can be selected for agents other than the original author.
+
+Memory can be `active`, `superseded`, or `archived`. Normal retrieval and prompt
+selection use active records only. A superseded record points to an acyclic replacement
+inside the same project.
 
 Memory answers: "What may help this agent or the wider team do better next time?" It should not override accepted decisions.
 
@@ -116,12 +121,20 @@ The `PROJECT` ownership edges below are conceptual project scoping, not a claim 
 every edge is an enforced cross-store foreign key. The model explicitly enforces the
 optional decision supersession and inbox-to-decision references.
 
+Current memory and decision rows are read projections. Append-only revision tables are
+the authoritative audit history. Every snapshot carries the stable record id, immutable
+revision id, predecessor, revision number, actor/source run, reason, timestamp,
+provenance fingerprint, trust/approval state, lifecycle, and content fields. REST and
+MCP history responses redact recognized secrets and personal identifiers.
+
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, system-ui, -apple-system, sans-serif','fontSize':'15px','primaryColor':'#E8EEF9','primaryBorderColor':'#0F6CBD','primaryTextColor':'#242424','lineColor':'#605E5C','clusterBkg':'#FAF9F8','clusterBorder':'#D2D0CE','edgeLabelBackground':'#FFFFFF'}}}%%
 erDiagram
     PROJECT ||--o{ DECISION : owns
     PROJECT ||--o{ DECISION_INBOX_ENTRY : reviews
     PROJECT ||--o{ AGENT_MEMORY : remembers
+    AGENT_MEMORY ||--o{ AGENT_MEMORY_REVISION : versions
+    DECISION ||--o{ DECISION_REVISION : versions
     PROJECT ||--o{ SESSION_CONTEXT : tracks
     DECISION ||--o{ DECISION : supersedes
     DECISION ||--o{ DECISION_INBOX_ENTRY : promoted_from
@@ -137,6 +150,8 @@ erDiagram
       string source_run_id
       string trust_state
       string approved_by
+      int revision
+      string current_revision_id
       string title
       string content
       string rationale
@@ -172,6 +187,26 @@ erDiagram
       string source_run_id
       string trust_state
       string approved_by
+      string status
+      int replaced_by_id
+      int revision
+      string current_revision_id
+    }
+    AGENT_MEMORY_REVISION {
+      string revision_id
+      int memory_id
+      int revision
+      string previous_revision_id
+      string reason
+      datetime created_at
+    }
+    DECISION_REVISION {
+      string revision_id
+      int decision_id
+      int revision
+      string previous_revision_id
+      string reason
+      datetime created_at
     }
     SESSION_CONTEXT {
       int id

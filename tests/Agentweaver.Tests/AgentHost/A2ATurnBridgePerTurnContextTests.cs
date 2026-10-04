@@ -37,7 +37,8 @@ public sealed class A2ATurnBridgePerTurnContextTests
         string? agentName,
         bool isRevision = false,
         string? apiBaseUrl = null,
-        string? apiKey = null)
+        string? apiKey = null,
+        EffectivePermissionBinding? permissionBinding = null)
     {
         var setup = new AgentSetupParams
         {
@@ -50,6 +51,7 @@ public sealed class A2ATurnBridgePerTurnContextTests
             ApiBaseUrl = apiBaseUrl,
             ApiKey = apiKey,
             IsRevision = isRevision,
+            EffectivePermissionBinding = permissionBinding,
         };
         var json = JsonSerializer.SerializeToUtf8Bytes(
             setup, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
@@ -89,6 +91,64 @@ public sealed class A2ATurnBridgePerTurnContextTests
             CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
+    [Fact]
+    public async Task StreamTurnAsync_AppliesRefreshedPermissionBindingBeforeTurn()
+    {
+        var runtimeState = new AgentHostRuntimeState();
+        runtimeState.TryConfigure("run-336", "user-336", "turn-token", copilotCredential: null)
+            .Should().BeTrue();
+        var binding = EffectivePermissionBinding.Create(
+            "run-336",
+            1,
+            "test-policy",
+            "project:test",
+            SandboxPolicy.Default("/workspace") with
+            {
+                AllowedOperations = [EffectivePermissionOperations.WorkspaceRead],
+            });
+        var runner = new RecordingTurnRunner();
+        var bridge = CreateBridge(runner, runtimeState);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, new List<AIContent>
+            {
+                EncodeSetup(
+                    "Charter: inspect only.",
+                    "proj-336",
+                    "Rogers",
+                    permissionBinding: binding),
+                new TextContent("read the project"),
+            }),
+        };
+
+        await DrainAsync(bridge, messages);
+
+        runtimeState.EffectivePermissionBinding.Should().NotBeNull();
+        runtimeState.EffectivePermissionBinding!.BindingId.Should().Be(binding.BindingId);
+    }
+
+    [Fact]
+    public async Task StreamTurnAsync_ConfiguredPodWithoutCurrentBinding_FailsClosed()
+    {
+        var runtimeState = new AgentHostRuntimeState();
+        runtimeState.TryConfigure("run-336", "user-336", "turn-token", copilotCredential: null)
+            .Should().BeTrue();
+        var bridge = CreateBridge(new RecordingTurnRunner(), runtimeState);
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, new List<AIContent>
+            {
+                EncodeSetup("Charter: inspect only.", "proj-336", "Rogers"),
+                new TextContent("write the project"),
+            }),
+        };
+
+        var act = () => DrainAsync(bridge, messages);
+
+        await act.Should().ThrowAsync<EffectivePermissionBindingException>()
+            .WithMessage("*current effective permission binding is required*");
+    }
+
     /// <summary>Records the per-turn context applied to the agent and the order relative to the turn.</summary>
     private sealed class RecordingTurnRunner : IPodTurnRunner
     {
@@ -100,7 +160,8 @@ public sealed class A2ATurnBridgePerTurnContextTests
 
         public bool ApplyPerTurnContext(
             string? systemPromptContext, string? projectId, string? agentName,
-            string? apiBaseUrl = null, string? apiKey = null)
+            string? apiBaseUrl = null, string? apiKey = null,
+            EffectivePermissionBinding? permissionBinding = null)
         {
             Applied.Add((systemPromptContext, projectId, agentName, apiBaseUrl, apiKey));
             return true;

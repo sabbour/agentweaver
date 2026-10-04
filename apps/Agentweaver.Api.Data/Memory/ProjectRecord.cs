@@ -17,6 +17,7 @@ public sealed class ProjectRecord
     public DateTimeOffset UpdatedAt { get; set; }
     public string? WebhookSecret { get; set; }
     public long TeamRevision { get; set; }
+    public long BacklogGraphRevision { get; set; }
     public int MaxReadyPerHeartbeat { get; set; } = 3;
     public bool PickupAutopilot { get; set; } = true;
     public bool PickupAutoApproveTools { get; set; } = true;

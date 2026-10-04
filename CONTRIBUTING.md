@@ -179,9 +179,26 @@ npm --prefix apps/web run test
 # Web frontend lint
 npm --prefix apps/web run lint
 
+# Machine-generated coverage reports. These do not prove behavioral completeness.
+npm run coverage:dotnet
+npm run coverage:web
+npm run coverage:node
+npm run coverage:all
+
 # Docs site build (only if you changed docs/)
 npm run docs:build
 ```
+
+### Published documentation
+
+`.github/workflows/deploy-docs.yml` is the only GitHub Pages publisher.
+It publishes 0.x at `/agentweaver/` and v1 at `/agentweaver/v1/`.
+The workflow combines the 0.x build with an artifact from the current `v1` branch head.
+It accepts only a successful push run to that head from `sabbour/agentweaver`.
+It records the v1 source commit, run, attempt, and artifact ID in the workflow summary.
+The composer leaves the 0.x output in place, including `CNAME` when present.
+If no matching artifact exists, the build stops before deployment.
+Do not add a second Pages deployment.
 
 See [Validation workflow](docs/guide/validation.md) for cache keys, invalidation,
 fallback behavior, and timing output.
@@ -227,6 +244,26 @@ CI is the full-suite authority and deliberately keeps job filesystems isolated. 
 steps call the same dependency helper with `--isolated`, preserving `npm ci`
 reproducibility. Local concurrent worktrees share only npm download content; writable
 dependency trees and build/test outputs never cross worktree boundaries.
+
+### Scheduled coverage reports
+
+Coverage collection is not a separate workflow — it is the same `dotnet-test-shards`,
+`web-tests`, and `node-toolchain-tests` jobs in [`CI`](.github/workflows/ci.yml) that
+every PR already runs, instrumented in place. A weekly schedule (Mondays 05:00 UTC)
+and an opt-in `collect_coverage` `workflow_dispatch` input both set a
+`collect_coverage` job output that (a) forces those three jobs to run regardless of
+path filters or draft state, and (b) threads a coverage flag into the *same* single
+`dotnet test` / `vitest` / `node --test` invocation each job already performs — never
+a second test run. Ordinary pull_request/push events never set this flag, so their
+command lines stay byte-identical to the pre-coverage behavior. Each area's job still
+fails honestly when its coverage run is partial (an unsupported Kata/Postgres shard, a
+timed-out shard, etc.), and uploads its report with bounded (14-day) retention via
+`if: always()`. Two additional jobs run only when `collect_coverage` is true:
+`dotnet-coverage-combine` downloads the per-shard `.NET` artifacts produced in the same
+run and merges them, and `coverage-summary` renders measured per-area totals and gaps
+to the run's job summary without applying any coverage threshold. See
+[Coverage reports](docs/guide/validation.md#coverage-reports) for the full report
+layout and the `workflow_dispatch` default-branch requirement.
 
 ### Container image publishing
 

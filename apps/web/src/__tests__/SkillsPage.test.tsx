@@ -942,8 +942,8 @@ describe('SkillsPage — curated marketplaces', () => {
     // Page 2 candidates are appended (page 1 remains visible), and the Load more control is gone.
     expect(await screen.findByText('skill-b')).toBeTruthy();
     expect(screen.getByText('skill-a')).toBeTruthy();
-    expect(screen.getByText('Showing 2 of 2')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(await screen.findByText('Showing 2 of 2')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull());
 
     expect(vi.mocked(apiClient.browseSkillMarketplace)).toHaveBeenNthCalledWith(1, expect.any(String), 'GitHub Awesome Copilot', undefined, 1, 25);
     expect(vi.mocked(apiClient.browseSkillMarketplace)).toHaveBeenNthCalledWith(2, expect.any(String), 'GitHub Awesome Copilot', undefined, 2, 25);

@@ -485,6 +485,12 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
     /// </summary>
     private void ApplyPerTurnSetup(AgentSetupParams? setup)
     {
+        if (_runtimeState?.IsConfigured == true
+            && setup?.EffectivePermissionBinding is null)
+        {
+            throw new EffectivePermissionBindingException(
+                "AgentHost turn denied: a current effective permission binding is required.");
+        }
         if (setup is null)
             return;
 
@@ -497,8 +503,17 @@ internal sealed class A2ATurnBridgeAgent : DelegatingAIAgent
         {
             _runtimeState?.SetToolApprovalApiAccess(setup.ApiBaseUrl, setup.ApiKey);
         }
+        if (setup.EffectivePermissionBinding is not null)
+            _runtimeState?.SetEffectivePermissionBinding(setup.EffectivePermissionBinding);
+        var effectiveBinding = _runtimeState?.EffectivePermissionBinding
+            ?? setup.EffectivePermissionBinding;
         var applied = _runner.ApplyPerTurnContext(
-            merged, setup.ProjectId, setup.AgentName, setup.ApiBaseUrl, setup.ApiKey);
+            merged,
+            setup.ProjectId,
+            setup.AgentName,
+            setup.ApiBaseUrl,
+            setup.ApiKey,
+            effectiveBinding);
         if (applied)
         {
             _logger.LogInformation(

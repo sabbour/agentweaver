@@ -1,4 +1,7 @@
 using FluentAssertions;
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using LibGit2Sharp;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Infrastructure;
@@ -49,6 +52,62 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
         return new RunTools(apiClient);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunRetry_ReportsActualResumeShape_AndSelectsComposedOperation(bool resumed)
+    {
+        using var handler = new RetryResponseHandler(resumed);
+        using var client = new HttpClient(handler);
+        var tools = new RunTools(new AgentweaverApiClient(
+            client, new McpConfig("https://example.test", "test-only-key")));
+        var result = await tools.RunRetryAsync("retained-run", CancellationToken.None);
+        if (resumed)
+        {
+            result.Should().Be("Resumed run retained-run in place from its failure point; no new run was created.");
+            handler.Operation.Should().Be("orchestration");
+        }
+        else
+        {
+            result.Should().Be("Retried run retained-run -> new run fresh-run.");
+            handler.Operation.Should().Be("agent_turn");
+        }
+    }
+
+    private sealed class RetryResponseHandler(bool resumed) : HttpMessageHandler
+    {
+        public string? Operation { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            object body;
+            if (request.Method == HttpMethod.Get)
+            {
+                body = new
+                {
+                    run_id = "retained-run", parent_run_id = (string?)null, agent_name = (string?)null,
+                    result = resumed ? "composed_decomposition_failed:database contention" : "test_failed",
+                };
+            }
+            else if (request.RequestUri!.AbsolutePath.EndsWith("/execution-context", StringComparison.Ordinal))
+            {
+                var context = await request.Content!.ReadFromJsonAsync<JsonElement>(cancellationToken);
+                Operation = context.GetProperty("operation").GetString();
+                body = new { effective_model_provider = new { state = "resolved" }, execution_key = "test-only-key" };
+            }
+            else
+            {
+                body = new
+                {
+                    run_id = resumed ? "retained-run" : "fresh-run",
+                    retried_from = resumed ? null : "retained-run", status = "in_progress", resumed,
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(body) };
+        }
+    }
+
     private string CreateTempGitRepo()
     {
         var repoPath = Path.Combine(Path.GetTempPath(), $"agentweaver-mcp-retry-{Guid.NewGuid():N}");
@@ -82,6 +141,21 @@ public sealed class McpRunRetryTests : IClassFixture<ProjectsWebApplicationFacto
 
         await act.Should().ThrowAsync<McpApiException>()
             .Where(ex => ex.StatusCode == 404);
+    }
+
+    [Fact]
+    public async Task OutputRevisionTools_UnknownRun_PropagateTypedHttpUnavailable()
+    {
+        var tools = CreateTools();
+        var id = Guid.NewGuid().ToString("N");
+        await FluentActions.Invoking(() => tools.RunOutputHistoryAsync(id))
+            .Should().ThrowAsync<McpApiException>().Where(ex => ex.StatusCode == 404);
+        await FluentActions.Invoking(() => tools.RunOutputRevisionAsync(id, "revision"))
+            .Should().ThrowAsync<McpApiException>().Where(ex => ex.StatusCode == 404);
+        await FluentActions.Invoking(() => tools.RunOutputFileAsync(id, "revision", "file.txt"))
+            .Should().ThrowAsync<McpApiException>().Where(ex => ex.StatusCode == 404);
+        await FluentActions.Invoking(() => tools.RunOutputCompareAsync(id, "old", "new"))
+            .Should().ThrowAsync<McpApiException>().Where(ex => ex.StatusCode == 404);
     }
 
     // =========================================================================

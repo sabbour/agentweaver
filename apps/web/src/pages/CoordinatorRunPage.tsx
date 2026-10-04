@@ -32,6 +32,10 @@ import type { AgentStep } from '../components/ui/agentic';
 import { AgentAvatar } from '../components/AgentAvatar';
 import { AgentSessionPanel } from '../components/AgentSessionPanel';
 import { CoordinatorArtifactsPanel } from '../components/CoordinatorArtifactsPanel';
+import { OutputRevisionHistory } from '../components/OutputRevisionHistory';
+import { EffectivePermissionsPanel } from '../components/EffectivePermissionsPanel';
+import { ExecutionIdentityPanel } from '../components/ExecutionIdentityPanel';
+import { FailureDiagnosticDetails } from '../components/FailureDiagnosticDetails';
 import { AiCredits } from '../components/AiCredits';
 import {
   AiExecutionProviderHint,
@@ -65,7 +69,10 @@ import { useSeededRunStream } from '../hooks/useSeededRunStream';
 import { usePendingApprovals } from '../hooks/usePendingApprovals';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 import { buildTopologyState, initialTopologyState, seedTopologyFromWorkPlan } from '../state/topologyReducer';
+import { latestPreviewStateFromEvents } from '../state/runPreviewState';
+import type { RunPreviewState } from '../state/runPreviewState';
 import { formatModelLabel } from '../utils/agentIdentity';
+import { readStr } from '../utils/readStr';
 import { layoutDagBalancedGrid, routeGridEdges, COMPACT_NODE_H, COMPACT_NODE_W, FIXED_NODE_W, FIXED_NODE_H, FIXED_NODE_WITH_CAPTION_H, POD_INDICATOR_NODE_H, REVIEW_EXPANDED_NODE_H } from '../utils/dagLayout';
 import {
   ArrowMaximizeRegular,
@@ -389,14 +396,6 @@ function outcomePlanRedraftIsActive(
   return latestDraftingSequence > latestOutcomeSequence;
 }
 
-function readStr(p: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const k of keys) {
-    const v = p[k];
-    if (v != null && String(v).trim() !== '') return String(v);
-  }
-  return undefined;
-}
-
 function apiErrorCode(err: unknown): string | undefined {
   if (!(err instanceof ApiError) || typeof err.payload !== 'object' || err.payload === null) return undefined;
   const error = (err.payload as Record<string, unknown>).error;
@@ -575,51 +574,6 @@ function terminalizedStatus(status: string | undefined, terminal: boolean, termi
 
 function previewUrlFromSession(session: PortForwardSessionDto | undefined): string | null {
   return session?.preview_url ?? session?.previewUrl ?? null;
-}
-
-type RunPreviewState =
-  | { status: 'none' }
-  | { status: 'ready'; previewUrl: string; targetPort?: string; eventSequence: number }
-  | { status: 'pending'; targetPort?: string }
-  | {
-    status: 'failed';
-    reason: string;
-    message?: string;
-    retryAvailable: boolean;
-    approvalRequestId?: string;
-  };
-
-function latestPreviewStateFromEvents(events: RunStreamEvent[]): RunPreviewState {
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    const evt = events[i];
-    if (evt.type === 'sandbox.preview_ready' || evt.type === 'coordinator.preview_ready') {
-      const preview = evt.payload['preview_url'] ?? evt.payload['previewUrl'];
-      if (preview != null && String(preview).trim() !== '') {
-        const targetPort = evt.payload['target_port'] ?? evt.payload['targetPort'];
-        return {
-          status: 'ready',
-          previewUrl: String(preview),
-          targetPort: targetPort == null ? undefined : String(targetPort),
-          eventSequence: evt.sequence,
-        };
-      }
-    }
-    if (evt.type === 'sandbox.preview_pending') {
-      const targetPort = evt.payload['target_port'] ?? evt.payload['targetPort'];
-      return {
-        status: 'pending',
-        targetPort: targetPort == null ? undefined : String(targetPort),
-      };
-    }
-    if (evt.type === 'sandbox.preview_failed') {
-      const reason = readStr(evt.payload, ['reason']) ?? 'unknown';
-      const message = readStr(evt.payload, ['message']);
-      const retryAvailable = evt.payload['retry_available'] === true;
-      const approvalRequestId = readStr(evt.payload, ['approval_request_id', 'approvalRequestId']);
-      return { status: 'failed', reason, message, retryAvailable, approvalRequestId };
-    }
-  }
-  return { status: 'none' };
 }
 
 function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }>): string {
@@ -1070,6 +1024,8 @@ interface SubtaskNodeData extends Record<string, unknown> {
   agentRole: string | undefined;
   model: string | undefined;
   phase: string | undefined;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
   projectId: string;
   startedAt?: number;
   completedAt?: number;
@@ -1132,6 +1088,9 @@ function SubtaskNode({ id, data, selected }: NodeProps) {
     ...(agentName ? [{ label: 'Agent', value: agentName }] : []),
     ...(d.model ? [{ label: 'Model', value: formatModelLabel(d.model as string), mono: true }] : []),
     ...(d.phase ? [{ label: 'Phase', value: d.phase as string }] : []),
+    ...(d.workflowBranchNodeId
+      ? [{ label: 'Workflow branch', value: `${(d.workflowBranchOrdinal ?? 0) + 1}. ${d.workflowBranchNodeId}`, mono: true }]
+      : []),
     ...(d.startedAt !== undefined
       ? [{ label: 'Duration', value: <ElapsedTimer startedAt={d.startedAt as number} completedAt={d.completedAt as number | undefined} /> }]
       : []),
@@ -2330,6 +2289,7 @@ export function CoordinatorRunPage() {
   const setRunLevelStatus = useCallback((status: RunStatus | undefined) => {
     setRunLevelStatusState({ runId: runId ?? '', status });
   }, [runId]);
+  const [pendingRequestKind, setPendingRequestKind] = useState<string | null>(null);
   const [runProviderState, setRunProviderState] = useState<{
     runId: string;
     provider: EffectiveModelProvider | null;
@@ -2404,10 +2364,10 @@ export function CoordinatorRunPage() {
   // Sandbox preview port-forward state.
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false);
   const [previewTargetPort, setPreviewTargetPort] = useState('3000');
-  const [previewSession,    setPreviewSession]    = useState<PortForwardSessionDto | undefined>(undefined);
   const [previewSessions,   setPreviewSessions]   = useState<PortForwardSessionDto[]>([]);
   const [previewBusy,       setPreviewBusy]       = useState(false);
   const [previewError,      setPreviewError]      = useState<string | undefined>(undefined);
+  const [previewListError,  setPreviewListError]  = useState<string | undefined>(undefined);
 
   // True once the work-plan endpoint has confirmed a 404 (run has no plan yet / is stuck).
   // Used to render a graceful empty state and to back off the lifecycle poll so the page
@@ -2566,6 +2526,7 @@ export function CoordinatorRunPage() {
       setWorkPlanError(null);
       setNoWorkPlan(false);
       setRunLevelStatus(undefined);
+      setPendingRequestKind(null);
       setRunProviderState({ runId: runId ?? '', provider: null });
       setRunTimingState({ runId: runId ?? '', startedAt: undefined, endedAt: undefined });
       setCoordStatusField(undefined);
@@ -2593,7 +2554,7 @@ export function CoordinatorRunPage() {
       setRunLoadError(null);
       // Child runs (parent_run_id non-null) are not coordinator runs and will never have a
       // work-plan or outcome-plan. Skip coordinator-only artifact fetches to avoid 404 noise.
-      const childRun = detail?.parent_run_id != null;
+      const childRun = detail?.parent_run_id != null && detail?.is_coordinator_plan !== true;
       setIsChildRun(childRun);
       let wp: WorkPlanResponse | null = null;
       let workPlanFailed = false;
@@ -2634,6 +2595,7 @@ export function CoordinatorRunPage() {
       setCoordinatorSteerable(typeof detail?.coordinator_steerable === 'boolean' ? detail.coordinator_steerable : undefined);
       setWorkPlanStatus(wpStatus);
       setRunLevelStatus(detail?.status ?? undefined);
+      setPendingRequestKind(detail?.pending_request_kind ?? null);
       setRunProviderState({
         runId,
         provider: detail?.effective_model_provider ?? null,
@@ -2851,23 +2813,35 @@ export function CoordinatorRunPage() {
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
-    apiClient.listPortForwards(runId)
-      .then((sessions) => {
-        if (cancelled) return;
-        setPreviewSessions(sessions);
-        setPreviewSession((current) => {
-          if (current && sessions.some((session) => session.session_id === current.session_id)) return current;
-          return sessions.find((session) => previewUrlFromSession(session)) ?? sessions[0];
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setPreviewSessions([]);
-      });
-    return () => { cancelled = true; };
+    let inFlight = false;
+    const refresh = () => {
+      if (inFlight) return;
+      inFlight = true;
+      apiClient.listPortForwards(runId)
+        .then((sessions) => {
+          if (cancelled) return;
+          setPreviewSessions(sessions);
+          setPreviewListError(undefined);
+        })
+        .catch((err: unknown) => {
+          if (!cancelled) {
+            setPreviewSessions([]);
+            setPreviewListError(formatApiErrorMessage(err, 'Could not check sandbox preview availability.'));
+          }
+        })
+        .finally(() => { inFlight = false; });
+    };
+    refresh();
+    const timer = setInterval(refresh, 15_000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, [runId, events.length]);
 
-  const runPreviewState = useMemo(() => latestPreviewStateFromEvents(events), [events]);
-  const activePreviewSession = previewSession ?? previewSessions.find((session) => previewUrlFromSession(session)) ?? previewSessions[0];
+  const runPreviewState = useMemo(
+    () => latestPreviewStateFromEvents(events, previewSessions),
+    [events, previewSessions],
+  );
+  const manualPreviewSession = previewSessions.find((session) =>
+    !session.preview_runner_session_id && previewUrlFromSession(session));
   const activePreviewUrl = runPreviewState.status === 'ready' ? runPreviewState.previewUrl : null;
   const previewDnsProbeKey = runPreviewState.status === 'ready'
     ? `${runPreviewState.eventSequence}:${runPreviewState.previewUrl}`
@@ -3118,6 +3092,8 @@ export function CoordinatorRunPage() {
             agentRole:     agentField ? roleByAgent[agentField] : undefined,
             model:         modelField,
             phase:         phaseField,
+            workflowBranchNodeId: topoNode?.workflowBranchNodeId,
+            workflowBranchOrdinal: topoNode?.workflowBranchOrdinal,
             projectId:     projectId ?? '',
             startedAt:     timing?.startedAt,
             completedAt:   timing?.completedAt,
@@ -3678,6 +3654,8 @@ export function CoordinatorRunPage() {
   // Run-wide (coordinator-level) collective-diff summary for the Changes chip above the composer.
   const [runChangesSummary, setRunChangesSummary] = useState<{ files: number; added: number; removed: number } | null>(null);
   const [topologyPanelOpen, setTopologyPanelOpen] = useState(false);
+  const [permissionsPanelOpen, setPermissionsPanelOpen] = useState(false);
+  const [executionIdentityPanelOpen, setExecutionIdentityPanelOpen] = useState(false);
 
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);
   const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
@@ -3695,7 +3673,7 @@ export function CoordinatorRunPage() {
     if (opts?.closeTopology) {
       setTopologyPanelOpen(false);
     }
-  }, []);
+  }, [setPanelNodeId, setSessionPanelOpen, setTopologyPanelOpen]);
 
   // Imperative handle to the full-topology viewport (registered by TopologyViewportController inside
   // the ReactFlowProvider) so a node click can cinematically pan+zoom onto the node.
@@ -3705,7 +3683,7 @@ export function CoordinatorRunPage() {
     setPanelNodeId('outcome-plan');
     setSessionPanelOpen(true);
     setComposerFocusSignal((value) => value + 1);
-  }, []);
+  }, [setPanelNodeId, setSessionPanelOpen, setComposerFocusSignal]);
 
   useEffect(() => {
     if (!latestOutcomePlanEvent || isChildRun) return;
@@ -3839,7 +3817,7 @@ export function CoordinatorRunPage() {
   const viewAssemblyExecution = useCallback((id: string) => {
     if (id.endsWith('-rai') || id.endsWith('-scribe')) openPanelForNode(id);
     else setArtifactsPanelOpen(true);
-  }, [openPanelForNode]);
+  }, [openPanelForNode, setArtifactsPanelOpen]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
   const toggleAutopilot = useCallback((next: boolean) => {
@@ -3934,7 +3912,6 @@ export function CoordinatorRunPage() {
     setPreviewError(undefined);
     apiClient.startPortForward(runId, port)
       .then((session) => {
-        setPreviewSession(session);
         setPreviewSessions((sessions) => [session, ...sessions.filter((s) => s.session_id !== session.session_id)]);
       })
       .catch((err) => setPreviewError(formatApiErrorMessage(err, 'Could not start the sandbox preview.')))
@@ -3942,12 +3919,11 @@ export function CoordinatorRunPage() {
   };
 
   const stopPreview = () => {
-    if (!runId || !activePreviewSession) return;
+    if (!runId || !manualPreviewSession) return;
     setPreviewBusy(true);
-    apiClient.stopPortForward(runId, activePreviewSession.session_id)
+    apiClient.stopPortForward(runId, manualPreviewSession.session_id)
       .then(() => {
-        setPreviewSession(undefined);
-        setPreviewSessions((sessions) => sessions.filter((s) => s.session_id !== activePreviewSession.session_id));
+        setPreviewSessions((sessions) => sessions.filter((s) => s.session_id !== manualPreviewSession.session_id));
       })
       .catch((err) => setPreviewError(formatApiErrorMessage(err, 'Could not stop the sandbox preview.')))
       .finally(() => setPreviewBusy(false));
@@ -3955,9 +3931,12 @@ export function CoordinatorRunPage() {
 
   const isKubernetesSandbox = sandboxBackend === 'kubernetes-sandbox-claim';
   const showPreviewSandboxButton = isKubernetesSandbox
-    && (runPreviewState.status !== 'none' || Boolean(activePreviewSession));
-  const previewUrl = activePreviewUrl ?? previewUrlFromSession(activePreviewSession);
-  const keepaliveUrl = activePreviewSession?.keepalive_url ?? activePreviewSession?.keepaliveUrl ?? null;
+    && (runPreviewState.status !== 'none' || Boolean(manualPreviewSession) || Boolean(previewListError));
+  const previewUrl = previewUrlFromSession(manualPreviewSession);
+  const keepaliveSession = manualPreviewSession
+    ?? previewSessions.find((session) => activePreviewUrl !== null
+      && previewUrlFromSession(session) === activePreviewUrl);
+  const keepaliveUrl = keepaliveSession?.keepalive_url ?? keepaliveSession?.keepaliveUrl ?? null;
 
   useEffect(() => {
     if (!keepaliveUrl) return;
@@ -4052,7 +4031,9 @@ export function CoordinatorRunPage() {
   // the in-memory assembly-review gate is NOT armed, so presenting an actionable review bar would
   // 409. Treat the review as actionable only when the run itself is not terminal.
   const runTerminal = viewState.terminal;
-  const reviewActionable = orch.phase === 'in_review' && !runTerminal;
+  const reviewActionable = orch.phase === 'in_review'
+    && !runTerminal
+    && pendingRequestKind !== 'workflow_child_work';
   const selectedBuildTestNode = selectedSessionItem
     ? isBuildTestNodeIdOrLabel(selectedSessionItem.nodeId, selectedSessionItem.label)
     : false;
@@ -4242,7 +4223,8 @@ export function CoordinatorRunPage() {
     }
 
     return chips.length > 0 ? <>{chips}</> : null;
-  }, [isChildRun, runChangesSummary, specConfirmed, styles]);
+  }, [isChildRun, runChangesSummary, specConfirmed, styles,
+    setPlanPanelOpen, setArtifactsPanelOpen, setFilesPanelOpen]);
 
   const primaryAction = reviewActionable
     ? {
@@ -4558,6 +4540,14 @@ export function CoordinatorRunPage() {
     }
   };
   const previewStatusContent = (compact = false) => {
+    if (previewListError) {
+      return (
+        <div className={styles.previewStatusStack} role="alert">
+          <Text weight="semibold">Preview availability could not be checked</Text>
+          <Text className={styles.previewStatusReason}>{previewListError}</Text>
+        </div>
+      );
+    }
     switch (runPreviewState.status) {
       case 'ready':
         return (
@@ -4624,7 +4614,7 @@ export function CoordinatorRunPage() {
         return null;
     }
   };
-  const previewStatusSlot = runPreviewState.status === 'none'
+  const previewStatusSlot = runPreviewState.status === 'none' && !previewListError
     ? undefined
     : (
       <div
@@ -4767,6 +4757,7 @@ export function CoordinatorRunPage() {
                 Failure in {terminalDiagnostic.component}. {safeTerminalFailureMessage(terminalDiagnostic.message, terminalDiagnostic.code, terminalDiagnostic.retryable)}
                 {terminalDiagnostic.cause_chain.length > 0 ? ` Cause chain: ${terminalDiagnostic.cause_chain.join(' -> ')}.` : ''}
                 {' '}{terminalDiagnosticAction}
+                <FailureDiagnosticDetails diagnostic={terminalDiagnostic} />
               </MessageBarBody>
               <MessageBarActions>
                 <Button
@@ -4830,6 +4821,28 @@ export function CoordinatorRunPage() {
                     data-testid="compact-primary-run-action"
                   >
                     {primaryAction.label}
+                  </Button>
+                )}
+                {projectId && runId && (
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    icon={<InfoRegular />}
+                    onClick={() => setPermissionsPanelOpen(true)}
+                    data-testid="open-effective-permissions"
+                  >
+                    Permissions
+                  </Button>
+                )}
+                {projectId && runId && (
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    icon={<InfoRegular />}
+                    onClick={() => setExecutionIdentityPanelOpen(true)}
+                    data-testid="open-execution-identity"
+                  >
+                    Execution identity
                   </Button>
                 )}
                 {projectId && runId && (
@@ -5027,7 +5040,7 @@ export function CoordinatorRunPage() {
                 />
               </div>
             )}
-            {selectedBuildTestNode && runPreviewState.status !== 'none' && (
+            {selectedBuildTestNode && (runPreviewState.status !== 'none' || previewListError) && (
               <div
                 className={`${styles.selectedTaskPreviewCta} ${runPreviewState.status === 'pending' ? styles.selectedTaskPreviewPending : ''} ${runPreviewState.status === 'failed' ? styles.selectedTaskPreviewUnavailable : ''}`}
                 data-testid="selected-build-preview-cta"
@@ -5057,6 +5070,17 @@ export function CoordinatorRunPage() {
                   artifactAdapter={coordAdapter}
                   runChips={runSummaryChips}
                   workPlanTopologyThumbnail={renderTopologyThumbnail('workplan')}
+                  workflowExecution={workPlanData && (
+                    workPlanData.parentWorkflowId
+                    || workPlanData.parentWorkflowNodeId
+                    || workPlanData.parentJoinNodeId
+                    || workPlanData.joinedOutput
+                  ) ? {
+                    parentWorkflowId: workPlanData.parentWorkflowId,
+                    parentWorkflowNodeId: workPlanData.parentWorkflowNodeId,
+                    parentJoinNodeId: workPlanData.parentJoinNodeId,
+                    joinedOutput: workPlanData.joinedOutput,
+                  } : undefined}
                   credits={{
                     totalNanoAiu: tokenBreakdown?.totalNanoAiu ?? null,
                     detail: <AgentTokenBreakdown data={tokenBreakdown} roleByAgent={roleByAgent} plain showHeader={false} />,
@@ -5080,6 +5104,22 @@ export function CoordinatorRunPage() {
           </section>
         </div>
       </div>
+
+      <SlidePanel
+        open={permissionsPanelOpen}
+        onClose={() => setPermissionsPanelOpen(false)}
+        title="Effective permissions"
+      >
+        {permissionsPanelOpen && <EffectivePermissionsPanel key={runId} runId={runId} />}
+      </SlidePanel>
+
+      <SlidePanel
+        open={executionIdentityPanelOpen}
+        onClose={() => setExecutionIdentityPanelOpen(false)}
+        title="Execution identity"
+      >
+        {executionIdentityPanelOpen && <ExecutionIdentityPanel key={runId} runId={runId} />}
+      </SlidePanel>
 
       <SlidePanel
         open={topologyPanelOpen}
@@ -5123,6 +5163,7 @@ export function CoordinatorRunPage() {
           flushBody
         >
           <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} liveUpdateKey={artifactsLiveUpdateKey} previewStatusSlot={previewStatusSlot} />
+          <OutputRevisionHistory runId={runId} />
         </SlidePanel>
       )}
 
@@ -5155,7 +5196,10 @@ export function CoordinatorRunPage() {
               Sandbox Preview
             </DialogTitle>
             <DialogContent style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM }}>
-              {!activePreviewSession ? (
+              {previewListError && (
+                <MessageBar intent="error"><MessageBarBody>{previewListError}</MessageBarBody></MessageBar>
+              )}
+              {!manualPreviewSession ? (
                 <>
                   <Text>
                     Preview traffic is proxied through the Agentweaver API server.
@@ -5173,7 +5217,7 @@ export function CoordinatorRunPage() {
               ) : (
                 <>
                   <Text>
-                    Preview active for port {activePreviewSession.target_port} on pod <code>{activePreviewSession.pod_name}</code>.
+                    Preview active for port {manualPreviewSession.target_port} on pod <code>{manualPreviewSession.pod_name}</code>.
                     {previewUrl ? ' The proxied preview is shown below.' : ' The API server did not return a proxied preview URL.'}
                   </Text>
                   {previewUrl && (
@@ -5185,13 +5229,13 @@ export function CoordinatorRunPage() {
                     />
                   )}
                   <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
-                    Session ID: {activePreviewSession.session_id}
+                    Session ID: {manualPreviewSession.session_id}
                   </Text>
                 </>
               )}
             </DialogContent>
             <DialogActions>
-              {!activePreviewSession ? (
+              {!manualPreviewSession ? (
                 <>
                   {previewUrl && (
                     <Button appearance="primary" icon={<OpenRegular />} onClick={() => window.open(previewUrl, '_blank', 'noopener,noreferrer')}>

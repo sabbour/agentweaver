@@ -2,6 +2,8 @@ namespace Agentweaver.Api.Memory;
 
 public sealed class BacklogTaskRecord
 {
+    public long? ClaimedGraphRevision { get; set; }
+    public string? ClaimedPrerequisitesJson { get; set; }
     public string TaskId { get; set; } = "";
     public string ProjectId { get; set; } = "";
     public string Title { get; set; } = "";
@@ -10,11 +12,13 @@ public sealed class BacklogTaskRecord
     public string OrderKey { get; set; } = "";
     public string CapturedBy { get; set; } = "";
     public string? CapturedByUserId { get; set; }
+    public string? ReadyByUserId { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? CommittedAt { get; set; }
     public DateTimeOffset? ClaimedAt { get; set; }
     public string? RunId { get; set; }
     public string? WorkflowOverrideId { get; set; }
+    public string? WorkflowDefinitionSnapshotYaml { get; set; }
     public DateTimeOffset? ArchivedAt { get; set; }
     public string? SourceFilePath { get; set; }
     public string? ParentPrdRunId { get; set; }

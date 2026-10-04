@@ -804,6 +804,13 @@ export interface AgentSessionPanelProps {
    *  subtask list (reuses CoordinatorRunPage's minimap rendering) — opens the same full topology
    *  dialog as the left-rail minimap. Only shown when the Work Plan node is selected (#UI-bug-3). */
   workPlanTopologyThumbnail?: ReactNode;
+  /** Persisted static-fan correlation and declaration-ordered join output for the Work Plan scope. */
+  workflowExecution?: {
+    parentWorkflowId?: string | null;
+    parentWorkflowNodeId?: string | null;
+    parentJoinNodeId?: string | null;
+    joinedOutput?: string | null;
+  };
   /** Run-level AI-credits indicator, rendered immediately left of the composer send button as the
    *  shared hoverable AiCredits control (Session credits + USD estimate). */
   credits?: {
@@ -1526,8 +1533,10 @@ function coordinatorActivityLine(evt: RunStreamEvent, subtasks: Map<string, Subt
       const reason = readString(p, ['reason', 'capacityReason', 'capacity_reason']);
       return `Subtask waiting for capacity: ${subtaskDescription(p, subtasks)}${reason ? ` — ${reason}` : ''}.`;
     }
-    case 'coordinator.child_provisioning_pending':
-      return `Waiting for sandbox capacity: ${subtaskDescription(p, subtasks)}. Kubernetes will schedule it when capacity becomes available.`;
+    case 'coordinator.child_provisioning_pending': {
+      const reason = readString(p, ['schedulingReason', 'scheduling_reason']);
+      return `Waiting for sandbox capacity: ${subtaskDescription(p, subtasks)}. ${reason ?? 'Kubernetes will schedule it when capacity becomes available.'}`;
+    }
     case 'subtask.running':
       return `Subtask running: ${subtaskDescription(p, subtasks)}.`;
     case 'subtask.assemble_ready':
@@ -1931,6 +1940,7 @@ export function AgentSessionPanel({
   runChips,
   credits,
   workPlanTopologyThumbnail,
+  workflowExecution,
   pendingApprovals,
   pendingApprovalsLoading = false,
   pendingApprovalsError = null,
@@ -2595,7 +2605,45 @@ export function AgentSessionPanel({
                       running={timelineModel.running}
                       emptyHint="Messages, tool calls, and activity will appear here as the run emits events."
                     />
-                    {selectedItem.nodeId === 'work-plan' && workPlanTopologyThumbnail}
+                    {selectedItem.nodeId === 'work-plan' && (
+                      <>
+                        {workPlanTopologyThumbnail}
+                        {workflowExecution && (
+                          <div
+                            data-testid="workflow-fan-result"
+                            style={{
+                              display: 'grid',
+                              gap: tokens.spacingVerticalXS,
+                              marginTop: tokens.spacingVerticalM,
+                              padding: tokens.spacingVerticalM,
+                              border: `1px solid ${tokens.colorNeutralStroke2}`,
+                              borderRadius: tokens.borderRadiusMedium,
+                              backgroundColor: tokens.colorNeutralBackground2,
+                            }}
+                          >
+                            <Text weight="semibold">Workflow fan result</Text>
+                            <Text size={200}>
+                              {[workflowExecution.parentWorkflowId && `workflow ${workflowExecution.parentWorkflowId}`,
+                                workflowExecution.parentWorkflowNodeId && `fan ${workflowExecution.parentWorkflowNodeId}`,
+                                workflowExecution.parentJoinNodeId && `join ${workflowExecution.parentJoinNodeId}`]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </Text>
+                            {workflowExecution.joinedOutput && (
+                              <pre style={{
+                                margin: 0,
+                                overflowX: 'auto',
+                                whiteSpace: 'pre-wrap',
+                                fontFamily: tokens.fontFamilyMonospace,
+                                fontSize: tokens.fontSizeBase200,
+                              }}>
+                                {workflowExecution.joinedOutput}
+                              </pre>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
                     {timelineApprovals.length > 0 && (
                       <div ref={timelineApprovalsRef} className={styles.timelineApprovals}>
                         {timelineApprovals.map((approval) => (

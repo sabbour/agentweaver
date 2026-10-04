@@ -13,6 +13,7 @@ public static class EventTypes
     public const string RunCompleted = "run.completed";
     public const string RunFailed    = "run.failed";
     public const string RunBounded   = "run.bounded";
+    public const string PermissionBindingBound = "permission.binding.bound";
     /// <summary>
     /// Non-terminal error event emitted when an operation fails but the run is
     /// reverted to a retryable state (e.g., AwaitingReview after merge InternalError).
@@ -242,6 +243,12 @@ public static class EventTypes
     public const string CoordinatorOutcomeSpecDrafting = "coordinator.outcome_spec.drafting";
 
     /// <summary>
+    /// The coordinator received an unusable model response while drafting and is making its one
+    /// bounded schema-correction attempt before failing explicitly.
+    /// </summary>
+    public const string CoordinatorOutcomeSpecDraftRetrying = "coordinator.outcome_spec.draft_retrying";
+
+    /// <summary>
     /// Emitted when the coordinator presents an outcome-spec draft (or revision) for
     /// human confirmation. The run is suspended at the await-confirmation gate after this.
     /// Payload: { specId, status, desiredOutcome, scope, assumptions, clarifyingQuestions }
@@ -459,6 +466,7 @@ public static class EventTypes
 
     /// <summary>The single collective merge succeeded. Payload: { workPlanId, commitHash }.</summary>
     public const string CoordinatorAssemblyMergeCompleted = "coordinator.assembly_merge_completed";
+    public const string CoordinatorAssemblyMergeUnknown = "coordinator.assembly_merge_unknown";
 
     /// <summary>The single collective merge failed (conflict/error). Payload: { workPlanId, reason,
     /// conflictingFiles }.</summary>

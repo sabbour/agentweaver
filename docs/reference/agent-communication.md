@@ -6,12 +6,16 @@ See Coordinator-mediated dispatch, observations and steering for the shared visu
 
 See Decision inbox, ledger, memory and curation for the shared visual model.
 
-This reference maps each of Agentweaver's three **agent communication channels**
+This reference maps Agentweaver's shared-state, addressed-message, handoff, and execution
+transport surfaces. The existing diagrams describe coordinator handoffs and execution
+transport, not the addressed mailbox.
+
+The original three **agent communication channels**
 to its concrete surfaces: MCP tools and HTTP API endpoints. For the conceptual
 model and the reasoning behind it, read the
 [Agent Communication deep dive](../deep-dive/agent-communication.md).
 
-The three channels are:
+The three pre-existing channels are:
 
 1. **Indirect / shared-state coordination** — the decisions ledger and
    cross-agent memory (the team's shared brain).
@@ -19,6 +23,36 @@ The three channels are:
    dispatch.
 3. **Direct transport (A2A)** — the worker↔sandbox-pod execution transport for a
    single agent turn.
+
+**Addressed messages** are a separate, durable mailbox for one named teammate and one
+target run. They are neither decisions nor coordinator steering. REST
+`POST /api/projects/{id}/agent-messages` persists a send with `recipient`,
+`target_run_id`, `content`, `idempotency_key`, and optional `reply_to_id`,
+`reference_kind`, `reference_id`, or `expires_at`. An authenticated source run
+determines the sender; the client does not choose one. A repeated key from the same
+sender returns the original logical message; a conflicting payload is rejected.
+`GET /api/projects/{id}/agent-messages` and `GET /{messageId}` expose project-visible
+history and diagnostics. Native and MCP tools expose corresponding send, list and get
+operations. MCP writes require forwarded, valid run-capability headers; an operator's
+broker token alone cannot impersonate a run, and stdio mode without a run identity
+cannot send. A reply uses the original message ID and preserves its thread.
+
+States are `accepted`, `claimed`, `delivered`, `acknowledged`, `expired`, and
+`undeliverable`. Recipient-run-bound `POST /claim` leases a message;
+`POST /{messageId}/deliver` needs the matching owner and fence;
+`POST /{messageId}/acknowledge` records receipt and can be repeated safely. Their MCP/native
+counterparts follow the same checks. A lease expiry allows reclaim after a crash,
+but callers must only claim and present messages at a safe turn boundary. **No runtime
+turn-boundary injection or scheduled idle wake is connected yet.** A manual claim is
+not proof that the model saw the content, and a delivered mark is only as reliable as
+the caller's presentation. Until that integration lands, use list/get to inspect
+messages and do not interpret `accepted` as delivered. There is no paid wake loop.
+
+Human notifications surface activity to operators; they are not addressed messages
+or acknowledgment receipts. Backlog/work-plan references link existing tasks without
+moving them; the decision inbox is for knowledge proposals; steering redirects a
+coordinator; A2A only executes a single agent turn. The handoff diagram below continues
+to describe coordinator-owned task dispatch, not mailbox delivery.
 
 > **Precision note.** Channels 1 and 2 are how the *team* coordinates. Channel 3
 > is how a *single agent turn* is *executed*. A2A is not a way for two agents to

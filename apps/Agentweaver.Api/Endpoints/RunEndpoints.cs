@@ -16,6 +16,7 @@ using Agentweaver.Api.Auth;
 using Agentweaver.Api.Casting;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Execution;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Projects;
@@ -51,6 +52,7 @@ app.MapGet("/api/runs/{id}", async (
     IRunStore runStore,
     RunStreamStore streamStore,
     CoordinatorStatusReader coordinator,
+    PendingRequestStore pendingStore,
     IRunOptionsStore runOptions,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -130,6 +132,28 @@ app.MapGet("/api/runs/{id}", async (
         }
     }
 
+    if (sandboxStatus is not null)
+    {
+        CurrentSandboxBindingResult binding;
+        try
+        {
+            await using var bindingScope = httpContext.RequestServices.CreateAsyncScope();
+            binding = await RunCurrentBindingReader.ReadAsync(
+                run, runStore, httpContext.RequestServices.GetService<IRunLeaseStore>(),
+                bindingScope.ServiceProvider.GetRequiredService<MemoryDbContext>(),
+                k8sClient, k8sOptions?.Namespace, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Current sandbox binding unavailable for run {RunId}", id);
+            binding = CurrentSandboxBindingResult.Unavailable("binding_read_failed");
+        }
+        if (binding.State != "verified")
+            logger.LogDebug("Current sandbox binding for run {RunId}: {State} ({Reason})",
+                id, binding.State, binding.Reason);
+        sandboxStatus = sandboxStatus with { CurrentBinding = binding };
+    }
+
     // Read outcome from the in-memory stream (same pattern as sandbox status).
     bool? outcomeAchieved = null;
     string? outcomeReason = null;
@@ -154,10 +178,16 @@ app.MapGet("/api/runs/{id}", async (
     // Coordinator runs surface their work-plan orchestration status so the UI can show
     // "Awaiting assembly" / "Assembling" / "Failed: <result>" rather than the bare run status.
     string? coordinatorStatus = null;
-    var isCoordinatorRun = run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
-    if (isCoordinatorRun)
+    var coordinatorCandidate = string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
+    if (coordinatorCandidate)
         coordinatorStatus = (await coordinator.GetCoordinatorStatusesAsync(new[] { run.Id.ToString() }, ct))
             .GetValueOrDefault(run.Id.ToString());
+    var isCoordinatorRun = coordinatorCandidate
+        && (run.ParentRunId is null || coordinatorStatus is not null);
+    var pendingRequestKind = run.Status == RunStatus.AwaitingReview
+        ? await pendingStore.GetActionableRequestKindAsync(
+            run, await runStore.GetLatestOutputRevisionAsync(run.Id, ct).ConfigureAwait(false), ct).ConfigureAwait(false)
+        : null;
     var stepCount = run.StepCount;
     if (stepCount <= 0 && streamEvents is not null)
         stepCount = streamEvents.Count(e => e.Type == EventTypes.ToolCall);
@@ -202,6 +232,7 @@ app.MapGet("/api/runs/{id}", async (
     return Results.Json(new RunResponse
     {
         RunId = run.Id.ToString(),
+        LifecycleGeneration = run.LifecycleGeneration,
         ProjectId = run.ProjectId?.ToString(),
         Status = run.Status.ToApiString(),
         ModelSource = run.ModelSource.ToApiString(),
@@ -222,6 +253,8 @@ app.MapGet("/api/runs/{id}", async (
         WorkflowSelectionReason = run.WorkflowSelectionReason,
         ParentRunId = run.ParentRunId,
         SubtaskId = run.SubtaskId,
+        IsCoordinatorPlan = isCoordinatorRun,
+        PendingRequestKind = pendingRequestKind,
         RetriedFrom = run.RetriedFrom,
         CoordinatorStatus = coordinatorStatus,
         CoordinatorStatusReason = isCoordinatorRun ? EndpointHelpers.CoordinatorStatusReasonForProjection(run, coordinatorStatus) : null,
@@ -238,7 +271,7 @@ app.MapGet("/api/runs/{id}/terminal-diagnostic", async (
     HttpContext httpContext,
     string id,
     IRunStore runStore,
-    MemoryDbContext db,
+    RunFailureExplanationService explanationService,
     CancellationToken ct) =>
 {
     if (!RunId.TryParse(id, out var runId))
@@ -253,14 +286,10 @@ app.MapGet("/api/runs/{id}/terminal-diagnostic", async (
     if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is not null)
         return Results.NotFound();
 
-    var diagnostic = await new RunTerminalDiagnosticReader(db).GetAsync(runId.ToString(), ct).ConfigureAwait(false);
-    if (diagnostic is null
-        && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
-        && run.Status is RunStatus.Failed or RunStatus.MergeFailed)
-        diagnostic = RunTerminalDiagnosticReader.CreateFallback(run);
+    var diagnostic = await explanationService.GetAsync(run, ct).ConfigureAwait(false);
     return diagnostic is null ? Results.NotFound() : Results.Ok(diagnostic);
 })
-    .Produces<RunTerminalDiagnosticResponse>(StatusCodes.Status200OK)
+    .Produces<Agentweaver.AspNetCore.RunTerminalDiagnosticResponse>(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status404NotFound);
 
 app.MapPost("/api/runs/{id}/archive", async (
@@ -298,8 +327,11 @@ app.MapDelete("/api/runs/{id}", async (
     IRunStore runStore,
     RunStreamStore streamStore,
     RunWorkflowRegistry registry,
+    WorkflowChildWorkService childWork,
     IWorktreeOperations worktreeOps,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
+    IRunEventStream eventStream,
+    TerminalOutcomeProjector terminalOutcomeProjector,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -318,12 +350,26 @@ app.MapDelete("/api/runs/{id}", async (
     if (await EndpointHelpers.RequireRunDeletionAccessAsync(httpContext, run, ct) is { } denied)
         return denied;
 
+    registry.Abandon(id);
+    await childWork.CancelForParentAsync(id, CancellationToken.None).ConfigureAwait(false);
+
     // For any non-terminal run: cancel the workflow, clean up worktree, force to terminal.
     if (!EndpointHelpers.IsTerminal(run.Status))
     {
         var podLifecycle = httpContext.RequestServices.GetService<IAgentHostPodLifecycle>();
         await EndpointHelpers.CancelRunWorkAsync(
-            run, runStore, streamStore, registry, worktreeOps, logger, ct, podLifecycle, sandboxRuntime.Value);
+            run,
+            runStore,
+            streamStore,
+            registry,
+            worktreeOps,
+            logger,
+            CancellationToken.None,
+            podLifecycle,
+            sandboxRuntime.Value,
+            eventStream,
+            terminalOutcomeProjector,
+            reason: "user_cancelled");
     }
 
     try { await runStore.DeleteAsync(runId, ct); }
@@ -343,8 +389,11 @@ app.MapPost("/api/runs/{id}/cancel", async (
     IRunStore runStore,
     RunStreamStore streamStore,
     RunWorkflowRegistry registry,
+    WorkflowChildWorkService childWork,
     IWorktreeOperations worktreeOps,
     IOptions<SandboxRuntimeOptions> sandboxRuntime,
+    IRunEventStream eventStream,
+    TerminalOutcomeProjector terminalOutcomeProjector,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -365,14 +414,33 @@ app.MapPost("/api/runs/{id}/cancel", async (
 
     // Already-terminal runs have no live work to cancel: report the current state without acting.
     if (EndpointHelpers.IsTerminal(run.Status))
+    {
+        registry.Abandon(id);
+        await childWork.CancelForParentAsync(id, CancellationToken.None).ConfigureAwait(false);
         return Results.Ok(new { run_id = id, status = run.Status.ToApiString(), cancelled = false, already_terminal = true });
+    }
 
-    // Cancel the live workflow (which also stops child subtask runs driven by the coordinator),
-    // clean up the worktree, and force the run to a terminal state — but KEEP the run row so the
-    // user can still inspect it. Same shared path the DELETE endpoint uses.
+    // Suppress fan continuation before terminalizing the parent so another replica cannot dispatch
+    // or resume child work through the cancellation boundary.
+    registry.Abandon(id);
+    await childWork.CancelForParentAsync(id, CancellationToken.None).ConfigureAwait(false);
+
+    // Cancel the live workflow, clean up the worktree, and force the run to a terminal state — but
+    // KEEP the run row so the user can still inspect it. Same shared path the DELETE endpoint uses.
     var cancelPodLifecycle = httpContext.RequestServices.GetService<IAgentHostPodLifecycle>();
     await EndpointHelpers.CancelRunWorkAsync(
-        run, runStore, streamStore, registry, worktreeOps, logger, ct, cancelPodLifecycle, sandboxRuntime.Value);
+        run,
+        runStore,
+        streamStore,
+        registry,
+        worktreeOps,
+        logger,
+        CancellationToken.None,
+        cancelPodLifecycle,
+        sandboxRuntime.Value,
+        eventStream,
+        terminalOutcomeProjector,
+        reason: "user_cancelled");
 
     var updated = await runStore.GetAsync(runId, ct);
     return Results.Ok(new
@@ -805,24 +873,27 @@ app.MapGet("/api/runs/{id}/graph", async (
     if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
         return denied;
 
-    // Coordinator runs (ParentRunId == null, driven by the built-in Coordinator agent) return the
-    // unified coordinator-variant descriptor built from the work plan, so the same generic renderer
-    // draws the coordinator + fan-out children + the planned collective-assembly stage. A coordinator
-    // run without a persisted work plan yet (pre-confirmation / pre-decomposition) returns the empty
-    // coordinator variant — the Coordinator node + planned assembly stage — NOT the misleading
-    // single-agent per-run pipeline.
-    if (run.ParentRunId is null && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
+    // Coordinator plans return the unified coordinator descriptor built from their work plan.
+    // Ordinary coordinators include their assembly stages; correlated static-fan coordinators
+    // contain only fan-out, branch, and fan-in nodes. A coordinator without a persisted plan yet
+    // returns the empty coordinator variant rather than the misleading single-agent pipeline.
+    if (string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal))
     {
         var plan = await coordinator.GetWorkPlanAsync(id, ct);
         if (plan is null)
-            return Results.Ok(CoordinatorGraphDescriptor.BuildEmpty(id, run.ModelId));
-
-        // #386: resolve the actual assembly gates (incl. the platform Build & Test gate, when the task
-        // produces code) so the run tree shows them as `planned` up front — not only once assembly
-        // execution reaches them.
-        var assemblyGates = await coordinator.GetAssemblyGatesAsync(id, ct);
-        return Results.Ok(CoordinatorGraphDescriptor.Build(
-            plan, podRegistry, assemblyGates: assemblyGates, coordinatorModel: run.ModelId));
+        {
+            if (run.ParentRunId is null)
+                return Results.Ok(CoordinatorGraphDescriptor.BuildEmpty(id, run.ModelId));
+        }
+        else
+        {
+            // #386: resolve the actual assembly gates (incl. the platform Build & Test gate, when the task
+            // produces code) so the run tree shows them as `planned` up front — not only once assembly
+            // execution reaches them.
+            var assemblyGates = await coordinator.GetAssemblyGatesAsync(id, ct);
+            return Results.Ok(CoordinatorGraphDescriptor.Build(
+                plan, podRegistry, assemblyGates: assemblyGates, coordinatorModel: run.ModelId));
+        }
     }
 
     try
@@ -934,6 +1005,147 @@ app.MapGet("/api/runs/{id}/history", async (
     }
 });
 
+app.MapGet("/api/runs/{id}/output-revisions", async (
+    HttpContext httpContext, string id, IRunStore runStore, CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
+    try
+    {
+        var revisions = await runStore.ListOutputRevisionsAsync(runId, ct);
+        if (run.CurrentOutputRevisionId is not null
+            && revisions.All(r => r.RevisionId != run.CurrentOutputRevisionId))
+            return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+        return Results.Ok(revisions.Select(r => new
+        {
+            revision_id = r.RevisionId, schema_version = r.SchemaVersion,
+            lifecycle_generation = r.LifecycleGeneration, workflow_digest = r.WorkflowDigest,
+            manifest_incomplete = r.ManifestIncomplete, tree_hash = r.TreeHash,
+            diff_sha256 = r.DiffSha256, predecessor_revision_id = r.PredecessorRevisionId,
+            tree_content_sha256 = r.TreeContentSha256,
+            output_kind = r.OutputKind, merged_commit_hash = r.MergedCommitHash,
+            work_plan_id = r.WorkPlanId, merge_effect_id = r.MergeEffectId,
+            accepted_no_change = r.AcceptedNoChange,
+            created_at = r.CreatedAt
+        }));
+    }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+    }
+});
+
+app.MapGet("/api/runs/{id}/output-revisions/{revisionId}", async (
+    HttpContext httpContext, string id, string revisionId, IRunStore runStore, CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
+    try
+    {
+        var revision = await runStore.GetOutputRevisionAsync(runId, revisionId, ct);
+        if (revision is null)
+            return run.CurrentOutputRevisionId == revisionId || run.ApprovedOutputRevisionId == revisionId
+                ? Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone)
+                : Results.NotFound(new { error = "output_revision_unavailable" });
+        if (revision.SchemaVersion == RunOutputRevision.CollectiveSchemaVersion)
+            revision.ResolveFiles();
+        return Results.Ok(new
+        {
+            revision_id = revision.RevisionId, schema_version = revision.SchemaVersion,
+            lifecycle_generation = revision.LifecycleGeneration, workflow_digest = revision.WorkflowDigest,
+            manifest_incomplete = revision.ManifestIncomplete, tree_hash = revision.TreeHash,
+            diff_sha256 = revision.DiffSha256, predecessor_revision_id = revision.PredecessorRevisionId,
+            output_kind = revision.OutputKind, merged_commit_hash = revision.MergedCommitHash,
+            work_plan_id = revision.WorkPlanId, merge_effect_id = revision.MergeEffectId,
+            accepted_no_change = revision.AcceptedNoChange,
+            tree_content_sha256 = revision.TreeContentSha256,
+            files = revision.TreeContent is null ? null : revision.ResolveFiles().Select(file => new
+            {
+                path = file.Path, mode = file.Mode, size = file.Bytes.Length,
+                sha256 = RunOutputRevision.Sha256(file.Bytes)
+            }),
+            created_at = revision.CreatedAt,
+            diff = new System.Text.UTF8Encoding(false, true).GetString(revision.DiffBytes)
+        });
+
+    }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+    }
+});
+
+app.MapGet("/api/runs/{id}/output-revisions/{revisionId}/files/{**path}", async (
+    HttpContext httpContext, string id, string revisionId, string path,
+    IRunStore runStore, CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
+    try
+    {
+        var revision = await runStore.ResolveOutputRevisionAsync(runId, revisionId, ct);
+        var file = revision.ResolveFile(path);
+        return Results.Ok(new
+        {
+            revision_id = revision.RevisionId, path = file.Path, mode = file.Mode,
+            sha256 = RunOutputRevision.Sha256(file.Bytes), content_base64 = Convert.ToBase64String(file.Bytes)
+        });
+    }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason },
+            statusCode: ex.Reason == "file_not_found" ? StatusCodes.Status404NotFound : StatusCodes.Status410Gone);
+    }
+});
+
+app.MapGet("/api/runs/{id}/output-revisions/{revisionId}/compare/{otherId}", async (
+    HttpContext httpContext, string id, string revisionId, string otherId,
+    IRunStore runStore, CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+    var run = await runStore.GetAsync(runId, ct);
+    if (run is null) return Results.NotFound();
+    if (await EndpointHelpers.RequireRunAccessAsync(httpContext, run, ProjectRole.Viewer, ct) is { } denied)
+        return denied;
+    try
+    {
+        var before = await runStore.ResolveOutputRevisionAsync(runId, revisionId, ct);
+        var after = await runStore.ResolveOutputRevisionAsync(runId, otherId, ct);
+        var oldFiles = before.ResolveFiles().ToDictionary(file => file.Path, StringComparer.Ordinal);
+        var newFiles = after.ResolveFiles().ToDictionary(file => file.Path, StringComparer.Ordinal);
+        var changes = oldFiles.Keys.Union(newFiles.Keys, StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .Where(path => !oldFiles.TryGetValue(path, out var oldFile)
+                || !newFiles.TryGetValue(path, out var newFile)
+                || oldFile.Mode != newFile.Mode || !oldFile.Bytes.AsSpan().SequenceEqual(newFile.Bytes))
+            .Select(path => new
+            {
+                path, before_sha256 = oldFiles.TryGetValue(path, out var oldFile)
+                    ? RunOutputRevision.Sha256(oldFile.Bytes) : null,
+                after_sha256 = newFiles.TryGetValue(path, out var newFile)
+                    ? RunOutputRevision.Sha256(newFile.Bytes) : null
+            });
+        return Results.Ok(new { before_revision_id = revisionId, after_revision_id = otherId, changes });
+    }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+    }
+});
+
 app.MapPost("/api/runs/{id}/review", async (
     HttpContext httpContext,
     string id,
@@ -970,7 +1182,9 @@ app.MapPost("/api/runs/{id}/review", async (
     var caller = httpContext.GetCaller();
 
     // Idempotency: return current state when the terminal decision already matches.
-    if (run.Status == RunStatus.Merged && request.Approved)
+    if (run.Status == RunStatus.Merged && request.Approved
+        && (request.OutputRevisionId is null
+            || request.OutputRevisionId == run.ApprovedOutputRevisionId))
         return Results.Json(new ReviewResponse { RunId = id, Status = run.Status.ToApiString(), MergeResult = run.Result });
     if (run.Status == RunStatus.Declined && !request.Approved)
         return Results.Json(new ReviewResponse { RunId = id, Status = run.Status.ToApiString(), MergeResult = null });
@@ -978,10 +1192,66 @@ app.MapPost("/api/runs/{id}/review", async (
     if (run.Status != RunStatus.AwaitingReview)
         return Results.Conflict(new { error = $"Run is in status '{run.Status.ToApiString()}' and cannot be reviewed." });
 
+    if (request.Approved)
+    {
+        RunOutputRevision? revision;
+        try { revision = await runStore.GetLatestOutputRevisionAsync(runId, ct); }
+        catch (RunOutputRevisionUnavailableException ex)
+        {
+            return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+        }
+        if (run.CurrentOutputRevisionId is not null
+            && revision?.RevisionId != run.CurrentOutputRevisionId)
+            return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+        if (revision is not null)
+        {
+            if (!revision.Matches(run, revision.RevisionId)
+                || (request.OutputRevisionId is not null && request.OutputRevisionId != revision.RevisionId))
+                return Results.Conflict(new { error = "Reviewed output revision is stale." });
+            request = request with { OutputRevisionId = revision.RevisionId };
+        }
+        else if (run.CurrentOutputRevisionId is not null)
+            return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+        else if (request.OutputRevisionId is not null)
+            return Results.Conflict(new { error = "Reviewed output revision is unavailable." });
+    }
+
     var streamingRunForReview = workflowRegistry.Get(id);
     var pendingForReview = await pendingStore.GetAsync(id, ct);
+    var pendingRequestKind = await pendingStore.GetRequestKindAsync(id, ct).ConfigureAwait(false);
+    if (string.Equals(
+        pendingRequestKind,
+        PendingRequestDeliveryKinds.WorkflowChildWork,
+        StringComparison.Ordinal))
+    {
+        return Results.Conflict(new
+        {
+            error = "Run is waiting for automated workflow child work and cannot be reviewed.",
+            pending_request_kind = pendingRequestKind,
+        });
+    }
+    if (pendingRequestKind is not null
+        && !string.Equals(
+            pendingRequestKind,
+            PendingRequestDeliveryKinds.WorkflowReview,
+            StringComparison.Ordinal))
+    {
+        return Results.Conflict(new
+        {
+            error = $"Run has pending request kind '{pendingRequestKind}' and cannot be reviewed.",
+            pending_request_kind = pendingRequestKind,
+        });
+    }
     if (streamingRunForReview is not null && pendingForReview is null)
+    {
+        if (await pendingStore.ExistsUndeliveredAsync(id, ct).ConfigureAwait(false))
+        {
+            var queuedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+            return Results.Json(new ReviewResponse { RunId = id, Status = queuedStatus, MergeResult = null });
+        }
+
         return Results.StatusCode(StatusCodes.Status409Conflict);
+    }
 
     var operationName = run.ParentRunId is null
         && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
@@ -1022,7 +1292,8 @@ app.MapPost("/api/runs/{id}/review", async (
         Approved: request.Approved,
         RequestChanges: request.RequestChanges,
         Feedback: request.Feedback,
-        ReviewedBy: caller.User);
+        ReviewedBy: caller.User,
+        OutputRevisionId: request.Approved ? request.OutputRevisionId : null);
 
     if (streamingRunForReview is null && pendingForReview is { } pendingForDefer)
     {
@@ -1030,17 +1301,130 @@ app.MapPost("/api/runs/{id}/review", async (
             && !caller.Owns(pendingForDefer.OwnerUser))
             return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-        if (!await DeferReviewDecisionAsync(id, decision, scopeFactory, logger, CancellationToken.None)
+        if (!await workflowFactory.HasCheckpointAsync(id, ct).ConfigureAwait(false))
+        {
+            if (request.RequestChanges)
+            {
+                var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
+                if (!transitioned)
+                    return Results.StatusCode(StatusCodes.Status409Conflict);
+            }
+            else if (!request.Approved)
+            {
+                var declined = await runStore.TryMutateTerminalOutcomeAsync(
+                    runId,
+                    new TerminalRunMutation(
+                        TerminalRunOutcome.Create(RunStatus.Declined, EventTypes.ReviewDeclined, new { }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                        null,
+                        new HashSet<RunStatus> { RunStatus.AwaitingReview },
+                        caller.User),
+                    ct);
+                if (!declined)
+                    return Results.StatusCode(StatusCodes.Status409Conflict);
+                await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+                    .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
+            }
+
+            logger.LogInformation(
+                "Review decision: {Decision} (direct no-checkpoint path). RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
+                request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
+                id, run.SubmittingUser, caller.User);
+            return await ExecuteDirectReviewAsync(
+                id, runId, run, request, runStore, streamStore, terminalOutcomeProjector, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
+        }
+
+        if (!await pendingStore.TryQueueDeliveryAsync(
+                id,
+                PendingRequestDeliveryKinds.WorkflowReview,
+                PendingRequestStore.CreateDecisionIdentity(pendingForDefer.Request.RequestId, decision),
+                decision,
+                pendingForDefer.OwnerUser,
+                CancellationToken.None)
             .ConfigureAwait(false))
             return Results.StatusCode(StatusCodes.Status409Conflict);
 
-        if (request.RequestChanges)
+        var deferredStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+        return Results.Json(new ReviewResponse { RunId = id, Status = deferredStatus, MergeResult = null });
+    }
+
+    PendingEntry? pendingEntry = null;
+    string? decisionIdentity = null;
+    if (streamingRunForReview is not null)
+    {
+        pendingEntry = await pendingStore.GetAsync(id, ct);
+        if (pendingEntry is null)
+            return Results.StatusCode(409);
+
+        // Guardrail 9: IDOR defense-in-depth — verify caller owns the pending request.
+        if (run.ProjectId is null
+            && !caller.Owns(pendingEntry.OwnerUser))
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+        decisionIdentity = PendingRequestStore.CreateDecisionIdentity(pendingEntry.Request.RequestId, decision);
+        if (!await pendingStore.TryQueueDeliveryAsync(
+                id,
+                PendingRequestDeliveryKinds.WorkflowReview,
+                decisionIdentity,
+                decision,
+                pendingEntry.OwnerUser,
+                CancellationToken.None).ConfigureAwait(false))
+            return Results.StatusCode(StatusCodes.Status409Conflict);
+    }
+
+    if (pendingEntry is null
+        && await pendingStore.ExistsUndeliveredAsync(id, ct).ConfigureAwait(false))
+    {
+        if (!await workflowFactory.HasCheckpointAsync(id, ct).ConfigureAwait(false))
         {
-            var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, CancellationToken.None);
+            if (request.RequestChanges)
+            {
+                var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
+                if (!transitioned)
+                    return Results.StatusCode(StatusCodes.Status409Conflict);
+            }
+            else if (!request.Approved)
+            {
+                var declined = await runStore.TryMutateTerminalOutcomeAsync(
+                    runId,
+                    new TerminalRunMutation(
+                        TerminalRunOutcome.Create(RunStatus.Declined, EventTypes.ReviewDeclined, new { }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                        null,
+                        new HashSet<RunStatus> { RunStatus.AwaitingReview },
+                        caller.User),
+                    ct);
+                if (!declined)
+                    return Results.StatusCode(StatusCodes.Status409Conflict);
+                await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
+                    .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
+            }
+
+            logger.LogInformation(
+                "Review decision: {Decision} (direct queued no-checkpoint path). RunId={RunId} SubmittingUser={SubmittingUser} Reviewer={Reviewer}",
+                request.Approved ? "approved" : (request.RequestChanges ? "request-changes" : "declined"),
+                id, run.SubmittingUser, caller.User);
+            return await ExecuteDirectReviewAsync(
+                id, runId, run, request, runStore, streamStore, terminalOutcomeProjector, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
+        }
+
+        var queuedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+        return Results.Json(new ReviewResponse { RunId = id, Status = queuedStatus, MergeResult = null });
+    }
+
+    if (streamingRunForReview is null)
+    {
+        if (request.Approved)
+        {
+            // Live MAF owns the AwaitingReview -> Merging CAS at the actual merge executor.
+            // The direct fallback below still performs the merge synchronously.
+        }
+        else if (request.RequestChanges)
+        {
+            // RequestChanges: transition run back to in-progress so the agent can revise.
+            var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
             if (!transitioned)
                 return Results.StatusCode(StatusCodes.Status409Conflict);
         }
-        else if (!request.Approved)
+        else
         {
             var declined = await runStore.TryMutateTerminalOutcomeAsync(
                 runId,
@@ -1049,49 +1433,14 @@ app.MapPost("/api/runs/{id}/review", async (
                     null,
                     new HashSet<RunStatus> { RunStatus.AwaitingReview },
                     caller.User),
-                CancellationToken.None);
+                ct);
             if (!declined)
                 return Results.StatusCode(StatusCodes.Status409Conflict);
             await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
-                .ProjectPendingAsync(CancellationToken.None, streamStore).ConfigureAwait(false);
+                .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
         }
-
-        var deferredStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
-        return Results.Json(new ReviewResponse { RunId = id, Status = deferredStatus, MergeResult = null });
     }
 
-    if (request.Approved)
-    {
-        // Live MAF owns the AwaitingReview -> Merging CAS at the actual merge executor. Stage 2
-        // policies can insert executable gates (e.g. rubberduck) after human approval but before merge,
-        // so moving to Merging here would make request-changes loops from those gates inconsistent.
-        // The direct fallback below still performs the merge synchronously.
-    }
-    else if (request.RequestChanges)
-    {
-        // RequestChanges: transition run back to in-progress so the agent can revise.
-        var transitioned = await runStore.TryTransitionReviewToInProgressAsync(runId, ct);
-        if (!transitioned)
-            return Results.StatusCode(StatusCodes.Status409Conflict);
-    }
-    else
-    {
-        var declined = await runStore.TryMutateTerminalOutcomeAsync(
-            runId,
-            new TerminalRunMutation(
-                TerminalRunOutcome.Create(RunStatus.Declined, EventTypes.ReviewDeclined, new { }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
-                null,
-                new HashSet<RunStatus> { RunStatus.AwaitingReview },
-                caller.User),
-            ct);
-        if (!declined)
-            return Results.StatusCode(StatusCodes.Status409Conflict);
-        await httpContext.RequestServices.GetRequiredService<TerminalOutcomeProjector>()
-            .ProjectPendingAsync(ct, streamStore).ConfigureAwait(false);
-    }
-
-    // Guardrail 10: Atomic TryRemove for replay/double-POST protection.
-    var pendingEntry = await pendingStore.TryRemoveAsync(id, ct);
     if (pendingEntry is null)
     {
         // Guardrail 2: On-demand fallback — if pending store is empty (e.g., after restart
@@ -1112,16 +1461,27 @@ app.MapPost("/api/runs/{id}/review", async (
                 id, runId, run, request, runStore, streamStore, terminalOutcomeProjector, worktreeOps, mergeCoordinator, workflowFactory, logger, ct);
         }
         // If the run is registered but no pending request, the request was already consumed.
+        if (await pendingStore.ExistsUndeliveredAsync(id, ct).ConfigureAwait(false))
+        {
+            var queuedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+            return Results.Json(new ReviewResponse { RunId = id, Status = queuedStatus, MergeResult = null });
+        }
         return Results.StatusCode(409);
     }
 
-    // Guardrail 9: IDOR defense-in-depth — verify caller owns the pending request.
-    if (run.ProjectId is null
-        && !caller.Owns(pendingEntry.OwnerUser))
-        return Results.StatusCode(StatusCodes.Status403Forbidden);
-
     if (streamingRunForReview is null)
         return Results.Conflict(new { error = "Workflow run is no longer active." });
+
+    var delivery = await pendingStore.TryClaimDeliveryAsync(
+        id,
+        $"http:{caller.User}",
+        staleAfter: TimeSpan.FromSeconds(15),
+        ct).ConfigureAwait(false);
+    if (delivery is null || delivery.DecisionIdentity != decisionIdentity)
+    {
+        var queuedStatus = request.Approved ? "merging" : (request.RequestChanges ? "revision_requested" : "declined");
+        return Results.Json(new ReviewResponse { RunId = id, Status = queuedStatus, MergeResult = null });
+    }
 
     // S3: Structured operational record for the review decision.
     logger.LogInformation(
@@ -1156,17 +1516,18 @@ app.MapPost("/api/runs/{id}/review", async (
     }
 
     // Create the response and send it to the workflow to resume.
-    var externalResponse = pendingEntry.Request.CreateResponse(decision);
+    var externalResponse = delivery.Request.CreateResponse(decision);
     try
     {
         await streamingRunForReview.SendResponseAsync(externalResponse);
     }
     catch (Exception ex)
     {
-        // SendResponseAsync failed after the CAS and pending-request removal already
-        // committed. The run is stuck in `merging` with no active workflow. Transition
-        // deterministically to Failed so the state is always explicit and the client
-        // can observe the outcome via the stream rather than polling indefinitely.
+        await pendingStore.ReleaseDeliveryAsync(
+            id, decisionIdentity, delivery.ClaimOwner, delivery.ClaimedAt, CancellationToken.None).ConfigureAwait(false);
+        // SendResponseAsync failed after the delivery claim was acquired. Release the claim for
+        // recovery, then transition deterministically to Failed so the client can observe the
+        // outcome via the stream rather than polling indefinitely.
         logger.LogError(ex, "SendResponseAsync failed for run {RunId}; transitioning to failed", id);
         var failedEntry = streamStore.Get(id);
         try
@@ -1246,7 +1607,24 @@ app.MapPost("/api/runs/{id}/commit", async (
     // TOCTOU races where a concurrent /review decline or /request-changes can race after
     // the git commit lands, and to prevent two simultaneous /commit calls from both succeeding.
     bool acquiredCommitting;
-    try { acquiredCommitting = await runStore.TryTransitionToCommittingAsync(runId, CancellationToken.None); }
+    RunOutputRevision? commitRevision;
+    try { commitRevision = await runStore.GetLatestOutputRevisionAsync(runId, ct); }
+    catch (RunOutputRevisionUnavailableException ex)
+    {
+        return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status410Gone);
+    }
+    if (run.CurrentOutputRevisionId is not null
+        && commitRevision?.RevisionId != run.CurrentOutputRevisionId)
+        return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+    if (commitRevision is null && run.CurrentOutputRevisionId is not null)
+        return Results.Json(new { error = "missing_content" }, statusCode: StatusCodes.Status410Gone);
+    try
+    {
+        acquiredCommitting = commitRevision is null
+            ? await runStore.TryTransitionToCommittingAsync(runId, CancellationToken.None)
+            : await runStore.TryTransitionToCommittingRevisionAsync(
+                runId, commitRevision.RevisionId, CancellationToken.None);
+    }
     catch (Exception ex)
     {
         logger.LogError(ex, "Failed to transition run {RunId} to Committing", runId);
@@ -1270,6 +1648,12 @@ app.MapPost("/api/runs/{id}/commit", async (
         return Results.Problem("Failed to commit worktree changes.", statusCode: 500);
     }
 
+    if (commitRevision is not null && !string.Equals(newTreeHash, commitRevision.TreeHash, StringComparison.Ordinal))
+    {
+        await runStore.TryRevertCommittingAsync(runId, newTreeHash, CancellationToken.None).ConfigureAwait(false);
+        return Results.Conflict(new { error = "Committed output differs from the reviewed revision; request changes and review again." });
+    }
+
     // Persist the new tree hash and execute the merge. Use CancellationToken.None for all
     // post-CAS operations: the run now owns a non-cancellable path to a terminal/retryable state
     // regardless of HTTP request lifetime. The try/catch is a safety net in case a captured ct
@@ -1283,7 +1667,8 @@ app.MapPost("/api/runs/{id}/commit", async (
         // Merge the worktree branch into the originating branch.
         // TryStartMergingAsync inside ExecuteMergeAsync now accepts Committing → Merging.
         var mergeInput = new MergeInput(
-            id, newTreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
+            id, newTreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch,
+            OutputRevisionId: commitRevision?.RevisionId);
         mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, CancellationToken.None).ConfigureAwait(false);
     }
     catch (OperationCanceledException)
@@ -1491,8 +1876,27 @@ app.MapPost("/api/runs/{id}/request-changes", async (
     // Won the CAS. Perform all post-transition steps unconditionally (use CancellationToken.None
     // for cleanup so process shutdown does not leave the run in a partially-cleaned state).
 
-    // a. Remove the pending request.
-    await pendingStore.TryRemoveAsync(id, CancellationToken.None);
+    // a. Remove the still-waiting pending request. This endpoint is intentionally human-recoverable:
+    // request-changes has already won the AwaitingReview -> InProgress CAS and abandons the old
+    // paused workflow before starting a fresh revision, so no automated resume depends on this gate.
+    // The abandonment API is narrowed to waiting rows and will not delete queued/delivering decisions.
+    var abandonedGate = await pendingStore.TryAbandonWaitingGateForHumanRevisionAsync(
+        id,
+        CancellationToken.None);
+    if (abandonedGate is null
+        && await pendingStore.ExistsUndeliveredAsync(id, CancellationToken.None).ConfigureAwait(false))
+    {
+        await runStore.UpdateStatusAsync(
+            runId,
+            RunStatus.AwaitingReview,
+            endedAt: null,
+            ct: CancellationToken.None).ConfigureAwait(false);
+        return Results.Conflict(new
+        {
+            error = "review_decision_already_submitted",
+            message = "A review decision is already queued; request-changes did not abandon the workflow.",
+        });
+    }
 
     // b. Abandon the old paused workflow: unregister and delete checkpoints.
     workflowRegistry.Abandon(id);
@@ -1564,16 +1968,18 @@ app.MapPost("/api/runs/{id}/request-changes", async (
 })
     .RequiresAiExecutionContext("orchestration or agent_turn");
 
-// POST /api/runs/{id}/retry — retrigger a FAILED run as a fresh run (new run_id), linked back via
-// retried_from. Never mutates the source run. Owner-scoped (401 unauth via middleware, 403 non-owner,
-// 404 unknown). Eligible source states: Failed and MergeFailed. Child runs and every other state are
-// rejected 409. A soft cap blocks retries once the retried_from chain reaches depth 3.
+// POST /api/runs/{id}/retry — resume eligible coordinators/composed workflows in place, otherwise
+// create a fresh run linked via retried_from. Owner-scoped (401 unauth via middleware, 403 non-owner,
+// 404 unknown). Eligible source states: Failed, MergeFailed, and an unlaunched composed
+// recovery with its durable marker. Child runs and every other state are rejected 409.
+// A soft cap blocks retries once the retried_from chain reaches depth 3.
 app.MapPost("/api/runs/{id}/retry", async (
     HttpContext httpContext,
     string id,
     IRunStore runStore,
     CoordinatorRunService coordinator,
     CoordinatorSteeringService steering,
+    WorkflowComposedRecoveryService composedRecovery,
     RunGitHubCapabilitySnapshotLifecycle capabilitySnapshots,
     IRunOptionsStore runOptions,
     RunOrchestrator orchestrator,
@@ -1605,9 +2011,9 @@ app.MapPost("/api/runs/{id}/retry", async (
     if (run.ParentRunId is not null)
         return Results.Conflict(new { error = "run_not_retryable", status = run.Status.ToApiString() });
 
-    // Eligible source states: terminal-failure only (Failed, MergeFailed). Declined and every
-    // non-failure / in-flight / terminal-success state is rejected.
-    if (run.Status is not (RunStatus.Failed or RunStatus.MergeFailed))
+    var pendingComposedRecovery = run.Status == RunStatus.InProgress
+        && await composedRecovery.CanRetryPendingAsync(run, ct).ConfigureAwait(false);
+    if (run.Status is not (RunStatus.Failed or RunStatus.MergeFailed) && !pendingComposedRecovery)
         return Results.Conflict(new { error = "run_not_retryable", status = run.Status.ToApiString() });
 
     // Soft cap: walk the retried_from provenance chain. Depth >= 3 means three retries already
@@ -1633,9 +2039,14 @@ app.MapPost("/api/runs/{id}/retry", async (
 
     var isCoordinatorRun = run.ParentRunId is null
         && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal);
+    var isPinnedWorkflowRun = run.ParentRunId is null
+        && run.GetExecutableWorkflowPin() is { } executablePin
+        && RunWorkflowGraphBinder.ContainsStaticFanRegion(executablePin);
+    var isComposedRecovery = pendingComposedRecovery
+        || WorkflowComposedRecoveryService.IsDecompositionFailure(run);
     using var execution = await EndpointHelpers.BeginAiExecutionAsync(
         httpContext,
-        isCoordinatorRun ? "orchestration" : "agent_turn",
+        isCoordinatorRun || isPinnedWorkflowRun || isComposedRecovery ? "orchestration" : "agent_turn",
         run.ProjectId,
         executionPlans,
         executionPlanAccessor,
@@ -1643,6 +2054,33 @@ app.MapPost("/api/runs/{id}/retry", async (
     execution.Activate();
     if (execution.Error is not null)
         return execution.Error;
+    if (isComposedRecovery)
+    {
+        try
+        {
+            await composedRecovery.ResumeFailedAsync(run, ct).ConfigureAwait(false);
+            return Results.Ok(new RetryRunResponse
+            {
+                RunId = id,
+                RetriedFrom = null,
+                Status = RunStatus.InProgress.ToApiString(),
+                Resumed = true,
+            });
+        }
+        catch (WorkflowComposedRecoveryException ex)
+        {
+            return Results.Conflict(new { error = ex.Code });
+        }
+        catch (ModelProviderConnectionRequiredException ex)
+        {
+            return Results.Json(ex.Requirement, statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogError(ex, "Failed to recover composed workflow {RunId} in place", id);
+            return Results.Problem("Failed to recover the composed workflow in place.", statusCode: 500);
+        }
+    }
     // #332: a coordinator run that failed AFTER completing upstream planning/subtask work should
     // RESUME from its last failure point (re-run only the failed subtask, preserve completed work
     // and the confirmed outcome spec, keep the original run options like auto_approve_tools) rather
@@ -1766,6 +2204,12 @@ app.MapPost("/api/runs/{id}/retry", async (
         else
         {
             // Regular single-agent project run: rebuild from persisted inputs and start fresh.
+            var sourcePolicy = run.GetApprovalPolicySnapshot()
+                ?? new RunApprovalPolicySnapshot(
+                    runOptions.GetLaunchPolicy(run.Id.ToString()),
+                    "retry",
+                    DateTimeOffset.UtcNow,
+                    InheritedFromRunId: run.Id.ToString());
             var newRun = new Run
             {
                 Id = RunId.New(),
@@ -1781,7 +2225,25 @@ app.MapPost("/api/runs/{id}/retry", async (
                 AgentName = run.AgentName,
                 Origin = run.Origin,
                 RetriedFrom = run.Id.ToString(),
-            };
+                WorkflowSelectionReason = run.WorkflowSelectionReason,
+                ExecutableWorkflowPinRequired = run.ExecutableWorkflowPinRequired,
+                ExecutableWorkflowManifestSchemaVersion = run.ExecutableWorkflowManifestSchemaVersion,
+                ExecutableWorkflowDefinitionId = run.ExecutableWorkflowDefinitionId,
+                ExecutableWorkflowDefinitionVersion = run.ExecutableWorkflowDefinitionVersion,
+                ExecutableWorkflowSource = run.ExecutableWorkflowSource,
+                ExecutableWorkflowContentDigest = run.ExecutableWorkflowContentDigest,
+                ExecutableWorkflowDefinitionYaml = run.ExecutableWorkflowDefinitionYaml,
+                ExecutableWorkflowPinnedAt = run.ExecutableWorkflowPinnedAt,
+                ExecutionInputRequired = run.ExecutionInputRequired,
+                ExecutionInputSourceCommitHash = run.ExecutionInputSourceCommitHash,
+                ExecutionInputCommitHash = run.ExecutionInputCommitHash,
+                ExecutionInputCompositeId = run.ExecutionInputCompositeId,
+            }.WithApprovalPolicySnapshot(new RunApprovalPolicySnapshot(
+                sourcePolicy.Policy,
+                "retry",
+                DateTimeOffset.UtcNow,
+                sourcePolicy.SettingsUpdatedAt,
+                run.Id.ToString()));
             await orchestrator.StartRunAsync(newRun, ct).ConfigureAwait(false);
             newRunId = newRun.Id;
         }
@@ -1872,18 +2334,29 @@ app.MapGet("/api/runs/{id}/workspace", async (
     // Merged runs: enumerate the commit tree from git (worktree has been deleted).
     if (run.Status is RunStatus.Merged)
     {
-        if (string.IsNullOrEmpty(run.RepositoryPath))
+        var hasPinnedCommit = !string.IsNullOrWhiteSpace(run.MergedCommitHash);
+        if (string.IsNullOrEmpty(run.RepositoryPath) || !Repository.IsValid(run.RepositoryPath))
+        {
+            if (hasPinnedCommit)
+                return Results.Json(new { error = "pinned_commit_unavailable" },
+                    statusCode: StatusCodes.Status410Gone);
             return Results.NotFound();
+        }
         try
         {
             using var repo = new Repository(run.RepositoryPath);
             Commit? commit = null;
-            if (!string.IsNullOrEmpty(run.MergedCommitHash))
+            if (hasPinnedCommit)
                 commit = repo.Lookup<Commit>(run.MergedCommitHash);
-            if (commit is null && !string.IsNullOrEmpty(run.WorktreeBranch))
+            else if (!string.IsNullOrEmpty(run.WorktreeBranch))
                 commit = repo.Branches[run.WorktreeBranch]?.Tip;
             if (commit is null)
+            {
+                if (hasPinnedCommit)
+                    return Results.Json(new { error = "pinned_commit_unavailable" },
+                        statusCode: StatusCodes.Status410Gone);
                 return Results.Json(Array.Empty<WorkspaceNode>());
+            }
 
             var nodes = new List<WorkspaceNode>();
             EnumerateGitTree(commit.Tree, "", nodes);
@@ -2487,6 +2960,110 @@ app.MapGet("/api/runs/{id}/tool-approval-policies/{toolName}", async (
     });
 }).RunCapability();
 
+app.MapGet("/api/runs/{id}/effective-permissions", async (
+    HttpContext httpContext,
+    string id,
+    IRunStore runStore,
+    IEffectivePermissionBindingProvider permissionBindings,
+    ISandboxPolicyStore policyStore,
+    IRunEventStream eventStream,
+    IRunAuthorshipCapabilityStore capabilityStore,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null)
+        return Results.NotFound();
+
+    if (httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.RunCapability)
+        || httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.InternalServiceKey))
+    {
+        var capabilityRunId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
+        var capabilityToken = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+        if (!string.Equals(capabilityRunId, id, StringComparison.Ordinal)
+            || !await capabilityStore.ValidateAsync(id, capabilityToken, ct).ConfigureAwait(false))
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+    }
+    else if (await EndpointHelpers.RequireRunAccessAsync(
+            httpContext, run, ProjectRole.Contributor, ct) is { } denied)
+    {
+        return denied;
+    }
+
+    try
+    {
+        var policyPath = run.WorktreePath ?? run.RepositoryPath;
+        var binding = await permissionBindings.ResolveForInspectionAsync(
+            id,
+            policyPath,
+            ct).ConfigureAwait(false);
+        var configuredPolicy = await policyStore
+            .GetPolicyAsync(policyPath, ct)
+            .ConfigureAwait(false);
+        var events = await eventStream
+            .GetPersistedEventsAsync(id, 0, ct)
+            .ConfigureAwait(false);
+        return Results.Ok(EffectivePermissionInspectionProjector.Project(
+            id,
+            configuredPolicy,
+            binding,
+            events));
+    }
+    catch (EffectivePermissionBindingException ex)
+    {
+        return Results.Json(
+            new { error = "effective_permission_binding_unavailable", message = ex.Message },
+            statusCode: StatusCodes.Status409Conflict);
+    }
+}).PlatformMcpOrRunCapability();
+
+app.MapGet("/api/runs/{id}/execution-identity", async (
+    HttpContext httpContext,
+    string id,
+    IRunStore runStore,
+    ExecutionIdentityReader reader,
+    IRunAuthorshipCapabilityStore capabilityStore,
+    CancellationToken ct) =>
+{
+    if (!RunId.TryParse(id, out var runId))
+        return Results.BadRequest(new { error = "Invalid run id." });
+
+    var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+    if (run is null)
+        return Results.NotFound();
+
+    if (httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.RunCapability)
+        || httpContext.User.HasClaim(
+            AgentweaverClaimTypes.AuthenticationScheme,
+            AgentweaverAuthenticationSchemes.InternalServiceKey))
+    {
+        var capabilityRunId = httpContext.Request.Headers[RunAuthorshipHeaders.RunId].ToString();
+        var capabilityToken = httpContext.Request.Headers[RunAuthorshipHeaders.RunToken].ToString();
+        if (!string.Equals(capabilityRunId, id, StringComparison.Ordinal)
+            || !await capabilityStore.ValidateAsync(id, capabilityToken, ct).ConfigureAwait(false))
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+    }
+    else if (await EndpointHelpers.RequireRunAccessAsync(
+            httpContext, run, ProjectRole.Viewer, ct) is not null)
+    {
+        return Results.NotFound();
+    }
+
+    return Results.Ok(await reader.GetAsync(run, ct).ConfigureAwait(false));
+}).PlatformMcpOrRunCapability();
+
 app.MapPost("/api/runs/{id}/questions/{requestId}/answer", async (
     HttpContext httpContext,
     string id,
@@ -2825,18 +3402,25 @@ app.MapGet("/api/runs/{id}/files/{**path}", async (
         // 409 "Worktree not available" once its sandbox is gone.
         if (run.Status is RunStatus.Merged or RunStatus.AssembleReady or RunStatus.Completed)
         {
-            if (string.IsNullOrEmpty(run.RepositoryPath))
+            var hasPinnedCommit = !string.IsNullOrWhiteSpace(run.MergedCommitHash);
+            if (string.IsNullOrEmpty(run.RepositoryPath) && !hasPinnedCommit)
                 return Results.NotFound();
             try
             {
                 var durable = worktreeManager.TryReadCommittedFileContent(
-                    run.RepositoryPath, run.WorktreeBranch, run.MergedCommitHash, normalizedPath, out _);
+                    run.RepositoryPath, run.WorktreeBranch, run.MergedCommitHash, normalizedPath,
+                    out _, out var sourceAvailable);
+                if (hasPinnedCommit && !sourceAvailable)
+                    return Results.Json(new { error = "pinned_commit_unavailable" },
+                        statusCode: StatusCodes.Status410Gone);
                 if (durable is not null)
                     return Results.Json(durable);
+                if (hasPinnedCommit)
+                    return Results.NotFound();
 
                 // The committed branch/commit could not resolve the file. Fall back to the live
-                // worktree if it still exists (e.g. assemble_ready run not yet torn down); otherwise
-                // the file genuinely does not exist in this run's output.
+                // worktree only for legacy runs without a pinned merge commit (or assemble_ready
+                // children whose branch has not yet been integrated).
                 if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
                     return Results.NotFound();
             }
@@ -3140,7 +3724,8 @@ static async Task<IResult> ExecuteDirectReviewAsync(
         entry.RecordNext(EventTypes.MergeStarted, new { tree_hash = run.TreeHash });
     }
 
-    var mergeInput = new MergeInput(id, run.TreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch);
+    var mergeInput = new MergeInput(id, run.TreeHash, run.WorktreePath, run.WorktreeBranch, run.RepositoryPath, run.OriginatingBranch,
+        OutputRevisionId: request.OutputRevisionId);
     var mergeExecResult = await mergeCoordinator.ExecuteMergeAsync(mergeInput, ct).ConfigureAwait(false);
 
     switch (mergeExecResult.Outcome)
@@ -3196,42 +3781,6 @@ static async Task<IResult> ExecuteDirectReviewAsync(
         default:
             throw new InvalidOperationException($"Unexpected merge execution outcome: {mergeExecResult.Outcome}");
     }
-}
-
-static async Task<bool> DeferReviewDecisionAsync(
-    string runId,
-    WorkflowReviewDecision decision,
-    IServiceScopeFactory scopeFactory,
-    ILogger<Program> logger,
-    CancellationToken ct)
-{
-    var json = System.Text.Json.JsonSerializer.Serialize(decision, JsonDefaults.Options);
-    using var scope = scopeFactory.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
-
-    var existing = await db.DeferredDecisions
-        .FirstOrDefaultAsync(d => d.RunId == runId, ct)
-        .ConfigureAwait(false);
-    if (existing is not null)
-        return false;
-
-    db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
-    {
-        RunId = runId,
-        DecisionJson = json,
-        CreatedAt = DateTimeOffset.UtcNow,
-    });
-
-    try
-    {
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
-    }
-    catch (DbUpdateException)
-    {
-        return false;
-    }
-    logger.LogInformation("Review decision for run {RunId} deferred for owner replica pickup", runId);
-    return true;
 }
 
 /// <summary>

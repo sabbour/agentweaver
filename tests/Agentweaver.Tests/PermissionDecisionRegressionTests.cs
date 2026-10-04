@@ -173,16 +173,8 @@ public sealed class PermissionDecisionRegressionTests : IDisposable
 
         return implementation switch
         {
-            "CopilotAIAgent" => new CopilotAIAgent(
-                factory,
-                SandboxExecutorFactory.CreatePassthrough(),
-                new StubPolicyStore(),
-                new InMemoryShellApprovalStore(),
-                approvalGate,
-                NullLogger<CopilotAIAgent>.Instance)
-                .BuildPermissionHandler(
-                    governance, RunId, _root, emitToolCall,
-                    (_, reason) => errors.Add(reason), (_, _) => { }, CancellationToken.None),
+            "CopilotAIAgent" => BuildCopilotHandler(
+                factory, governance, approvalGate, emitToolCall, errors),
             "GitHubCopilotAgentRunner" => new GitHubCopilotAgentRunner(
                 factory,
                 SandboxExecutorFactory.CreatePassthrough(),
@@ -195,6 +187,31 @@ public sealed class PermissionDecisionRegressionTests : IDisposable
                     (_, reason) => errors.Add(reason), (_, _) => { }, CancellationToken.None),
             _ => throw new ArgumentOutOfRangeException(nameof(implementation)),
         };
+    }
+
+    private Func<PermissionRequest, PermissionInvocation, Task<PermissionDecision>> BuildCopilotHandler(
+        GitHubCopilotClientFactory factory,
+        SandboxGovernance governance,
+        IToolApprovalGate approvalGate,
+        Action<string, string, object?> emitToolCall,
+        List<string> errors)
+    {
+        var agent = new CopilotAIAgent(
+            factory,
+            SandboxExecutorFactory.CreatePassthrough(),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            approvalGate,
+            NullLogger<CopilotAIAgent>.Instance);
+        agent.EffectivePermissionBindingForTesting = EffectivePermissionBinding.Create(
+            RunId,
+            1,
+            "test-policy",
+            "repository:test",
+            SandboxPolicy.Default(_root));
+        return agent.BuildPermissionHandler(
+            governance, RunId, _root, emitToolCall,
+            (_, reason) => errors.Add(reason), (_, _) => { }, CancellationToken.None);
     }
 
     private SandboxGovernance BuildGovernance() =>

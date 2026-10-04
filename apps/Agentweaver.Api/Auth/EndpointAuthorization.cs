@@ -15,6 +15,7 @@ public enum EndpointAuthorizationKind
     PlatformOrMcp,
     InternalService,
     RunCapability,
+    PlatformMcpOrRunCapability,
 }
 
 public sealed record EndpointAuthorizationMetadata(EndpointAuthorizationKind Kind)
@@ -28,7 +29,8 @@ public sealed record EndpointAuthorizationMetadata(EndpointAuthorizationKind Kin
         Kind is EndpointAuthorizationKind.AuthenticatedPlatform
             or EndpointAuthorizationKind.PlatformOrMcp
             or EndpointAuthorizationKind.InternalService
-            or EndpointAuthorizationKind.RunCapability;
+            or EndpointAuthorizationKind.RunCapability
+            or EndpointAuthorizationKind.PlatformMcpOrRunCapability;
 }
 
 public static class EndpointAuthorizationPolicies
@@ -39,6 +41,7 @@ public static class EndpointAuthorizationPolicies
     public const string PlatformOrMcp = nameof(PlatformOrMcp);
     public const string InternalService = nameof(InternalService);
     public const string RunCapability = nameof(RunCapability);
+    public const string PlatformMcpOrRunCapability = nameof(PlatformMcpOrRunCapability);
 
     public static string For(EndpointAuthorizationKind kind) => kind switch
     {
@@ -48,6 +51,7 @@ public static class EndpointAuthorizationPolicies
         EndpointAuthorizationKind.PlatformOrMcp => PlatformOrMcp,
         EndpointAuthorizationKind.InternalService => InternalService,
         EndpointAuthorizationKind.RunCapability => RunCapability,
+        EndpointAuthorizationKind.PlatformMcpOrRunCapability => PlatformMcpOrRunCapability,
         _ => throw new InvalidOperationException(
             $"Authorization kind '{kind}' does not use an ASP.NET authorization policy."),
     };
@@ -108,6 +112,10 @@ public static class EndpointAuthorizationExtensions
     public static TBuilder RunCapability<TBuilder>(this TBuilder builder)
         where TBuilder : IEndpointConventionBuilder =>
         builder.WithAuthorizationClassification(EndpointAuthorizationKind.RunCapability);
+
+    public static TBuilder PlatformMcpOrRunCapability<TBuilder>(this TBuilder builder)
+        where TBuilder : IEndpointConventionBuilder =>
+        builder.WithAuthorizationClassification(EndpointAuthorizationKind.PlatformMcpOrRunCapability);
 
     private static TBuilder WithAuthorizationClassification<TBuilder>(
         this TBuilder builder,

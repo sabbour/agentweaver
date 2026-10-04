@@ -24,6 +24,9 @@ import {
   vi,
 } from 'vitest';
 import type { RunStreamEvent } from '../api/sse';
+import type { PortForwardSessionDto } from '../api/types';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { useState, type ReactNode } from 'react';
 class ResizeObserverStub {
   observe() {}
@@ -33,6 +36,10 @@ class ResizeObserverStub {
 (globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
 
 let currentEvents: RunStreamEvent[] = [];
+const gatewayPreviewSession = (JSON.parse(readFileSync(
+  resolve(process.cwd(), 'src/__tests__/fixtures/gatewayPreviewList.json'),
+  'utf8',
+)) as PortForwardSessionDto[])[0];
 
 vi.mock('../api/apiClient', () => ({
   apiClient: {
@@ -70,6 +77,10 @@ vi.mock('../api/apiClient', () => ({
     getAssemblyFiles: vi.fn().mockResolvedValue([]),
     getAssemblyWorkspace: vi.fn().mockResolvedValue([]),
     getAssemblyFileDiff: vi.fn().mockResolvedValue(null),
+    getOutputRevisionHistory: vi.fn().mockResolvedValue([]),
+    getOutputRevision: vi.fn(),
+    getOutputRevisionFile: vi.fn(),
+    compareOutputRevisions: vi.fn(),
     listPortForwards: vi.fn().mockResolvedValue([]),
     startPortForward: vi.fn(),
     stopPortForward: vi.fn(),
@@ -153,6 +164,7 @@ beforeEach(() => {
     updated_at: '2026-07-07T00:00:00.000Z',
   } as never);
   vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+  vi.mocked(apiClient.listPortForwards).mockResolvedValue([]);
   vi.mocked(apiClient.getPendingApprovals).mockResolvedValue({
     run_id: 'coord-run-1',
     count: 0,
@@ -219,9 +231,23 @@ describe('CoordinatorRunPage operator console redesign', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }));
     vi.mocked(apiClient.getRunGraph).mockResolvedValue(graphWithBuildTest);
     vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'awaiting_review', coordinator_status: 'in_review' } as never);
+    vi.mocked(apiClient.listPortForwards).mockResolvedValue([gatewayPreviewSession]);
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
-      { sequence: 10, type: 'sandbox.preview_ready', payload: { preview_url: 'https://preview.example.test', target_port: 5173 } },
-      { sequence: 11, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'human-review' } },
+      { sequence: 8, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 9, type: 'sandbox.preview_applicability', payload: {
+        tree_hash: 'current-tree', state: 'preview_required',
+      } },
+      { sequence: 10, type: 'sandbox.preview_ready', payload: {
+        preview_url: gatewayPreviewSession.preview_url,
+        target_port: gatewayPreviewSession.target_port,
+        tree_hash: 'current-tree',
+        session_id: gatewayPreviewSession.session_id,
+        pod_name: gatewayPreviewSession.pod_name,
+        preview_runner_session_id: gatewayPreviewSession.preview_runner_session_id,
+      } },
+      { sequence: 11, type: 'coordinator.assembly_review_requested', payload: {
+        gateKind: 'human-review', treeHash: 'current-tree',
+      } },
     ]);
 
     try {
@@ -258,7 +284,13 @@ describe('CoordinatorRunPage operator console redesign', () => {
   it('shows pending approval for the latest preview event', async () => {
     vi.mocked(apiClient.getRunGraph).mockResolvedValue(graphWithBuildTest);
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
-      { sequence: 20, type: 'sandbox.preview_pending', payload: { target_port: 5173 } },
+      { sequence: 18, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 19, type: 'sandbox.preview_applicability', payload: {
+        tree_hash: 'current-tree', state: 'preview_required',
+      } },
+      { sequence: 20, type: 'sandbox.preview_pending', payload: {
+        tree_hash: 'current-tree', target_port: 5173,
+      } },
     ]);
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
@@ -274,8 +306,16 @@ describe('CoordinatorRunPage operator console redesign', () => {
     vi.mocked(apiClient.getRunGraph).mockResolvedValue(graphWithBuildTest);
     vi.mocked(apiClient.getRun).mockResolvedValue({ status: 'awaiting_review', coordinator_status: 'in_review' } as never);
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
-      { sequence: 30, type: 'sandbox.preview_failed', payload: { reason: 'preview_not_requested', message: 'No preview was requested.' } },
-      { sequence: 31, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'human-review' } },
+      { sequence: 28, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 29, type: 'sandbox.preview_applicability', payload: {
+        tree_hash: 'current-tree', state: 'preview_required',
+      } },
+      { sequence: 30, type: 'sandbox.preview_failed', payload: {
+        tree_hash: 'current-tree', reason: 'preview_not_requested', message: 'No preview was requested.',
+      } },
+      { sequence: 31, type: 'coordinator.assembly_review_requested', payload: {
+        gateKind: 'human-review', treeHash: 'current-tree',
+      } },
     ]);
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);

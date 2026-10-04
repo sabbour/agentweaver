@@ -4,6 +4,7 @@ using System.Text.Json;
 using Agentweaver.Api.Memory;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Tests.Memory;
@@ -48,6 +49,10 @@ public sealed class MemoryWriteDeduplicationTests
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.AgentMemoryRevisions.CountAsync(r => r.MemoryId == memoryIds[0]))
+                .Should().Be(1);
+            (await db.DecisionRevisions.CountAsync(r => r.DecisionId == decisionIds[0]))
+                .Should().Be(1);
             await MemoryLedgerExporter.ExportAsync(
                 projectId, workingDirectory, db, CancellationToken.None);
         }
@@ -89,7 +94,7 @@ public sealed class MemoryWriteDeduplicationTests
 
         var supersede = await client.PutAsJsonAsync(
             $"/api/projects/{projectId}/decisions/{firstId}",
-            new { superseded_by_id = replacementId });
+            new { expected_revision = 1, superseded_by_id = replacementId });
         supersede.EnsureSuccessStatusCode();
 
         var nextVersion = await client.PostAsJsonAsync($"/api/projects/{projectId}/decisions", original);
@@ -100,7 +105,7 @@ public sealed class MemoryWriteDeduplicationTests
 
         var supersedeNextVersion = await client.PutAsJsonAsync(
             $"/api/projects/{projectId}/decisions/{nextVersionId}",
-            new { superseded_by_id = replacementId });
+            new { expected_revision = 1, superseded_by_id = replacementId });
         supersedeNextVersion.EnsureSuccessStatusCode();
 
         var latestVersion = await client.PostAsJsonAsync($"/api/projects/{projectId}/decisions", original);

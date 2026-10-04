@@ -8,11 +8,18 @@ on:
     paths:
       - 'docs/**'
       - 'apps/web/src/**'
+      - 'scripts/docs/pages-publisher.mjs'
       - '.github/workflows/deploy-docs.yml'
   workflow_dispatch:
+  workflow_run:
+    # GitHub filters by display name; the resolver verifies the exact filename and ID.
+    workflows: ['Agentweaver v1 Docs CI']
+    branches: [v1]
+    types: [completed]
 
 permissions:
   contents: read
+  actions: read
   pages: write
   id-token: write
 
@@ -22,9 +29,21 @@ concurrency:
 
 jobs:
   build:
+    outputs:
+      publish: ${{ steps.v1_source.outputs.publish }}
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'v1' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || github.event.repository.default_branch }}
 
       - uses: actions/setup-node@v7
         with:
@@ -32,21 +51,55 @@ jobs:
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
+      - name: Resolve admitted v1 docs source
+        id: v1_source
+        env:
+          PUBLISHER_GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/docs/pages-publisher.mjs resolve
+
       - name: Install docs dependencies
+        if: steps.v1_source.outputs.publish == 'true'
         run: node scripts/ci/shared-deps.mjs ensure --project docs --isolated
 
       - name: Build VitePress site
+        if: steps.v1_source.outputs.publish == 'true'
         working-directory: docs
         run: npm run build
 
+      - name: Download v1 docs artifact
+        if: steps.v1_source.outputs.publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.v1_source.outputs.artifact_id }}
+          path: ${{ runner.temp }}/v1-docs
+          repository: sabbour/agentweaver
+          run-id: ${{ steps.v1_source.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Compose v1 site with 0.x site
+        if: steps.v1_source.outputs.publish == 'true'
+        env:
+          V1_SOURCE_SHA: ${{ steps.v1_source.outputs.source_sha }}
+          V1_RUN_ID: ${{ steps.v1_source.outputs.run_id }}
+          V1_RUN_ATTEMPT: ${{ steps.v1_source.outputs.run_attempt }}
+          V1_ARTIFACT_ID: ${{ steps.v1_source.outputs.artifact_id }}
+          V1_ARTIFACT_NAME: ${{ steps.v1_source.outputs.artifact_name }}
+          V1_WORKFLOW_ID: ${{ steps.v1_source.outputs.workflow_id }}
+          V1_WORKFLOW_NAME: ${{ steps.v1_source.outputs.workflow_name }}
+          V1_RUN_URL: ${{ steps.v1_source.outputs.run_url }}
+        run: node scripts/docs/pages-publisher.mjs compose --root-dist docs/.vitepress/dist --artifact-dir "$RUNNER_TEMP/v1-docs"
+
       - uses: actions/configure-pages@v5
+        if: steps.v1_source.outputs.publish == 'true'
 
       - uses: actions/upload-pages-artifact@v5
+        if: steps.v1_source.outputs.publish == 'true'
         with:
           path: docs/.vitepress/dist
 
   deploy:
     needs: build
+    if: needs.build.outputs.publish == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

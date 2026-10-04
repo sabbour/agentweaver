@@ -5,10 +5,16 @@ using System.Text.Json;
 using FluentAssertions;
 using LibGit2Sharp;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Agents.AI.Workflows;
+using Microsoft.Agents.AI.Workflows.Checkpointing;
+using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Domain;
+using Run = Agentweaver.Domain.Run;
+using RunStatus = Agentweaver.Domain.RunStatus;
 using Agentweaver.Tests.Helpers;
 
 namespace Agentweaver.Tests.Api;
@@ -69,6 +75,138 @@ public sealed class ReviewEndpointTests : IClassFixture<ReviewWebApplicationFact
             try { Directory.Delete(dir, recursive: true); }
             catch { /* best effort — git packs may still be locked */ }
         }
+    }
+
+    [Fact]
+    public async Task RunDetail_ProjectsOnlyProducerPinnedWaitingReview()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync();
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var current = (await store.GetAsync(run.Id))!;
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+        var pending = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var request = new ExternalRequest(
+            new RequestPortInfo(new TypeId("Test", "Review"), new TypeId("Test", "Decision"), "review"),
+            "review-1", new PortableValue(new WorkflowReviewRequest(
+                run.Id.ToString(), current.TreeHash!, current.Diff!, 0,
+                LifecycleGeneration: current.LifecycleGeneration)));
+        await pending.SetAsync(run.Id.ToString(), request, ReviewWebApplicationFactory.OwnerUser,
+            lifecycleGeneration: current.LifecycleGeneration, reviewOutputRevisionId: revision.RevisionId);
+
+        var detail = await _ownerClient.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}");
+        detail.GetProperty("pending_request_kind").GetString().Should().Be("workflow_review");
+
+        await pending.SetAsync(run.Id.ToString(), request, ReviewWebApplicationFactory.OwnerUser,
+            lifecycleGeneration: current.LifecycleGeneration);
+        detail = await _ownerClient.GetFromJsonAsync<JsonElement>($"/api/runs/{run.Id}");
+        detail.GetProperty("pending_request_kind").ValueKind.Should().Be(JsonValueKind.Null,
+            "an unpinned review cannot advise human approval");
+    }
+
+    [Fact]
+    public async Task OutputRevisionRemainsReadableAfterMergeAndRejectsStaleApproval()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync(dir =>
+            File.WriteAllText(Path.Combine(dir, "review.txt"), "immutable"));
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+
+        var list = await _ownerClient.GetAsync($"/api/runs/{run.Id}/output-revisions");
+        list.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var listed = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+        listed.RootElement.GetArrayLength().Should().Be(1);
+        listed.RootElement[0].GetProperty("revision_id").GetString().Should().Be(revision.RevisionId);
+
+        var unauthorized = await _otherClient.GetAsync($"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
+        unauthorized.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        var stale = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true, output_revision_id = "stale" });
+        stale.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        var approved = await _ownerClient.PostAsJsonAsync(
+            $"/api/runs/{run.Id}/review", new { approved = true, output_revision_id = revision.RevisionId });
+        approved.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await store.GetAsync(run.Id))!.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
+
+        var exact = await _ownerClient.GetAsync($"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
+        exact.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var response = JsonDocument.Parse(await exact.Content.ReadAsStringAsync());
+        response.RootElement.GetProperty("diff").GetString().Should().Be(run.Diff);
+        response.RootElement.GetProperty("diff_sha256").GetString().Should().Be(revision.DiffSha256);
+        response.RootElement.GetProperty("output_kind").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task CollectiveRevisionHistoryAndExactDiffExposeIntegrationIdentity()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync(dir =>
+            File.WriteAllText(Path.Combine(dir, "collective.txt"), "assembled"));
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        await store.PinDefaultExecutableWorkflowForTestAsync(run.Id);
+        (await store.TryTransitionReviewToInProgressAsync(run.Id)).Should().BeTrue();
+        await store.UpdateAssemblyArtifactsAsync(run.Id, "collective-tree", "collective-diff");
+        var generation = (await store.GetAsync(run.Id))!.LifecycleGeneration;
+        (await store.TryMutateTerminalOutcomeAsync(run.Id, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted,
+                new { result = "assembly_complete" }, DateTimeOffset.UtcNow, generation),
+            "assembly_complete", MergedCommitHash: "collective-commit", TreeHash: "collective-tree",
+            CollectiveOutput: new CollectiveOutputPublication("42", "effect-42",
+                "collective-commit", "collective-tree", false,
+                RunOutputTree.Encode([new RunOutputTree.File("collective.txt", 33188,
+                    System.Text.Encoding.UTF8.GetBytes("assembled"))]))))).Should().BeTrue();
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+
+        var history = await _ownerClient.GetAsync($"/api/runs/{run.Id}/output-revisions");
+        history.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var list = JsonDocument.Parse(await history.Content.ReadAsStringAsync());
+        list.RootElement[0].GetProperty("revision_id").GetString().Should().Be(revision.RevisionId);
+        list.RootElement[0].GetProperty("work_plan_id").GetString().Should().Be("42");
+        var response = await _ownerClient.GetAsync(
+            $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var exact = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        exact.RootElement.GetProperty("output_kind").GetString().Should().Be("collective");
+        exact.RootElement.GetProperty("merged_commit_hash").GetString().Should().Be("collective-commit");
+        exact.RootElement.GetProperty("merge_effect_id").GetString().Should().Be("effect-42");
+        exact.RootElement.GetProperty("diff").GetString().Should().Be("collective-diff");
+        var retainedFile = await _ownerClient.GetAsync(
+            $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}/files/collective.txt");
+        retainedFile.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var retained = JsonDocument.Parse(await retainedFile.Content.ReadAsStringAsync());
+        Convert.FromBase64String(retained.RootElement.GetProperty("content_base64").GetString()!)
+            .Should().Equal(System.Text.Encoding.UTF8.GetBytes("assembled"));
+    }
+
+    [Fact]
+    public async Task CollectiveRevisionWithoutPinnedInputRetainsCapturedFiles()
+    {
+        var (run, _) = await SetupRunAwaitingReviewAsync(dir =>
+            File.WriteAllText(Path.Combine(dir, "legacy.txt"), "legacy"));
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        (await store.TryTransitionReviewToInProgressAsync(run.Id)).Should().BeTrue();
+        await store.UpdateAssemblyArtifactsAsync(run.Id, "legacy-tree", "legacy-diff");
+        var generation = (await store.GetAsync(run.Id))!.LifecycleGeneration;
+        (await store.TryMutateTerminalOutcomeAsync(run.Id, new TerminalRunMutation(
+            TerminalRunOutcome.Create(RunStatus.Completed, EventTypes.RunCompleted,
+                new { result = "assembly_complete" }, DateTimeOffset.UtcNow, generation),
+            "assembly_complete", MergedCommitHash: "legacy-commit", TreeHash: "legacy-tree",
+            CollectiveOutput: new CollectiveOutputPublication("43", "effect-43",
+                "legacy-commit", "legacy-tree", false,
+                RunOutputTree.Encode([new RunOutputTree.File("legacy.txt", 33188,
+                    System.Text.Encoding.UTF8.GetBytes("legacy"))]))))).Should().BeTrue();
+        var revision = (await store.GetLatestOutputRevisionAsync(run.Id))!;
+        revision.ManifestIncomplete.Should().BeFalse();
+
+        var response = await _ownerClient.GetAsync(
+            $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var file = await _ownerClient.GetAsync(
+            $"/api/runs/{run.Id}/output-revisions/{revision.RevisionId}/files/legacy.txt");
+        file.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var body = JsonDocument.Parse(await file.Content.ReadAsStringAsync());
+        Convert.FromBase64String(body.RootElement.GetProperty("content_base64").GetString()!)
+            .Should().Equal(System.Text.Encoding.UTF8.GetBytes("legacy"));
     }
 
     // =========================================================================

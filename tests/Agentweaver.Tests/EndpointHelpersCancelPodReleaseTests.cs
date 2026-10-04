@@ -8,6 +8,8 @@ using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Sandbox;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Tests.Api;
 
@@ -62,9 +64,12 @@ public sealed class EndpointHelpersCancelPodReleaseTests
 
         lifecycle.ReleasedRunIds.Should().Contain(runId.ToString(),
             "cancelling a run (via DELETE or /cancel) must reliably tear down the remote AgentHost pod, not just the local token");
+        streamStore.Get(runId.ToString())!.GetSnapshotSince(0).Events.Should().ContainSingle(evt =>
+            evt.Type == EventTypes.RunCancelled
+            && evt.Payload.ToString()!.Contains("abandoned", StringComparison.Ordinal));
         runStore.TerminalOutcome.Should().Match<TerminalRunOutcome>(outcome =>
             outcome.Status == RunStatus.Failed
-            && outcome.EventType == EventTypes.RunFailed
+            && outcome.EventType == EventTypes.RunCancelled
             && outcome.Payload.GetProperty("reason").GetString() == "abandoned");
     }
 
@@ -91,6 +96,159 @@ public sealed class EndpointHelpersCancelPodReleaseTests
             sandboxRuntime: new SandboxRuntimeOptions { AgentExecutionMode = "in-api" });
 
         lifecycle.ReleasedRunIds.Should().BeEmpty("in-api mode has no remote pod to release");
+    }
+
+    [Fact]
+    public async Task CancelRunWorkAsync_ParentCancellation_PersistsAttributableCancelledEvent()
+    {
+        var runId = RunId.New();
+        var parentRunId = RunId.New().ToString();
+        var run = MakeRun(runId) with { ParentRunId = parentRunId };
+        var streamStore = new RunStreamStore();
+        streamStore.Create(runId.ToString(), "alice");
+        var runStore = new NoOpRunStore();
+
+        await EndpointHelpers.CancelRunWorkAsync(
+            run,
+            runStore,
+            streamStore,
+            new RunWorkflowRegistry(),
+            new NoOpWorktreeOperations(),
+            NullLogger.Instance,
+            CancellationToken.None,
+            eventStream: null,
+            terminalOutcomeProjector: null,
+            reason: "parent_cancelled",
+            requestedByRunId: parentRunId);
+
+        runStore.TerminalOutcome.Should().Match<TerminalRunOutcome>(outcome =>
+            outcome.Status == RunStatus.Failed
+            && outcome.EventType == EventTypes.RunCancelled
+            && outcome.Payload.GetProperty("reason").GetString() == "parent_cancelled"
+            && outcome.Payload.GetProperty("requested").GetBoolean()
+            && outcome.Payload.GetProperty("requestedByRunId").GetString() == parentRunId);
+    }
+
+    [Fact]
+    public async Task CancelRunWorkAsync_WhenTerminalTransitionLoses_DoesNotDestroyCompletedWork()
+    {
+        var lifecycle = new TrackingPodLifecycle();
+        var worktree = new TrackingWorktreeOperations();
+        var runId = RunId.New();
+        var run = MakeRun(runId) with
+        {
+            WorktreePath = "C:\\repo\\.agentweaver\\worktrees\\child",
+        };
+        var streamStore = new RunStreamStore();
+        streamStore.Create(runId.ToString(), "alice");
+
+        await EndpointHelpers.CancelRunWorkAsync(
+            run,
+            new NoOpRunStore(terminalizationResult: false),
+            streamStore,
+            new RunWorkflowRegistry(),
+            worktree,
+            NullLogger.Instance,
+            CancellationToken.None,
+            podLifecycle: lifecycle,
+            sandboxRuntime: new SandboxRuntimeOptions { AgentExecutionMode = "pod-per-run" },
+            reason: "parent_cancelled",
+            requestedByRunId: RunId.New().ToString());
+
+        worktree.Removed.Should().BeFalse(
+            "a concurrent successful terminal transition owns the completed child worktree");
+        lifecycle.ReleasedRunIds.Should().Contain(runId.ToString(),
+            "the cancellation attempt must still stop any remote execution after losing the terminal CAS");
+        streamStore.Get(runId.ToString())!.GetSnapshotSince(0).Events.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CancelRunWorkAsync_WhenWorkerFailureWins_PersistsParentCancellationOnce()
+    {
+        var worktree = new TrackingWorktreeOperations();
+        var runId = RunId.New();
+        var parentRunId = RunId.New().ToString();
+        var run = MakeRun(runId) with
+        {
+            ParentRunId = parentRunId,
+            WorktreePath = "C:\\repo\\.agentweaver\\worktrees\\child",
+        };
+        var streamStore = new RunStreamStore();
+        streamStore.Create(runId.ToString(), "alice");
+        using var durableEvents = new TemporarySqliteRunEventStream();
+        var runStore = new NoOpRunStore(terminalizationResult: false);
+
+        await EndpointHelpers.CancelRunWorkAsync(
+            run,
+            runStore,
+            streamStore,
+            new RunWorkflowRegistry(),
+            worktree,
+            NullLogger.Instance,
+            CancellationToken.None,
+            eventStream: durableEvents.Stream,
+            reason: "parent_cancelled",
+            requestedByRunId: parentRunId);
+        await EndpointHelpers.CancelRunWorkAsync(
+            run,
+            runStore,
+            streamStore,
+            new RunWorkflowRegistry(),
+            worktree,
+            NullLogger.Instance,
+            CancellationToken.None,
+            eventStream: durableEvents.Stream,
+            reason: "parent_cancelled",
+            requestedByRunId: parentRunId);
+
+        worktree.Removed.Should().BeFalse(
+            "the concurrent worker terminal outcome still owns the child worktree");
+        var events = await durableEvents.Stream.GetPersistedEventsAsync(runId.ToString());
+        var cancelled = events.Where(evt => evt.Type == EventTypes.RunCancelled).ToList();
+        cancelled.Should().ContainSingle();
+        var payload = System.Text.Json.JsonSerializer.SerializeToElement(cancelled[0].Payload);
+        payload.GetProperty("reason").GetString().Should().Be("parent_cancelled");
+        payload.GetProperty("requested").GetBoolean().Should().BeTrue();
+        payload.GetProperty("requestedByRunId").GetString().Should().Be(parentRunId);
+    }
+
+    [Fact]
+    public async Task CancelRunWorkAsync_WhenCancellationWins_RetryDoesNotDuplicateProvenance()
+    {
+        var runId = RunId.New();
+        var parentRunId = RunId.New().ToString();
+        var run = MakeRun(runId) with { ParentRunId = parentRunId };
+        var streamStore = new RunStreamStore();
+        streamStore.Create(runId.ToString(), "alice");
+        using var durableEvents = new TemporarySqliteRunEventStream();
+        var runStore = new NoOpRunStore();
+
+        await EndpointHelpers.CancelRunWorkAsync(
+            run,
+            runStore,
+            streamStore,
+            new RunWorkflowRegistry(),
+            new NoOpWorktreeOperations(),
+            NullLogger.Instance,
+            CancellationToken.None,
+            eventStream: durableEvents.Stream,
+            reason: "parent_cancelled",
+            requestedByRunId: parentRunId);
+        runStore.TerminalizationResult = false;
+        await EndpointHelpers.CancelRunWorkAsync(
+            run,
+            runStore,
+            streamStore,
+            new RunWorkflowRegistry(),
+            new NoOpWorktreeOperations(),
+            NullLogger.Instance,
+            CancellationToken.None,
+            eventStream: durableEvents.Stream,
+            reason: "parent_cancelled",
+            requestedByRunId: parentRunId);
+
+        var events = await durableEvents.Stream.GetPersistedEventsAsync(runId.ToString());
+        events.Where(evt => evt.Type == EventTypes.RunCancelled).Should().ContainSingle();
     }
 
     [Fact]
@@ -150,6 +308,12 @@ public sealed class EndpointHelpersCancelPodReleaseTests
     /// exercised by <see cref="EndpointHelpers.CancelRunWorkAsync"/>; every other member throws.</summary>
     private sealed class NoOpRunStore : IRunStore
     {
+        public NoOpRunStore(bool terminalizationResult = true)
+        {
+            TerminalizationResult = terminalizationResult;
+        }
+
+        public bool TerminalizationResult { get; set; }
         public TerminalRunOutcome? TerminalOutcome { get; private set; }
 
         public Task<bool> TrySetTerminalStatusAsync(
@@ -160,7 +324,7 @@ public sealed class EndpointHelpersCancelPodReleaseTests
             RunId runId, TerminalRunOutcome outcome, string? result, CancellationToken ct = default)
         {
             TerminalOutcome = outcome;
-            return Task.FromResult(true);
+            return Task.FromResult(TerminalizationResult);
         }
 
         public Task InsertAsync(Run run, CancellationToken ct = default) => throw new NotImplementedException();
@@ -204,5 +368,65 @@ public sealed class EndpointHelpersCancelPodReleaseTests
         public MergeResult MergeWorktree(string repositoryPath, string originatingBranch, string worktreeBranch, string expectedTreeHash) => throw new NotImplementedException();
         public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) => throw new NotImplementedException();
         public string? GetTreeHash(string worktreePath) => null;
+    }
+
+    private sealed class TrackingWorktreeOperations : IWorktreeOperations
+    {
+        public bool Removed { get; private set; }
+
+        public bool WorktreeExists(string worktreePath) => true;
+        public string CommitChanges(string worktreePath, string runId) => throw new NotImplementedException();
+        public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch) => throw new NotImplementedException();
+        public int GetStepCount(string runId) => throw new NotImplementedException();
+        public MergeResult MergeWorktree(string repositoryPath, string originatingBranch, string worktreeBranch, string expectedTreeHash) => throw new NotImplementedException();
+        public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) => Removed = true;
+        public string? GetTreeHash(string worktreePath) => null;
+    }
+
+    private sealed class TemporarySqliteRunEventStream : IDisposable
+    {
+        private readonly string _directory;
+
+        public TemporarySqliteRunEventStream()
+        {
+            _directory = Path.Combine(Path.GetTempPath(), "aw-cancel-events-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(_directory);
+            var memoryDbPath = Path.Combine(_directory, "memory.db");
+            using (var connection = new SqliteConnection($"Data Source={memoryDbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    """
+                    CREATE TABLE "RunEvents" (
+                        "Id" INTEGER NOT NULL CONSTRAINT "PK_RunEvents" PRIMARY KEY AUTOINCREMENT,
+                        "RunId" TEXT NOT NULL,
+                        "Sequence" INTEGER NOT NULL,
+                        "EventType" TEXT NOT NULL,
+                        "PayloadJson" TEXT NOT NULL,
+                        "CreatedAt" TEXT NOT NULL
+                    );
+                    CREATE UNIQUE INDEX "IX_RunEvents_RunId_Sequence"
+                        ON "RunEvents" ("RunId", "Sequence");
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Database:Path"] = Path.Combine(_directory, "agentweaver.db"),
+                })
+                .Build();
+            Stream = new SqliteRunEventStream(configuration);
+        }
+
+        public SqliteRunEventStream Stream { get; }
+
+        public void Dispose()
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(_directory, recursive: true);
+        }
     }
 }

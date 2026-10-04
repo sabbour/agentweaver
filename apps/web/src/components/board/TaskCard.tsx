@@ -4,7 +4,7 @@ import { ApiError } from '../../api/client';
 import { Badge, Button, Caption1, Field, Input, makeStyles, Menu, MenuItem, MenuList, MenuPopover, MenuTrigger, mergeClasses, Text, Textarea, tokens } from '@fluentui/react-components';
 import { ArchiveRegular, CheckmarkRegular, DismissRegular, EditRegular, FlowRegular } from '@fluentui/react-icons';
 import { useState } from 'react';
-import type { TaskCardDto, WorkflowSummaryDto } from '../../api/types';
+import type { BacklogDependenciesResponse, TaskCardDto, WorkflowSummaryDto } from '../../api/types';
 const useStyles = makeStyles({
   card: {
     display: 'flex',
@@ -131,6 +131,9 @@ export interface TaskCardProps {
 export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask, onDragEndTask, isDragging }: TaskCardProps) {
   const styles = useStyles();
   const [editing, setEditing] = useState(false);
+  const [editingDependencies, setEditingDependencies] = useState(false);
+  const [dependencyDraft, setDependencyDraft] = useState((card.depends_on_task_ids ?? []).join(', '));
+  const [dependencyPreview, setDependencyPreview] = useState<BacklogDependenciesResponse | null>(null);
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description ?? '');
   const [busy, setBusy] = useState(false);
@@ -141,7 +144,7 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
   const queueLabel = card.state === 'ready'
     ? card.is_ready_to_start === false
       ? 'Waiting on prerequisites'
-      : 'Ready for pickup'
+      : 'Ready for pickup (capacity-limited)'
     : 'Backlog intake';
   const capturedAt = new Date(card.created_at).toLocaleDateString();
   const cardClassName = styles.card;
@@ -216,6 +219,70 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
     }
   };
 
+  const changeDependencies = async (preview: boolean) => {
+    if (card.graph_revision === undefined) {
+      setError('Graph revision unavailable. Refresh the board before editing dependencies.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await apiClient.editBacklogDependencies(projectId, card.task_id, {
+        expected_revision: card.graph_revision,
+        replace: dependencyDraft.split(',').map((id) => id.trim()).filter(Boolean),
+      }, preview);
+      if (preview) {
+        setDependencyPreview(result);
+      } else {
+        setEditingDependencies(false);
+        setDependencyPreview(null);
+        await onMutated();
+      }
+    } catch (e) {
+      reportError(e);
+      if (e instanceof ApiError && e.status === 409) {
+        setDependencyPreview(null);
+        await onMutated();
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (editingDependencies) {
+    return (
+      <div className={cardClassName}>
+        <div className={styles.editFields}>
+          <Text weight="semibold">Edit prerequisites for {card.title}</Text>
+          <Field label="Prerequisite task IDs" hint="Separate task IDs with commas. Leave empty to remove all links.">
+            <Input
+              aria-label="Prerequisite task IDs"
+              value={dependencyDraft}
+              disabled={busy}
+              onChange={(_, data) => { setDependencyDraft(data.value); setDependencyPreview(null); }}
+            />
+          </Field>
+          {dependencyPreview && (
+            <Caption1>
+              {dependencyPreview.changed ? 'Proposed change' : 'No change'} affects
+              {' '}{dependencyPreview.affected_task_ids.join(', ')}.
+              {' '}Revision after save: {dependencyPreview.revision}.
+            </Caption1>
+          )}
+          {error && <Text className={styles.error}>{error}</Text>}
+          <div className={styles.editActions}>
+            <Button size="small" disabled={busy} onClick={() => { setEditingDependencies(false); setError(null); }}>
+              Cancel
+            </Button>
+            <Button size="small" disabled={busy} onClick={() => void changeDependencies(true)}>Preview</Button>
+            <Button appearance="primary" size="small" disabled={busy || !dependencyPreview}
+              onClick={() => void changeDependencies(false)}>Save links</Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (editing) {
     return (
       <div className={cardClassName}>
@@ -285,6 +352,12 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
             </MenuPopover>
           </Menu>
           <Button appearance="subtle" size="small" icon={<EditRegular />} aria-label="Edit task" disabled={busy} onClick={() => setEditing(true)} />
+          <Button appearance="subtle" size="small" aria-label="Edit prerequisites" disabled={busy}
+            onClick={() => {
+              setDependencyDraft((card.depends_on_task_ids ?? []).join(', '));
+              setDependencyPreview(null);
+              setEditingDependencies(true);
+            }}>Links</Button>
           <Button appearance="subtle" size="small" icon={<ArchiveRegular />} aria-label="Archive task" disabled={busy} onClick={() => void handleArchive()} />
         </div>
       </div>
@@ -294,6 +367,18 @@ export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask
           <Badge appearance="tint" color="warning">Blocked</Badge>
           {card.blocked_reason && <Caption1>{card.blocked_reason}</Caption1>}
         </div>
+      )}
+      {card.prerequisites?.map((prerequisite) => (
+        <Caption1 key={prerequisite.task_id} className={styles.meta}>
+          Needs {prerequisite.title}: {prerequisite.reason === 'upstream_output_identity_unavailable'
+            ? 'integrated output identity unavailable'
+            : prerequisite.reason === 'upstream_output_revision_unavailable'
+              ? 'immutable integrated output revision unavailable'
+            : prerequisite.reason ?? 'pending'}
+        </Caption1>
+      ))}
+      {!!card.dependents_task_ids?.length && (
+        <Caption1 className={styles.meta}>Dependents: {card.dependents_task_ids.join(', ')}</Caption1>
       )}
       <div className={styles.metadataRow}>
         <Text className={styles.meta}>{queueLabel}</Text>

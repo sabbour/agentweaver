@@ -10,7 +10,8 @@ namespace Agentweaver.AgentRuntime.Workflow;
 ///
 /// <para>
 /// Extracting this interface restores a test seam: production resolves
-/// <see cref="CopilotAIAgent"/> (and its <c>RaiAIAgent</c>/<c>ScribeAIAgent</c> subclasses)
+/// <see cref="CopilotAIAgent"/> (or a parameterized <see cref="EphemeralCopilotAIAgent"/> for
+/// built-in ephemeral roles)
 /// via <see cref="IWorkflowAgentFactory"/>, while tests can supply a fake that performs
 /// deterministic file/event operations without touching the GitHub Copilot SDK.
 /// </para>

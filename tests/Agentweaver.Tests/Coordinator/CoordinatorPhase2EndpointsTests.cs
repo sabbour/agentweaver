@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Agents.AI.Workflows;
+using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Auth;
@@ -10,9 +12,12 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
+using Run = Agentweaver.Domain.Run;
+using RunStatus = Agentweaver.Domain.RunStatus;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -163,6 +168,210 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var children = await resp.Content.ReadFromJsonAsync<List<CoordinatorChildResponse>>();
         children.Should().NotBeNull();
         children!.Should().BeEmpty("auto-dispatch is off, so no child runs exist");
+    }
+
+    [Fact]
+    public async Task WorkPlanAndChildren_StaticWorkflowChild_ProjectCorrelationAndDeclaredOrder()
+    {
+        var parentRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser);
+        var coordinatorRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser);
+        var secondChildRunId = await SeedAssembleReadyChildRunAsync("second");
+        var firstChildRunId = await SeedAssembleReadyChildRunAsync("first");
+        await SeedFanWorkPlanAsync(
+            coordinatorRunId,
+            [
+                ("branch-b", 1, secondChildRunId),
+                ("branch-a", 0, firstChildRunId),
+            ],
+            parentRunId);
+
+        var workPlan = await _owner.GetFromJsonAsync<WorkPlanResponse>(
+            $"/api/runs/{parentRunId}/work-plan");
+        var children = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
+            $"/api/runs/{parentRunId}/children");
+
+        workPlan.Should().NotBeNull();
+        workPlan!.ParentRunId.Should().Be(parentRunId);
+        workPlan.ParentWorkflowId.Should().Be("fan-workflow");
+        workPlan.ParentWorkflowNodeId.Should().Be("fan");
+        workPlan.ParentJoinNodeId.Should().Be("join");
+        workPlan.ParentResumeRequestId.Should().Be("resume-request");
+        workPlan.ParentResumeState.Should().Be("ready");
+        workPlan.JoinedOutput.Should().Be(
+            "[1. branch-a]\nfirst-output\n\n[2. branch-b]\nsecond-output");
+        workPlan.Subtasks.Select(branch => branch.WorkflowBranchOrdinal).Should().Equal(0, 1);
+        workPlan.Subtasks.Select(branch => branch.WorkflowBranchNodeId).Should().Equal("branch-a", "branch-b");
+
+        children.Should().NotBeNull();
+        children!.Select(branch => branch.WorkflowBranchOrdinal).Should().Equal(0, 1);
+        children.Select(branch => branch.WorkflowBranchNodeId).Should().Equal("branch-a", "branch-b");
+        children.Should().OnlyContain(branch =>
+            branch.ParentRunId == parentRunId
+            && branch.ParentWorkflowId == "fan-workflow"
+            && branch.ParentWorkflowNodeId == "fan"
+            && branch.ParentJoinNodeId == "join");
+    }
+
+    [Theory]
+    [InlineData("delivered", "waiting", "dispatching", "composed")]
+    [InlineData("waiting", "delivered", "in_review", "human_review")]
+    public async Task WorkPlanAndChildren_ParentSelectsLatestPersistedNode(
+        string firstResume, string secondResume, string secondStatus, string secondNode)
+    {
+        var parentRunId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var firstCoordinatorId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var secondCoordinatorId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var firstChildId = await SeedAssembleReadyChildRunAsync("first");
+        var secondChildId = await SeedAssembleReadyChildRunAsync("second");
+        var firstId = await SeedParentNodePlanAsync(parentRunId, firstCoordinatorId, "fan",
+            WorkPlanStatus.Complete, firstResume, firstChildId);
+        var secondId = await SeedParentNodePlanAsync(parentRunId, secondCoordinatorId, secondNode,
+            secondStatus, secondResume, secondChildId);
+
+        var plan = await _owner.GetFromJsonAsync<WorkPlanResponse>($"/api/runs/{parentRunId}/work-plan");
+        var children = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
+            $"/api/runs/{parentRunId}/children");
+
+        plan!.WorkPlanId.Should().Be(secondId).And.BeGreaterThan(firstId);
+        plan.CoordinatorRunId.Should().Be(secondCoordinatorId);
+        plan.Status.Should().Be(secondStatus);
+        plan.ParentWorkflowNodeId.Should().Be(secondNode);
+        plan.ParentResumeState.Should().Be(secondResume);
+        plan.Subtasks.Select(s => s.ChildRunId).Should().Equal(secondChildId);
+        children!.Select(s => s.ChildRunId).Should().Equal(secondChildId);
+        children!.Select(s => s.SubtaskId).Should().Equal(plan.Subtasks.Select(s => s.SubtaskId));
+        children.Should().OnlyContain(s => s.ParentWorkflowNodeId == secondNode);
+
+        var exactChildPlan = await _owner.GetFromJsonAsync<WorkPlanResponse>(
+            $"/api/runs/{firstCoordinatorId}/work-plan");
+        exactChildPlan!.WorkPlanId.Should().Be(firstId);
+        var exactChildChildren = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
+            $"/api/runs/{firstCoordinatorId}/children");
+        exactChildChildren!.Select(s => s.ChildRunId).Should().Equal(firstChildId);
+    }
+
+    [Fact]
+    public async Task WorkPlanAndChildren_DirectCoordinatorWinsOverRelatedChildPlans()
+    {
+        var parentRunId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var directChildId = await SeedAssembleReadyChildRunAsync("direct");
+        await SeedWorkPlanWithChildAsync(parentRunId, directChildId, WorkPlanStatus.Dispatching);
+        var relatedCoordinatorId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var relatedChildId = await SeedAssembleReadyChildRunAsync("related");
+        await SeedParentNodePlanAsync(parentRunId, relatedCoordinatorId, "composed",
+            WorkPlanStatus.Dispatching, "waiting", relatedChildId);
+
+        var plan = await _owner.GetFromJsonAsync<WorkPlanResponse>($"/api/runs/{parentRunId}/work-plan");
+        var children = await _owner.GetFromJsonAsync<List<CoordinatorChildResponse>>(
+            $"/api/runs/{parentRunId}/children");
+
+        plan!.CoordinatorRunId.Should().Be(parentRunId);
+        plan.ParentWorkflowNodeId.Should().BeNull();
+        plan.Subtasks.Select(s => s.ChildRunId).Should().Equal(directChildId);
+        children!.Select(s => s.ChildRunId).Should().Equal(directChildId);
+    }
+
+    [Fact]
+    public async Task WorkPlan_ParentAddressedTerminalChild_UsesSelectedCoordinatorReason()
+    {
+        const string childReason = "assembly_blocked: child integration conflict";
+        var parentRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunStatus.Failed,
+            result: "parent workflow failed for another reason");
+        var coordinatorRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser, RunStatus.Failed, result: childReason);
+        var childRunId = await SeedAssembleReadyChildRunAsync("child");
+        await SeedParentNodePlanAsync(parentRunId, coordinatorRunId, "fan",
+            WorkPlanStatus.AssemblyBlocked, "waiting", childRunId);
+
+        var plan = await _owner.GetFromJsonAsync<JsonElement>(
+            $"/api/runs/{parentRunId}/work-plan");
+
+        plan.GetProperty("coordinatorRunId").GetString().Should().Be(coordinatorRunId);
+        plan.GetProperty("status").GetString().Should().Be(WorkPlanStatus.AssemblyBlocked);
+        plan.GetProperty("statusReason").GetString().Should().Be(childReason);
+    }
+
+    [Fact]
+    public async Task EmbeddedStaticCoordinator_RunAndGraph_ProjectCoordinatorPlanWithoutAssemblyStages()
+    {
+        var parentRunId = RunId.New().ToString();
+        var coordinatorRunId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            parentRunId: parentRunId,
+            subtaskId: WorkflowChildWorkService.ChildCoordinatorSubtaskKey("fan"));
+        var firstChildRunId = await SeedAssembleReadyChildRunAsync("first");
+        var secondChildRunId = await SeedAssembleReadyChildRunAsync("second");
+        await SeedFanWorkPlanAsync(
+            coordinatorRunId,
+            [
+                ("branch-a", 0, firstChildRunId),
+                ("branch-b", 1, secondChildRunId),
+            ]);
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{coordinatorRunId}");
+        var graph = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{coordinatorRunId}/graph");
+
+        detail.GetProperty("parent_run_id").GetString().Should().Be(parentRunId);
+        detail.GetProperty("is_coordinator_plan").GetBoolean().Should().BeTrue();
+        graph.GetProperty("variant").GetString().Should().Be(CoordinatorGraphDescriptor.Variant);
+        var nodes = graph.GetProperty("nodes").EnumerateArray().ToList();
+        var nodeIds = nodes.Select(node => node.GetProperty("id").GetString()).ToList();
+        nodeIds.Should().Contain("workflow:fan-in");
+        nodeIds.Should().NotContain(CoordinatorGraphDescriptor.AssemblyRaiNodeId);
+        nodeIds.Should().NotContain(CoordinatorGraphDescriptor.AssemblyReviewNodeId);
+        nodeIds.Should().NotContain(CoordinatorGraphDescriptor.AssemblyMergeNodeId);
+        nodeIds.Should().NotContain(CoordinatorGraphDescriptor.AssemblyScribeNodeId);
+        nodes.Where(node => node.TryGetProperty("child_graph_ref", out _))
+            .Select(node => node.GetProperty("child_graph_ref").GetString())
+            .Should().Contain([$"run:{firstChildRunId}", $"run:{secondChildRunId}"]);
+    }
+
+    [Fact]
+    public async Task Review_WorkflowChildWorkWait_Returns409WithoutConsumingGate()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(
+            CoordinatorWebApplicationFactory.OwnerUser,
+            status: RunStatus.AwaitingReview);
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var requestId = $"workflow-child-work:{runId}:fan:42";
+        var port = new RequestPortInfo(
+            new TypeId("Agentweaver.Api", nameof(WorkflowChildWorkPauseRequest)),
+            new TypeId("Agentweaver.Api", nameof(WorkflowChildWorkResult)),
+            "workflow-child-work");
+        await pendingStore.SetAsync(
+            runId,
+            new ExternalRequest(
+                port,
+                requestId,
+                new PortableValue(new WorkflowChildWorkPauseRequest(
+                    42,
+                    runId,
+                    "fan",
+                    "join",
+                    RunId.New().ToString()))),
+            CoordinatorWebApplicationFactory.OwnerUser);
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var pending = await db.PendingRequests.SingleAsync(row => row.RunId == runId);
+            pending.DeliveryKind = PendingRequestDeliveryKinds.WorkflowChildWork;
+            await db.SaveChangesAsync();
+        }
+
+        var detail = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}");
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/runs/{runId}/review",
+            new { approved = true });
+
+        detail.GetProperty("pending_request_kind").ValueKind.Should().Be(JsonValueKind.Null,
+            "a child pause without a bound current parent-node plan is not yet actionable");
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("pending_request_kind").GetString().Should().Be("workflow_child_work");
+        (await pendingStore.GetAsync(runId)).Should().NotBeNull();
     }
 
     [Fact]
@@ -317,6 +526,52 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         spec!.ConfirmedBy.Should().Be(CoordinatorWebApplicationFactory.OwnerUser);
     }
 
+    [Fact]
+    public async Task Steer_Send_PeerOwnedOutcomeGate_QueuesOnlyTheDecision_NotOrdinarySteering()
+    {
+        var lease = new DenyRecoveryLeaseStore();
+        using var factory = new CoordinatorWebApplicationFactory { LeaseStoreOverride = lease };
+        using var owner = factory.CreateOwnerClient();
+        var dir = factory.NewWorkingDirectory();
+        var project = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Peer gate {Guid.NewGuid():N}", origin = "blank", working_directory = dir,
+        });
+        project.StatusCode.Should().Be(HttpStatusCode.Created);
+        SquadTestFixtureHelper.CreateMinimalSquad(dir, "Peer gate");
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var started = await owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations", new { goal = "Confirm via the peer gate" });
+        started.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await started.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("runId").GetString()!;
+        var pending = factory.Services.GetRequiredService<PendingRequestStore>();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (await pending.GetAsync(runId) is null && DateTime.UtcNow < deadline)
+            await Task.Delay(25);
+        (await pending.GetAsync(runId)).Should().NotBeNull();
+        factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId).Should().BeTrue();
+        lease.DenyRecovery = true;
+
+        var response = await owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
+            new { kind = "send", instruction = "yes, go ahead" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var directive = (await response.Content.ReadFromJsonAsync<SteeringDirectiveResponse>())!;
+        directive.Status.Should().Be(SteeringStatus.Queued);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var stored = await db.SteeringDirectives.SingleAsync(d => d.Id == directive.Id);
+        stored.Source.Should().Be("gate:outcome-spec");
+        (await factory.Services.GetRequiredService<CoordinatorSteeringQueue>()
+            .TryTakeAssemblySendAsync(runId)).Should().BeNull();
+        (await pending.GetDeliveryStateAsync(
+            runId, PendingRequestDeliveryKinds.CoordinatorOutcomeSpec))!.State
+            .Should().Be(PendingRequestDeliveryStates.Ready);
+    }
+
     // #272 regression: the live API harness used the multi-clause phrase
     // "yes, looks good, please proceed". This natural affirmative must confirm the spec (route through
     // the confirm seam), not redraft it.
@@ -469,6 +724,108 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task DeferredOutcomeSpecDelivery_CrashBeforeSend_RemainsRetryable()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A queued confirm decision must survive a crash before send");
+        await WaitForGateAsync(runId);
+
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var pending = await pendingStore.GetAsync(runId);
+        pending.Should().NotBeNull("the coordinator run must be suspended at its confirmation gate");
+
+        var decision = new CoordinatorOutcomeSpecDecision(
+            Confirmed: true,
+            Revise: false,
+            ConfirmedBy: CoordinatorWebApplicationFactory.OwnerUser);
+        var decisionIdentity = PendingRequestStore.CreateDecisionIdentity(pending!.Request.RequestId, decision);
+        (await pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            decisionIdentity,
+            decision,
+            pending.OwnerUser)).Should().BeTrue("the decision must be durably queued before delivery is attempted");
+
+        // Simulate process death after the decision is queued but before SendResponseAsync runs.
+        // The owner-side poller must claim the queued decision and resume the suspended workflow.
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        (await coordinator.ApplyDeferredDecisionAsync(runId, CancellationToken.None))
+            .Should().BeTrue("queued coordinator decisions must remain retryable after a crash before send");
+
+        var spec = await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed");
+        spec.Should().NotBeNull("the queued confirm decision must eventually advance the spec");
+    }
+
+    [Fact]
+    public async Task DeferredOutcomeSpecDelivery_ConflictingRetry_DoesNotReplaceQueuedDecision()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A conflicting retry must not replace the queued decision");
+        await WaitForGateAsync(runId);
+
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var pending = await pendingStore.GetAsync(runId);
+        pending.Should().NotBeNull();
+
+        var confirm = new CoordinatorOutcomeSpecDecision(
+            Confirmed: true,
+            Revise: false,
+            ConfirmedBy: CoordinatorWebApplicationFactory.OwnerUser);
+        (await pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            PendingRequestStore.CreateDecisionIdentity(pending!.Request.RequestId, confirm),
+            confirm,
+            pending.OwnerUser)).Should().BeTrue();
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        var conflicting = await coordinator.ReviseOutcomeSpecAsync(
+            runId,
+            "replace the already queued confirmation",
+            CoordinatorWebApplicationFactory.OwnerUser,
+            CancellationToken.None);
+        conflicting.Should().Be(CoordinatorGateOutcome.NoPendingGate,
+            "a different decision is not an idempotent retry of the queued confirmation");
+
+        (await coordinator.ApplyDeferredDecisionAsync(runId, CancellationToken.None)).Should().BeTrue();
+        (await PollOutcomeSpecUntilAsync(runId, s => s.Status == "confirmed")).Should().NotBeNull(
+            "the originally queued confirmation must remain the decision that advances the gate");
+    }
+
+    [Fact]
+    public async Task ApplyingMigratedLegacyDecision_DeletesLegacyWakeupRecord()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, "A migrated decision must not replay against a later gate");
+        await WaitForGateAsync(runId);
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.DeferredDecisions.Add(new CoordinatorDeferredDecisionRecord
+            {
+                RunId = runId,
+                DecisionJson = JsonSerializer.Serialize(
+                    new CoordinatorOutcomeSpecDecision(
+                        Confirmed: true,
+                        Revise: false,
+                        ConfirmedBy: CoordinatorWebApplicationFactory.OwnerUser),
+                    JsonDefaults.Options),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        (await coordinator.ApplyDeferredDecisionAsync(runId, CancellationToken.None)).Should().BeTrue();
+
+        using var verificationScope = _factory.Services.CreateScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verificationDb.DeferredDecisions.AnyAsync(d => d.RunId == runId)).Should().BeFalse(
+            "the legacy wakeup row must be removed once its fenced delivery is sent");
+    }
+
+    [Fact]
     public async Task DrainOrphanedSpecDeferrals_StaleDecisionForNonGateRun_IsDiscarded()
     {
         // A coordinator run that is NOT parked at the confirmation gate (no outcome spec) with a
@@ -497,6 +854,34 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             (await db.DeferredDecisions.AnyAsync(d => d.RunId == runId))
                 .Should().BeFalse("the stale deferral must be discarded so it is not retried forever");
         }
+    }
+
+    [Fact]
+    public async Task DrainOrphanedSpecDeferrals_QueuedDeliveryForNonGateRun_IsDiscarded()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        var pendingStore = _factory.Services.GetRequiredService<PendingRequestStore>();
+        var request = new ExternalRequest(
+            new RequestPortInfo(
+                new TypeId("Agentweaver.Api", "CoordinatorOutcomeSpecRequest"),
+                new TypeId("Agentweaver.Api", "CoordinatorOutcomeSpecDecision"),
+                "outcome-spec"),
+            "stale-coordinator-request",
+            new PortableValue("stale-coordinator-request"));
+        var decision = new CoordinatorOutcomeSpecDecision(Confirmed: true);
+        await pendingStore.SetAsync(runId, request, CoordinatorWebApplicationFactory.OwnerUser);
+        (await pendingStore.TryQueueDeliveryAsync(
+            runId,
+            PendingRequestDeliveryKinds.CoordinatorOutcomeSpec,
+            PendingRequestStore.CreateDecisionIdentity(request.RequestId, decision),
+            decision,
+            CoordinatorWebApplicationFactory.OwnerUser)).Should().BeTrue();
+
+        var coordinator = _factory.Services.GetRequiredService<CoordinatorRunService>();
+        (await coordinator.DrainOrphanedSpecDeferralsAsync(CancellationToken.None)).Should().Be(1,
+            "queued coordinator deliveries must be visible to the orphan-recovery scan");
+        (await pendingStore.ExistsUndeliveredAsync(runId)).Should().BeFalse(
+            "a queued decision for a run that is no longer at the gate must be discarded");
     }
 
     [Fact]
@@ -558,6 +943,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
         _owner.DefaultRequestHeaders.Remove(AiExecutionPlanHeaders.ProviderKey);
 
@@ -589,10 +975,13 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/assembly/review",
-            new { approved = true, feedback = "looks good" });
+            new { approved = true, feedback = "looks good",
+                output_revision_id = (await _factory.Services.GetRequiredService<SqliteRunStore>()
+                    .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Accepted,
             "a non-owner replica can durably defer a decision only for a validated in-review gate");
@@ -607,6 +996,31 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         record.DecisionJson.Should().Contain("\"Approved\":true");
         record.DecisionJson.Should().Contain("looks good");
         record.DecisionSubmittedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task AssemblyReview_StaleOrMissingCandidateCannotBeDeferred()
+    {
+        var runId = await InsertInactiveCoordinatorRunAsync(CoordinatorWebApplicationFactory.OwnerUser);
+        await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
+        var candidate = await SeedReviewCandidateAsync(runId);
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(), runId,
+            CoordinatorWebApplicationFactory.OwnerUser, $"agentweaver/integration/{runId}",
+            "tree-hash", candidate, CancellationToken.None);
+
+        foreach (var submittedId in new string?[] { null, "stale-revision" })
+        {
+            var response = await _owner.PostAsJsonAsync($"/api/runs/{runId}/assembly/review",
+                new { approved = true, output_revision_id = submittedId });
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        }
+
+        using var scope = _factory.Services.CreateScope();
+        var row = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+            .AssemblyReviews.AsNoTracking().SingleAsync(r => r.CoordinatorRunId == runId);
+        row.DecisionJson.Should().BeNull();
+        row.DecisionSubmittedAt.Should().BeNull();
     }
 
     // =========================================================================
@@ -684,10 +1098,13 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
-            new { kind = "redirect", instruction = "Rework the signup validation." });
+            new { kind = "redirect", instruction = "Rework the signup validation.",
+                output_revision_id = (await _factory.Services.GetRequiredService<SqliteRunStore>()
+                    .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Accepted,
             "a human redirect at the review gate on a replica without the armed gate is durably deferred, mirroring /assembly/review");
@@ -722,10 +1139,13 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
-            new { kind = "amend", instruction = "Also cover the empty-email edge case." });
+            new { kind = "amend", instruction = "Also cover the empty-email edge case.",
+                output_revision_id = (await _factory.Services.GetRequiredService<SqliteRunStore>()
+                    .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId });
 
         resp.StatusCode.Should().Be(HttpStatusCode.Accepted);
         var directive = await resp.Content.ReadFromJsonAsync<SteeringDirectiveResponse>();
@@ -756,9 +1176,12 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             CoordinatorWebApplicationFactory.OwnerUser,
             $"agentweaver/integration/{runId}",
             "tree-hash",
+            await SeedReviewCandidateAsync(runId),
             CancellationToken.None);
 
-        var json = $$"""{"kind":"redirect","target_child_run_id":"{{childRunId}}","instruction":"fix the signup path"}""";
+        var candidateId = (await _factory.Services.GetRequiredService<SqliteRunStore>()
+            .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId;
+        var json = $$"""{"kind":"redirect","target_child_run_id":"{{childRunId}}","instruction":"fix the signup path","output_revision_id":"{{candidateId}}"}""";
         var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
         var resp = await _owner.PostAsync($"/api/runs/{runId}/steer", content);
 
@@ -997,6 +1420,141 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         await db.SaveChangesAsync();
     }
 
+    private async Task SeedFanWorkPlanAsync(
+        string coordinatorRunId,
+        IReadOnlyList<(string NodeId, int Ordinal, string ChildRunId)> branches,
+        string parentRunId = "11111111-1111-1111-1111-111111111111")
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "proj-fan",
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "run branches",
+            DesiredOutcome = "join outputs",
+            Scope = "static workflow",
+            Assumptions = "none",
+            Status = "confirmed",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+
+        var plan = new WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = "proj-fan",
+            CoordinatorRunId = coordinatorRunId,
+            Status = WorkPlanStatus.Dispatching,
+            ParentRunId = parentRunId,
+            ParentWorkflowId = "fan-workflow",
+            ParentWorkflowNodeId = "fan",
+            ParentJoinNodeId = "join",
+            ParentResumeRequestId = "resume-request",
+            ParentResumeState = "ready",
+            ParentResumeResultJson = JsonSerializer.Serialize(
+                new WorkflowChildWorkResult(
+                    1,
+                    coordinatorRunId,
+                    "fan-workflow",
+                    "fan",
+                    "join",
+                    true,
+                    WorkPlanStatus.Complete,
+                    null,
+                    [
+                        new WorkflowChildWorkBranch(1, "branch-a", 0, SubtaskStatus.Completed, branches.Single(branch => branch.NodeId == "branch-a").ChildRunId, "first-output"),
+                        new WorkflowChildWorkBranch(2, "branch-b", 1, SubtaskStatus.Completed, branches.Single(branch => branch.NodeId == "branch-b").ChildRunId, "second-output"),
+                    ],
+                    "[1. branch-a]\nfirst-output\n\n[2. branch-b]\nsecond-output"),
+                JsonDefaults.Options),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+
+        foreach (var branch in branches)
+        {
+            db.Subtasks.Add(new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = branch.NodeId,
+                Scope = branch.NodeId,
+                AssignedAgent = "morpheus",
+                SelectedModelId = "gpt",
+                Phase = "execution",
+                IsolationStrategy = "worktree",
+                Status = SubtaskStatus.Completed,
+                ChildRunId = branch.ChildRunId,
+                WorkflowBranchNodeId = branch.NodeId,
+                WorkflowBranchOrdinal = branch.Ordinal,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
+        await db.SaveChangesAsync();
+    }
+
+    private async Task<int> SeedParentNodePlanAsync(
+        string parentRunId, string coordinatorRunId, string nodeId, string status,
+        string resumeState, string childRunId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "proj-fan",
+            CoordinatorRunId = coordinatorRunId,
+            Goal = "run node",
+            DesiredOutcome = "complete node",
+            Scope = "workflow",
+            Assumptions = "none",
+            Status = "confirmed",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+        var plan = new WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = "proj-fan",
+            CoordinatorRunId = coordinatorRunId,
+            ParentRunId = parentRunId,
+            ParentWorkflowId = "workflow",
+            ParentWorkflowNodeId = nodeId,
+            ParentResumeState = resumeState,
+            Status = status,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.WorkPlans.Add(plan);
+        await db.SaveChangesAsync();
+        db.Subtasks.Add(new Subtask
+        {
+            WorkPlanId = plan.Id,
+            Title = nodeId,
+            Scope = nodeId,
+            AssignedAgent = "morpheus",
+            SelectedModelId = "gpt",
+            Phase = "execution",
+            IsolationStrategy = "worktree",
+            Status = SubtaskStatus.Completed,
+            ChildRunId = childRunId,
+            WorkflowBranchNodeId = nodeId,
+            WorkflowBranchOrdinal = 0,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await db.SaveChangesAsync();
+        return plan.Id;
+    }
+
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -1082,7 +1640,9 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
     private async Task<string> InsertInactiveCoordinatorRunAsync(
         string ownerUser,
         RunStatus status = RunStatus.InProgress,
-        string? result = null)
+        string? result = null,
+        string? parentRunId = null,
+        string? subtaskId = null)
     {
         var projectId = await CreateProjectAsync();
         var runStore = _factory.Services.GetRequiredService<SqliteRunStore>();
@@ -1100,13 +1660,26 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             StartedAt = DateTimeOffset.UtcNow,
             AgentName = "Coordinator",
             ProjectId = ProjectId.Parse(projectId),
-            ParentRunId = null,
-            SubtaskId = null,
+            ParentRunId = parentRunId,
+            SubtaskId = subtaskId,
         };
         await runStore.InsertAsync(run, CancellationToken.None);
         await _factory.PrepareAiExecutionAsync(
             _owner, "orchestration", projectId, runId.ToString());
         return runId.ToString();
+    }
+
+    private async Task<string> SeedReviewCandidateAsync(string coordinatorRunId)
+    {
+        var store = _factory.Services.GetRequiredService<SqliteRunStore>();
+        var runId = RunId.Parse(coordinatorRunId);
+        await store.PinDefaultExecutableWorkflowForTestAsync(runId);
+        await store.UpdateAssemblyArtifactsAsync(runId, "tree-hash", "review diff");
+        var run = (await store.GetAsync(runId))!;
+        var candidate = await store.PublishCollectiveCandidateAsync(
+            runId, run.LifecycleGeneration, "1", "tree-hash", "review diff",
+            RunOutputTree.Encode([new RunOutputTree.File("artifact.txt", 33188, [1, 2, 3])]));
+        return candidate.RevisionId;
     }
 
     private async Task SeedConfirmedOutcomeSpecAsync(string coordinatorRunId)
@@ -1126,5 +1699,26 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
             UpdatedAt = DateTimeOffset.UtcNow,
         });
         await db.SaveChangesAsync();
+    }
+
+    private sealed class DenyRecoveryLeaseStore : IRunLeaseStore
+    {
+        public bool DenyRecovery { get; set; }
+
+        public Task<(bool Claimed, long FencingToken)> TryClaimAsync(
+            string runId, string ownerId, TimeSpan leaseTtl, CancellationToken ct = default)
+            => Task.FromResult(DenyRecovery ? (false, 0L) : (true, 1L));
+
+        public Task<bool> TryRenewAsync(
+            string runId, string ownerId, long fencingToken, TimeSpan leaseTtl, CancellationToken ct = default)
+            => Task.FromResult(true);
+
+        public Task ReleaseAsync(
+            string runId, string ownerId, long fencingToken, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<bool> IsLeaseOwnerAsync(
+            string runId, string ownerId, long fencingToken, CancellationToken ct = default)
+            => Task.FromResult(!DenyRecovery);
     }
 }

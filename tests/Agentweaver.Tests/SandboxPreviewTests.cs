@@ -529,6 +529,12 @@ public class SandboxPreviewTests
         bool failRegistration = false,
         bool supersedeRegistration = false) : ISandboxPreviewService
     {
+        public Task<PreviewSession> StartRunBoundPreviewAsync(
+            string runId, int targetPort, string ownerUserId, int expectedLifecycleGeneration,
+            CancellationToken ct = default, string? previewRunnerSessionId = null,
+            string? publicationLeaseOwner = null) =>
+            StartPreviewAsync(runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
+
         public bool Enabled => true;
         public int AllowedPortMin => 3000;
         public int AllowedPortMax => 9000;

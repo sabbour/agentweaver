@@ -89,6 +89,12 @@ When you create a project from GitHub, authorize the Repo App. Then select a rep
 The list is the intersection of repositories you can access and repositories granted to the
 Agentweaver GitHub App installation. Installation settings can grant all repositories or only
 selected repositories.
+If the saved Repo App access token expires or GitHub rejects it, repository browsing renews it
+through the stored Repo App refresh token and retries once. A temporary GitHub or refresh
+failure returns `503 github_capability_transient`; retry later rather than reconnecting.
+If the refresh token is rejected, repository selection returns `409 github_binding_unavailable`;
+authorize repository access again. The connected GitHub login in Account settings reports the
+saved authorization, not proof that an installation still grants a particular repository.
 
 Agentweaver verifies the repository selection on the server. It does not accept an unverified repository identifier.
 
@@ -107,6 +113,14 @@ The project readiness check reports separate capability dimensions:
 A repositoryless project does not require a Repo App installation. A GitHub-backed project is
 repository-ready only when the Repo App installation and its project repository grant are both
 current.
+For GitHub-origin projects, accepting a new BYOK run also captures and fences the
+project's repository grant before creating the run. If that grant is unavailable, the
+start request returns `409 repo_app_repository_grant_required`; reconnect the Repo App
+and grant the selected repository, then prepare a new execution context and retry.
+Readiness is a point-in-time check, not a promise that a grant cannot later be revoked.
+Static workflow fan coordinators and their selected child agents each inherit and
+revalidate the same run-bound repository grant. A grant revoked or changed after
+acceptance still blocks child launch rather than falling back to ambient access.
 
 Repository status alone never makes a project unattended-ready. For GitHub Copilot, the readiness
 check verifies that the selected live binding still has the complete grant and credential tuple

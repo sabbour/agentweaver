@@ -46,6 +46,7 @@ export default withMermaid({
       { text: 'User Guide', link: '/experience/00-overview' },
       { text: 'Deep Dive', link: '/deep-dive/00-system-overview' },
       { text: 'Reference', link: '/reference/api' },
+      { text: 'v1 docs', link: 'https://sabbour.me/agentweaver/v1/', target: '_self' },
     ],
     socialLinks: [
       { icon: 'github', link: 'https://github.com/sabbour/agentweaver' },

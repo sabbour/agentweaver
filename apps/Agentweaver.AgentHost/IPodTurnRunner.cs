@@ -30,7 +30,8 @@ internal interface IPodTurnRunner
         string? projectId,
         string? agentName,
         string? apiBaseUrl = null,
-        string? apiKey = null) => false;
+        string? apiKey = null,
+        EffectivePermissionBinding? permissionBinding = null) => false;
 
     /// <summary>Stops a turn that did not honor its cancellation token within the bridge drain bound.</summary>
     Task ForceStopTurnAsync() => Task.CompletedTask;
@@ -58,8 +59,15 @@ internal sealed class CopilotPodTurnRunner : IPodTurnRunner
         string? projectId,
         string? agentName,
         string? apiBaseUrl = null,
-        string? apiKey = null) =>
-        _agent.ApplyPerTurnContext(systemPromptContext, projectId, agentName, apiBaseUrl, apiKey);
+        string? apiKey = null,
+        EffectivePermissionBinding? permissionBinding = null) =>
+        _agent.ApplyPerTurnContext(
+            systemPromptContext,
+            projectId,
+            agentName,
+            apiBaseUrl,
+            apiKey,
+            permissionBinding);
 
     public Task ForceStopTurnAsync() => _agent.ForceStopCopilotProcessTreeAsync();
 }

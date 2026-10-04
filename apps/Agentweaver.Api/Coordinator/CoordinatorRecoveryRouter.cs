@@ -27,6 +27,9 @@ public enum CoordinatorRecoveryAction
 
     /// <summary>Plan reached a blocked/failed/declined terminal but the run row was never finalized — settle the run as failed.</summary>
     SettleFailed,
+
+    /// <summary>Ambiguous Git evidence is parked for operator inspection and must never auto-rearm.</summary>
+    WaitForOperator,
 }
 
 /// <summary>
@@ -61,6 +64,7 @@ public static class CoordinatorRecoveryRouter
             WorkPlanStatus.AssemblyBlocked => CoordinatorRecoveryAction.SettleFailed,
             WorkPlanStatus.AssemblyFailed => CoordinatorRecoveryAction.SettleFailed,
             WorkPlanStatus.AssemblyDeclined => CoordinatorRecoveryAction.SettleFailed,
+            WorkPlanStatus.AssemblyUnknown => CoordinatorRecoveryAction.WaitForOperator,
             // Unknown/forward-incompatible status: re-arm dispatch defensively rather than stranding the run.
             _ => CoordinatorRecoveryAction.Dispatch,
         };

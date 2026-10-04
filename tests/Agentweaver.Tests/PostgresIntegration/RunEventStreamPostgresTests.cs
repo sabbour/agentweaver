@@ -135,6 +135,71 @@ public sealed class RunEventStreamPostgresTests(PostgresFixture pg)
     }
 
     [PostgresRequiredFact]
+    public async Task AppendIdentifiedAsync_AfterMigration_ConcurrentReplicasPersistOneParentCancellation()
+    {
+        const string migration =
+            "20260926182148_AddChildCancellationProvenancePostgres";
+        var runId = "run-parent-cancellation-pg-" + Guid.NewGuid().ToString("N");
+        var parentRunId = "parent-" + Guid.NewGuid().ToString("N");
+        var eventIdentity = $"parent-cancelled:0:{parentRunId}";
+        await using (var db = await pg.CreateDbContextAsync().ConfigureAwait(false))
+        {
+            (await db.Database.GetAppliedMigrationsAsync().ConfigureAwait(false))
+                .Should().Contain(migration);
+            (await db.Database.GetPendingMigrationsAsync().ConfigureAwait(false))
+                .Should().BeEmpty();
+        }
+
+        var providers = new List<ServiceProvider>();
+        try
+        {
+            var streams = Enumerable.Range(0, 8).Select(_ =>
+            {
+                var services = new ServiceCollection();
+                services.AddDbContextFactory<MemoryDbContext>(options =>
+                    options.UseNpgsql(
+                        pg.ConnectionString,
+                        postgres => postgres.MigrationsAssembly("Agentweaver.Api.Migrations.Postgres")));
+                services.AddLogging();
+                var provider = services.BuildServiceProvider();
+                providers.Add(provider);
+                return new EfRunEventStream(
+                    provider.GetRequiredService<IDbContextFactory<MemoryDbContext>>());
+            }).ToArray();
+            using var start = new Barrier(streams.Length);
+
+            var appended = await Task.WhenAll(streams.Select(stream => Task.Run(async () =>
+            {
+                start.SignalAndWait();
+                return await stream.AppendIdentifiedAsync(
+                    runId,
+                    eventIdentity,
+                    new RunEvent(0, EventTypes.RunCancelled, new
+                    {
+                        reason = "parent_cancelled",
+                        requested = true,
+                        requestedByRunId = parentRunId,
+                    })).ConfigureAwait(false);
+            }))).ConfigureAwait(false);
+
+            appended.Select(evt => evt.Sequence).Should().OnlyContain(sequence => sequence == appended[0].Sequence);
+            await using var verifier = await pg.CreateDbContextAsync().ConfigureAwait(false);
+            var rows = await verifier.RunEvents.AsNoTracking()
+                .Where(evt => evt.RunId == runId)
+                .ToListAsync()
+                .ConfigureAwait(false);
+            rows.Should().ContainSingle();
+            rows[0].EventIdentity.Should().Be(eventIdentity);
+            rows[0].EventType.Should().Be(EventTypes.RunCancelled);
+        }
+        finally
+        {
+            foreach (var provider in providers)
+                await provider.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    [PostgresRequiredFact]
     public async Task RecordNext_InterleavedWithDirectSequenceZeroAppend_PersistsBothEventsWithoutCollision()
     {
         var runId = "run-events-pg-mixed-" + Guid.NewGuid().ToString("N");

@@ -1,14 +1,19 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Threading.Channels;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Workflows;
+using Agentweaver.AgentRuntime.Providers;
+using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
@@ -34,6 +39,52 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
 {
     private readonly CoordinatorWebApplicationFactory _factory;
     private readonly HttpClient _owner;
+
+    [Fact]
+    public async Task ComposedPersistence_RetriesWrappedSerializationFailure_WithoutReplanning()
+    {
+        var attempts = 0;
+        var result = await CoordinatorOrchestratorExecutor.RetryComposedSerializationAsync(
+            _ => ++attempts < 3
+                ? Task.FromException<int>(new InvalidOperationException("transient",
+                    new DbUpdateException("save failed",
+                        new Npgsql.PostgresException("concurrent update", "ERROR", "ERROR", "40001"))))
+                : Task.FromResult(42),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, 1, CancellationToken.None);
+        result.Should().Be(42);
+        attempts.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task ComposedPersistence_DoesNotRetryUnrelatedFailures()
+    {
+        var attempts = 0;
+        Func<Task> action = async () => await CoordinatorOrchestratorExecutor.RetryComposedSerializationAsync(
+            _ =>
+            {
+                attempts++;
+                return Task.FromException<int>(new InvalidOperationException("invalid plan"));
+            },
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, 1, CancellationToken.None);
+        await action.Should().ThrowAsync<InvalidOperationException>().WithMessage("invalid plan");
+        attempts.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ComposedPersistence_ExhaustsBoundedRetries_AndPropagatesFailure()
+    {
+        var attempts = 0;
+        Func<Task> action = async () => await CoordinatorOrchestratorExecutor.RetryComposedSerializationAsync(
+            _ =>
+            {
+                attempts++;
+                return Task.FromException<int>(
+                    new Npgsql.PostgresException("concurrent update", "ERROR", "ERROR", "40001"));
+            },
+            Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, 1, CancellationToken.None);
+        await action.Should().ThrowAsync<Npgsql.PostgresException>();
+        attempts.Should().Be(3);
+    }
 
     public CoordinatorOrchestratorTests()
     {
@@ -102,6 +153,88 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         entry.Should().NotBeNull();
         var planEvents = await PollForWorkPlanEventsAsync(entry!);
         planEvents.Should().HaveCount(1, "exactly one plan-time snapshot event is emitted");
+    }
+
+    [Fact]
+    public async Task ReservedComposedPlan_IsPopulatedInPlace_WithoutSelectingNestedWorkflow()
+    {
+        var projectId = await CreateProjectAsync();
+        var project = await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId));
+        var runId = RunId.New().ToString();
+        var parentRunId = RunId.New().ToString();
+        int planId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var now = DateTimeOffset.UtcNow;
+            var spec = new OutcomeSpec
+            {
+                ProjectId = projectId,
+                CoordinatorRunId = runId,
+                Goal = "Derive a dependent work plan",
+                DesiredOutcome = "Derive a dependent work plan",
+                Scope = "Embedded workflow stage",
+                Assumptions = string.Empty,
+                Status = "confirmed",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = projectId,
+                CoordinatorRunId = runId,
+                ParentRunId = parentRunId,
+                ParentWorkflowId = "workflow-v1",
+                ParentWorkflowNodeId = "composed",
+                ParentResumeState = "committed",
+                Status = WorkPlanStatus.Planned,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            planId = plan.Id;
+        }
+
+        var input = new CoordinatorDraftInput(
+            runId, projectId, "Derive a dependent work plan", "octocat",
+            project!.WorkingDirectory, "test-model");
+        var executor = new CoordinatorOrchestratorExecutor(
+            new DependentDagWorkflowAgentFactory(),
+            _factory.Services.GetRequiredService<RunStreamStore>(),
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            _factory.Services.GetRequiredService<ILoggerFactory>(),
+            _factory.Services.GetRequiredService<IStoryIndependenceClassifier>(),
+            _factory.Services.GetRequiredService<IAssemblyGateCodeClassifier>(),
+            "gpt-5-mini",
+            null,
+            null);
+        var first = await executor.OrchestrateAsync(input, CancellationToken.None);
+        var second = await _factory.Services.GetRequiredService<CoordinatorWorkflowFactory>()
+            .OrchestrateComposedAsync(input, CancellationToken.None);
+
+        first.WorkPlanId.Should().Be(planId);
+        second.WorkPlanId.Should().Be(planId);
+        second.InlineSubtaskCount.Should().Be(first.InlineSubtaskCount);
+        first.InlineSubtaskCount.Should().Be(2);
+        using var verifyScope = _factory.Services.CreateScope();
+        var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verify.WorkPlans.CountAsync(plan => plan.CoordinatorRunId == runId)).Should().Be(1);
+        (await verify.Subtasks.CountAsync(subtask => subtask.WorkPlanId == planId))
+            .Should().Be(first.InlineSubtaskCount);
+        var subtasks = await verify.Subtasks.AsNoTracking()
+            .Where(subtask => subtask.WorkPlanId == planId)
+            .OrderBy(subtask => subtask.Id)
+            .ToListAsync();
+        var dependency = await verify.SubtaskDependencies.AsNoTracking().SingleAsync();
+        dependency.SubtaskId.Should().Be(subtasks[1].Id);
+        dependency.DependsOnSubtaskId.Should().Be(subtasks[0].Id);
+        (await verify.WorkPlans.SingleAsync(plan => plan.Id == planId))
+            .WorkflowId.Should().BeNull("the child must not select a recursive authored workflow");
     }
 
     // #238 — a non-empty run model pin (explicit request `modelId` OR the project's GitHub Copilot
@@ -192,15 +325,427 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Direct_ExplicitNonFanOverride_RetainsCoordinatorPlanning()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var runId = await StartOrchestrationAsync(
+            projectId,
+            "Draft a concise launch announcement.",
+            workflowOverrideId: "content-authoring",
+            startMode: "direct");
+
+        var workPlan = await PollAsync(async db =>
+            await db.WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+        workPlan.Should().NotBeNull();
+        workPlan!.WorkflowId.Should().Be("content-authoring");
+
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        var pin = await PollAsync(async _ => (await store.GetAsync(RunId.Parse(runId)))?
+            .GetExecutableWorkflowPin());
+        var run = await store.GetAsync(RunId.Parse(runId));
+        run!.AgentName.Should().Be("Coordinator");
+        pin.Should().NotBeNull("the coordinator saves its selected workflow when the plan commits");
+        pin!.DefinitionId.Should().Be(workPlan.WorkflowId);
+        pin.ContentDigest.Should().Be(ExecutableWorkflowSnapshots.Digest(pin.DefinitionYaml));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PlannedCoordinator_UsesSavedReviewGates_AfterWorkflowEditOrDelete(bool delete)
+    {
+        var projectId = await CreateProjectAsync();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        var definition = BuiltInWorkflows.Default.Definition! with
+        {
+            Id = "frozen-review",
+            Name = "Frozen Review",
+            Nodes = BuiltInWorkflows.Default.Definition!.Nodes
+                .Select(node => node.Id == "review" ? node with { Label = "Pinned Review" } : node)
+                .ToList(),
+        };
+        var path = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", "frozen-review.yaml");
+        await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(definition));
+        var runId = await StartOrchestrationAsync(
+            projectId, "Draft release notes", workflowOverrideId: "frozen-review");
+        await WaitForGateAsync(runId);
+        (await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var plan = await PollAsync(async db => await db.WorkPlans.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.CoordinatorRunId == runId));
+        plan.Should().NotBeNull();
+        plan!.WorkflowId.Should().Be("frozen-review");
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        var saved = await PollAsync(async _ => (await store.GetAsync(RunId.Parse(runId)))?
+            .GetExecutableWorkflowPin());
+        saved.Should().NotBeNull();
+        saved!.DefinitionId.Should().Be(plan.WorkflowId);
+        saved.ContentDigest.Should().Be(ExecutableWorkflowSnapshots.Digest(saved.DefinitionYaml));
+
+        if (delete)
+            File.Delete(path);
+        else
+            await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(
+                definition with
+                {
+                    Nodes = definition.Nodes.Select(node => node.Id == "review"
+                        ? node with { Label = "Edited Review" } : node).ToList(),
+                }));
+
+        using var scope = _factory.Services.CreateScope();
+        var gates = await CoordinatorAssemblyGateResolver.ResolveAsync(
+            scope.ServiceProvider, plan.Id, CancellationToken.None);
+        gates.Single(g => g.GateKind == "human-review").Label.Should().Be("Pinned Review");
+
+        await store.UpdateExecutableWorkflowPinAsync(RunId.Parse(runId),
+            saved with { ContentDigest = "sha256:" + new string('0', 64) });
+        var resolveCorrupt = () => CoordinatorAssemblyGateResolver.ResolveAsync(
+            scope.ServiceProvider, plan.Id, CancellationToken.None);
+        await resolveCorrupt.Should().ThrowAsync<WorkflowBindException>();
+
+        await store.UpdateExecutableWorkflowPinAsync(RunId.Parse(runId),
+            saved with { DefinitionYaml = "" });
+        var resolveMissing = () => CoordinatorAssemblyGateResolver.ResolveAsync(
+            scope.ServiceProvider, plan.Id, CancellationToken.None);
+        await resolveMissing.Should().ThrowAsync<WorkflowBindException>();
+    }
+
+    [Fact]
+    public async Task SQLite_InterruptedPlanCommit_ReusesDurableSelection_AndRejectsStaleOwner()
+    {
+        var projectId = await CreateProjectAsync();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        var definition = BuiltInWorkflows.Default.Definition! with
+        {
+            Id = "interrupted-plan",
+            Name = "Interrupted Plan",
+            Nodes = BuiltInWorkflows.Default.Definition!.Nodes
+                .Select(node => node.Id == "review" ? node with { Label = "Saved Before Plan" } : node)
+                .ToList(),
+        };
+        var path = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", "interrupted-plan.yaml");
+        await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(definition));
+
+        var runId = RunId.New();
+        var now = DateTimeOffset.UtcNow;
+        await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = project.WorkingDirectory,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "Draft release notes",
+            SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress,
+            StartedAt = now,
+            ProjectId = ProjectId.Parse(projectId),
+            AgentName = "Coordinator",
+        });
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                CoordinatorRunId = runId.ToString(),
+                ProjectId = projectId,
+                Goal = "Draft release notes",
+                DesiredOutcome = "Draft release notes",
+                Scope = "Documentation",
+                Assumptions = "",
+                Status = "confirmed",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var runTx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+                db, runId.ToString(), null, CancellationToken.None,
+                scope.ServiceProvider.GetRequiredService<SqliteDb>(), lockUnfenced: true);
+            await using (runTx)
+            {
+                await using (var interruptedPlanTx = await db.Database.BeginTransactionAsync())
+                {
+                    db.WorkPlans.Add(new WorkPlan
+                    {
+                        CoordinatorRunId = runId.ToString(),
+                        OutcomeSpecId = spec.Id,
+                        ProjectId = projectId,
+                        WorkflowId = definition.Id,
+                        Status = WorkPlanStatus.Planned,
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    });
+                    await db.SaveChangesAsync();
+                    await CoordinatorOrchestratorExecutor.PinSelectedWorkflowAsync(
+                        db, runTx!, runId.ToString(),
+                        ExecutableWorkflowSnapshots.Create(definition, "coordinator-selection"),
+                        CancellationToken.None);
+                    await runTx!.CommitAsync(CancellationToken.None);
+                }
+            }
+        }
+
+        File.Delete(path);
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        var saved = (await store.GetAsync(runId))!.GetExecutableWorkflowPin();
+        saved.Should().NotBeNull("the run pin committed even though the separate plan transaction rolled back");
+
+        var input = new CoordinatorDraftInput(
+            runId.ToString(), projectId, "Draft release notes",
+            CoordinatorWebApplicationFactory.OwnerUser, project.WorkingDirectory, "test-model");
+        var executor = new CoordinatorOrchestratorExecutor(
+            new DependentDagWorkflowAgentFactory(),
+            _factory.Services.GetRequiredService<RunStreamStore>(),
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            _factory.Services.GetRequiredService<ILoggerFactory>(),
+            _factory.Services.GetRequiredService<IStoryIndependenceClassifier>(),
+            _factory.Services.GetRequiredService<IAssemblyGateCodeClassifier>(),
+            "gpt-5-mini", null, null);
+        await store.UpdateExecutableWorkflowPinAsync(runId, saved! with { DefinitionYaml = "" });
+        var corrupted = () => executor.OrchestrateAsync(input, CancellationToken.None);
+        await corrupted.Should().ThrowAsync<WorkflowBindException>(
+            "an incomplete pending snapshot must not reselect from the current project");
+        await store.UpdateExecutableWorkflowPinAsync(runId, saved);
+        var recovered = await executor.OrchestrateAsync(input, CancellationToken.None);
+        using var verifyScope = _factory.Services.CreateScope();
+        var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verify.WorkPlans.SingleAsync(w => w.CoordinatorRunId == runId.ToString()))
+            .WorkflowId.Should().Be(definition.Id);
+        var gates = await CoordinatorAssemblyGateResolver.ResolveAsync(
+            verifyScope.ServiceProvider, recovered.WorkPlanId, CancellationToken.None);
+        gates.Single(g => g.GateKind == "human-review").Label.Should().Be("Saved Before Plan");
+        (await store.GetAsync(runId))!.GetExecutableWorkflowPin()!.DefinitionYaml
+            .Should().Be(saved!.DefinitionYaml);
+
+        var staleOwner = () => CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            verify, runId.ToString(), new RunLeaseFence("losing-owner", 0, 1),
+            CancellationToken.None, verifyScope.ServiceProvider.GetRequiredService<SqliteDb>());
+        await staleOwner.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
+        (await store.GetAsync(runId))!.GetExecutableWorkflowPin()!.DefinitionYaml
+            .Should().Be(saved.DefinitionYaml);
+    }
+
+    [Fact]
     public void ProviderConnectionFailure_CannotFallBackToDeterministicDecomposition()
     {
         var exception = new ModelProviderConnectionRequiredException(ProjectId.New());
 
         CoordinatorOrchestratorExecutor.CanUseModelFallback(exception).Should().BeFalse(
             "an AgentHost pre-launch provider failure must remain the terminal actionable cause");
+        CoordinatorOrchestratorExecutor.CanUseModelFallback(
+            new GitHubCopilotUnauthorizedException("Sign in to GitHub Copilot")).Should().BeFalse(
+            "decomposition authorization failures must retain their sign-in diagnostic");
         CoordinatorOrchestratorExecutor.CanUseModelFallback(new HttpRequestException()).Should().BeTrue(
             "ordinary model availability failures may still use deterministic decomposition");
     }
+
+    private const string ExplicitDeliverables = """
+        Deliverables:
+        - Create schema
+        - Create consumer after schema
+        """;
+
+    [Theory]
+    [InlineData("## Deliverables:\n\n- Create schema\n- Create consumer after schema")]
+    [InlineData("Outputs:\r\n\r\n1. Create schema\r\n2. Create consumer after schema")]
+    public void ExplicitDeliverables_MarkdownFormattingCannotBypassGuard(string goal)
+    {
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "project", CoordinatorRunId = "run", Goal = goal,
+            DesiredOutcome = goal, Scope = "", Assumptions = "", Status = "confirmed",
+        };
+        var fallback = CoordinatorOrchestratorExecutor.DecomposeDeterministic(spec);
+        var act = () => CoordinatorOrchestratorExecutor.ValidateExplicitDeliverables(spec, fallback);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*could not verify separate tasks*");
+    }
+
+    [Fact]
+    public void ExplicitDeliverables_OverlappingTitlesCanMatchDistinctTasks()
+    {
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "project", CoordinatorRunId = "run", Goal = ExplicitDeliverables,
+            DesiredOutcome = ExplicitDeliverables, Scope = "", Assumptions = "", Status = "confirmed",
+        };
+        var fallback = CoordinatorOrchestratorExecutor.DecomposeDeterministic(spec)[0];
+        var drafts = new[]
+        {
+            fallback with { Title = "Integrate schema into consumer" },
+            fallback with { Title = "Create schema" },
+        };
+        var act = () => CoordinatorOrchestratorExecutor.ValidateExplicitDeliverables(spec, drafts);
+        act.Should().NotThrow("both named deliverables have separate, matching task titles");
+    }
+
+    [Fact]
+    public async Task Direct_ExplicitDeliverables_OfflineFallbackFailsWithoutSavingPlan()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, ExplicitDeliverables, startMode: "direct");
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        var failed = await PollAsync(async _ =>
+        {
+            var run = await store.GetAsync(RunId.Parse(runId));
+            return run?.Status == RunStatus.Failed ? run : null;
+        });
+        failed.Should().NotBeNull("the offline one-item fallback cannot satisfy the named deliverables");
+        var failureEvents = await PollAsync(_ =>
+        {
+            var events = _factory.Services.GetRequiredService<RunStreamStore>()
+                .Get(runId)!.GetSnapshotSince(0).Events.Where(e => e.Type == EventTypes.RunFailed).ToList();
+            return Task.FromResult(events.Count > 0 ? events : null);
+        });
+        failureEvents.Should().ContainSingle();
+        JsonSerializer.Serialize(failureEvents).Should().Contain("coordinator_decomposition_unverified")
+            .And.Contain("Retry with the model available");
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.WorkPlans.CountAsync(p => p.CoordinatorRunId == runId)).Should().Be(0);
+        (await db.OutcomeSpecs.SingleAsync(s => s.CoordinatorRunId == runId))
+            .Status.Should().Be("confirmed", "direct mode skips only the outcome gate");
+    }
+
+    [Fact]
+    public async Task Confirm_ExplicitDeliverables_OfflineFallbackFailsWithActionableReason()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = await StartOrchestrationAsync(projectId, ExplicitDeliverables);
+        await WaitForGateAsync(runId);
+        (await _owner.PostAsync($"/api/runs/{runId}/outcome-spec/confirm", null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var store = _factory.Services.GetRequiredService<IRunStore>();
+        (await PollAsync(async _ =>
+            (await store.GetAsync(RunId.Parse(runId))) is { Status: RunStatus.Failed } run ? run : null))
+            .Should().NotBeNull();
+        var failureEvents = await PollAsync(_ =>
+        {
+            var events = _factory.Services.GetRequiredService<RunStreamStore>()
+                .Get(runId)!.GetSnapshotSince(0).Events.Where(e => e.Type == EventTypes.RunFailed).ToList();
+            return Task.FromResult(events.Count > 0 ? events : null);
+        });
+        failureEvents.Should().ContainSingle();
+        JsonSerializer.Serialize(failureEvents)
+            .Should().Contain("coordinator_decomposition_unverified")
+            .And.Contain("Retry with the model available");
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.WorkPlans.CountAsync(p => p.CoordinatorRunId == runId)).Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData("{invalid")]
+    [InlineData("[{\"story_key\":\"schema\",\"title\":\"Create schema\",\"scope\":\"Create schema\",\"depends_on\":[]}]")]
+    public async Task Confirm_ExplicitDeliverables_InvalidOrCollapsedModelFailsBeforePlan(string response)
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = RunId.New().ToString();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(new Run
+        {
+            Id = RunId.Parse(runId), RepositoryPath = project.WorkingDirectory,
+            OriginatingBranch = "main", ModelSource = ModelSource.GitHubCopilot,
+            Task = ExplicitDeliverables, SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.Parse(projectId), AgentName = "Coordinator",
+        });
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = projectId, CoordinatorRunId = runId, Goal = ExplicitDeliverables,
+                DesiredOutcome = "Ship an integrated feature", Scope = "", Assumptions = "",
+                Status = "confirmed", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+        var executor = CreateDecompositionExecutor(new DependentDagWorkflowAgentFactory(response));
+        var input = new CoordinatorDraftInput(runId, projectId, ExplicitDeliverables,
+            CoordinatorWebApplicationFactory.OwnerUser, project.WorkingDirectory, "test-model");
+        var act = () => executor.OrchestrateAsync(input, CancellationToken.None);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*could not verify separate tasks*");
+        using var verifyScope = _factory.Services.CreateScope();
+        var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verify.WorkPlans.CountAsync(p => p.CoordinatorRunId == runId)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Confirm_ExplicitDeliverables_DistinctModelTasksPersistDependency()
+    {
+        var projectId = await CreateProjectAsync();
+        var runId = RunId.New().ToString();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        await _factory.Services.GetRequiredService<IRunStore>().InsertAsync(new Run
+        {
+            Id = RunId.Parse(runId), RepositoryPath = project.WorkingDirectory,
+            OriginatingBranch = "main", ModelSource = ModelSource.GitHubCopilot,
+            Task = ExplicitDeliverables, SubmittingUser = CoordinatorWebApplicationFactory.OwnerUser,
+            Status = RunStatus.InProgress, StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.Parse(projectId), AgentName = "Coordinator",
+        });
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = projectId, CoordinatorRunId = runId, Goal = ExplicitDeliverables,
+                DesiredOutcome = ExplicitDeliverables, Scope = "", Assumptions = "",
+                Status = "confirmed", CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+        var input = new CoordinatorDraftInput(runId, projectId, ExplicitDeliverables,
+            CoordinatorWebApplicationFactory.OwnerUser, project.WorkingDirectory, "test-model");
+        var result = await CreateDecompositionExecutor(new DependentDagWorkflowAgentFactory())
+            .OrchestrateAsync(input, CancellationToken.None);
+        result.InlineSubtaskCount.Should().Be(2);
+        using var verifyScope = _factory.Services.CreateScope();
+        var verify = verifyScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var tasks = await verify.Subtasks.Where(s => s.WorkPlanId == result.WorkPlanId).ToListAsync();
+        tasks.Select(t => t.Title).Should().BeEquivalentTo(["Create schema", "Create consumer"]);
+        var edges = await verify.SubtaskDependencies
+            .Where(e => tasks.Select(t => t.Id).Contains(e.SubtaskId)).ToListAsync();
+        edges.Should().ContainSingle(e => e.SubtaskId == tasks.Single(t => t.Title == "Create consumer").Id
+            && e.DependsOnSubtaskId == tasks.Single(t => t.Title == "Create schema").Id);
+        var plan = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}/work-plan");
+        plan.GetProperty("subtasks").GetArrayLength().Should().Be(2);
+        var graph = await _owner.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}/graph");
+        graph.GetProperty("nodes").EnumerateArray()
+            .Where(n => n.GetProperty("node_type").GetString() == "subtask")
+            .Select(n => n.GetProperty("label").GetString())
+            .Should().BeEquivalentTo(["Create schema", "Create consumer"]);
+    }
+
+    [Fact]
+    public void AtomicGoal_OneSubtaskRemainsValid()
+    {
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "project", CoordinatorRunId = "run", Goal = "Fix typo in README",
+            DesiredOutcome = "Fix typo in README", Scope = "", Assumptions = "", Status = "confirmed",
+        };
+        var fallback = CoordinatorOrchestratorExecutor.DecomposeDeterministic(spec);
+        var act = () => CoordinatorOrchestratorExecutor.ValidateExplicitDeliverables(spec, fallback);
+        act.Should().NotThrow();
+        fallback.Should().ContainSingle();
+    }
+
+    private CoordinatorOrchestratorExecutor CreateDecompositionExecutor(IWorkflowAgentFactory factory) =>
+        new(factory, _factory.Services.GetRequiredService<RunStreamStore>(),
+            _factory.Services.GetRequiredService<IServiceScopeFactory>(),
+            _factory.Services.GetRequiredService<ILoggerFactory>(),
+            _factory.Services.GetRequiredService<IStoryIndependenceClassifier>(),
+            _factory.Services.GetRequiredService<IAssemblyGateCodeClassifier>(),
+            "gpt-5-mini", null, null);
 
     [Fact]
     public async Task Confirm_AutoSelectedPmDiscovery_NonCodeDecomposition_KeepsPmDiscovery()
@@ -377,5 +922,71 @@ public sealed class CoordinatorOrchestratorTests : IDisposable
         }
 
         return [];
+    }
+
+    internal sealed class DependentDagWorkflowAgentFactory : IWorkflowAgentFactory
+    {
+        private readonly DependentDagWorkflowTurnAgent _agent;
+
+        public DependentDagWorkflowAgentFactory(string? response = null) =>
+            _agent = new DependentDagWorkflowTurnAgent(response);
+
+        public IWorkflowTurnAgent CreateWorkerAgent() => _agent;
+        public IWorkflowTurnAgent CreateRaiAgent() => _agent;
+        public IWorkflowTurnAgent CreateRubberduckAgent() => _agent;
+        public IWorkflowTurnAgent CreateBuildTestAgent() => _agent;
+        public IWorkflowTurnAgent CreateScribeAgent() => _agent;
+    }
+
+    private sealed class DependentDagWorkflowTurnAgent : IWorkflowTurnAgent
+    {
+        private readonly string? _response;
+
+        public DependentDagWorkflowTurnAgent(string? response) => _response = response;
+
+        public Task SetupAsync(
+            string workingDirectory,
+            string repositoryPath,
+            string runId,
+            string? modelId,
+            string? systemPromptContext,
+            ChannelWriter<RunEvent>? streamWriter,
+            string? projectId,
+            string? agentName,
+            string? apiBaseUrl,
+            string? apiKey,
+            CancellationToken ct,
+            string? userId = null) => Task.CompletedTask;
+
+        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
+            Task.FromResult(_response ??
+                """
+                [
+                  {
+                    "story_key": "schema",
+                    "title": "Create schema",
+                    "scope": "Create generated/schema.txt.",
+                    "role": "lead-architect",
+                    "complexity": "low",
+                    "phase": "implementation",
+                    "isolation": "worktree",
+                    "declared_output_paths": ["generated/schema.txt"],
+                    "depends_on": []
+                  },
+                  {
+                    "story_key": "consumer",
+                    "title": "Create consumer",
+                    "scope": "Read generated/schema.txt and create generated/consumer.txt.",
+                    "role": "lead-architect",
+                    "complexity": "low",
+                    "phase": "implementation",
+                    "isolation": "worktree",
+                    "declared_output_paths": ["generated/consumer.txt"],
+                    "depends_on": [1]
+                  }
+                ]
+                """);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

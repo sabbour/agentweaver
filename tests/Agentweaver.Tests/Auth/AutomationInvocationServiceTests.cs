@@ -232,8 +232,11 @@ public sealed class AutomationInvocationServiceTests
         var connectionString = $"Data Source=file:{databaseName}?mode=memory&cache=shared;Default Timeout=5";
         var options = new DbContextOptionsBuilder<MemoryDbContext>()
             .UseSqlite(connectionString, options => options.MigrationsAssembly("Agentweaver.Api")).Options;
+        await using var keepAliveConnection = new SqliteConnection(connectionString);
+        await keepAliveConnection.OpenAsync();
         await using var firstDb = new MemoryDbContext(options);
         await firstDb.Database.MigrateAsync();
+        SqliteConnection.ClearAllPools();
         var activation = await ActivateAsync(firstDb);
         var project = ProjectId.Parse(activation.ProjectId);
         var first = AutomationTestServices.CreateInvocationService(firstDb);

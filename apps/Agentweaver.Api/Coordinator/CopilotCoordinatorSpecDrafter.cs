@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,7 +23,13 @@ namespace Agentweaver.Api.Coordinator;
 /// </summary>
 public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
 {
+    private const int MaxDraftAttempts = 2;
     private const string CoordinatorAgentName = "Coordinator";
+    private const string DraftRepairInstruction =
+        "Your previous response did not satisfy the outcome-spec response contract. Retry the " +
+        "original planning-only request below. Do not perform the user's work. Return ONLY one JSON " +
+        "object with non-empty string fields desired_outcome, scope, and assumptions, plus " +
+        "clarifying_questions as a string or null. Do not include markdown, prose, or code fences.";
     private const string CoordinatorMetaToolsRuntimeNote =
         """
 
@@ -51,6 +58,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private readonly IModelInvocationGuard? _modelInvocationGuard;
     private readonly RunModelProviderSnapshotStore? _providerSnapshots;
+    private readonly IRunStore? _runStore;
+    private readonly RunLeaseFenceRegistry? _leaseFences;
     private readonly string? _apiBaseUrl;
     private readonly string? _apiKey;
     private readonly string _outcomeSpecModel;
@@ -68,7 +77,9 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         IOptions<GenerationModelOptions>? generationOptions = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
         IModelInvocationGuard? modelInvocationGuard = null,
-        RunModelProviderSnapshotStore? providerSnapshots = null)
+        RunModelProviderSnapshotStore? providerSnapshots = null,
+        IRunStore? runStore = null,
+        RunLeaseFenceRegistry? leaseFences = null)
     {
         _copilotClientFactory = copilotClientFactory;
         _scopeProvider = scopeProvider;
@@ -81,6 +92,8 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
         _byokProviderConfiguration = byokProviderConfiguration;
         _modelInvocationGuard = modelInvocationGuard;
         _providerSnapshots = providerSnapshots;
+        _runStore = runStore;
+        _leaseFences = leaseFences;
         _apiBaseUrl = configuration["Agentweaver:ApiBaseUrl"] ?? "http://localhost:5000";
         _apiKey = configuration["Auth:ApiKey"]
             ?? configuration.GetSection("Auth:Keys").GetChildren().FirstOrDefault()?["Token"];
@@ -136,7 +149,10 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
             // the coordinator entry; the agent emits no run.completed (only agent.turn.end), so the
             // coordinator timeline is not prematurely terminated.
             var coordEntry = _streamStore.Get(input.RunId);
-            var streamWriter = coordEntry is null ? null : new RecordingChannelWriter(coordEntry);
+            var leaseFence = _leaseFences?.Get(input.RunId);
+            var streamWriter = coordEntry is null
+                ? null
+                : new CoordinatorDraftChannelWriter(coordEntry, _runStore, leaseFence, ct);
 
             await agent.SetupAsync(
                 workingDirectory: input.RepositoryPath,
@@ -153,19 +169,98 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 userId: input.SubmittingUser,
                 preferModelIdOverByokConfiguration: true).ConfigureAwait(false);
 
-            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            var response = await agent.ExecuteStreamingLoopAsync(task, session, ct).ConfigureAwait(false);
-
-            return ParseDraft(response)
-                ?? throw new InvalidOperationException(
-                    "Coordinator model draft returned no parseable outcome spec. The run fails rather " +
-                    "than fabricate a spec; retry once connectivity and the model are available.");
+            return await DraftFromModelAsync(
+                input.RunId,
+                acceptedModelSource,
+                task,
+                async (prompt, token) =>
+                {
+                    var session = await agent.CreateSessionAsync(token).ConfigureAwait(false);
+                    return await agent.ExecuteStreamingLoopAsync(prompt, session, token).ConfigureAwait(false);
+                },
+                (attempt, reason) =>
+                {
+                    _loggerFactory.CreateLogger<CopilotCoordinatorSpecDrafter>().LogWarning(
+                        "Coordinator outcome-spec response for run {RunId} was {Reason}; " +
+                        "requesting one schema-correction turn ({Attempt}/{MaxAttempts})",
+                        input.RunId,
+                        reason,
+                        attempt + 1,
+                        MaxDraftAttempts);
+                    RecordDraftEvent(
+                        coordEntry,
+                        leaseFence,
+                        EventTypes.CoordinatorOutcomeSpecDraftRetrying,
+                        new
+                        {
+                            attempt = attempt + 1,
+                            maxAttempts = MaxDraftAttempts,
+                            reason,
+                        },
+                        ct);
+                },
+                ct).ConfigureAwait(false);
         }
+
         finally
         {
             if (agent is not null)
                 await agent.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    private sealed class CoordinatorDraftChannelWriter(
+        RunStreamEntry entry,
+        IRunStore? runStore,
+        RunLeaseFence? leaseFence,
+        CancellationToken draftCancellation) : ChannelWriter<RunEvent>
+    {
+        public override bool TryWrite(RunEvent item)
+        {
+            if (draftCancellation.IsCancellationRequested)
+                return false;
+            if (item.Type != EventTypes.RunFailed)
+            {
+                var sequence = runStore is not null && leaseFence is not null
+                    ? entry.RecordNextIfLeaseOwned(
+                        item.Type,
+                        item.Payload,
+                        runStore,
+                        leaseFence,
+                        draftCancellation)
+                    : entry.RecordNext(item.Type, item.Payload);
+                if (sequence == 0)
+                    return false;
+            }
+            return true;
+        }
+
+        public override ValueTask<bool> WaitToWriteAsync(CancellationToken cancellationToken = default) =>
+            ValueTask.FromResult(!draftCancellation.IsCancellationRequested);
+
+        public override bool TryComplete(Exception? error = null) => true;
+    }
+
+    private void RecordDraftEvent(
+        RunStreamEntry? entry,
+        RunLeaseFence? leaseFence,
+        string eventType,
+        object payload,
+        CancellationToken ct)
+    {
+        if (entry is null)
+            return;
+        if (_runStore is not null && leaseFence is not null)
+        {
+            entry.RecordNextIfLeaseOwned(
+                eventType,
+                payload,
+                _runStore,
+                leaseFence,
+                ct);
+            return;
+        }
+        entry.RecordNext(eventType, payload);
     }
 
     private string ResolveOutcomeSpecModel(string? projectModel) =>
@@ -376,6 +471,78 @@ public sealed class CopilotCoordinatorSpecDrafter : ICoordinatorSpecDrafter
                 - "clarifying_questions": string or null. Only questions whose answers would
                   materially change the scope; null if there are none.
                 """;
+    }
+
+    internal static async Task<OutcomeSpecDraft> DraftFromModelAsync(
+        string runId,
+        ModelSource modelSource,
+        string initialTask,
+        Func<string, CancellationToken, Task<string>> executeTurn,
+        Action<int, string>? onRetry,
+        CancellationToken ct)
+    {
+        var prompt = initialTask;
+        string? lastResponse = null;
+        var lastReason = "invalid_response";
+
+        for (var attempt = 1; attempt <= MaxDraftAttempts; attempt++)
+        {
+            lastResponse = await executeTurn(prompt, ct).ConfigureAwait(false);
+            var parsedDraft = ParseDraft(lastResponse);
+            if (parsedDraft is not null && !IsLikelyModelRefusal(lastResponse, parsedDraft))
+            {
+                var draft = parsedDraft;
+                return draft;
+            }
+
+            lastReason = IsLikelyModelRefusal(lastResponse, parsedDraft)
+                ? "model_refusal"
+                : "invalid_response";
+            if (attempt < MaxDraftAttempts)
+            {
+                onRetry?.Invoke(attempt, lastReason);
+                prompt = BuildDraftRepairTask(initialTask);
+            }
+        }
+
+        var refused = lastReason == "model_refusal";
+        throw new AgentProviderException(
+            modelSource,
+            AgentProviderFailureKind.ProviderUnavailable,
+            refused
+                ? CoordinatorFailureCodes.OutcomeSpecModelRefused
+                : CoordinatorFailureCodes.OutcomeSpecInvalidResponse,
+            refused
+                ? $"The model declined to draft the outcome spec for run {runId} after one correction attempt. Retry the run or choose another model."
+                : $"The model returned an invalid outcome-spec response for run {runId} after one correction attempt. Retry the run or choose another model.",
+            isRetryable: true);
+    }
+
+    private static string BuildDraftRepairTask(string initialTask) =>
+        $"{DraftRepairInstruction}\n\nORIGINAL OUTCOME-SPEC REQUEST:\n{initialTask}";
+
+    private static bool IsLikelyModelRefusal(string? response, OutcomeSpecDraft? parsedDraft)
+    {
+        if (ContainsRefusal(response))
+            return true;
+
+        return parsedDraft is not null
+            && (ContainsRefusal(parsedDraft.DesiredOutcome)
+                || ContainsRefusal(parsedDraft.Scope)
+                || ContainsRefusal(parsedDraft.Assumptions)
+                || ContainsRefusal(parsedDraft.ClarifyingQuestions));
+    }
+
+    private static bool ContainsRefusal(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var normalized = value.Trim();
+        return normalized.StartsWith("I'm sorry", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("cannot assist with that request", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("can't assist with that request", StringComparison.OrdinalIgnoreCase)
+            || normalized.Contains("unable to assist with that request", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>Tolerant JSON extraction: pulls the first balanced object out of the response.</summary>

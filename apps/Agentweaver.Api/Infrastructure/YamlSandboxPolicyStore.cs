@@ -51,8 +51,8 @@ public sealed class YamlSandboxPolicyStore : ISandboxPolicyStore
         }
         catch (Exception ex) when (ex is YamlDotNet.Core.YamlException or IOException)
         {
-            // Malformed or unreadable file — return defaults rather than crashing the run.
-            return Task.FromResult(SandboxPolicy.Default(repositoryPath));
+            throw new EffectivePermissionBindingException(
+                $"Sandbox policy '{filePath}' is malformed or unreadable; execution is denied.", ex);
         }
     }
 
@@ -141,6 +141,7 @@ internal sealed class SandboxPolicyYamlDto
     public bool RequireApprovalForAllShell { get; set; } = false;
     public bool RedactPii { get; set; } = true;
     public int MaxOutputBytes { get; set; } = 4 * 1024 * 1024;
+    public List<string>? AllowedOperations { get; set; }
 
     public SandboxPolicy ToDomain(SandboxPolicy defaults) => new()
     {
@@ -155,6 +156,7 @@ internal sealed class SandboxPolicyYamlDto
         RequireApprovalForAllShell = RequireApprovalForAllShell,
         RedactPii = RedactPii,
         MaxOutputBytes = MaxOutputBytes,
+        AllowedOperations = AllowedOperations,
     };
 
     public static SandboxPolicyYamlDto FromDomain(SandboxPolicy p) => new()
@@ -167,5 +169,6 @@ internal sealed class SandboxPolicyYamlDto
         RequireApprovalForAllShell = p.RequireApprovalForAllShell,
         RedactPii = p.RedactPii,
         MaxOutputBytes = p.MaxOutputBytes,
+        AllowedOperations = p.AllowedOperations is null ? null : [.. p.AllowedOperations],
     };
 }

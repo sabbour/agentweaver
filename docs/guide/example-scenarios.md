@@ -29,7 +29,7 @@ the direct-start or unattended-confirmation path.
 From the **Project Gallery** (`/projects`), choose a creation path:
 
 - **Create blank project** — enter a name and a repository folder. Agentweaver initializes an empty git repository (`POST /api/projects` with `origin: blank`).
-- **Create from GitHub** — enter a name, select a Repo App-authorized repository, and a folder. Agentweaver clones it after consuming an opaque `repository_selection_code` (`POST /api/projects` with `origin: github`).
+- **Create from GitHub** — enter a name, select a Repo App-authorized repository, and a folder. Agentweaver first reserves a trackable project, then clones it after consuming an opaque `repository_selection_code` (`POST /api/projects` with `origin: github`). A disconnected client does not cancel work after that reservation. Retrying the same still-valid selection code returns the same `creating`, `active`, or `failed` project instead of creating another workspace.
 
 You land on the project **Dashboard** (`/projects/{id}`).
 

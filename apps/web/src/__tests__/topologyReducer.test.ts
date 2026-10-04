@@ -71,6 +71,39 @@ describe('topologyReducer', () => {
     expect(state.nodes['s2'].status).toBe('completed');
   });
 
+  it('preserves static workflow branch identity and declared order from topology and subtask events', () => {
+    const snapshot = makeEvent('coordinator.topology', {
+      version: 1,
+      seq: 0,
+      nodes: [
+        { id: 'coord', kind: 'coordinator', title: 'Coordinator', status: 'running' },
+        {
+          id: 'subtask-7',
+          kind: 'subtask',
+          title: 'Second declared branch',
+          status: 'pending',
+          workflowBranchNodeId: 'branch-b',
+          workflowBranchOrdinal: 1,
+        },
+      ],
+      edges: [],
+    }, 1);
+    const dispatched = makeEvent('subtask.dispatched', {
+      subtaskId: 7,
+      childRunId: 'child-7',
+      workflowBranchNodeId: 'branch-b',
+      workflowBranchOrdinal: 1,
+    }, 2);
+
+    const state = buildTopologyState([snapshot, dispatched]);
+
+    expect(state.nodes['subtask-7']).toMatchObject({
+      childRunId: 'child-7',
+      workflowBranchNodeId: 'branch-b',
+      workflowBranchOrdinal: 1,
+    });
+  });
+
   it('attaches steering to the node matched by targetChildRunId', () => {
     const dispatched = makeEvent('subtask.dispatched', { subtaskId: 's1', childRunId: 'child-1' }, 2);
     const steering = makeEvent('coordinator.steering', {

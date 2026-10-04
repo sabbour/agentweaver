@@ -66,7 +66,8 @@ Agentweaver's workflow schema models these conceptual node types:
 - **open_pull_request** — a platform-owned deterministic action, not an LLM turn. It invokes the PR client with configured `title`, `body`, `base`, `head`, and `draft` fields; templates support `{run_id}`, `{worktree_branch}`, `{originating_branch}`, and `{outcome_summary}`. It can follow an agent turn or a supported approval/merge transition. Successful publication emits the PR number/url; ordinary validation, credential, and client errors emit a failed step while passing the produced `AgentTurnOutput` onward unchanged. Cancellation is rethrown rather than swallowed (`packages/Agentweaver.AgentRuntime/Workflow/OpenPullRequestTurnExecutor.cs:88–166`). Do not equate one client invocation with a guaranteed single network request.
 - **scribe** — a recording step that captures the outcome.
 - **terminal** — an explicit sink such as done, declined, or safety failed.
-- **fan_out**, **fan_in**, **serial**, **coordinator_composed** — schema-level extension points for richer topologies.
+- **fan_out**, **fan_in**, **coordinator_composed** — schema-level extension points for richer topologies.
+- **serial** is not a workflow node type; ordinary directed edges express sequential execution.
 
 Runtime binding supports prompt/publish agent turns, peer-review, `build_test`, `open_pull_request`, check gates with known gate kinds, merge, scribe, terminal sinks, and a set of sequential / review / direct-completion topologies. Extension node types remain explicit schema concepts; until executors bind them, the runtime fails closed.
 

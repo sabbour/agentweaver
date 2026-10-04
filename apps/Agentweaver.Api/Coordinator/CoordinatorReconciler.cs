@@ -42,10 +42,12 @@ public sealed class CoordinatorReconciler
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IRunStore _runStore;
+    private readonly IRunLeaseStore _runLeaseStore;
     private readonly RunStreamStore _streamStore;
     private readonly ICoordinatorDispatch _dispatch;
     private readonly ICoordinatorAssembly? _assembly;
     private readonly ILogger<CoordinatorReconciler> _logger;
+    private readonly TerminalCoordinatorChildSandboxCleanup? _childSandboxCleanup;
 
     /// <summary>Pod name used as distributed lease owner identity (matches WorkPlan.CoordinatorPodId).</summary>
     private readonly string _myPodId;
@@ -86,14 +88,18 @@ public sealed class CoordinatorReconciler
         ICoordinatorDispatch dispatch,
         ILogger<CoordinatorReconciler> logger,
         IConfiguration? configuration = null,
-        ICoordinatorAssembly? assembly = null)
+        ICoordinatorAssembly? assembly = null,
+        TerminalCoordinatorChildSandboxCleanup? childSandboxCleanup = null,
+        IRunLeaseStore? runLeaseStore = null)
     {
         _scopeFactory = scopeFactory;
         _runStore = runStore;
+        _runLeaseStore = runLeaseStore ?? new NoOpRunLeaseStore();
         _streamStore = streamStore;
         _dispatch = dispatch;
         _assembly = assembly;
         _logger = logger;
+        _childSandboxCleanup = childSandboxCleanup;
 
         _myPodId = configuration?.GetValue<string>("App:PodId")
                    ?? Environment.GetEnvironmentVariable("HOSTNAME")
@@ -116,18 +122,33 @@ public sealed class CoordinatorReconciler
     /// </summary>
     public async Task<int> SweepAsync(CancellationToken ct)
     {
+        if (_childSandboxCleanup is not null)
+        {
+            try
+            {
+                await _childSandboxCleanup.SweepAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Coordinator reconciler: terminal child sandbox sweep failed; will retry");
+            }
+        }
+
         List<PlanCandidate> candidates;
         using (var scope = _scopeFactory.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             candidates = await db.WorkPlans
                 .AsNoTracking()
-                .Where(w => w.Status == WorkPlanStatus.Dispatching
-                         || w.Status == WorkPlanStatus.AwaitingAssembly
-                         || w.Status == WorkPlanStatus.Assembling
-                         || w.Status == WorkPlanStatus.AssemblySteering
-                         || w.Status == WorkPlanStatus.InReview
-                         || w.Status == WorkPlanStatus.AssemblyBlocked)
+                .Where(w => w.ParentRunId == null
+                         && (w.Status == WorkPlanStatus.Planned
+                             || w.Status == WorkPlanStatus.Dispatching
+                             || w.Status == WorkPlanStatus.AwaitingAssembly
+                             || w.Status == WorkPlanStatus.Assembling
+                             || w.Status == WorkPlanStatus.AssemblySteering
+                             || w.Status == WorkPlanStatus.InReview
+                             || w.Status == WorkPlanStatus.AssemblyBlocked))
                 .Select(w => new PlanCandidate(w.Id, w.CoordinatorRunId, w.Status, w.CoordinatorPodId, w.UpdatedAt))
                 .ToListAsync(ct).ConfigureAwait(false);
         }
@@ -165,6 +186,7 @@ public sealed class CoordinatorReconciler
 
                 switch (plan.Status)
                 {
+                    case WorkPlanStatus.Planned:
                     case WorkPlanStatus.Dispatching:
                         if (!string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
                             && _dispatch.IsDispatchActive(plan.CoordinatorRunId))
@@ -220,6 +242,10 @@ public sealed class CoordinatorReconciler
                         // healthy run, so skip while the lease is fresh. Only a STALE assembling plan
                         // (owner likely dead) is a genuine orphan to re-arm.
                         if (IsAssemblyActive(plan))
+                            continue;
+                        if (!string.IsNullOrWhiteSpace(plan.CoordinatorRunId)
+                            && await _runLeaseStore.GetActiveClaimAsync(plan.CoordinatorRunId!, ct)
+                                .ConfigureAwait(false) is not null)
                             continue;
                         if ((DateTimeOffset.UtcNow - plan.UpdatedAt) < _staleLeaseTtl)
                             continue;
@@ -597,7 +623,7 @@ public sealed class CoordinatorReconciler
                    SET "CoordinatorPodId" = {_myPodId},
                        "UpdatedAt" = {now}
                  WHERE "Id" = {planId}
-                   AND "Status" = {WorkPlanStatus.Dispatching}
+                   AND "Status" IN ({WorkPlanStatus.Planned}, {WorkPlanStatus.Dispatching})
                    AND ("CoordinatorPodId" IS NULL
                         OR "CoordinatorPodId" = {_myPodId}
                         OR "UpdatedAt" < {staleThreshold})
@@ -608,7 +634,7 @@ public sealed class CoordinatorReconciler
 
         int rows = await db.WorkPlans
             .Where(w => w.Id == planId
-                     && w.Status == WorkPlanStatus.Dispatching
+                     && (w.Status == WorkPlanStatus.Planned || w.Status == WorkPlanStatus.Dispatching)
                      && (w.CoordinatorPodId == null
                          || w.CoordinatorPodId == _myPodId
                          || w.UpdatedAt < staleThreshold))

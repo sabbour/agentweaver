@@ -37,18 +37,66 @@ test("image-spec: dockerfiles/context point at real repo-relative paths", () => 
   }
 });
 
-test("api image installs the pinned GitHub CLI from an immutable verified release artifact", () => {
-  const dockerfile = readFileSync(
-    fileURLToPath(new URL("../../../apps/Agentweaver.Api/Dockerfile", import.meta.url)),
-    "utf8",
-  );
+const apiDockerfile = readFileSync(
+  fileURLToPath(new URL("../../../apps/Agentweaver.Api/Dockerfile", import.meta.url)),
+  "utf8",
+);
+
+test("api image maps TARGETARCH to pinned, verified Copilot CLI packages and native runtime paths", () => {
+  assert.match(apiDockerfile, /ARG COPILOT_CLI_VERSION=1\.0\.57/);
+  assert.match(apiDockerfile, /ARG COPILOT_NPM_REGISTRY_URL=https:\/\/registry\.npmjs\.org/);
+  assert.match(apiDockerfile, /ARG COPILOT_CLI_SHA512_AMD64=10e3a753863ebd91dfc5597c78100fec9b524e6bb9778643502f70086a4003993bd379449e9bbc50ebf4e264c7467f0a4f36fc823fa28cd8710d67b75e58db6b/);
+  assert.match(apiDockerfile, /ARG COPILOT_CLI_SHA512_ARM64=e9aa4d63fbfb08cc4a938e4272d5192f342775d069206f647927a774529837e901204052772fffb3f0b3ff86105f5884467925a606513fb16f73068ab34ffb60/);
+  assert.match(apiDockerfile, /amd64\) runtime_arch=x64; copilot_sha512="\$\{COPILOT_CLI_SHA512_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) runtime_arch=arm64; copilot_sha512="\$\{COPILOT_CLI_SHA512_ARM64\}"/);
+  assert.match(apiDockerfile, /printf '%s' "\$\{runtime_arch\}" > \/copilot-bin\/runtime-arch/);
+  assert.match(apiDockerfile, /\$\{COPILOT_NPM_REGISTRY_URL\}\/@github\/copilot-linux-\$\{runtime_arch\}\/-\/copilot-linux-\$\{runtime_arch\}-\$\{COPILOT_CLI_VERSION\}\.tgz/);
+  assert.match(apiDockerfile, /echo "\$\{copilot_sha512\}  \/tmp\/copilot\.tgz" \| sha512sum -c - && \\\s+tar -xzf/);
+  assert.doesNotMatch(apiDockerfile, /sha1sum|COPILOT_CLI_SHA1/);
+  assert.equal((apiDockerfile.match(/runtime_arch="\$\(cat \/copilot-bin\/runtime-arch\)"/g) ?? []).length, 2);
+  assert.match(apiDockerfile, /\/app\/publish\/runtimes\/linux-\$\{runtime_arch\}\/native\/copilot/);
+  assert.match(apiDockerfile, /--runtime "linux-\$\{runtime_arch\}"/);
+  assert.doesNotMatch(apiDockerfile, /linux-\$\{TARGETARCH\}|linux-amd64/);
+});
+
+test("api image installs architecture-matched GitHub CLI from pinned, verified release artifacts", () => {
+  const dockerfile = apiDockerfile;
+  assert.match(dockerfile, /ARG GH_CLI_VERSION=2\.98\.0/);
+  assert.match(dockerfile, /ARG GH_CLI_SHA256_AMD64=f65a3fa2fa0eb2e97c445ee3f5e087a40aae03b64847f45a8f13805e504535d6/);
+  assert.match(dockerfile, /ARG GH_CLI_SHA256_ARM64=bbc4ac7964c2a091fd555cd1758d10a7cfcfdc472e405f0b0fb958f05d535cb6/);
+  assert.match(dockerfile, /amd64\) gh_sha256="\$\{GH_CLI_SHA256_AMD64\}"/);
+  assert.match(dockerfile, /arm64\) gh_sha256="\$\{GH_CLI_SHA256_ARM64\}"/);
   assert.match(
     dockerfile,
-    /github\.com\/cli\/cli\/releases\/download\/v\$\{GH_CLI_VERSION\}\/gh_\$\{GH_CLI_VERSION\}_linux_amd64\.deb/,
+    /github\.com\/cli\/cli\/releases\/download\/v\$\{GH_CLI_VERSION\}\/gh_\$\{GH_CLI_VERSION\}_linux_\$\{target_arch\}\.deb/,
   );
-  assert.match(dockerfile, /ARG GH_CLI_SHA256=[0-9a-f]{64}/);
-  assert.match(dockerfile, /echo "\$\{GH_CLI_SHA256\}  \/tmp\/gh\.deb" \| sha256sum -c -/);
+  assert.match(dockerfile, /echo "\$\{gh_sha256\}  \/tmp\/gh\.deb" \| sha256sum -c -/);
   assert.doesNotMatch(dockerfile, /apt-get install[^\n]*gh=\$\{GH_CLI_VERSION\}/);
+});
+
+test("api image pins architecture-matched kubectl and rejects unsupported TARGETARCH before downloads", () => {
+  assert.equal((apiDockerfile.match(/ARG TARGETARCH/g) ?? []).length, 2);
+  assert.equal((apiDockerfile.match(/\*\) echo "Unsupported API image TARGETARCH: \$\{target_arch\}" >&2; exit 1/g) ?? []).length, 3);
+  assert.match(apiDockerfile, /ARG KUBECTL_SHA256_AMD64=5de4e9f2266738fd112b721265a0c1cd7f4e5208b670f811861f699474a100a3/);
+  assert.match(apiDockerfile, /ARG KUBECTL_SHA256_ARM64=d595d1a26b7444e0beb122e25750ee4524e74414bbde070b672b423139295ce6/);
+  assert.match(apiDockerfile, /amd64\) kubectl_sha256="\$\{KUBECTL_SHA256_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) kubectl_sha256="\$\{KUBECTL_SHA256_ARM64\}"/);
+  assert.match(apiDockerfile, /\/bin\/linux\/\$\{target_arch\}\/kubectl/);
+  assert.match(apiDockerfile, /echo "\$\{kubectl_sha256\}  \/usr\/local\/bin\/kubectl" \| sha256sum -c -/);
+  assert.doesNotMatch(apiDockerfile, /kubectl\.sha256/);
+  assert.doesNotMatch(apiDockerfile, /\/bin\/linux\/amd64\/kubectl/);
+});
+
+test("api image defaults missing TARGETARCH to amd64 in build and runtime without overriding buildx arm64", () => {
+  assert.doesNotMatch(apiDockerfile, /ARG TARGETARCH=/);
+  assert.equal((apiDockerfile.match(/RUN target_arch="\$\{TARGETARCH:-amd64\}" && \\\s+case "\$\{target_arch\}" in/g) ?? []).length, 3);
+  assert.match(apiDockerfile, /amd64\) runtime_arch=x64; copilot_sha512="\$\{COPILOT_CLI_SHA512_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) runtime_arch=arm64; copilot_sha512="\$\{COPILOT_CLI_SHA512_ARM64\}"/);
+  assert.match(apiDockerfile, /amd64\) gh_sha256="\$\{GH_CLI_SHA256_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) gh_sha256="\$\{GH_CLI_SHA256_ARM64\}"/);
+  assert.match(apiDockerfile, /amd64\) kubectl_sha256="\$\{KUBECTL_SHA256_AMD64\}"/);
+  assert.match(apiDockerfile, /arm64\) kubectl_sha256="\$\{KUBECTL_SHA256_ARM64\}"/);
+  assert.doesNotMatch(apiDockerfile, /\$\{TARGETARCH\}/);
 });
 
 test("image-spec: agent-host uses AGENTHOST_IMAGE_TAG; others use IMAGE_TAG", () => {

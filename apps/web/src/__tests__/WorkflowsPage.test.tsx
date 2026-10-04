@@ -1,7 +1,7 @@
 import { apiClient } from '../api/apiClient';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { WorkflowsPage } from '../pages/WorkflowsPage';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import {
   afterEach,
@@ -20,6 +20,7 @@ vi.mock('../api/apiClient', () => ({
     setDefaultWorkflow: vi.fn(),
     getProject: vi.fn(),
     getWorkflowYaml: vi.fn(),
+    getWorkflowGraph: vi.fn(),
     saveWorkflowYaml: vi.fn(),
     runWorkflowNow: vi.fn(),
     generateWorkflow: vi.fn(),
@@ -94,6 +95,57 @@ afterEach(() => {
 });
 
 describe('WorkflowsPage', () => {
+  it('keeps a long workflow summary separate from its source and all actions', async () => {
+    const id = 'custom-fan-coordinator-demo-with-a-long-unbroken-identifier';
+    const description = 'Retained documentation-only demo: two independent prompt branches, a fan-in barrier, a read-only handoff, and genuine coordinator-composed synthesis. No application, server, preview, commit, push or pull request.';
+    const source = `${id}-and-a-long-unbroken-filename.yaml`;
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue({
+      default_workflow_id: id,
+      workflows: [{
+        ...sampleList.workflows[1],
+        id,
+        name: 'Custom Fan + Coordinator Demo - 2026-09-30',
+        description,
+        source,
+        valid: true,
+        error: null,
+        is_default: true,
+      }],
+    });
+    vi.mocked(apiClient.getWorkflowGraph).mockResolvedValue({
+      graph_id: id,
+      variant: 'definition',
+      start_node_id: 'start',
+      nodes: [{ id: 'start', label: 'Start', role: 'coordinator', kind: 'planned' }],
+      edges: [],
+    });
+
+    renderPage('proj-1');
+
+    const card = await screen.findByTestId(`workflow-card-${id}`);
+    const summary = card.children[1] as HTMLElement;
+    const controls = card.children[2] as HTMLElement;
+    expect(getComputedStyle(card).gridTemplateColumns).toBe('auto minmax(0, 1fr)');
+    expect(getComputedStyle(controls).gridColumn).toBe('1/-1');
+    expect(getComputedStyle(controls).flexWrap).toBe('wrap');
+    expect(getComputedStyle(summary).overflowWrap).toBe('anywhere');
+    expect(getComputedStyle(controls.children[0]).overflowWrap).toBe('anywhere');
+    expect(getComputedStyle(controls.children[1]).flexWrap).toBe('wrap');
+    expect(within(summary).getByText('Custom Fan + Coordinator Demo - 2026-09-30')).toBeDefined();
+    expect(within(summary).getByText(id)).toBeDefined();
+    expect(within(summary).getByText(description)).toBeDefined();
+    expect(within(summary).getByText('Active')).toBeDefined();
+    expect(within(summary).getByText('Manual only')).toBeDefined();
+    expect(within(controls).getByText(`Source: ${source}`)).toBeDefined();
+    for (const name of ['View graph', 'Run now', 'Edit', 'Edit visually', 'Add schedule', 'Add event']) {
+      expect(within(controls).getByRole('button', { name })).toBeDefined();
+    }
+    expect(summary.contains(controls)).toBe(false);
+    fireEvent.click(within(controls).getByRole('button', { name: 'View graph' }));
+    expect(await screen.findByTestId('workflow-definition-viewport')).toBeDefined();
+    expect(apiClient.getWorkflowGraph).toHaveBeenCalledWith('proj-1', id);
+  });
+
   it('lists workflows with default/validation badges', async () => {
     vi.mocked(apiClient.listWorkflows).mockResolvedValue(sampleList);
 
@@ -307,7 +359,7 @@ trigger:
     const actionSelect = await screen.findByRole('combobox', { name: 'Issue action' });
     expect((actionSelect as HTMLSelectElement).value).toBe('opened');
     fireEvent.change(actionSelect, { target: { value: 'labeled' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save event' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save event' }));
 
     await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
     expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls[0]?.[2])

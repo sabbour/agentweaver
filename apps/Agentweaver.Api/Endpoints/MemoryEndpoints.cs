@@ -21,6 +21,7 @@ using Agentweaver.Squad.Model;
 using Agentweaver.Squad.Squad;
 using Agentweaver.Squad.Analysis;
 using Agentweaver.Squad.Sync;
+using Agentweaver.SandboxExec;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -33,8 +34,11 @@ public static class MemoryEndpoints
 // (paginated; see Contracts.PagedResult<T>)
 app.MapGet("/api/projects/{id}/memory", async (
     string id,
+    string? q,
     string? type,
     string? tags,
+    string? agent,
+    string? status,
     int? page,
     int? page_size,
     HttpContext httpContext,
@@ -49,10 +53,22 @@ app.MapGet("/api/projects/{id}/memory", async (
     if (project is null) return Results.NotFound();
     if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
 
+    if (q?.Length > 256)
+        return Results.BadRequest(new { error = "q must be 256 characters or fewer." });
+    var statusFilter = string.IsNullOrWhiteSpace(status)
+        ? KnowledgeLifecycleStates.Active
+        : status.Trim().ToLowerInvariant();
+    if (statusFilter != "all" && !KnowledgeLifecycleStates.IsValid(statusFilter))
+        return Results.BadRequest(new { error = "status must be active, superseded, archived, or all." });
+
     IQueryable<AgentMemory> query = memoryDb.AgentMemory.Where(m => m.ProjectId == id);
+    if (statusFilter != "all")
+        query = query.Where(m => m.Status == statusFilter);
 
     if (!string.IsNullOrWhiteSpace(type))
         query = query.Where(m => m.Type == type);
+    if (!string.IsNullOrWhiteSpace(agent))
+        query = query.Where(m => m.AgentName == agent);
 
     var requestedTags = !string.IsNullOrWhiteSpace(tags)
         ? tags.Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToList()
@@ -60,13 +76,13 @@ app.MapGet("/api/projects/{id}/memory", async (
 
     var memories = (await query.ToListAsync(ct))
         .Where(m => requestedTags.Count == 0 || (m.Tags is not null && requestedTags.Any(tag => m.Tags.Contains($",{tag},"))))
-        .OrderByDescending(m => m.CreatedAt)
-        .Select(m => new
-        {
-            m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
-            m.SourceKind, m.SourceIdentity, m.SourceRunId, m.TrustState, m.ApprovedBy, m.ApprovedAt,
-            created_at = m.CreatedAt, updated_at = m.UpdatedAt,
-        })
+        .Where(m => string.IsNullOrWhiteSpace(q)
+            || m.Content.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || m.AgentName.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || (m.Tags?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+        .OrderByDescending(m => m.UpdatedAt)
+        .ThenByDescending(m => m.Id)
+        .Select(MemoryResponse)
         .ToList();
     return Results.Ok(Paging.Of(memories, page, page_size));
 });
@@ -77,6 +93,7 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
     string name,
     string? type,
     string? importance,
+    string? status,
     int? page,
     int? page_size,
     HttpContext httpContext,
@@ -90,18 +107,20 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory", async (
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
     if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+    var statusFilter = string.IsNullOrWhiteSpace(status)
+        ? KnowledgeLifecycleStates.Active
+        : status.Trim().ToLowerInvariant();
+    if (statusFilter != "all" && !KnowledgeLifecycleStates.IsValid(statusFilter))
+        return Results.BadRequest(new { error = "status must be active, superseded, archived, or all." });
     var memories = (await memoryDb.AgentMemory
         .Where(m => m.ProjectId == id && m.AgentName == name)
         .Where(m => type == null || m.Type == type)
         .Where(m => importance == null || m.Importance == importance)
         .ToListAsync(ct))
-        .OrderByDescending(m => m.CreatedAt)
-        .Select(m => new
-        {
-            m.Id, m.AgentName, m.SessionId, m.Type, m.Importance, m.Content, m.Tags,
-            m.SourceKind, m.SourceIdentity, m.SourceRunId, m.TrustState, m.ApprovedBy, m.ApprovedAt,
-            created_at = m.CreatedAt, updated_at = m.UpdatedAt,
-        })
+        .Where(m => statusFilter == "all" || m.Status == statusFilter)
+        .OrderByDescending(m => m.UpdatedAt)
+        .ThenByDescending(m => m.Id)
+        .Select(MemoryResponse)
         .ToList();
     return Results.Ok(Paging.Of(memories, page, page_size));
 });
@@ -160,13 +179,7 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory", async (
     // The database write is the durable record. Filesystem export rewrites the full project
     // memory snapshot and may target a remote workspace volume, so it must not delay this
     // latency-sensitive agent tool call. Scribe invokes /memory/export explicitly at run end.
-    var response = new
-    {
-        storedMemory.Id, storedMemory.AgentName, storedMemory.SessionId, storedMemory.Type,
-        storedMemory.Importance, storedMemory.Content, storedMemory.Tags, storedMemory.SourceKind,
-        storedMemory.SourceIdentity, storedMemory.SourceRunId, storedMemory.TrustState,
-        created_at = storedMemory.CreatedAt,
-    };
+    var response = MemoryResponse(storedMemory);
     return created
         ? Results.Created($"/api/projects/{id}/agents/{name}/memory/{storedMemory.Id}", response)
         : Results.Ok(response);
@@ -190,16 +203,18 @@ app.MapPut("/api/projects/{id}/agents/{name}/memory/{memId}", async (
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
     if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
-    if (request.Type is null && request.Content is null && request.Importance is null && request.Tags is null)
-        return Results.BadRequest(new { error = "type, content, importance, or tags is required." });
+    if (request.Type is null && request.Content is null && request.Importance is null && request.Tags is null
+        && request.Status is null && request.ReplacedById is null)
+        return Results.BadRequest(new { error = "type, content, importance, tags, status, or replaced_by_id is required." });
 
     var memory = await memoryDb.AgentMemory
         .AsNoTracking()
         .SingleOrDefaultAsync(m => m.Id == memId, ct);
     if (memory is null || memory.ProjectId != id || !string.Equals(memory.AgentName, name, StringComparison.OrdinalIgnoreCase))
         return Results.NotFound();
+    if (request.ExpectedRevision is null or < 1)
+        return Results.BadRequest(new { error = "expected_revision is required." });
 
-    var changed = false;
     var memoryType = memory.Type;
     var importance = memory.Importance;
     var content = memory.Content;
@@ -209,48 +224,44 @@ app.MapPut("/api/projects/{id}/agents/{name}/memory/{memId}", async (
         memoryType = request.Type.Trim().ToLowerInvariant();
         if (!MemoryWritePolicy.IsMemoryType(memoryType))
             return Results.BadRequest(new { error = "type must be core_context, learning, pattern, or update." });
-        changed |= memory.Type != memoryType;
     }
     if (request.Importance is not null)
     {
         importance = request.Importance.Trim().ToLowerInvariant();
         if (!MemoryWritePolicy.IsImportance(importance))
             return Results.BadRequest(new { error = "importance must be low, medium, or high." });
-        changed |= memory.Importance != importance;
     }
     if (request.Content is not null)
     {
         if (string.IsNullOrWhiteSpace(request.Content))
             return Results.BadRequest(new { error = "content must not be empty." });
-        changed |= memory.Content != request.Content;
         content = request.Content;
     }
     if (request.Tags is not null)
     {
         tags = MemoryWritePolicy.NormalizeTags(request.Tags);
-        changed |= memory.Tags != tags;
     }
+    var lifecycle = request.Status?.Trim().ToLowerInvariant() ?? memory.Status;
+    if (!KnowledgeLifecycleStates.IsValid(lifecycle))
+        return Results.BadRequest(new { error = "status must be active, superseded, or archived." });
 
-    if (changed)
-    {
-        var updatedAt = DateTimeOffset.UtcNow;
-        if (!await MemoryPromotionHelpers.TryApplyUpdateAsync(
-            memoryDb, memory, memoryType, importance, content, tags, updatedAt, ct))
-        {
-            return Results.NotFound();
-        }
-        await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
-        memory = await memoryDb.AgentMemory
-            .AsNoTracking()
-            .SingleAsync(m => m.Id == memId, ct);
-    }
+    var result = await KnowledgeRevisionWriter.UpdateMemoryAsync(
+        memoryDb, memId, request.ExpectedRevision.Value, memoryType, importance, content, tags,
+        lifecycle,
+        lifecycle == KnowledgeLifecycleStates.Superseded
+            ? request.ReplacedById ?? memory.ReplacedById
+            : null,
+        "project-contributor",
+        request.Reason ?? "updated through API", ct);
+    if (result.Status == KnowledgeWriteStatus.NotFound) return Results.NotFound();
+    if (result.Status == KnowledgeWriteStatus.Stale)
+        return RevisionConflict(result.CurrentRevision);
+    if (result.Status is KnowledgeWriteStatus.InvalidReplacement or KnowledgeWriteStatus.ReplacementCycle)
+        return Results.Conflict(new { error = result.Status == KnowledgeWriteStatus.ReplacementCycle
+            ? "replacement_cycle" : "invalid_replacement" });
 
-    return Results.Ok(new
-    {
-        memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
-        memory.SourceKind, memory.SourceIdentity, memory.SourceRunId, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt,
-        created_at = memory.CreatedAt, updated_at = memory.UpdatedAt,
-    });
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
+    return Results.Ok(MemoryResponse(result.Record!));
 });
 
 // POST /api/projects/{id}/agents/{name}/memory/{memId}/promote
@@ -258,6 +269,7 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
     string id,
     string name,
     int memId,
+    ExpectedRevisionRequest request,
     HttpContext httpContext,
     IProjectStore projectStore,
     IConfiguration configuration,
@@ -270,6 +282,8 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (request.ExpectedRevision is null or < 1)
+        return Results.BadRequest(new { error = "expected_revision is required." });
 
     var (approver, authorFailure) = await RunAuthorship.ResolveAsync(
         httpContext, id, requestedAgentName: null, runResolver, turnTokens, ct);
@@ -290,12 +304,16 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
         .SingleOrDefaultAsync(m => m.Id == memId, ct);
     if (memory is null || memory.ProjectId != id || !string.Equals(memory.AgentName, name, StringComparison.OrdinalIgnoreCase))
         return Results.NotFound();
+    if (memory.Revision != request.ExpectedRevision.Value)
+        return RevisionConflict(memory.Revision);
     if (memory.TrustState == MemoryTrustStates.Approved)
-        return Results.Ok(new { memory.Id, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt });
+        return Results.Ok(new { memory.Id, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt, memory.Revision });
 
     var approvedAt = DateTimeOffset.UtcNow;
     if (!await MemoryPromotionHelpers.TryPromoteReviewedAsync(
-        memoryDb, memory, approver.SourceIdentity, approvedAt, ct))
+        memoryDb, memory, approver.SourceIdentity, approvedAt,
+        approver.SourceKind == MemorySourceKinds.Run ? approver.AgentName : "project-owner",
+        request.Reason ?? "approved", ct))
     {
         var current = await memoryDb.AgentMemory
             .AsNoTracking()
@@ -308,11 +326,7 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
         if (current.TrustState == MemoryTrustStates.Approved)
             return Results.Ok(new { current.Id, current.TrustState, current.ApprovedBy, current.ApprovedAt });
 
-        return Results.Conflict(new
-        {
-            error = "memory_changed_since_review",
-            updated_at = current.UpdatedAt,
-        });
+        return RevisionConflict(current.Revision);
     }
 
     return Results.Ok(new
@@ -321,6 +335,7 @@ app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/promote", async (
         TrustState = MemoryTrustStates.Approved,
         ApprovedBy = approver.SourceIdentity,
         ApprovedAt = approvedAt,
+        Revision = memory.Revision + 1,
     });
 });
 
@@ -342,12 +357,128 @@ app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}", async (
     if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
     var memory = await memoryDb.AgentMemory.FindAsync(new object[] { memId }, ct);
     if (memory is null || memory.ProjectId != id || memory.AgentName != name) return Results.NotFound();
-    return Results.Ok(new
-    {
-        memory.Id, memory.AgentName, memory.SessionId, memory.Type, memory.Importance, memory.Content, memory.Tags,
-        memory.SourceKind, memory.SourceIdentity, memory.SourceRunId, memory.TrustState, memory.ApprovedBy, memory.ApprovedAt,
-        created_at = memory.CreatedAt, updated_at = memory.UpdatedAt,
-    });
+    return Results.Ok(MemoryResponse(memory));
+});
+
+// GET /api/projects/{id}/agents/{name}/memory/{memId}/revisions
+app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}/revisions", async (
+    string id,
+    string name,
+    int memId,
+    int? page,
+    int? page_size,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+    var memory = await memoryDb.AgentMemory.AsNoTracking()
+        .SingleOrDefaultAsync(m => m.Id == memId && m.ProjectId == id && m.AgentName == name, ct);
+    if (memory is null) return Results.NotFound();
+
+    var revisions = (await memoryDb.AgentMemoryRevisions.AsNoTracking()
+            .Where(r => r.ProjectId == id && r.MemoryId == memId)
+            .ToListAsync(ct))
+        .OrderByDescending(r => r.Revision)
+        .Select(MemoryRevisionResponse)
+        .ToList();
+    return Results.Ok(Paging.Of(revisions, page, page_size));
+});
+
+// GET /api/projects/{id}/agents/{name}/memory/{memId}/revisions/{revision}
+app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}/revisions/{revision}", async (
+    string id,
+    string name,
+    int memId,
+    int revision,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+    var record = await memoryDb.AgentMemory.AsNoTracking()
+        .AnyAsync(m => m.Id == memId && m.ProjectId == id && m.AgentName == name, ct);
+    if (!record) return Results.NotFound();
+    var item = await memoryDb.AgentMemoryRevisions.AsNoTracking()
+        .SingleOrDefaultAsync(r => r.ProjectId == id && r.MemoryId == memId && r.Revision == revision, ct);
+    return item is null ? Results.NotFound() : Results.Ok(MemoryRevisionResponse(item));
+});
+
+// GET /api/projects/{id}/agents/{name}/memory/{memId}/compare
+app.MapGet("/api/projects/{id}/agents/{name}/memory/{memId}/compare", async (
+    string id,
+    string name,
+    int memId,
+    int from_revision,
+    int to_revision,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+    if (!await memoryDb.AgentMemory.AsNoTracking()
+            .AnyAsync(m => m.Id == memId && m.ProjectId == id && m.AgentName == name, ct))
+        return Results.NotFound();
+    var revisions = await memoryDb.AgentMemoryRevisions.AsNoTracking()
+        .Where(r => r.ProjectId == id && r.MemoryId == memId
+            && (r.Revision == from_revision || r.Revision == to_revision))
+        .ToListAsync(ct);
+    var from = revisions.SingleOrDefault(r => r.Revision == from_revision);
+    var to = revisions.SingleOrDefault(r => r.Revision == to_revision);
+    return from is null || to is null
+        ? Results.NotFound()
+        : Results.Ok(new { from = MemoryRevisionResponse(from), to = MemoryRevisionResponse(to) });
+});
+
+// POST /api/projects/{id}/agents/{name}/memory/{memId}/restore
+app.MapPost("/api/projects/{id}/agents/{name}/memory/{memId}/restore", async (
+    string id,
+    string name,
+    int memId,
+    RestoreKnowledgeRequest request,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Contributor, ct) is { } forbid) return forbid;
+    if (request.ExpectedRevision is null or < 1 || request.Revision is null or < 1)
+        return Results.BadRequest(new { error = "expected_revision and revision are required." });
+    if (!await memoryDb.AgentMemory.AsNoTracking()
+            .AnyAsync(m => m.Id == memId && m.ProjectId == id && m.AgentName == name, ct))
+        return Results.NotFound();
+
+    var result = await KnowledgeRevisionWriter.RestoreMemoryAsync(
+        memoryDb, memId, request.ExpectedRevision.Value, request.Revision.Value,
+        "project-contributor", request.Reason ?? $"restored revision {request.Revision.Value}", ct);
+    if (result.Status == KnowledgeWriteStatus.NotFound) return Results.NotFound();
+    if (result.Status == KnowledgeWriteStatus.Stale) return RevisionConflict(result.CurrentRevision);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
+    return Results.Ok(MemoryResponse(result.Record!));
 });
 
 // GET /api/projects/{id}/sessions/current
@@ -701,6 +832,63 @@ app.MapPost("/api/projects/{id}/memory/import", async (
         return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
     }
 });
+
+        static object MemoryResponse(AgentMemory memory) => new
+        {
+            memory.Id,
+            memory.AgentName,
+            memory.SessionId,
+            memory.Type,
+            memory.Importance,
+            memory.Content,
+            memory.Tags,
+            memory.Status,
+            replaced_by_id = memory.ReplacedById,
+            memory.SourceKind,
+            memory.SourceIdentity,
+            memory.SourceRunId,
+            memory.TrustState,
+            memory.ApprovedBy,
+            memory.ApprovedAt,
+            memory.Revision,
+            current_revision_id = memory.CurrentRevisionId,
+            created_at = memory.CreatedAt,
+            updated_at = memory.UpdatedAt,
+        };
+
+        static object MemoryRevisionResponse(AgentMemoryRevision revision) => new
+        {
+            revision_id = revision.RevisionId,
+            memory_id = revision.MemoryId,
+            revision = revision.Revision,
+            previous_revision_id = revision.PreviousRevisionId,
+            revision.Actor,
+            source_run_id = revision.SourceRunId,
+            reason = SandboxOutputRedactor.Default.Redact(revision.Reason),
+            agent_name = revision.AgentName,
+            session_id = revision.SessionId,
+            revision.Type,
+            revision.Importance,
+            content = SandboxOutputRedactor.Default.Redact(revision.Content),
+            tags = SandboxOutputRedactor.Default.Redact(revision.Tags ?? ""),
+            revision.Status,
+            replaced_by_id = revision.ReplacedById,
+            source_kind = revision.SourceKind,
+            source_identity_fingerprint = revision.SourceIdentityFingerprint,
+            source_run_reference = revision.SourceRunReference,
+            trust_state = revision.TrustState,
+            approved_by_fingerprint = revision.ApprovedByFingerprint,
+            approved_at = revision.ApprovedAt,
+            created_at = revision.CreatedAt,
+        };
+
+        static IResult RevisionConflict(int? currentRevision) =>
+            Results.Conflict(new
+            {
+                error = "stale_revision",
+                message = "The knowledge record changed. Reload it and retry with the current revision.",
+                current_revision = currentRevision,
+            });
     }
 }
 
@@ -716,22 +904,20 @@ internal static class MemoryPromotionHelpers
         DateTimeOffset updatedAt,
         CancellationToken ct)
     {
-        var updated = await memoryDb.AgentMemory
-            .Where(memory =>
-                memory.Id == reviewed.Id &&
-                memory.ProjectId == reviewed.ProjectId &&
-                memory.AgentName == reviewed.AgentName)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(memory => memory.Type, type)
-                .SetProperty(memory => memory.Importance, importance)
-                .SetProperty(memory => memory.Content, content)
-                .SetProperty(memory => memory.Tags, tags)
-                .SetProperty(memory => memory.TrustState, MemoryTrustStates.Pending)
-                .SetProperty(memory => memory.ApprovedBy, (string?)null)
-                .SetProperty(memory => memory.ApprovedAt, (DateTimeOffset?)null)
-                .SetProperty(memory => memory.UpdatedAt, updatedAt), ct);
-
-        return updated == 1;
+        var result = await KnowledgeRevisionWriter.UpdateMemoryAsync(
+            memoryDb,
+            reviewed.Id,
+            reviewed.Revision,
+            type,
+            importance,
+            content,
+            tags,
+            reviewed.Status,
+            reviewed.ReplacedById,
+            reviewed.AgentName,
+            "updated",
+            ct);
+        return result.Status == KnowledgeWriteStatus.Updated;
     }
 
     public static async Task<bool> TryPromoteReviewedAsync(
@@ -739,25 +925,47 @@ internal static class MemoryPromotionHelpers
         AgentMemory reviewed,
         string? approvedBy,
         DateTimeOffset approvedAt,
+        CancellationToken ct) =>
+        await TryPromoteReviewedAsync(
+            memoryDb, reviewed, approvedBy, approvedAt, reviewed.AgentName, "approved", ct);
+
+    public static async Task<bool> TryPromoteReviewedAsync(
+        MemoryDbContext memoryDb,
+        AgentMemory reviewed,
+        string? approvedBy,
+        DateTimeOffset approvedAt,
+        string actor,
+        string reason,
         CancellationToken ct)
     {
-        var updated = await memoryDb.AgentMemory
-            .Where(memory =>
-                memory.Id == reviewed.Id &&
-                memory.ProjectId == reviewed.ProjectId &&
-                memory.AgentName == reviewed.AgentName &&
-                memory.Type == reviewed.Type &&
-                memory.Importance == reviewed.Importance &&
-                memory.Content == reviewed.Content &&
-                memory.Tags == reviewed.Tags &&
-                memory.TrustState == MemoryTrustStates.Pending &&
-                memory.UpdatedAt == reviewed.UpdatedAt)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(memory => memory.TrustState, MemoryTrustStates.Approved)
-                .SetProperty(memory => memory.ApprovedBy, approvedBy)
-                .SetProperty(memory => memory.ApprovedAt, approvedAt)
-                .SetProperty(memory => memory.UpdatedAt, approvedAt), ct);
+        memoryDb.ChangeTracker.Clear();
+        var memory = await memoryDb.AgentMemory.SingleOrDefaultAsync(candidate =>
+            candidate.Id == reviewed.Id
+            && candidate.ProjectId == reviewed.ProjectId
+            && candidate.AgentName == reviewed.AgentName, ct);
+        if (memory is null
+            || memory.Revision != reviewed.Revision
+            || memory.Type != reviewed.Type
+            || memory.Importance != reviewed.Importance
+            || memory.Content != reviewed.Content
+            || memory.Tags != reviewed.Tags
+            || memory.TrustState != MemoryTrustStates.Pending)
+            return false;
 
-        return updated == 1;
+        memory.TrustState = MemoryTrustStates.Approved;
+        memory.ApprovedBy = approvedBy;
+        memory.ApprovedAt = approvedAt;
+        memory.UpdatedAt = approvedAt;
+        memory.RevisionActor = actor;
+        memory.RevisionReason = reason;
+        try
+        {
+            await memoryDb.SaveChangesAsync(ct);
+            return true;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return false;
+        }
     }
 }

@@ -13,11 +13,13 @@
 // or a generated workflow with dangling edges / unrouted check branches that would only
 // blow up at run time.
 //
-// Bounded + safe: it only calls generation endpoints (which return UNSAVED drafts) and a
-// throwaway project for project-scoped workflow generation, then cleans up. Nothing is
-// deployed, merged, saved to a catalog, or run.
+// Bounded + safe by default: it calls generation endpoints (which return UNSAVED drafts) and a
+// throwaway project, then cleans up. With --keep, explicitly selected generated workflows may be
+// saved and queued for real provider-backed execution so post-merge acceptance can inspect the
+// durable project/run; the harness never fabricates completion.
 
 import {
+  analyzeConservativeFan,
   findReservedRoleLeaks,
   validateWorkflowYaml,
   workflowNodeRoles,
@@ -28,7 +30,13 @@ import { redact } from '../../harness-shared/redaction.mjs';
 // bugs in generation structure — they make the seam un-assessable. We surface them as
 // an inconclusive result rather than a false regression.
 const PROVIDER_FAIL_STATUS = new Set([401, 402, 429, 500, 502, 503, 504]);
+const WORKFLOW_PROVIDER_FAILURE_CODES = new Set([
+  'workflow_provider_timeout',
+  'workflow_provider_unavailable',
+  'workflow_provider_authorization_required',
+]);
 const MODEL_PROVIDER_KEY_HEADER = 'If-Model-Provider-Key';
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 export async function prepareAiExecutionContext(client, operation, projectId, options) {
   const body = { operation };
@@ -137,18 +145,146 @@ export function replacementExecutionContext(response, operation) {
 }
 
 async function retryWithReplacementContext(client, {
-  response, operation, path, body, time, timingKey,
+  response, operation, path, body, time, timingKey, extraHeaders = {},
 }) {
   const replacement = replacementExecutionContext(response, operation);
   if (!replacement?.ready) return { response, replacement: replacement?.evidence ?? null };
 
   const retried = await time(`${timingKey}RetryMs`, () =>
-    client.post(path, body, { headers: replacement.headers }),
+    client.post(path, body, { headers: { ...extraHeaders, ...replacement.headers } }),
   );
   return {
     response: retried,
     replacement: { ...replacement.evidence, retried: true, retryStatus: retried.status },
   };
+}
+
+function durableIdempotencyKey(prefix) {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function jobStatus(response) {
+  return typeof response?.responseBody?.status === 'string'
+    ? response.responseBody.status.toLowerCase()
+    : null;
+}
+
+function jobId(response) {
+  return response?.responseBody?.job_id ?? response?.responseBody?.jobId ?? null;
+}
+
+export function resolveWorkflowGenerationOutcome(request) {
+  const durable = request?.durable === true;
+  const final = durable ? request.final : null;
+  const terminalStatus = jobStatus(final);
+  const result = durable ? request.result : request?.result ?? null;
+  const failure = final?.responseBody?.failure ?? null;
+  const yaml = result?.responseBody?.yaml;
+  const hasArtifact = result?.ok === true
+    && result.status === 200
+    && typeof yaml === 'string'
+    && yaml.trim().length > 0;
+  const response = hasArtifact && (!durable || terminalStatus === 'completed')
+    ? result
+    : null;
+  const inconclusive = !response && (
+    WORKFLOW_PROVIDER_FAILURE_CODES.has(failure?.code)
+    || PROVIDER_FAIL_STATUS.has(result?.status)
+    || (durable && (!terminalStatus || terminalStatus === 'cancelled'
+      || !TERMINAL_JOB_STATUSES.has(terminalStatus)))
+  );
+  const outcome = {
+    response,
+    inconclusive,
+    detail: response
+      ? `completed job ${jobId(final) ?? '(unknown)'} returned a nonempty YAML artifact`
+      : failure?.code
+        ? `job ${jobId(final) ?? '(unknown)'} ended ${terminalStatus ?? '(unknown)'} with ${failure.code}`
+        : terminalStatus === 'completed'
+          ? `job ${jobId(final) ?? '(unknown)'} completed without a successful nonempty YAML artifact`
+          : durable
+            ? `job ${jobId(final) ?? '(unknown)'} ended with status ${terminalStatus ?? '(unknown)'}`
+            : `workflow generation returned no successful nonempty YAML artifact (status ${result?.status ?? '(missing)'})`,
+    evidence: {
+      status: final?.status ?? result?.status ?? null,
+      jobId: jobId(request?.accepted) ?? jobId(final),
+      terminalStatus,
+      resultStatus: request?.result?.status ?? null,
+      failure: redact(failure),
+      analysis: null,
+    },
+  };
+  return outcome;
+}
+
+function jobUrl(response, name) {
+  return response?.responseBody?.[name] ?? null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForDurableJob(client, initial, { time, timingKey, timeoutMs }) {
+  let current = initial;
+  const statusUrl = jobUrl(initial, 'status_url') ?? jobUrl(initial, 'statusUrl');
+  if (!statusUrl) return current;
+  const deadline = Date.now() + (timeoutMs ?? 300_000);
+  while (!TERMINAL_JOB_STATUSES.has(jobStatus(current) ?? '') && Date.now() < deadline) {
+    await sleep(1000);
+    current = await time(`${timingKey}StatusMs`, () => client.get(statusUrl));
+  }
+  return current;
+}
+
+async function submitDurableJob(client, {
+  path,
+  body,
+  headers,
+  idempotencyKey,
+  time,
+  timingKey,
+  timeoutMs,
+}) {
+  const requestHeaders = { ...headers, 'Idempotency-Key': idempotencyKey };
+  const accepted = await time(`${timingKey}AcceptMs`, () =>
+    client.post(path, body, { headers: requestHeaders }),
+  );
+  if (accepted.status !== 202) {
+    return { durable: false, accepted, duplicate: null, final: accepted, result: null };
+  }
+  const duplicate = await time(`${timingKey}IdempotencyMs`, () =>
+    client.post(path, body, { headers: requestHeaders }),
+  );
+  const final = await waitForDurableJob(client, accepted, { time, timingKey, timeoutMs });
+  const resultUrl = jobUrl(final, 'result_url') ?? jobUrl(final, 'resultUrl') ?? jobUrl(accepted, 'result_url') ?? jobUrl(accepted, 'resultUrl');
+  const result = jobStatus(final) === 'completed' && resultUrl
+    ? await time(`${timingKey}ResultMs`, () => client.get(resultUrl))
+    : null;
+  return { durable: true, accepted, duplicate, final, result };
+}
+
+async function exerciseCancelRetry(client, {
+  path,
+  body,
+  headers,
+  idempotencyKey,
+  time,
+  timingKey,
+}) {
+  const accepted = await time(`${timingKey}AcceptMs`, () =>
+    client.post(path, body, { headers: { ...headers, 'Idempotency-Key': idempotencyKey } }),
+  );
+  if (accepted.status !== 202) return { accepted, cancel: null, retry: null };
+  const cancelUrl = jobUrl(accepted, 'cancel_url') ?? jobUrl(accepted, 'cancelUrl');
+  const cancel = cancelUrl
+    ? await time(`${timingKey}CancelMs`, () => client.post(cancelUrl, {}))
+    : null;
+  const retryUrl = jobUrl(cancel, 'retry_url') ?? jobUrl(cancel, 'retryUrl') ?? jobUrl(accepted, 'retry_url') ?? jobUrl(accepted, 'retryUrl');
+  const retry = retryUrl
+    ? await time(`${timingKey}RetryMs`, () => client.post(retryUrl, {}))
+    : null;
+  return { accepted, cancel, retry };
 }
 
 /**
@@ -157,6 +293,32 @@ async function retryWithReplacementContext(client, {
  * @param {Object} opts
  * @param {boolean} [opts.keep]
  */
+export function verifyPmDiscovery(response) {
+  const workflow = response.responseBody ?? {};
+  const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
+  const edges = Array.isArray(workflow.edges) ? workflow.edges : [];
+  const branchIds = edges
+    .filter((edge) => edge.from === 'discovery-fan-out')
+    .map((edge) => edge.to);
+  const customer = nodes.find((node) => node.id === 'customer-signal-research');
+  const technical = nodes.find((node) => node.id === 'technical-feasibility-research');
+  const valid = response.ok
+    && branchIds.join(',') === 'customer-signal-research,technical-feasibility-research'
+    && customer?.independent === true
+    && technical?.independent === true
+    && customer?.declared_output_paths?.join(',') === 'customer-signals.md'
+    && technical?.declared_output_paths?.join(',') === 'technical-feasibility.md'
+    && edges.some((edge) => edge.from === 'customer-signal-research' && edge.to === 'discovery-fan-in')
+    && edges.some((edge) => edge.from === 'technical-feasibility-research' && edge.to === 'discovery-fan-in')
+    && edges.some((edge) => edge.from === 'discovery-fan-in' && edge.to === 'synthesis');
+  return {
+    valid,
+    branchIds,
+    customerOutputPaths: customer?.declared_output_paths ?? [],
+    technicalOutputPaths: technical?.declared_output_paths ?? [],
+  };
+}
+
 export async function runGenerationSeams(client, scenario, opts = {}) {
   const lifecycle = { projectId: null, cleanupAttempted: false };
   const cleanup = async () => {
@@ -197,6 +359,11 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     generatedBlueprintWorkflowValid: null,
     generatedWorkflow: null,
     generatedWorkflowValidation: null,
+    conservativeFanCases: [],
+    retainedWorkflowIds: [],
+    retainedRunTriggers: [],
+    retainedRuntimeProofs: scenario.retainedRuntimeProofs ?? [],
+    pmDiscovery: null,
   };
   /** @type {{name:string, pass:boolean, detail:string, category:string, skipped?:boolean}[]} */
   const checks = [];
@@ -206,6 +373,7 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
   const add = (name, pass, detail = '', category = 'P0') =>
     checks.push({ name, pass: !!pass, detail, category, skipped: category === 'CANNOT_DETERMINE' });
   let inconclusive = false;
+  let blueprintGeneratedWorkflowYaml = null;
 
   const time = async (key, fn) => {
     const t0 = Date.now();
@@ -254,12 +422,13 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     sessionStatus: null,
   };
   authConfig.responseBody = authMode ? { mode: authMode } : null;
+  const supportedAuthMode = authMode === 'Entra' || authMode === 'LocalTest';
   add(
     'Deployment exposes its authentication configuration (/api/auth/config)',
-    authConfig.ok && authMode === 'Entra',
+    authConfig.ok && supportedAuthMode,
     authMode ? `server auth mode ${authMode}` : `status ${authConfig.status}`,
   );
-  if (!authConfig.ok || authMode !== 'Entra') return finalize();
+  if (!authConfig.ok || !supportedAuthMode) return finalize();
 
   const auth = await client.get('/api/auth/session');
   const signedIn = auth.ok && auth.responseBody?.authenticated === true;
@@ -272,9 +441,9 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     auth_mode: authModeFromSession,
   };
   const authDetail = signedIn
-    ? 'authenticated Entra session'
-    : `status ${auth.status}; a valid Entra bearer token is required (GitHub CLI tokens are not accepted)`;
-  add('Authenticated Entra bearer token accepted (/api/auth/session)', signedIn, authDetail);
+    ? `authenticated ${authMode} session`
+    : `status ${auth.status}; a valid ${authMode} bearer token is required (GitHub CLI tokens are not accepted)`;
+  add(`Authenticated ${authMode} bearer token accepted (/api/auth/session)`, signedIn, authDetail);
   if (!signedIn) return finalize();
 
   // ── SEAM 1: blueprint generation ────────────────────────────────────────────
@@ -284,29 +453,76 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
   addExecutionContextCheck('blueprint generation', blueprintContext, add);
   if (blueprintContext.inconclusive) inconclusive = true;
 
+  const blueprintBody = { description: scenario.blueprintDescription };
+  const blueprintIdempotencyKey = durableIdempotencyKey('api-harness-blueprint');
   const blueprintRequest = blueprintContext.ready
-    ? await time('blueprintGenerateMs', () =>
-      client.post(
-        '/api/blueprints/generate',
-        { description: scenario.blueprintDescription },
-        { headers: blueprintContext.headers },
-      ),
-    )
-    : null;
-  const blueprintResult = blueprintRequest
-    ? await retryWithReplacementContext(client, {
-      response: blueprintRequest,
-      operation: 'blueprint_generation',
+    ? await submitDurableJob(client, {
       path: '/api/blueprints/generate',
-      body: { description: scenario.blueprintDescription },
+      body: blueprintBody,
+      headers: blueprintContext.headers,
+      idempotencyKey: blueprintIdempotencyKey,
       time,
       timingKey: 'blueprintGenerate',
+      timeoutMs: opts.timeoutMs,
     })
-    : { response: null, replacement: null };
+    : null;
+  const blueprintResult = blueprintRequest?.durable === false
+    ? await retryWithReplacementContext(client, {
+      response: blueprintRequest.accepted,
+      operation: 'blueprint_generation',
+      path: '/api/blueprints/generate',
+      body: blueprintBody,
+      time,
+      timingKey: 'blueprintGenerate',
+      extraHeaders: { 'Idempotency-Key': blueprintIdempotencyKey },
+    })
+    : { response: blueprintRequest?.result ?? blueprintRequest?.final ?? null, replacement: null };
   evidence.aiExecutionContexts.blueprintGeneration = {
     ...blueprintContext.evidence,
     replacement: blueprintResult.replacement,
+    ...(blueprintRequest?.durable ? {
+      job: {
+        acceptedStatus: blueprintRequest.accepted.status,
+        duplicateStatus: blueprintRequest.duplicate?.status ?? null,
+        jobId: jobId(blueprintRequest.accepted),
+        duplicateJobId: jobId(blueprintRequest.duplicate),
+        terminalStatus: jobStatus(blueprintRequest.final),
+        resultStatus: blueprintRequest.result?.status ?? null,
+      },
+    } : {}),
   };
+  if (blueprintRequest?.durable) {
+    add(
+      'Blueprint generation job is accepted durably (202)',
+      blueprintRequest.accepted.status === 202 && !!jobId(blueprintRequest.accepted),
+      `status ${blueprintRequest.accepted.status}; job=${jobId(blueprintRequest.accepted) ?? '(missing)'}`,
+    );
+    add(
+      'Blueprint generation idempotency reuses the same job',
+      blueprintRequest.duplicate?.status === 202
+        && !!jobId(blueprintRequest.accepted)
+        && jobId(blueprintRequest.accepted) === jobId(blueprintRequest.duplicate),
+      `first=${jobId(blueprintRequest.accepted) ?? '(missing)'}, duplicate=${jobId(blueprintRequest.duplicate) ?? '(missing)'}`,
+    );
+    add(
+      'Blueprint generation reaches terminal completed status through the hosted worker',
+      jobStatus(blueprintRequest.final) === 'completed',
+      `terminal status=${jobStatus(blueprintRequest.final) ?? '(missing)'}`,
+    );
+    add(
+      'Blueprint generation exposes a result artifact',
+      blueprintRequest.result?.ok === true
+        && !!blueprintRequest.result.responseBody?.artifact_id
+        && !!blueprintRequest.result.responseBody?.blueprint,
+      `result status=${blueprintRequest.result?.status ?? '(not fetched)'}`,
+    );
+  } else if (scenario.requireDurableJobs && blueprintRequest?.accepted) {
+    add(
+      'Blueprint generation uses the durable job contract (202)',
+      false,
+      `status ${blueprintRequest.accepted.status}`,
+    );
+  }
   if (blueprintResult.replacement?.retried) {
     add(
       'Blueprint generator accepts replacement AI execution context after provider change',
@@ -324,8 +540,9 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
       add('Blueprint generation returned a usable draft', false, `status ${genBp.status}: ${JSON.stringify(redact(genBp.responseBody)).slice(0, 300)}`);
     }
   } else {
-    const bp = genBp.responseBody?.blueprint ?? {};
-    const genWfYaml = genBp.responseBody?.generated_workflow_yaml ?? null;
+    const bp = genBp?.responseBody?.blueprint ?? {};
+    const genWfYaml = genBp?.responseBody?.generated_workflow_yaml ?? null;
+    blueprintGeneratedWorkflowYaml = genWfYaml;
     evidence.generatedBlueprint = {
       id: bp.id,
       name: bp.name,
@@ -365,11 +582,22 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     // If the generator produced a custom workflow inline, it must pass structural validation.
     if (genWfYaml) {
       const v = validateWorkflowYaml(genWfYaml);
-      evidence.generatedBlueprintWorkflowValid = { valid: v.valid, errors: v.errors, nodeCount: v.nodeCount };
+      const fan = analyzeConservativeFan(genWfYaml);
+      evidence.generatedBlueprintWorkflowValid = {
+        valid: v.valid,
+        errors: v.errors,
+        nodeCount: v.nodeCount,
+        conservativeFan: fan,
+      };
       add(
         "Blueprint's inline generated workflow passes backend structural validation",
         v.valid,
         v.valid ? `${v.nodeCount} nodes, structurally valid` : `${v.errors.length} error(s): ${v.errors.slice(0, 3).join('; ')}`,
+      );
+      add(
+        "Blueprint's inline generated workflow obeys conservative fan safety",
+        fan.safe,
+        fan.safe ? `mode=${fan.mode}` : fan.errors.slice(0, 3).join('; '),
       );
     }
   }
@@ -395,35 +623,151 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
   );
 
   if (evidence.projectId) {
+    if (scenario.verifyPmDiscovery) {
+      await inspectPmDiscovery(client, evidence.projectId, evidence, add);
+    }
+    if (opts.keep && blueprintGeneratedWorkflowYaml) {
+      await retainGeneratedWorkflow(
+        client,
+        evidence.projectId,
+        blueprintGeneratedWorkflowYaml,
+        'blueprint custom workflow',
+        evidence,
+        add,
+      );
+    }
+
     const workflowContext = await time('workflowExecutionContextMs', () =>
       prepareAiExecutionContext(client, 'workflow_generation', evidence.projectId),
     );
     addExecutionContextCheck('workflow generation', workflowContext, add);
     if (workflowContext.inconclusive) inconclusive = true;
 
+    const workflowBody = { description: scenario.workflowDescription };
+    const workflowPath = `/api/projects/${evidence.projectId}/workflows/generate`;
+    const workflowIdempotencyKey = durableIdempotencyKey('api-harness-workflow');
     const workflowRequest = workflowContext.ready
-      ? await time('workflowGenerateMs', () =>
-        client.post(
-          `/api/projects/${evidence.projectId}/workflows/generate`,
-          { description: scenario.workflowDescription },
-          { headers: workflowContext.headers },
-        ),
-      )
-      : null;
-    const workflowResult = workflowRequest
-      ? await retryWithReplacementContext(client, {
-        response: workflowRequest,
-        operation: 'workflow_generation',
-        path: `/api/projects/${evidence.projectId}/workflows/generate`,
-        body: { description: scenario.workflowDescription },
+      ? await submitDurableJob(client, {
+        path: workflowPath,
+        body: workflowBody,
+        headers: workflowContext.headers,
+        idempotencyKey: workflowIdempotencyKey,
         time,
         timingKey: 'workflowGenerate',
+        timeoutMs: opts.timeoutMs,
       })
-      : { response: null, replacement: null };
+      : null;
+    const directWorkflowResult = workflowRequest?.durable === false
+      ? await retryWithReplacementContext(client, {
+        response: workflowRequest.accepted,
+        operation: 'workflow_generation',
+        path: workflowPath,
+        body: workflowBody,
+        time,
+        timingKey: 'workflowGenerate',
+        extraHeaders: { 'Idempotency-Key': workflowIdempotencyKey },
+      })
+      : null;
+    const workflowOutcome = workflowRequest
+      ? resolveWorkflowGenerationOutcome(workflowRequest.durable
+        ? workflowRequest
+        : { durable: false, result: directWorkflowResult?.response })
+      : null;
+    const workflowResult = {
+      response: workflowOutcome?.response ?? null,
+      replacement: directWorkflowResult?.replacement ?? null,
+    };
+    const cancelRetryContext = workflowContext.ready && workflowRequest?.durable
+      ? await time('workflowCancelRetryExecutionContextMs', () =>
+        prepareAiExecutionContext(client, 'workflow_generation', evidence.projectId),
+      )
+      : null;
+    if (cancelRetryContext) {
+      addExecutionContextCheck('workflow cancellation/retry probe', cancelRetryContext, add);
+      if (cancelRetryContext.inconclusive) inconclusive = true;
+    }
+    const cancelRetry = cancelRetryContext?.ready
+      ? await exerciseCancelRetry(client, {
+        path: workflowPath,
+        body: { description: `${scenario.workflowDescription}\n\nCancellation/retry probe.` },
+        headers: cancelRetryContext.headers,
+        idempotencyKey: durableIdempotencyKey('api-harness-workflow-cancel'),
+        time,
+        timingKey: 'workflowCancelRetry',
+      })
+      : null;
     evidence.aiExecutionContexts.workflowGeneration = {
       ...workflowContext.evidence,
       replacement: workflowResult.replacement,
+      ...(workflowRequest?.durable ? {
+        job: {
+          acceptedStatus: workflowRequest.accepted.status,
+          duplicateStatus: workflowRequest.duplicate?.status ?? null,
+          jobId: jobId(workflowRequest.accepted),
+          duplicateJobId: jobId(workflowRequest.duplicate),
+          terminalStatus: jobStatus(workflowRequest.final),
+          resultStatus: workflowRequest.result?.status ?? null,
+          failure: workflowOutcome?.evidence.failure ?? null,
+          analysis: null,
+        },
+      } : {}),
+      ...(cancelRetry ? {
+        cancelRetry: {
+          contextStatus: cancelRetryContext?.evidence.status ?? null,
+          acceptedStatus: cancelRetry.accepted?.status ?? null,
+          cancelStatus: cancelRetry.cancel?.status ?? null,
+          cancelledJobStatus: jobStatus(cancelRetry.cancel),
+          retryStatus: cancelRetry.retry?.status ?? null,
+          retriedJobStatus: jobStatus(cancelRetry.retry),
+        },
+      } : {}),
     };
+    if (workflowRequest?.durable) {
+      const providerOutcomeInconclusive = workflowOutcome?.inconclusive === true;
+      const outcomeCategory = providerOutcomeInconclusive ? 'CANNOT_DETERMINE' : 'P0';
+      add(
+        'Advanced workflow generation job is accepted durably (202)',
+        workflowRequest.accepted.status === 202 && !!jobId(workflowRequest.accepted),
+        `status ${workflowRequest.accepted.status}; job=${jobId(workflowRequest.accepted) ?? '(missing)'}`,
+      );
+      add(
+        'Advanced workflow generation idempotency reuses the same job',
+        workflowRequest.duplicate?.status === 202
+          && !!jobId(workflowRequest.accepted)
+          && jobId(workflowRequest.accepted) === jobId(workflowRequest.duplicate),
+        `first=${jobId(workflowRequest.accepted) ?? '(missing)'}, duplicate=${jobId(workflowRequest.duplicate) ?? '(missing)'}`,
+      );
+      add(
+        'Advanced workflow generation reaches terminal completed status through the hosted worker',
+        jobStatus(workflowRequest.final) === 'completed' || providerOutcomeInconclusive,
+        `terminal status=${jobStatus(workflowRequest.final) ?? '(missing)'}`,
+        outcomeCategory,
+      );
+      add(
+        'Advanced workflow generation exposes a result artifact',
+        !!workflowOutcome?.response || providerOutcomeInconclusive,
+        workflowOutcome?.detail ?? `result status=${workflowRequest.result?.status ?? '(not fetched)'}`,
+        outcomeCategory,
+      );
+    } else if (scenario.requireDurableJobs && workflowRequest?.accepted) {
+      add(
+        'Advanced workflow generation uses the durable job contract (202)',
+        false,
+        `status ${workflowRequest.accepted.status}`,
+      );
+    }
+    if (cancelRetryContext?.ready) {
+      add(
+        'Advanced workflow generation cancellation is accepted',
+        cancelRetry?.accepted?.status === 202 && cancelRetry.cancel?.status === 200 && jobStatus(cancelRetry.cancel) === 'cancelled',
+        `accept status=${cancelRetry?.accepted?.status ?? '(missing)'}; cancel status=${cancelRetry?.cancel?.status ?? '(missing)'}; job status=${jobStatus(cancelRetry?.cancel) ?? '(missing)'}`,
+      );
+      add(
+        'Advanced workflow generation retry is accepted after cancellation',
+        cancelRetry?.retry?.status === 202,
+        `retry status=${cancelRetry?.retry?.status ?? '(missing)'}; job status=${jobStatus(cancelRetry?.retry) ?? '(missing)'}`,
+      );
+    }
     if (workflowResult.replacement?.retried) {
       add(
         'Workflow generator accepts replacement AI execution context after provider change',
@@ -433,7 +777,14 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     }
     const genWf = workflowResult.response;
 
-    if (genWf && genWf.status !== 200) {
+    if (!genWf && workflowOutcome) {
+      if (workflowOutcome.inconclusive) {
+        inconclusive = true;
+        add('Workflow generation artifact is assessable', true, workflowOutcome.detail, 'CANNOT_DETERMINE');
+      } else {
+        add('Workflow generation returned a usable draft', false, workflowOutcome.detail);
+      }
+    } else if (genWf && genWf.status !== 200) {
       if (PROVIDER_FAIL_STATUS.has(genWf.status)) {
         inconclusive = true;
         add('Workflow generator reachable', true, `provider unavailable (status ${genWf.status}) — seam not assessed`, 'CANNOT_DETERMINE');
@@ -441,13 +792,20 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
         add('Workflow generation returned a usable draft', false, `status ${genWf.status}: ${JSON.stringify(redact(genWf.responseBody)).slice(0, 300)}`);
       }
     } else {
-      const yaml = genWf.responseBody?.yaml ?? '';
-      const workflowId = genWf.responseBody?.workflowId ?? null;
+      const yaml = genWf?.responseBody?.yaml ?? '';
+      const workflowId = genWf?.responseBody?.workflowId ?? genWf?.responseBody?.workflow_id ?? null;
       const v = validateWorkflowYaml(yaml);
       const yamlDocumentId = v.documentId;
       const nodeRoles = workflowNodeRoles(yaml);
       const roleLeaks = findReservedRoleLeaks({ workflowRoles: nodeRoles });
-      evidence.generatedWorkflow = { workflowId, yamlDocumentId, wasCorrected: genWf.responseBody?.wasCorrected, nodeRoles };
+      const fan = analyzeConservativeFan(yaml);
+      evidence.generatedWorkflow = {
+        workflowId,
+        yamlDocumentId,
+        wasCorrected: genWf.responseBody?.wasCorrected,
+        nodeRoles,
+        conservativeFan: fan,
+      };
       evidence.generatedWorkflowValidation = { valid: v.valid, errors: v.errors, warnings: v.warnings, nodeCount: v.nodeCount };
 
       add(
@@ -465,6 +823,52 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
         roleLeaks.offenders.length === 0,
         roleLeaks.offenders.length === 0 ? `roles: ${nodeRoles.join(', ') || '(none declared)'}` : `LEAKED: ${roleLeaks.offenders.join(', ')}`,
       );
+      add(
+        'Generated workflow obeys conservative fan safety',
+        fan.safe,
+        fan.safe ? `mode=${fan.mode}` : fan.errors.slice(0, 3).join('; '),
+      );
+      if (opts.keep && v.valid && fan.safe) {
+        await retainGeneratedWorkflow(client, evidence.projectId, yaml, 'primary generated workflow', evidence, add);
+      }
+    }
+
+    for (const fanCase of scenario.conservativeFanCases ?? []) {
+      const fanResult = await runConservativeFanGenerationCase(
+        client,
+        evidence.projectId,
+        fanCase,
+        opts,
+        time,
+      );
+      evidence.conservativeFanCases.push(fanResult.evidence);
+      if (fanResult.inconclusive) inconclusive = true;
+      add(
+        `Conservative generation case '${fanCase.id}' returns ${fanCase.expectedMode}`,
+        fanResult.pass,
+        fanResult.detail,
+        fanResult.inconclusive ? 'CANNOT_DETERMINE' : 'P0',
+      );
+      if (opts.keep && fanResult.yaml && fanResult.analysis?.safe) {
+        const retainedWorkflowId = await retainGeneratedWorkflow(
+          client,
+          evidence.projectId,
+          fanResult.yaml,
+          `conservative generation case '${fanCase.id}'`,
+          evidence,
+          add,
+        );
+        if (retainedWorkflowId && fanCase.startRetainedRun) {
+          await queueRetainedWorkflowRun(
+            client,
+            evidence.projectId,
+            retainedWorkflowId,
+            fanCase.id,
+            evidence,
+            add,
+          );
+        }
+      }
     }
 
     // ── SEAM 3: backend round-trip — prove our local validator mirror agrees with
@@ -473,6 +877,151 @@ async function executeGenerationSeams(client, scenario, opts = {}) {
     // outgoing edge for it) via PUT and assert the backend rejects it with a 4xx;
     // then save a VALID one as a positive control and assert it is accepted.
     await runBackendGuardRoundTrip(client, evidence.projectId, add, time);
+  }
+
+  async function runConservativeFanGenerationCase(client, projectId, fanCase, opts, time) {
+    const timingKey = `conservativeFan-${fanCase.id.replace(/[^a-z0-9]+/gi, '-')}`;
+    const context = await time(`${timingKey}ContextMs`, () =>
+      prepareAiExecutionContext(client, 'workflow_generation', projectId),
+    );
+    if (!context.ready) {
+      return {
+        pass: false,
+        inconclusive: context.inconclusive,
+        detail: `AI execution context unavailable (status ${context.evidence.status})`,
+        yaml: null,
+        analysis: null,
+        evidence: { id: fanCase.id, expectedMode: fanCase.expectedMode, context: context.evidence },
+      };
+    }
+
+    const path = `/api/projects/${projectId}/workflows/generate`;
+    const idempotencyKey = durableIdempotencyKey(`api-harness-${fanCase.id}`);
+    const request = await submitDurableJob(client, {
+      path,
+      body: { description: fanCase.description, content_only: true },
+      headers: context.headers,
+      idempotencyKey,
+      time,
+      timingKey,
+      timeoutMs: opts.timeoutMs,
+    });
+    const directResult = request.durable === false
+      ? await retryWithReplacementContext(client, {
+        response: request.accepted,
+        operation: 'workflow_generation',
+        path,
+        body: { description: fanCase.description, content_only: true },
+        time,
+        timingKey,
+        extraHeaders: { 'Idempotency-Key': idempotencyKey },
+      })
+      : null;
+    const outcome = resolveWorkflowGenerationOutcome(request.durable
+      ? request
+      : { durable: false, result: directResult?.response });
+    const response = outcome.response;
+    if (!response) {
+      return {
+        pass: false,
+        inconclusive: outcome.inconclusive,
+        detail: outcome.detail,
+        yaml: null,
+        analysis: null,
+        evidence: {
+          id: fanCase.id,
+          expectedMode: fanCase.expectedMode,
+          ...outcome.evidence,
+        },
+      };
+    }
+
+    const yaml = response.responseBody?.yaml ?? '';
+    const validation = validateWorkflowYaml(yaml);
+    const analysis = analyzeConservativeFan(yaml);
+    const pass = validation.valid && analysis.safe && analysis.mode === fanCase.expectedMode;
+    return {
+      pass,
+      inconclusive: false,
+      detail: pass
+        ? `mode=${analysis.mode}; ${validation.nodeCount} nodes`
+        : `mode=${analysis.mode}; expected=${fanCase.expectedMode}; ${[...validation.errors, ...analysis.errors].slice(0, 3).join('; ')}`,
+      yaml,
+      analysis,
+      evidence: {
+        id: fanCase.id,
+        expectedMode: fanCase.expectedMode,
+        ...outcome.evidence,
+        workflowId: response.responseBody?.workflow_id ?? response.responseBody?.workflowId ?? null,
+        validation,
+        analysis,
+      },
+    };
+  }
+
+  async function retainGeneratedWorkflow(client, projectId, yaml, label, evidence, add) {
+    const validation = validateWorkflowYaml(yaml);
+    const workflowId = validation.documentId;
+    if (!validation.valid || !workflowId) {
+      add(`Retain ${label}`, false, 'generated YAML is not valid enough to save');
+      return null;
+    }
+    const response = await client.put(
+      `/api/projects/${projectId}/workflows/${encodeURIComponent(workflowId)}`,
+      { yaml },
+    );
+    if (response.ok) evidence.retainedWorkflowIds.push(workflowId);
+    add(
+      `Retain ${label}`,
+      response.ok,
+      response.ok ? `saved workflow ${workflowId}` : `save status ${response.status}`,
+    );
+    return response.ok ? workflowId : null;
+  }
+
+  async function queueRetainedWorkflowRun(client, projectId, workflowId, caseId, evidence, add) {
+    const context = await prepareAiExecutionContext(client, 'orchestration', projectId);
+    if (!context.ready) {
+      add(
+        `Queue retained run for '${caseId}'`,
+        false,
+        `orchestration context unavailable (status ${context.evidence.status})`,
+        context.inconclusive ? 'CANNOT_DETERMINE' : 'P0',
+      );
+      return;
+    }
+    const response = await client.post(
+      `/api/projects/${projectId}/workflows/${encodeURIComponent(workflowId)}/run`,
+      {},
+      { headers: context.headers },
+    );
+    const taskId = response.responseBody?.task_id ?? null;
+    if (response.ok && taskId) {
+      evidence.retainedRunTriggers.push({ caseId, workflowId, taskId });
+    }
+    add(
+      `Queue retained run for '${caseId}'`,
+      response.status === 201 && !!taskId,
+      taskId ? `task ${taskId} will execute against retained workflow ${workflowId}` : `status ${response.status}`,
+    );
+  }
+
+  async function inspectPmDiscovery(client, projectId, evidence, add) {
+    const response = await client.get(`/api/projects/${projectId}/workflows/pm-discovery`);
+    const verification = verifyPmDiscovery(response);
+    evidence.pmDiscovery = {
+      status: response.status,
+      branchIds: verification.branchIds,
+      customerOutputPaths: verification.customerOutputPaths,
+      technicalOutputPaths: verification.technicalOutputPaths,
+    };
+    add(
+      'PM Discovery exposes two ordered independent research branches before synthesis',
+      verification.valid,
+      verification.valid
+        ? `${verification.branchIds.join(' -> join, ')} -> join -> synthesis`
+        : `status ${response.status}; branches=${verification.branchIds.join(',')}`,
+    );
   }
 
   return finalize();

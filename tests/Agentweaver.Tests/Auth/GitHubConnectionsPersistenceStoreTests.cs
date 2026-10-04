@@ -685,6 +685,102 @@ public sealed class GitHubConnectionsPersistenceStoreTests
     }
 
     [Fact]
+    public async Task CapabilitySnapshotLifecycle_GitHubOriginByokStaticFanRequiresEveryIntermediateRunToInherit()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        var projects = new FakeProjectStore();
+        projects.Seed(GitHubOriginDomainProject(projectId));
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        var persistence = new GitHubConnectionsPersistenceStore(db, projects);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var parent = RunForSnapshotLifecycle(projectId) with { ModelSource = ModelSource.Byok };
+        (await lifecycle.PrepareForLaunchAsync(parent, CancellationToken.None)).Should().BeTrue();
+
+        var fanCoordinator = RunForSnapshotLifecycle(projectId) with
+        {
+            ParentRunId = parent.Id.ToString(),
+            ModelSource = ModelSource.Byok,
+        };
+        var firstBranch = RunForSnapshotLifecycle(projectId) with
+        {
+            ParentRunId = fanCoordinator.Id.ToString(),
+            ModelSource = ModelSource.Byok,
+        };
+        (await lifecycle.PrepareForLaunchAsync(firstBranch, CancellationToken.None)).Should().BeFalse(
+            "the fan coordinator is the immediate parent and may not skip a capability boundary");
+
+        (await lifecycle.PrepareForLaunchAsync(fanCoordinator, CancellationToken.None)).Should().BeTrue();
+        (await lifecycle.PrepareForLaunchAsync(firstBranch, CancellationToken.None)).Should().BeTrue();
+        var secondBranch = RunForSnapshotLifecycle(projectId) with
+        {
+            ParentRunId = fanCoordinator.Id.ToString(),
+            ModelSource = ModelSource.Byok,
+        };
+        (await lifecycle.PrepareForLaunchAsync(secondBranch, CancellationToken.None)).Should().BeTrue();
+        foreach (var run in new[] { parent, fanCoordinator, firstBranch, secondBranch })
+        {
+            var snapshots = await persistence.GetCapabilitySnapshotsAsync(run.Id.ToString());
+            snapshots.Should().ContainSingle(snapshot =>
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedRepository
+                && snapshot.ProjectId == projectId.ToString());
+            snapshots.Should().NotContain(snapshot =>
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedCopilot);
+        }
+
+        await db.GitHubRepositoryGrants.ExecuteUpdateAsync(update => update
+            .SetProperty(grant => grant.PermissionDigest, "changed"));
+        (await lifecycle.PrepareForLaunchAsync(firstBranch, CancellationToken.None)).Should().BeFalse(
+            "a changed grant must not silently rebind an accepted run");
+        var afterChange = RunForSnapshotLifecycle(projectId) with
+        {
+            ParentRunId = fanCoordinator.Id.ToString(),
+            ModelSource = ModelSource.Byok,
+        };
+        (await lifecycle.PrepareForLaunchAsync(afterChange, CancellationToken.None)).Should().BeFalse();
+        await db.GitHubRepositoryGrants.ExecuteUpdateAsync(update => update
+            .SetProperty(grant => grant.RevokedAt, DateTimeOffset.UtcNow));
+        (await lifecycle.PrepareForLaunchAsync(secondBranch, CancellationToken.None)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CapabilitySnapshotLifecycle_ExistingChildSnapshotCannotBeReboundToAnotherGrant()
+    {
+        await using var connection = await OpenDatabaseAsync();
+        await using var db = new MemoryDbContext(Options(connection));
+        var projectId = ProjectId.New();
+        var projects = new FakeProjectStore();
+        projects.Seed(GitHubOriginDomainProject(projectId));
+        db.Projects.Add(Project(projectId.ToString()));
+        await db.SaveChangesAsync();
+        await SeedCapabilitySourcesAsync(db, projectId.ToString());
+        var persistence = new GitHubConnectionsPersistenceStore(db, projects);
+        var lifecycle = CreateLifecycle(db, persistence);
+        var first = RunForSnapshotLifecycle(projectId) with { ModelSource = ModelSource.Byok };
+        (await lifecycle.PrepareForLaunchAsync(first, CancellationToken.None)).Should().BeTrue();
+        await db.GitHubRepositoryGrants.ExecuteUpdateAsync(update => update
+            .SetProperty(grant => grant.PermissionDigest, "replacement"));
+        var replacement = RunForSnapshotLifecycle(projectId) with { ModelSource = ModelSource.Byok };
+        (await lifecycle.PrepareForLaunchAsync(replacement, CancellationToken.None)).Should().BeTrue();
+        var child = RunForSnapshotLifecycle(projectId) with
+        {
+            ModelSource = ModelSource.Byok,
+            ParentRunId = replacement.Id.ToString(),
+        };
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeTrue();
+
+        (await persistence.TryInheritRepositoryCapabilitySnapshotAsync(
+            first.Id.ToString(), child.Id.ToString(), projectId.ToString()))
+            .Should().BeFalse("an existing child's snapshot cannot be accepted as a different parent's grant");
+        (await lifecycle.PrepareForLaunchAsync(child, CancellationToken.None)).Should().BeTrue();
+        (await persistence.GetCapabilitySnapshotsAsync(child.Id.ToString()))
+            .Should().ContainSingle(snapshot => snapshot.GrantDigest == "replacement");
+    }
+
+    [Fact]
     public async Task CapabilitySnapshotLifecycle_CopilotRetryUsesAcceptedCredentialVersion()
     {
         await using var connection = await OpenDatabaseAsync();

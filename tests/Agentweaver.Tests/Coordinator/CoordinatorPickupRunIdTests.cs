@@ -4,14 +4,20 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
+using LibGit2Sharp;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
+using Agentweaver.Api.Security;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
+using Agentweaver.Squad.Catalog;
+using Agentweaver.Squad.Model;
+using Agentweaver.Squad.Squad;
 
 namespace Agentweaver.Tests.Coordinator;
 
@@ -54,6 +60,16 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         var projectId = await CreateProjectAsync();
         var pid = ProjectId.Parse(projectId);
         await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId);
+        AiOperationCatalog.TryGet("orchestration", out var operation).Should().BeTrue();
+        string providerKey;
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var plans = scope.ServiceProvider.GetRequiredService<AiExecutionPlanService>();
+            var acceptedPlan = await plans.PrepareAsync(operation, pid,
+                new CallerContext { User = CoordinatorWebApplicationFactory.OwnerUser },
+                CancellationToken.None);
+            providerKey = plans.CreateQueuedProviderKey(acceptedPlan);
+        }
 
         // Preserve the display GitHub login separately from the durable auth subject used by the
         // resulting background run.
@@ -68,6 +84,8 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
             OrderKey    = "n",
             CapturedBy  = "owner-github-login",
             CapturedByUserId = CoordinatorWebApplicationFactory.OwnerUser,
+            ReadyByUserId = CoordinatorWebApplicationFactory.OwnerUser,
+            AiExecutionProviderKey = providerKey,
             CreatedAt   = DateTimeOffset.UtcNow,
             CommittedAt = DateTimeOffset.UtcNow,
             ClaimedAt   = null,
@@ -181,6 +199,604 @@ public sealed class CoordinatorPickupRunIdTests : IDisposable
         // The run-detail endpoint also resolves by run_id post-confirm (no 404 cascade).
         var finalRun = await _owner.GetAsync($"/api/runs/{runId}");
         finalRun.StatusCode.Should().Be(HttpStatusCode.OK, "the coordinator run stays resolvable by run_id end-to-end");
+    }
+
+    [Fact]
+    public async Task RunNow_StaticFan_ExecutesPinnedWorkflowInsteadOfCoordinatorDecomposition()
+    {
+        await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
+        using var owner = factory.CreateOwnerClient();
+        factory.TestAgentRunner.Mode = TestFileEditAgentRunner.AgentMode.NoChange;
+
+        var workingDirectory = factory.NewWorkingDirectory();
+        var create = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Run now fan {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = workingDirectory,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        var pid = ProjectId.Parse(projectId);
+        SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory);
+
+        const string originalYaml = """
+            id: run-now-fan
+            name: Run now fan
+            version: "1"
+            start: fan
+            nodes:
+              - id: fan
+                type: fan_out
+                label: Parallel work
+              - id: branch-one
+                type: prompt
+                label: Branch one
+                agent: alpha
+                prompt: Produce branch one.
+              - id: branch-two
+                type: prompt
+                label: Branch two
+                agent: alpha
+                prompt: Produce branch two.
+              - id: join
+                type: fan_in
+                label: Join
+                target: fan
+              - id: done
+                type: terminal
+                label: Done
+            edges:
+              - from: fan
+                to: branch-one
+              - from: fan
+                to: branch-two
+              - from: branch-one
+                to: join
+              - from: branch-two
+                to: join
+              - from: join
+                to: done
+            """;
+        var save = await owner.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/run-now-fan",
+            new { yaml = originalYaml });
+        save.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Repository.Init(workingDirectory);
+        using (var repository = new Repository(workingDirectory))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial workflow", signature, signature);
+            if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+                repository.Branches.Rename(repository.Head, "main");
+        }
+
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var runNow = await owner.PostAsync(
+            $"/api/projects/{projectId}/workflows/run-now-fan/run",
+            content: null);
+        runNow.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var backlog = factory.Services.GetRequiredService<IBacklogTaskStore>();
+        var task = (await backlog.ListByProjectAsync(pid)).Should().ContainSingle().Subject;
+        task.WorkflowDefinitionSnapshotYaml.Should().Contain("id: branch-one");
+        await File.WriteAllTextAsync(
+            Path.Combine(workingDirectory, ".agentweaver", "workflows", "run-now-fan.yaml"),
+            originalYaml.Replace("branch-one", "edited-branch", StringComparison.Ordinal));
+        File.Delete(Path.Combine(workingDirectory, ".agentweaver", "workflows", "run-now-fan.yaml"));
+
+        var projectStore = factory.Services.GetRequiredService<IProjectStore>();
+        await projectStore.UpdatePickupSettingsAsync(
+            pid, 3, autopilot: true, autoApproveTools: true, DateTimeOffset.UtcNow);
+        var project = await projectStore.GetAsync(pid);
+        await factory.Services.GetRequiredService<CoordinatorPickupService>()
+            .TryPickupAsync(project!, task, CancellationToken.None);
+
+        var claimed = await backlog.GetAsync(pid, task.Id);
+        claimed!.RunId.Should().NotBeNull();
+        var runId = claimed.RunId!.Value.ToString();
+
+        JsonElement plan = default;
+        var attached = await PollUntilAsync(async () =>
+        {
+            var response = await owner.GetAsync($"/api/runs/{runId}/work-plan");
+            if (response.StatusCode != HttpStatusCode.OK)
+                return false;
+            plan = await response.Content.ReadFromJsonAsync<JsonElement>();
+            return plan.GetProperty("subtasks").GetArrayLength() == 2;
+        }, timeoutSeconds: 40);
+        attached.Should().BeTrue(
+            "Run now must enter the static fan child-work path; last plan: {0}",
+            plan.ValueKind == JsonValueKind.Undefined ? "<none>" : plan.GetRawText());
+
+        plan.GetProperty("parentRunId").GetString().Should().Be(runId);
+        plan.GetProperty("parentWorkflowId").GetString().Should().Be("run-now-fan");
+        plan.GetProperty("parentWorkflowNodeId").GetString().Should().Be("fan");
+        plan.GetProperty("parentJoinNodeId").GetString().Should().Be("join");
+        plan.GetProperty("subtasks").EnumerateArray()
+            .Select(item => (
+                item.GetProperty("workflowBranchNodeId").GetString(),
+                item.GetProperty("workflowBranchOrdinal").GetInt32()))
+            .Should().Equal(("branch-one", 0), ("branch-two", 1));
+        var events = string.Empty;
+        var waitingEvent = await PollUntilAsync(async () =>
+        {
+            events = await owner.GetStringAsync($"/api/runs/{runId}/events");
+            return events.Contains("waiting_child_work", StringComparison.Ordinal);
+        });
+        waitingEvent.Should().BeTrue();
+        events.Should().Contain("waiting_child_work");
+        events.Should().NotContain("coordinator.outcome_spec");
+        factory.Services.GetRequiredService<RunStreamStore>().Remove(runId);
+
+        var persistedRun = await factory.Services.GetRequiredService<IRunStore>()
+            .GetAsync(RunId.Parse(runId));
+        persistedRun.Should().NotBeNull();
+        persistedRun!.AgentName.Should().BeNull("static saved workflows are workflow runs, not coordinator decompositions");
+        persistedRun.GetExecutableWorkflowPin().Should().NotBeNull();
+        persistedRun.ExecutableWorkflowDefinitionYaml.Should().Contain("id: branch-one");
+        persistedRun.ExecutableWorkflowDefinitionYaml.Should().NotContain("edited-branch");
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var storedPlan = await db.WorkPlans.SingleAsync(row => row.ParentRunId == runId);
+        storedPlan.IntegrationBranch.Should().BeNull();
+        storedPlan.AssemblyStage.Should().BeNull();
+        var storedBranches = await db.Subtasks
+            .Where(row => row.WorkPlanId == storedPlan.Id)
+            .OrderBy(row => row.WorkflowBranchOrdinal)
+            .ToListAsync();
+        storedBranches.Should().HaveCount(2);
+        storedPlan.Status = WorkPlanStatus.Complete;
+        foreach (var branch in storedBranches)
+            branch.Status = SubtaskStatus.Completed;
+        await db.SaveChangesAsync();
+
+        var childWork = factory.Services.GetRequiredService<WorkflowChildWorkService>();
+        await childWork.TryPrepareResumeAsync(storedPlan.Id);
+        await childWork.TryPrepareResumeAsync(storedPlan.Id);
+
+        using var durableEvents = JsonDocument.Parse(await owner.GetStringAsync($"/api/runs/{runId}/events"));
+        var readyEvents = durableEvents.RootElement.EnumerateArray()
+            .Where(evt => evt.GetProperty("type").GetString() == EventTypes.WorkflowStep)
+            .Where(evt => evt.GetProperty("payload").GetProperty("status").GetString() == "child_work_ready")
+            .ToList();
+        readyEvents.Should().ContainSingle(
+            "hosted-worker preparation must durably publish one logical ready event without a parent-process stream");
+        var readyPayload = readyEvents[0].GetProperty("payload");
+        readyPayload.GetProperty("parentWorkflowId").GetString().Should().Be("run-now-fan");
+        readyPayload.GetProperty("parentWorkflowNodeId").GetString().Should().Be("fan");
+        readyPayload.GetProperty("parentJoinNodeId").GetString().Should().Be("join");
+        readyPayload.GetProperty("workPlanId").GetInt32().Should().Be(storedPlan.Id);
+        readyPayload.GetProperty("childCoordinatorRunId").GetString()
+            .Should().Be(storedPlan.CoordinatorRunId);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DirectOrchestration_ExplicitStaticFanOverride_ExecutesPinnedWorkflowInsteadOfCoordinatorDecomposition(
+        bool githubOriginByok)
+    {
+        await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
+        using var owner = factory.CreateOwnerClient();
+        factory.TestAgentRunner.Mode = TestFileEditAgentRunner.AgentMode.NoChange;
+
+        var workingDirectory = factory.NewWorkingDirectory();
+        var create = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Direct fan override {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = workingDirectory,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        if (githubOriginByok)
+        {
+            var catalog = new CatalogReader();
+            var members = new[]
+            {
+                ("Rachael", "devops-engineer"),
+                ("Deckard", "lead-architect"),
+                ("Roy", "qa-engineer"),
+            }.Select(member => new CastMember(
+                member.Item1,
+                catalog.LoadRole(member.Item2)!,
+                $".squad/agents/{member.Item1.ToLowerInvariant()}/charter.md",
+                CastMemberStatus.Active,
+                true)).ToArray();
+            new SquadWriter(workingDirectory).WriteTeam(
+                new Team("Discovery", "test", members), "test", DateTimeOffset.UtcNow);
+        }
+        else
+            SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory);
+        if (githubOriginByok)
+        {
+            await factory.Services.GetRequiredService<IProjectStore>().UpdateOriginAsync(
+                ProjectId.Parse(projectId),
+                ProjectOrigin.FromGitHub("sabbour/agentweaver"),
+                DateTimeOffset.UtcNow);
+            await using var setupScope = factory.Services.CreateAsyncScope();
+            var setupDb = setupScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var installationId = Random.Shared.NextInt64(1, long.MaxValue);
+            setupDb.Projects.Add(new ProjectRecord
+            {
+                ProjectId = projectId,
+                OriginKind = "from_github",
+                Name = "Selected discovery",
+                WorkingDirectory = workingDirectory,
+                Owner = CoordinatorWebApplicationFactory.OwnerUser,
+                DefaultProvider = "byok",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            setupDb.GitHubInstallations.Add(new GitHubInstallationRecord
+            {
+                InstallationId = installationId,
+                AppKind = GitHubAppKind.Repo,
+                ProjectId = projectId,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            setupDb.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+            {
+                InstallationId = installationId,
+                RepositoryId = 5678,
+                ProjectId = projectId,
+                FullNameDisplay = "sabbour/agentweaver",
+                PermissionDigest = "digest",
+                GrantedAt = DateTimeOffset.UtcNow,
+            });
+            await setupDb.SaveChangesAsync();
+            var byok = setupScope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+            var configuration = await byok.AddAsync(new ByokProviderConfiguration(
+                Id: string.Empty,
+                Name: "Test Azure provider",
+                Type: "azure",
+                BaseUrl: "https://byok-resource.openai.azure.com",
+                Model: "gpt-4.1",
+                ApiKey: "test-byok-key"), CancellationToken.None);
+            await byok.SetActiveAsync(configuration.Id, CancellationToken.None);
+            var readiness = await owner.GetFromJsonAsync<JsonElement>(
+                $"/api/projects/{projectId}/github/unattended-readiness");
+            readiness.GetProperty("status").GetString().Should().Be("unattended_ready");
+        }
+
+        const string originalYaml = """
+            id: direct-fan
+            name: Direct fan
+            version: "1"
+            start: fan
+            nodes:
+              - id: fan
+                type: fan_out
+                label: Parallel work
+              - id: branch-one
+                type: prompt
+                label: Branch one
+                role: lead-architect
+                prompt: Produce branch one.
+              - id: branch-two
+                type: prompt
+                label: Branch two
+                role: lead-architect
+                prompt: Produce branch two.
+              - id: join
+                type: fan_in
+                label: Join
+                target: fan
+              - id: synthesis
+                type: prompt
+                label: Synthesis
+                agent: alpha
+                prompt: Synthesize the branch results.
+              - id: done
+                type: terminal
+                label: Done
+            edges:
+              - from: fan
+                to: branch-one
+              - from: fan
+                to: branch-two
+              - from: branch-one
+                to: join
+              - from: branch-two
+                to: join
+              - from: join
+                to: synthesis
+              - from: synthesis
+                to: done
+            """;
+        var workflowId = githubOriginByok ? "issue-1634-pm-discovery" : "direct-fan";
+        var selectedYaml = originalYaml;
+        if (githubOriginByok)
+        {
+            selectedYaml = new CatalogReader().LoadAllWorkflowYamls()
+                .Select(item => item.Yaml)
+                .Single(yaml => yaml.Contains("id: pm-discovery", StringComparison.Ordinal))
+                .Replace("id: pm-discovery", $"id: {workflowId}", StringComparison.Ordinal)
+                .Replace("role: customer-researcher", "role: devops-engineer", StringComparison.Ordinal)
+                .Replace("role: prototype-designer", "role: lead-architect", StringComparison.Ordinal)
+                .Replace("role: lead-pm", "role: qa-engineer", StringComparison.Ordinal)
+                .Replace("role: product-marketing-manager", "role: qa-engineer", StringComparison.Ordinal);
+        }
+        var save = await owner.PutAsJsonAsync(
+            $"/api/projects/{projectId}/workflows/{workflowId}",
+            new { yaml = selectedYaml });
+        save.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        Repository.Init(workingDirectory);
+        using (var repository = new Repository(workingDirectory))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial workflow", signature, signature);
+            if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+                repository.Branches.Rename(repository.Head, "main");
+        }
+
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var start = await owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations",
+            new
+            {
+                goal = "Run the selected discovery fan.",
+                start_mode = "direct",
+                workflow_override_id = workflowId,
+                auto_approve_tools = false,
+                autopilot = false,
+            });
+        start.StatusCode.Should().Be(HttpStatusCode.Created, await start.Content.ReadAsStringAsync());
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("runId").GetString()!;
+
+        JsonElement plan = default;
+        var attached = await PollUntilAsync(async () =>
+        {
+            var response = await owner.GetAsync($"/api/runs/{runId}/work-plan");
+            if (response.StatusCode != HttpStatusCode.OK)
+                return false;
+            plan = await response.Content.ReadFromJsonAsync<JsonElement>();
+            return plan.GetProperty("subtasks").GetArrayLength() == 2;
+        }, timeoutSeconds: 40);
+        attached.Should().BeTrue(
+            "an explicit direct fan override must execute the pinned workflow, not generic coordinator decomposition; last plan: {0}",
+            plan.ValueKind == JsonValueKind.Undefined ? "<none>" : plan.GetRawText());
+
+        plan.GetProperty("parentRunId").GetString().Should().Be(runId);
+        plan.GetProperty("parentWorkflowId").GetString().Should().Be(workflowId);
+        plan.GetProperty("parentWorkflowNodeId").GetString().Should().Be(
+            githubOriginByok ? "discovery-fan-out" : "fan");
+        plan.GetProperty("parentJoinNodeId").GetString().Should().Be(
+            githubOriginByok ? "discovery-fan-in" : "join");
+        plan.GetProperty("subtasks").EnumerateArray()
+            .Select(item => (
+                item.GetProperty("workflowBranchNodeId").GetString(),
+                item.GetProperty("workflowBranchOrdinal").GetInt32()))
+            .Should().Equal(
+                (githubOriginByok ? "customer-signal-research" : "branch-one", 0),
+                (githubOriginByok ? "technical-feasibility-research" : "branch-two", 1));
+        plan.GetProperty("subtasks").EnumerateArray()
+            .Select(item => item.GetProperty("assignedAgent").GetString())
+            .Should().Equal(githubOriginByok ? ["Rachael", "Deckard"] : ["Alpha", "Alpha"]);
+
+        var persistedRun = await factory.Services.GetRequiredService<IRunStore>()
+            .GetAsync(RunId.Parse(runId));
+        persistedRun.Should().NotBeNull();
+        persistedRun!.AgentName.Should().BeNull(
+            "static workflow overrides are executable workflow runs, not coordinator decompositions");
+        persistedRun.WorkflowSelectionReason.Should().Contain("explicit workflow override");
+        persistedRun.GetExecutableWorkflowPin().Should().NotBeNull();
+        persistedRun.ExecutableWorkflowDefinitionYaml.Should().Contain("id: synthesis");
+        persistedRun.ExecutableWorkflowDefinitionYaml.Should().Contain("role: lead-architect");
+
+        var events = string.Empty;
+        var waitingEvent = await PollUntilAsync(async () =>
+        {
+            events = await owner.GetStringAsync($"/api/runs/{runId}/events");
+            return events.Contains("waiting_child_work", StringComparison.Ordinal);
+        });
+        waitingEvent.Should().BeTrue();
+        events.Should().Contain("waiting_child_work");
+        events.Should().Contain("\"id\":\"synthesis\"");
+        events.Should().NotContain("coordinator.outcome_spec");
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plans = await db.WorkPlans
+            .Where(row => row.ParentRunId == runId || row.CoordinatorRunId == runId)
+            .ToListAsync();
+        plans.Should().ContainSingle("restart-safe attachment must not duplicate the work plan");
+        plans[0].IntegrationBranch.Should().BeNull();
+        plans[0].AssemblyStage.Should().BeNull();
+        if (githubOriginByok)
+        {
+            var snapshots = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                .Where(snapshot => snapshot.RunId == runId
+                    || snapshot.RunId == plans[0].CoordinatorRunId)
+                .ToListAsync();
+            snapshots.Should().HaveCount(2);
+            snapshots.Should().OnlyContain(snapshot =>
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedRepository
+                && snapshot.ProjectId == projectId);
+            var branches = await db.Subtasks.AsNoTracking()
+                .Where(row => row.WorkPlanId == plans[0].Id)
+                .OrderBy(row => row.WorkflowBranchOrdinal)
+                .ToArrayAsync();
+            branches.Should().HaveCount(2);
+            var dispatched = await PollUntilAsync(async () =>
+            {
+                var current = await db.Subtasks.AsNoTracking()
+                    .Where(row => row.WorkPlanId == plans[0].Id)
+                    .ToListAsync();
+                if (current.Count != 2 || current.Any(row => row.ChildRunId is null))
+                    return false;
+                var ids = current.Select(row => row.ChildRunId!).ToArray();
+                return await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                    .CountAsync(snapshot => ids.Contains(snapshot.RunId)) == 2;
+            });
+            dispatched.Should().BeTrue(
+                "the actual dispatched branches must inherit the parent repository capability");
+            var childIds = await db.Subtasks.AsNoTracking()
+                .Where(row => row.WorkPlanId == plans[0].Id)
+                .Select(row => row.ChildRunId!)
+                .ToArrayAsync();
+            var childSnapshots = await db.RunGitHubCapabilitySnapshots.AsNoTracking()
+                .Where(snapshot => childIds.Contains(snapshot.RunId))
+                .ToListAsync();
+            childSnapshots.Should().HaveCount(2);
+            childSnapshots.Should().OnlyContain(snapshot =>
+                snapshot.Purpose == GitHubCapabilityPurpose.UnattendedRepository
+                && snapshot.ProjectId == projectId);
+        }
+
+        factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId);
+        var runStore = factory.Services.GetRequiredService<IRunStore>();
+        await runStore.TryTransitionReviewToInProgressAsync(RunId.Parse(runId));
+        var restartable = await runStore.GetAsync(RunId.Parse(runId));
+        await factory.Services.GetRequiredService<RunOrchestrator>()
+            .RestartInterruptedPinnedWorkflowRunAsync(
+                restartable!,
+                new RunLeaseClaim("test-recovery", 1),
+                CancellationToken.None);
+
+        var reattached = await PollUntilAsync(async () =>
+        {
+            await using var verificationScope = factory.Services.CreateAsyncScope();
+            var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var matchingPlans = await verificationDb.WorkPlans
+                .Where(row => row.ParentRunId == runId || row.CoordinatorRunId == runId)
+                .ToListAsync();
+            if (matchingPlans.Count != 1)
+                return false;
+            return await verificationDb.Subtasks.CountAsync(row => row.WorkPlanId == matchingPlans[0].Id) == 2;
+        });
+        reattached.Should().BeTrue(
+            "checkpointless restart must reattach the original run to one existing fan plan and child set");
+        factory.Services.GetRequiredService<RunWorkflowRegistry>().Abandon(runId);
+    }
+
+    [Fact]
+    public async Task DirectOrchestration_GitHubOriginByokRevokedRepositoryGrant_RejectsBeforeRunCreation()
+    {
+        await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
+        using var owner = factory.CreateOwnerClient();
+        var workingDirectory = factory.NewWorkingDirectory();
+        var create = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Repository grant preflight {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = workingDirectory,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory);
+        await factory.Services.GetRequiredService<IProjectStore>().UpdateOriginAsync(
+            ProjectId.Parse(projectId), ProjectOrigin.FromGitHub("sabbour/agentweaver"),
+            DateTimeOffset.UtcNow);
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var installationId = Random.Shared.NextInt64(1, long.MaxValue);
+        db.Projects.Add(new ProjectRecord
+        {
+            ProjectId = projectId,
+            OriginKind = "from_github",
+            Name = "Repository grant preflight",
+            WorkingDirectory = workingDirectory,
+            Owner = CoordinatorWebApplicationFactory.OwnerUser,
+            DefaultProvider = "byok",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubInstallations.Add(new GitHubInstallationRecord
+        {
+            InstallationId = installationId,
+            AppKind = GitHubAppKind.Repo,
+            ProjectId = projectId,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        db.GitHubRepositoryGrants.Add(new GitHubRepositoryGrantRecord
+        {
+            InstallationId = installationId,
+            RepositoryId = 5678,
+            ProjectId = projectId,
+            FullNameDisplay = "sabbour/agentweaver",
+            PermissionDigest = "digest",
+            GrantedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var byok = scope.ServiceProvider.GetRequiredService<ByokProviderConfigurationService>();
+        var configuration = await byok.AddAsync(new ByokProviderConfiguration(
+            Id: string.Empty, Name: "Test Azure provider", Type: "azure",
+            BaseUrl: "https://byok-resource.openai.azure.com",
+            Model: "gpt-4.1", ApiKey: "test-byok-key"), CancellationToken.None);
+        await byok.SetActiveAsync(configuration.Id, CancellationToken.None);
+
+        var readiness = await owner.GetFromJsonAsync<JsonElement>(
+            $"/api/projects/{projectId}/github/unattended-readiness");
+        readiness.GetProperty("status").GetString().Should().Be("unattended_ready");
+        await db.GitHubRepositoryGrants.ExecuteUpdateAsync(update => update
+            .SetProperty(grant => grant.RevokedAt, DateTimeOffset.UtcNow));
+
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var rejected = await owner.PostAsJsonAsync($"/api/projects/{projectId}/orchestrations",
+            new { goal = "Run the selected discovery workflow", start_mode = "direct" });
+        rejected.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await rejected.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Be("repo_app_repository_grant_required");
+        body.GetProperty("message").GetString().Should().Contain("Reconnect");
+        (await factory.Services.GetRequiredService<IRunStore>()
+            .GetRunsByProjectAsync(ProjectId.Parse(projectId), includeChildren: true))
+            .Should().BeEmpty("preflight must reject before a run is persisted");
+        (await db.RunGitHubCapabilitySnapshots.CountAsync(snapshot => snapshot.ProjectId == projectId))
+            .Should().Be(0, "rejected starts must not retain a run-bound snapshot without a run");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("default")]
+    public async Task DirectOrchestration_WithoutStaticFanOverride_RetainsCoordinatorFlow(
+        string? workflowOverrideId)
+    {
+        await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
+        using var owner = factory.CreateOwnerClient();
+
+        var workingDirectory = factory.NewWorkingDirectory();
+        var create = await owner.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"Direct coordinator {Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = workingDirectory,
+        });
+        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        var projectId = (await create.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("project_id").GetString()!;
+        SquadTestFixtureHelper.CreateMinimalSquad(workingDirectory);
+
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId);
+        var start = await owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/orchestrations",
+            new
+            {
+                goal = "Use the ordinary direct coordinator flow.",
+                start_mode = "direct",
+                workflow_override_id = workflowOverrideId,
+                auto_approve_tools = false,
+                autopilot = false,
+            });
+        start.StatusCode.Should().Be(HttpStatusCode.Created);
+        var runId = (await start.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("runId").GetString()!;
+
+        var persistedRun = await factory.Services.GetRequiredService<IRunStore>()
+            .GetAsync(RunId.Parse(runId));
+        persistedRun.Should().NotBeNull();
+        persistedRun!.AgentName.Should().Be("Coordinator");
+        persistedRun.GetExecutableWorkflowPin().Should().BeNull();
     }
 
     [Fact]

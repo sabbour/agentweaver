@@ -123,6 +123,15 @@ Click any agent card to open a drawer:
 
 Agents accumulate **memories** and **decisions** across runs. Navigate to **Team Memory** from a project sidebar.
 
+The **Addressed messages** tab shows the latest project messages, their sender and recipient
+runs, thread and reply links, optional backlog/work-plan references, and delivery status
+or error. Refresh it to reconcile pending messages against retired recipients and ended
+runs. This is currently an inspection surface: a run-bound agent can send and acknowledge
+through REST, MCP or native tools, but the operator cannot impersonate an agent run.
+Automatic turn-boundary delivery and idle wake are not yet connected; an accepted message
+does not promise that the recipient has seen it. Acknowledged means receipt only, not task
+completion or decision approval.
+
 ### The four memory layers
 
 Every agent's context for a run is compiled from four layers, in order of priority:

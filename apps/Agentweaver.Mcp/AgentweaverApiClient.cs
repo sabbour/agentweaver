@@ -56,7 +56,13 @@ public sealed class McpApiException : McpException
     private static string SerializePayload(McpErrorPayload payload) =>
         IsMemoryError(payload.ErrorCode)
             ? JsonSerializer.Serialize(
-                new { error = payload.ErrorCode, message = payload.Error, hint = payload.Hint },
+                new
+                {
+                    error = payload.ErrorCode,
+                    message = payload.Error,
+                    details = payload.Details,
+                    hint = payload.Hint,
+                },
                 ErrorJsonOptions)
             : string.Equals(
                 payload.ErrorCode,
@@ -106,7 +112,8 @@ public sealed class McpApiException : McpException
                 explicitHint ?? DefaultHintForPath(normalizedPath),
                 normalizedMessage,
                 normalizedPath,
-                errorCode);
+                errorCode,
+                details);
         }
 
         if (string.Equals(errorCode, "preview_registration_timeout", StringComparison.Ordinal))
@@ -338,7 +345,8 @@ public sealed class McpApiException : McpException
                 .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     private static bool IsMemoryError(string? errorCode) =>
-        errorCode?.StartsWith("memory_", StringComparison.Ordinal) == true;
+        errorCode?.StartsWith("memory_", StringComparison.Ordinal) == true
+        || string.Equals(errorCode, "stale_revision", StringComparison.Ordinal);
 
     private static string? ExtractQuotedValue(string message)
     {
@@ -436,10 +444,28 @@ public sealed class AgentweaverApiClient
     private AuthenticationHeaderValue GetAuthHeader() =>
         new("Bearer", GetEffectiveBrokerToken());
 
+    private void ForwardAddressedMessageRunIdentity(HttpRequestMessage message, string path)
+    {
+        const string runIdHeader = "X-Agentweaver-Run-Id";
+        const string runTokenHeader = "X-Agentweaver-Run-Token";
+        if (!path.Contains("/agent-messages", StringComparison.Ordinal)
+            || _httpContextAccessor?.HttpContext is not { } context
+            || context.User.Identity?.IsAuthenticated != true
+            || !context.Items.ContainsKey(McpBrokerAuthenticationDefaults.ValidatedTokenItem))
+            return;
+        var runId = context.Request.Headers[runIdHeader].ToString();
+        var runToken = context.Request.Headers[runTokenHeader].ToString();
+        if (string.IsNullOrWhiteSpace(runId) || string.IsNullOrWhiteSpace(runToken))
+            return;
+        message.Headers.TryAddWithoutValidation(runIdHeader, runId);
+        message.Headers.TryAddWithoutValidation(runTokenHeader, runToken);
+    }
+
     public async Task<T> GetAsync<T>(string path, CancellationToken ct = default)
     {
         using var message = new HttpRequestMessage(HttpMethod.Get, path.TrimStart('/'));
         message.Headers.Authorization = GetAuthHeader();
+        ForwardAddressedMessageRunIdentity(message, path);
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, path, ct);
     }
@@ -451,6 +477,7 @@ public sealed class AgentweaverApiClient
             Content = body is not null ? JsonContent.Create(body, options: JsonOptions) : null
         };
         message.Headers.Authorization = GetAuthHeader();
+        ForwardAddressedMessageRunIdentity(message, path);
         using var response = await _http.SendAsync(message, ct);
         return await ReadJsonAsync<T>(response, path, ct);
     }
@@ -563,8 +590,14 @@ public sealed class AgentweaverApiClient
                 || parentElement.ValueKind == JsonValueKind.Null)
             && run.TryGetProperty("agent_name", out var agentNameElement)
             && string.Equals(agentNameElement.GetString(), "Coordinator", StringComparison.Ordinal);
+        var isComposedRecovery = (!run.TryGetProperty("parent_run_id", out var composedParent)
+                || composedParent.ValueKind == JsonValueKind.Null)
+            && run.TryGetProperty("result", out var resultElement)
+            && resultElement.ValueKind == JsonValueKind.String
+            && resultElement.GetString()?.StartsWith(
+                "composed_decomposition_failed:", StringComparison.Ordinal) == true;
         var resolvedOperation = operation == "retry"
-            ? isCoordinator ? "orchestration" : "agent_turn"
+            ? isCoordinator || isComposedRecovery ? "orchestration" : "agent_turn"
             : operation;
         return await PostAiAsync<T>(
             path,
@@ -685,6 +718,7 @@ public sealed class AgentweaverApiClient
             string? errorCode = null;
             string? message = null;
             string? hint = null;
+            JsonElement? details = null;
             try
             {
                 var doc = JsonDocument.Parse(body);
@@ -698,6 +732,12 @@ public sealed class AgentweaverApiClient
                     message = detail.GetString();
                 if (doc.RootElement.TryGetProperty("hint", out var hintProp))
                     hint = hintProp.GetString();
+                if (doc.RootElement.TryGetProperty("current_revision", out var currentRevision)
+                    && currentRevision.TryGetInt32(out var currentRevisionNumber))
+                    details = JsonSerializer.SerializeToElement(new
+                    {
+                        current_revision = currentRevisionNumber,
+                    });
             }
             catch (JsonException) { }
 
@@ -706,7 +746,8 @@ public sealed class AgentweaverApiClient
                 message ?? error ?? body,
                 path,
                 errorCode ?? error,
-                hint);
+                hint,
+                details);
         }
     }
 }

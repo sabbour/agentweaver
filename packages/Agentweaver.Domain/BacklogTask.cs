@@ -23,6 +23,8 @@ public sealed record BacklogTask
     /// legacy and automation behavior.
     /// </summary>
     public string? CapturedByUserId { get; init; }
+    /// <summary>The human Entra subject who accepted the provider when moving this task to Ready.</summary>
+    public string? ReadyByUserId { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
     /// <summary>Set when the task is first moved Backlog -> Ready. Null while in Backlog. Also a
     /// pickup tie-breaker.</summary>
@@ -31,6 +33,8 @@ public sealed record BacklogTask
     public DateTimeOffset? ClaimedAt { get; init; }
     /// <summary>The 1:1 coordinator run this task produced. Non-null iff State == Claimed.</summary>
     public RunId? RunId { get; init; }
+    public long? ClaimedGraphRevision { get; init; }
+    public string? ClaimedPrerequisitesJson { get; init; }
     /// <summary>When set, the task is archived off the active board and no longer claimable.</summary>
     public DateTimeOffset? ArchivedAt { get; init; }
 
@@ -40,6 +44,12 @@ public sealed record BacklogTask
     /// Null means "use the project default workflow".
     /// </summary>
     public string? WorkflowOverrideId { get; init; }
+
+    /// <summary>
+    /// Immutable normalized workflow definition captured when a workflow-triggered task is created.
+    /// Pickup uses this snapshot so edits or deletion before launch cannot change the selected graph.
+    /// </summary>
+    public string? WorkflowDefinitionSnapshotYaml { get; init; }
 
     /// <summary>
     /// The workspace-relative file path from which this task was decomposed (Feature 014).

@@ -388,10 +388,11 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     /// </summary>
     /// <param name="id">The coordinator run identifier.</param>
     /// <response code="200">Returns the confirmed outcome spec state.</response>
+    /// <response code="202">The decision is durably queued for the replica holding the gate; watch the run for completion.</response>
     /// <response code="400">The run id was malformed.</response>
     /// <response code="403">The caller does not own the coordinator run.</response>
     /// <response code="404">The coordinator run was not found.</response>
-    /// <response code="409">The run is no longer active or is not waiting at the outcome-spec gate.</response>
+    /// <response code="409">The gate is unavailable, already consumed, or cannot be safely recovered (typed diagnostic).</response>
     public static async Task<IResult> ConfirmOutcomeSpecAsync(
         HttpContext httpContext,
         string id,
@@ -448,10 +449,18 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             return await EndpointHelpers.DurableProviderBoundaryErrorAsync(
                 ex, "orchestration", run, caller, executionPlans, ct).ConfigureAwait(false);
         }
+        catch (CoordinatorGateRecoveryException ex)
+        {
+            logger.LogWarning(ex, "Outcome-spec confirm recovery {Code} for run {RunId}, correlation {CorrelationId}",
+                ex.ErrorCode, ex.RunId, ex.CorrelationId);
+            return Results.Conflict(new { error = ex.ErrorCode, run_id = ex.RunId,
+                correlation_id = ex.CorrelationId, diagnostic_path = ex.DiagnosticPath, message = ex.Message });
+        }
 
         return outcome switch
         {
             CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
+            CoordinatorGateOutcome.Queued => Results.Json(new { status = "queued", run_id = id }, statusCode: 202),
             CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be confirmed." }),
             CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
             _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
@@ -464,10 +473,11 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     /// <param name="id">The coordinator run identifier.</param>
     /// <param name="request">Revision feedback for the coordinator to incorporate.</param>
     /// <response code="200">Returns the revised outcome spec state.</response>
+    /// <response code="202">The decision is durably queued for the replica holding the gate; watch the run for completion.</response>
     /// <response code="400">The run id was malformed or feedback was missing.</response>
     /// <response code="403">The caller does not own the coordinator run.</response>
     /// <response code="404">The coordinator run was not found.</response>
-    /// <response code="409">The run is no longer active or is not waiting at the outcome-spec gate.</response>
+    /// <response code="409">The gate is unavailable, already consumed, or cannot be safely recovered (typed diagnostic).</response>
     public static async Task<IResult> ReviseOutcomeSpecAsync(
         HttpContext httpContext,
         string id,
@@ -523,10 +533,18 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             return await EndpointHelpers.DurableProviderBoundaryErrorAsync(
                 ex, "orchestration", run, caller, executionPlans, ct).ConfigureAwait(false);
         }
+        catch (CoordinatorGateRecoveryException ex)
+        {
+            logger.LogWarning(ex, "Outcome-spec revise recovery {Code} for run {RunId}, correlation {CorrelationId}",
+                ex.ErrorCode, ex.RunId, ex.CorrelationId);
+            return Results.Conflict(new { error = ex.ErrorCode, run_id = ex.RunId,
+                correlation_id = ex.CorrelationId, diagnostic_path = ex.DiagnosticPath, message = ex.Message });
+        }
 
         return outcome switch
         {
             CoordinatorGateOutcome.Accepted => Results.Json(await ReadOutcomeSpecAsync(coordinator, id, ct)),
+            CoordinatorGateOutcome.Queued => Results.Json(new { status = "queued", run_id = id }, statusCode: 202),
             CoordinatorGateOutcome.RunNotActive => Results.Conflict(new { error = "run_not_active", detail = await ReadFailureReasonAsync(runStore, runId, ct), message = "The coordinator run is not active and cannot be revised." }),
             CoordinatorGateOutcome.NoPendingGate => Results.Conflict(new { error = "no_pending_gate", message = "The outcome spec is not awaiting confirmation." }),
             _ => Results.Problem("Unexpected coordinator outcome.", statusCode: 500),
@@ -703,7 +721,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                 request.Instruction ?? string.Empty,
                 caller.User,
                 run.ProjectId is null ? caller.GitHubLogin : run.SubmittingUser,
-                ct);
+                ct, request.OutputRevisionId);
 
             var statusCode = directive.Status == SteeringStatus.Deferred
                 ? StatusCodes.Status202Accepted
@@ -714,6 +732,10 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
         catch (SteeringValidationException ex)
         {
             return BadRequestError("steering_invalid", ex.Message);
+        }
+        catch (RunOutputRevisionUnavailableException ex)
+        {
+            return Results.Json(new { error = ex.Reason }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (SteeringRecoveryExhaustedException ex)
         {
@@ -807,7 +829,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             RequestChanges: request.RequestChanges,
             Feedback: request.Feedback,
             TargetFiles: request.TargetFiles,
-            Reviewer: CallerDisplayName(caller));
+            Reviewer: CallerDisplayName(caller),
+            OutputRevisionId: request.OutputRevisionId);
 
         var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
             scopeFactory,
@@ -838,6 +861,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                     },
                     statusCode: StatusCodes.Status202Accepted),
             AssemblyReviewDeliveryResult.Forbidden => ForbiddenError(),
+            AssemblyReviewDeliveryResult.StaleRevision =>
+                Results.Conflict(new { error = "stale_output_revision", message = "Review the current output revision before deciding." }),
             _ => NoAssemblyReviewPending(),
         };
     }
@@ -988,9 +1013,19 @@ static WorkPlanResponse MapWorkPlan(CoordinatorWorkPlanView plan) => new()
     CoordinatorRunId = plan.CoordinatorRunId,
     OutcomeSpecId = plan.OutcomeSpecId,
     Status = plan.Status,
+    ParentRunId = plan.ParentRunId,
+    ParentWorkflowId = plan.ParentWorkflowId,
+    ParentWorkflowNodeId = plan.ParentWorkflowNodeId,
+    ParentJoinNodeId = plan.ParentJoinNodeId,
+    ParentResumeRequestId = plan.ParentResumeRequestId,
+    ParentResumeState = plan.ParentResumeState,
+    JoinedOutput = plan.JoinedOutput,
     AssemblyStage = plan.AssemblyStage,
     AssemblyTerminalStage = plan.AssemblyTerminalStage,
     StatusReason = plan.StatusReason,
+    MergeEffectState = plan.MergeEffectState,
+    MergeRecoveryAction = plan.MergeRecoveryAction,
+    MergeEvidence = plan.MergeEvidence,
     IsolationSummary = plan.IsolationSummary,
     Subtasks = plan.Subtasks.Select(s => new WorkPlanSubtaskResponse
     {
@@ -1003,6 +1038,8 @@ static WorkPlanResponse MapWorkPlan(CoordinatorWorkPlanView plan) => new()
         Isolation = s.Isolation,
         Status = s.Status,
         ChildRunId = s.ChildRunId,
+        WorkflowBranchNodeId = s.WorkflowBranchNodeId,
+        WorkflowBranchOrdinal = s.WorkflowBranchOrdinal,
     }).ToList(),
     Dependencies = plan.Dependencies.Select(d => new WorkPlanDependencyResponse
     {
@@ -1023,6 +1060,12 @@ static CoordinatorChildResponse MapChild(CoordinatorChildView child) => new()
     WorktreeBranch = child.WorktreeBranch,
     TreeHash = child.TreeHash,
     StepCount = child.StepCount,
+    WorkflowBranchNodeId = child.WorkflowBranchNodeId,
+    WorkflowBranchOrdinal = child.WorkflowBranchOrdinal,
+    ParentRunId = child.ParentRunId,
+    ParentWorkflowId = child.ParentWorkflowId,
+    ParentWorkflowNodeId = child.ParentWorkflowNodeId,
+    ParentJoinNodeId = child.ParentJoinNodeId,
 };
 
 // Maps a steering directive view to its camelCase response (Feature 008 Phase 2).

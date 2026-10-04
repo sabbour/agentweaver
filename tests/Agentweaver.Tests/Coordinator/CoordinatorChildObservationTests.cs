@@ -10,6 +10,7 @@ using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
@@ -117,6 +118,264 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
         (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady,
             "replay on the new process instance delivers the persisted terminal event");
+    }
+
+    [Theory]
+    [InlineData(SubtaskStatus.Pending)]
+    [InlineData(SubtaskStatus.Running)]
+    public async Task StaticFanRecovery_RunningAndReservedPending_RetainsBothIdsAndDispatchesPendingOnce(
+        string reservedSubtaskStatus)
+    {
+        var coordinatorId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorId, RunStatus.InProgress);
+        var runningId = await SeedChildRunAsync(RunStatus.InProgress);
+        var reservedId = RunId.New();
+        var (planId, subtaskIds) = await SeedPlanAsync(coordinatorId,
+            [(SubtaskStatus.Running, runningId), (reservedSubtaskStatus, reservedId.ToString())]);
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(p => p.Id == planId);
+            plan.ParentRunId = RunId.New().ToString();
+            plan.ParentWorkflowId = "fan-workflow";
+            plan.ParentWorkflowNodeId = "fan";
+            plan.ParentJoinNodeId = "join";
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Waiting;
+            await db.SaveChangesAsync();
+        }
+        await _runStore.InsertAsync(new Run
+        {
+            Id = reservedId,
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "reserved sibling",
+            SubmittingUser = "owner",
+            Status = RunStatus.Pending,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "morpheus",
+            ParentRunId = coordinatorId,
+            SubtaskId = subtaskIds[1].ToString(),
+        });
+        var stream = new SqliteRunEventStream(_streamConfig);
+        await stream.AppendAsync(runningId,
+            new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }));
+        _streamStore.Create(coordinatorId, "owner");
+        var dispatches = 0;
+        var sut = BuildDispatch(stream);
+        sut.StartChildRunOverride = async (child, ct) =>
+        {
+            Interlocked.Increment(ref dispatches);
+            child.Id.Should().Be(reservedId);
+            child.ParentRunId.Should().Be(coordinatorId);
+            child.SubtaskId.Should().Be(subtaskIds[1].ToString());
+            await _runStore.UpdateStatusAsync(child.Id, RunStatus.InProgress, null, ct);
+            await stream.AppendAsync(child.Id.ToString(),
+                new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }), ct);
+        };
+
+        await sut.RunDispatchLoopAsync(Context(coordinatorId, staticWorkflowChild: true), default);
+
+        dispatches.Should().Be(1);
+        (await GetSubtaskAsync(subtaskIds[0])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        var sibling = await GetSubtaskAsync(subtaskIds[1]);
+        sibling.Status.Should().Be(SubtaskStatus.AssembleReady);
+        sibling.ChildRunId.Should().Be(reservedId.ToString());
+        (await _runStore.GetRunsByParentAsync(coordinatorId)).Should().ContainSingle(
+            child => child.Id == reservedId);
+    }
+
+    [Fact]
+    public async Task StaticWorkflowChild_TwoDispatchedBranchesOverlap_AndWaitForBothBeforeJoin()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
+        var (planId, ids) = await SeedPlanAsync(
+            coord,
+            [
+                (SubtaskStatus.Pending, null),
+                (SubtaskStatus.Pending, null),
+            ]);
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId);
+            plan.ParentRunId = RunId.New().ToString();
+            plan.ParentWorkflowId = "fan-workflow";
+            plan.ParentWorkflowNodeId = "fan";
+            plan.ParentJoinNodeId = "join";
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Waiting;
+            var branches = await db.Subtasks
+                .Where(row => row.WorkPlanId == planId)
+                .OrderBy(row => row.Id)
+                .ToListAsync();
+            branches[0].WorkflowBranchNodeId = "branch-a";
+            branches[0].WorkflowBranchOrdinal = 0;
+            branches[1].WorkflowBranchNodeId = "branch-b";
+            branches[1].WorkflowBranchOrdinal = 1;
+            await db.SaveChangesAsync();
+        }
+        _streamStore.Create(coord, "owner");
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var sut = BuildDispatch(stream);
+        var bothExecuting = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var executions = new List<Task>();
+        var dispatchedBaseBranches = new List<string>();
+        var active = 0;
+        var maxConcurrent = 0;
+        sut.StartChildRunOverride = async (child, ct) =>
+        {
+            await _runStore.InsertAsync(child, ct);
+            dispatchedBaseBranches.Add(child.OriginatingBranch);
+            executions.Add(Task.Run(async () =>
+            {
+                var current = Interlocked.Increment(ref active);
+                UpdateMax(ref maxConcurrent, current);
+                if (current == 2)
+                    bothExecuting.TrySetResult();
+                try
+                {
+                    await bothExecuting.Task.WaitAsync(ct);
+                    await Task.Delay(50, ct);
+                    await stream.AppendAsync(
+                        child.Id.ToString(),
+                        new RunEvent(
+                            0,
+                            EventTypes.RunAssembleReady,
+                            new { raiSafetyFlagged = false }),
+                        ct);
+                    await stream.CompleteAsync(child.Id.ToString(), ct);
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref active);
+                }
+            }, ct));
+        };
+
+        await sut.RunDispatchLoopAsync(Context(coord, staticWorkflowChild: true), default);
+        await Task.WhenAll(executions);
+
+        maxConcurrent.Should().Be(2);
+        dispatchedBaseBranches.Should().HaveCount(2).And.OnlyContain(
+            branch => branch == "main",
+            "static branches must start from the parent branch without constructing an integration ref");
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        (await GetSubtaskAsync(ids[1])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        _assembly.Started.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task StaticWorkflowChild_UnlinkedTerminalRun_IsAdoptedWithoutLaunchingDuplicate()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
+        var (planId, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Pending, null)]);
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId);
+            plan.ParentRunId = RunId.New().ToString();
+            plan.ParentWorkflowId = "fan-workflow";
+            plan.ParentWorkflowNodeId = "fan";
+            plan.ParentJoinNodeId = "join";
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Waiting;
+            var branch = await db.Subtasks.SingleAsync(row => row.Id == ids[0]);
+            branch.WorkflowBranchNodeId = "branch-a";
+            branch.WorkflowBranchOrdinal = 0;
+            await db.SaveChangesAsync();
+        }
+
+        var existingChildId = RunId.New();
+        await _runStore.InsertAsync(new Run
+        {
+            Id = existingChildId,
+            RepositoryPath = "repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "already launched before linkage",
+            SubmittingUser = "owner",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "morpheus",
+            ParentRunId = coord,
+            SubtaskId = ids[0].ToString(),
+        });
+        (await _runStore.TerminalizeForTestAsync(existingChildId, RunStatus.AssembleReady))
+            .Should().BeTrue();
+
+        _streamStore.Create(coord, "owner");
+        var launched = 0;
+        var sut = BuildDispatch(new SqliteRunEventStream(_streamConfig));
+        sut.StartChildRunOverride = (_, _) =>
+        {
+            Interlocked.Increment(ref launched);
+            return Task.CompletedTask;
+        };
+
+        await sut.RunDispatchLoopAsync(Context(coord, staticWorkflowChild: true), default);
+
+        launched.Should().Be(0);
+        var branchAfterRecovery = await GetSubtaskAsync(ids[0]);
+        branchAfterRecovery.ChildRunId.Should().Be(existingChildId.ToString());
+        branchAfterRecovery.Status.Should().Be(SubtaskStatus.AssembleReady);
+        (await _runStore.GetRunsByParentAsync(coord)).Should().ContainSingle()
+            .Which.Id.Should().Be(existingChildId);
+        _assembly.Started.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task StaticWorkflowChild_PromptBeforeFanContext_ReachesBranchOnExactParentBase()
+    {
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
+        var (planId, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Pending, null)]);
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId);
+            plan.ParentRunId = RunId.New().ToString();
+            plan.ParentWorkflowId = "prompt-before-fan";
+            plan.ParentWorkflowNodeId = "fan";
+            plan.ParentJoinNodeId = "join";
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Waiting;
+            var branch = await db.Subtasks.SingleAsync(row => row.Id == ids[0]);
+            branch.WorkflowBranchNodeId = "branch-a";
+            branch.WorkflowBranchOrdinal = 0;
+            branch.Scope = "Execute the branch prompt.";
+            await db.SaveChangesAsync();
+        }
+
+        _streamStore.Create(coord, "owner");
+        var stream = new SqliteRunEventStream(_streamConfig);
+        Run? launched = null;
+        var sut = BuildDispatch(stream);
+        sut.StartChildRunOverride = async (child, ct) =>
+        {
+            launched = child;
+            await _runStore.InsertAsync(child, ct);
+            await stream.AppendAsync(
+                child.Id.ToString(),
+                new RunEvent(0, EventTypes.RunAssembleReady, new { raiSafetyFlagged = false }),
+                ct);
+            await stream.CompleteAsync(child.Id.ToString(), ct);
+        };
+
+        await sut.RunDispatchLoopAsync(
+            Context(
+                coord,
+                staticWorkflowChild: true,
+                originatingBranch: "agentweaver/parent-after-prompt",
+                staticParentTask: "submitted task\n\npredecessor result"),
+            default);
+
+        launched.Should().NotBeNull();
+        launched!.RepositoryPath.Should().Be("repo");
+        launched.OriginatingBranch.Should().Be("agentweaver/parent-after-prompt");
+        launched.Task.Should().Contain("submitted task");
+        launched.Task.Should().Contain("predecessor result");
+        launched.Task.Should().Contain("Execute the branch prompt.");
     }
 
     // -----------------------------------------------------------------------
@@ -229,6 +488,153 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
         _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
             e => e.Type == EventTypes.CoordinatorChildStallDetected,
             "the coordinator must not emit a false-positive stall signal for an already-completed child (#317)");
+    }
+
+    [Fact]
+    public async Task ObserveChild_TurnEnded_TerminalArrivesAfterFirstDeadline_AssembleReadyWins()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        const string coord = "obs-post-turn-race-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        // The second subscription times out with no terminal. Only after the observer has
+        // completed its first durable recheck and entered the grace subscription do we write it.
+        var stream = new TurnEndThenBlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001, postTurnGraceSeconds: 0.5);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+        await stream.GraceSubscriptionStarted.WaitAsync(cts.Token);
+
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.RunEvents.Add(new RunEventRecord
+            {
+                RunId = childRunId,
+                Sequence = 2,
+                EventType = EventTypes.RunAssembleReady,
+                PayloadJson = JsonSerializer.Serialize(new { raiSafetyFlagged = false }),
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync(cts.Token);
+        }
+
+        await loop;
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
+    [Fact]
+    public async Task ObserveChild_TurnEnded_ActiveLease_TerminalAfterGrace_AssembleReadyWins()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        await RecordExecutionLeaseAsync(childRunId);
+        const string coord = "obs-post-turn-lease-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+
+        var stream = new TurnEndThenBlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001,
+            postTurnGraceSeconds: 10, postTurnMaxWaitSeconds: 15);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        var loop = sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        // Subscription four cannot start until the old 10-second grace has expired and the durable
+        // lease has been checked. The terminal event arrives strictly AFTER that former boundary.
+        await stream.PostGraceSubscriptionStarted.WaitAsync(cts.Token);
+        await RecordTerminalAsync(childRunId, cts.Token);
+        await loop;
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.AssembleReady);
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().NotContain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
+    [Fact]
+    public async Task ObserveChild_TurnEnded_ActiveLeaseWithoutFinalization_StallsAtHardCap()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        await RecordExecutionLeaseAsync(childRunId);
+        const string coord = "obs-post-turn-lease-cap-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var subtask = await db.Subtasks.SingleAsync(row => row.Id == ids[0]);
+            subtask.RecoveryAttempts = CoordinatorSteeringService.MaxRecoveryAttempts;
+            await db.SaveChangesAsync();
+        }
+
+        var stream = new TurnEndThenBlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001,
+            postTurnGraceSeconds: 0.1, postTurnMaxWaitSeconds: 0.35);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        stream.SubscriptionCount.Should().BeGreaterThan(3,
+            "the live lease postponed the old grace boundary, but not the hard cap");
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Failed);
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().Contain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
+    [Fact]
+    public async Task ObserveChild_TurnEnded_ButFinalizationHangs_FailsAfterOneBoundedGrace()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        const string coord = "obs-post-turn-hang-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var subtask = await db.Subtasks.SingleAsync(row => row.Id == ids[0]);
+            subtask.RecoveryAttempts = CoordinatorSteeringService.MaxRecoveryAttempts;
+            await db.SaveChangesAsync();
+        }
+
+        var stream = new TurnEndThenBlockingEventStream();
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.001, postTurnGraceSeconds: 0.15);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Failed);
+        stream.SubscriptionCount.Should().Be(3,
+            "the turn-end marker grants exactly one bounded reconciliation subscription");
+        _streamStore.Get(coord)!.GetSnapshotSince(0).Events.Should().Contain(
+            e => e.Type == EventTypes.CoordinatorChildStallDetected);
+    }
+
+    [Fact]
+    public async Task ObserveChild_TurnEnded_NonTerminalDuringGrace_DoesNotRestoreOrdinaryStallTtl()
+    {
+        var childRunId = await SeedChildRunAsync(RunStatus.InProgress);
+        await RecordTurnEndAsync(childRunId);
+        const string coord = "obs-post-turn-progress-coord";
+        var (_, ids) = await SeedPlanAsync(coord, [(SubtaskStatus.Running, childRunId)]);
+        _streamStore.Create(coord, "owner");
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var subtask = await db.Subtasks.SingleAsync(row => row.Id == ids[0]);
+            subtask.RecoveryAttempts = CoordinatorSteeringService.MaxRecoveryAttempts;
+            await db.SaveChangesAsync();
+        }
+
+        var stream = new TurnEndThenBlockingEventStream(emitNonTerminalDuringGrace: true);
+        var sut = BuildDispatch(stream, stallTimeoutMinutes: 0.02, postTurnGraceSeconds: 0.2);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2.2));
+        await sut.RunDispatchLoopAsync(Context(coord), cts.Token);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Failed);
+        stream.SubscriptionCount.Should().Be(4);
     }
 
     [Fact]
@@ -487,6 +893,123 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
             "a stopped coordinator must not launch new children after active stop cancellation is observed");
         pending.ChildRunId.Should().BeNull();
         _assembly.Started.Should().Be(0, "stopped dispatch must not hand off to assembly");
+    }
+
+    [Fact]
+    public async Task RunDispatchLoop_StaticWorkflowChildStoppedAfterParentCancellation_MarksActiveBranchCancelled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.Failed);
+        var childRunId = await SeedChildRunAsync(RunStatus.Failed);
+        await stream.AppendAsync(childRunId, new RunEvent(0, EventTypes.RunCancelled, new { reason = "parent_cancelled" }));
+        await stream.CompleteAsync(childRunId);
+
+        var (_, ids) = await SeedPlanAsync(coord,
+            [(SubtaskStatus.Running, childRunId), (SubtaskStatus.Pending, null)]);
+        _streamStore.Create(coord, "owner");
+
+        var sut = BuildDispatch(stream);
+        await sut.RunDispatchLoopAsync(Context(coord, staticWorkflowChild: true), default);
+
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Cancelled,
+            "parent cancellation is a distinct terminal state for correlated static fan branch work");
+        var pending = await GetSubtaskAsync(ids[1]);
+        pending.Status.Should().Be(SubtaskStatus.Pending,
+            "parent cancellation must stop the fan before another branch is dispatched");
+        pending.ChildRunId.Should().BeNull();
+        _assembly.Started.Should().Be(0, "cancelled static fan work must never enter ordinary coordinator assembly");
+    }
+
+    [Fact]
+    public async Task RunDispatchLoop_StaticChildStartedDuringCancellation_IsImmediatelyCancelled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
+        var (planId, ids) = await SeedPlanAsync(
+            coord,
+            [(SubtaskStatus.Pending, null), (SubtaskStatus.Pending, null)]);
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId);
+            plan.ParentRunId = RunId.New().ToString();
+            plan.ParentWorkflowId = "fan-workflow";
+            plan.ParentWorkflowNodeId = "fan";
+            plan.ParentJoinNodeId = "join";
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Waiting;
+            var branches = await db.Subtasks.Where(row => ids.Contains(row.Id)).OrderBy(row => row.Id).ToListAsync();
+            for (var index = 0; index < branches.Count; index++)
+            {
+                branches[index].WorkflowBranchNodeId = $"branch-{index}";
+                branches[index].WorkflowBranchOrdinal = index;
+            }
+            await db.SaveChangesAsync();
+        }
+
+        _streamStore.Create(coord, "owner");
+        var sut = BuildDispatch(stream);
+        Run? launched = null;
+        sut.StartChildRunOverride = async (child, ct) =>
+        {
+            launched = child;
+            await _runStore.InsertAsync(child, ct);
+            _streamStore.Create(child.Id.ToString(), child.SubmittingUser);
+            await using var scope = _provider.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId, ct);
+            plan.Status = WorkPlanStatus.Cancelled;
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Suppressed;
+            await db.SaveChangesAsync(ct);
+        };
+
+        await sut.RunDispatchLoopAsync(Context(coord, staticWorkflowChild: true), default);
+
+        launched.Should().NotBeNull();
+        (await _runStore.GetAsync(launched!.Id))!.Status.Should().Be(RunStatus.Failed);
+        _streamStore.Get(launched.Id.ToString())!.GetSnapshotSince(0).Events.Should().Contain(evt =>
+            evt.Type == EventTypes.RunCancelled);
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Cancelled);
+        (await GetSubtaskAsync(ids[1])).Status.Should().Be(SubtaskStatus.Pending);
+        _assembly.Started.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RunDispatchLoop_TopLevelChildStartedDuringCancellation_IsImmediatelyCancelled()
+    {
+        var stream = new SqliteRunEventStream(_streamConfig);
+        var coord = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coord, RunStatus.InProgress);
+        var (planId, ids) = await SeedPlanAsync(
+            coord,
+            [(SubtaskStatus.Pending, null), (SubtaskStatus.Pending, null)]);
+
+        _streamStore.Create(coord, "owner");
+        var sut = BuildDispatch(stream);
+        Run? launched = null;
+        sut.StartChildRunOverride = async (child, ct) =>
+        {
+            launched = child;
+            await _runStore.InsertAsync(child, ct);
+            _streamStore.Create(child.Id.ToString(), child.SubmittingUser);
+            await using var scope = _provider.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId, ct);
+            plan.Status = WorkPlanStatus.Cancelled;
+            plan.ParentResumeState = WorkflowChildWorkResumeStates.Suppressed;
+            await db.SaveChangesAsync(ct);
+        };
+
+        await sut.RunDispatchLoopAsync(Context(coord), default);
+
+        launched.Should().NotBeNull();
+        (await _runStore.GetAsync(launched!.Id))!.Status.Should().Be(RunStatus.Failed);
+        _streamStore.Get(launched.Id.ToString())!.GetSnapshotSince(0).Events.Should().Contain(evt =>
+            evt.Type == EventTypes.RunCancelled);
+        (await GetSubtaskAsync(ids[0])).Status.Should().Be(SubtaskStatus.Cancelled);
+        (await GetSubtaskAsync(ids[1])).Status.Should().Be(SubtaskStatus.Pending);
+        _assembly.Started.Should().Be(0);
     }
 
     // -----------------------------------------------------------------------
@@ -797,30 +1320,41 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
     private CoordinatorDispatchService BuildDispatch(
         IRunEventStream eventStream,
-        double stallTimeoutMinutes = 5)
+        double stallTimeoutMinutes = 5,
+        double postTurnGraceSeconds = 10,
+        double postTurnMaxWaitSeconds = 300)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Coordinator:SubtaskStallTimeoutMinutes"] =
                     stallTimeoutMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Coordinator:PostTurnFinalizationGraceSeconds"] =
+                    postTurnGraceSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["Coordinator:PostTurnFinalizationMaxWaitSeconds"] =
+                    postTurnMaxWaitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
             })
             .Build();
 
         var orchestrator = new RunOrchestrator(
             _runStore, _streamStore,
-            worktreeManager: null!, workflowFactory: null!, registry: null!, watchLoop: null!,
+            worktreeManager: null!, workflowFactory: null!, registry: new RunWorkflowRegistry(), watchLoop: null!,
             _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
 
         return new CoordinatorDispatchService(
             _runStore, _streamStore, orchestrator, null!, new CoordinatorSteeringQueue(_scopeFactory), _assembly,
             _scopeFactory, new TestHostApplicationLifetime(),
             NullLogger<CoordinatorDispatchService>.Instance,
-            runOptions: null, autopilot: null, configuration: config, eventStream: eventStream);
+            runOptions: null, autopilot: null, configuration: config, eventStream: eventStream,
+            runLeaseStore: new SqliteRunLeaseStore(_runDb.Db));
     }
 
-    private static CoordinatorDispatchContext Context(string coord) =>
-        new(coord, "repo", "main", "owner", null);
+    private static CoordinatorDispatchContext Context(
+        string coord,
+        bool staticWorkflowChild = false,
+        string originatingBranch = "main",
+        string? staticParentTask = null) =>
+        new(coord, "repo", originatingBranch, "owner", null, staticWorkflowChild, staticParentTask);
 
     private async Task<string> SeedChildRunAsync(RunStatus status, DateTimeOffset? startedAt = null)
     {
@@ -1005,6 +1539,98 @@ public sealed class CoordinatorChildObservationTests : IAsyncDisposable
 
         public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
             ValueTask.CompletedTask;
+    }
+
+    private sealed class TurnEndThenBlockingEventStream : IRunEventStream
+    {
+        private readonly TaskCompletionSource _graceSubscriptionStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _postGraceSubscriptionStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly bool _emitNonTerminalDuringGrace;
+
+        public TurnEndThenBlockingEventStream(bool emitNonTerminalDuringGrace = false)
+        {
+            _emitNonTerminalDuringGrace = emitNonTerminalDuringGrace;
+        }
+
+        public Task GraceSubscriptionStarted => _graceSubscriptionStarted.Task;
+        public Task PostGraceSubscriptionStarted => _postGraceSubscriptionStarted.Task;
+        public int SubscriptionCount { get; private set; }
+
+        public ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default) =>
+            ValueTask.FromResult(evt.Sequence);
+
+        public async IAsyncEnumerable<RunEvent> SubscribeAsync(
+            string runId, int fromSequence = 0,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+        {
+            SubscriptionCount++;
+            if (SubscriptionCount == 1)
+                yield return new RunEvent(1, EventTypes.AgentTurnEnd, new { turnId = "turn-1" });
+
+            if (SubscriptionCount == 3)
+            {
+                _graceSubscriptionStarted.TrySetResult();
+                if (_emitNonTerminalDuringGrace)
+                    yield return new RunEvent(2, EventTypes.AgentMessage, new { content = "finalizing" });
+            }
+            if (SubscriptionCount == 4)
+                _postGraceSubscriptionStarted.TrySetResult();
+
+            await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+        }
+
+        public ValueTask CompleteAsync(string runId, CancellationToken ct = default) =>
+            ValueTask.CompletedTask;
+    }
+
+    private async Task RecordTurnEndAsync(string childRunId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = childRunId,
+            Sequence = 1,
+            EventType = EventTypes.AgentTurnEnd,
+            PayloadJson = JsonSerializer.Serialize(new { turnId = "turn-1" }),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task RecordExecutionLeaseAsync(string childRunId)
+    {
+        var (claimed, _) = await new SqliteRunLeaseStore(_runDb.Db).TryClaimAsync(
+            childRunId, "recovered-worker", TimeSpan.FromMinutes(2));
+        claimed.Should().BeTrue();
+    }
+
+    private async Task RecordTerminalAsync(string childRunId, CancellationToken ct)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        db.RunEvents.Add(new RunEventRecord
+        {
+            RunId = childRunId,
+            Sequence = 2,
+            EventType = EventTypes.RunAssembleReady,
+            PayloadJson = JsonSerializer.Serialize(new { raiSafetyFlagged = false }),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync(ct);
+    }
+
+    private static void UpdateMax(ref int target, int value)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref target);
+            if (value <= current
+                || Interlocked.CompareExchange(ref target, value, current) == current)
+                return;
+        }
     }
 
     private sealed class RecordingAssembly : ICoordinatorAssembly

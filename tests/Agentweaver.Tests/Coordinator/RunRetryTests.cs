@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using LibGit2Sharp;
@@ -10,6 +12,8 @@ using Agentweaver.Api.Contracts;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Casting;
 using Agentweaver.Tests.Helpers;
@@ -51,6 +55,45 @@ public sealed class RunRetryTests : IDisposable
 
     private SqliteRunStore Runs => _factory.Services.GetRequiredService<SqliteRunStore>();
 
+    [Fact]
+    public async Task FailedComposedWorkflow_WithoutAtomicRecovery_ReturnsConflictNeverFreshRun()
+    {
+        var projectId = await CreateProjectAsync();
+        var definition = new WorkflowDefinition
+        {
+            Id = "composed-recovery",
+            Name = "Composed recovery",
+            Start = "verify",
+            Nodes =
+            [
+                new WorkflowNode { Id = "verify", Label = "Verify", Type = WorkflowNodeType.Prompt },
+                new WorkflowNode
+                {
+                    Id = "compose", Label = "Compose", Type = WorkflowNodeType.CoordinatorComposed,
+                    Prompt = "Summarize retained sources",
+                },
+                new WorkflowNode { Id = "done", Label = "Done", Type = WorkflowNodeType.Terminal },
+            ],
+            Edges =
+            [
+                new WorkflowEdge { From = "verify", To = "compose" },
+                new WorkflowEdge { From = "compose", To = "done" },
+            ],
+        };
+        var source = await SeedRunAsync(
+            RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
+            projectId: ProjectId.Parse(projectId),
+            executableWorkflowYaml: WorkflowDefinitionYamlSerializer.Serialize(definition),
+            executableWorkflowId: definition.Id,
+            result: "composed_decomposition_failed:database contention");
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
+        var response = await _owner.PostAsync($"/api/runs/{source.Id}/retry", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict, await response.Content.ReadAsStringAsync());
+        (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("error").GetString().Should().Be("composed_recovery_requires_atomic_run_store");
+        (await Runs.GetAsync(source.Id))!.Status.Should().Be(RunStatus.Failed);
+    }
+
     // =========================================================================
     // (a) Coordinator Failed -> retry -> fresh resolvable run; source stays Failed.
     // =========================================================================
@@ -88,6 +131,92 @@ public sealed class RunRetryTests : IDisposable
         sourceResp.StatusCode.Should().Be(HttpStatusCode.OK);
         (await sourceResp.Content.ReadFromJsonAsync<JsonElement>())
             .GetProperty("status").GetString().Should().Be("failed", "a retry never mutates the failed source run");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task FreshCoordinatorRetry_KeepsSavedReviewWorkflow_AfterEditOrDelete(
+        bool pickup, bool delete)
+    {
+        var projectId = await CreateProjectAsync();
+        var project = (await _factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId)))!;
+        var definition = BuiltInWorkflows.Default.Definition! with
+        {
+            Id = "retry-saved-review",
+            Name = "Retry Saved Review",
+            Version = "1",
+            Nodes = BuiltInWorkflows.Default.Definition!.Nodes
+                .Select(node => node.Id == "review"
+                    ? node with { Label = "Original Review" } : node).ToList(),
+        };
+        var path = Path.Combine(project.WorkingDirectory, ".agentweaver", "workflows", "retry-saved-review.yaml");
+        await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(definition));
+        var source = await SeedRunAsync(
+            RunStatus.Failed, CoordinatorWebApplicationFactory.OwnerUser,
+            agentName: "Coordinator",
+            origin: pickup ? RunOrigin.BacklogPickup : RunOrigin.Interactive,
+            projectId: ProjectId.Parse(projectId),
+            executableWorkflowYaml: WorkflowDefinitionYamlSerializer.Serialize(definition),
+            executableWorkflowId: definition.Id);
+        var (planId, subtaskId) = await SeedRecoverablePlanAsync(source);
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.WorkPlans.SingleAsync(w => w.Id == planId)).WorkflowId = definition.Id;
+            (await db.Subtasks.SingleAsync(s => s.Id == subtaskId)).RecoveryAttempts = 3;
+            await db.SaveChangesAsync();
+        }
+
+        if (delete)
+            File.Delete(path);
+        else
+            await File.WriteAllTextAsync(path, WorkflowDefinitionYamlSerializer.Serialize(
+                definition with
+                {
+                    Nodes = definition.Nodes.Select(node => node.Id == "review"
+                        ? node with { Label = "Edited Review" } : node).ToList(),
+                }));
+
+        await _factory.PrepareAiExecutionAsync(_owner, "orchestration", projectId, source.Id.ToString());
+        var response = await _owner.PostAsync($"/api/runs/{source.Id}/retry", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Created,
+            await response.Content.ReadAsStringAsync());
+        var retryId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("run_id").GetString()!;
+        retryId.Should().NotBe(source.Id.ToString(), "exhausted recovery must mint a fresh run");
+        var pending = _factory.Services.GetRequiredService<PendingRequestStore>();
+        (await PollUntilAsync(async () => await pending.GetAsync(retryId) is not null))
+            .Should().BeTrue("the new coordinator reaches its outcome confirmation gate");
+        (await _owner.PostAsync($"/api/runs/{retryId}/outcome-spec/confirm", null))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        WorkPlan? retryPlan = null;
+        (await PollUntilAsync(async () =>
+        {
+            await using var scope = _factory.Services.CreateAsyncScope();
+            retryPlan = await scope.ServiceProvider.GetRequiredService<MemoryDbContext>()
+                .WorkPlans.AsNoTracking().FirstOrDefaultAsync(w => w.CoordinatorRunId == retryId);
+            return retryPlan is not null;
+        })).Should().BeTrue();
+        retryPlan!.WorkflowId.Should().Be(definition.Id);
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        (await PollUntilAsync(async () =>
+            (await runStore.GetAsync(RunId.Parse(retryId)))?.GetExecutableWorkflowPin() is not null))
+            .Should().BeTrue("the fresh plan saves the inherited selected definition");
+        var retry = await runStore.GetAsync(RunId.Parse(retryId));
+        retry!.AgentName.Should().Be("Coordinator", "saved coordinator workflows are not static executable runs");
+        retry.GetExecutableWorkflowPin()!.DefinitionYaml.Should().Be(source.ExecutableWorkflowDefinitionYaml);
+        await using var gateScope = _factory.Services.CreateAsyncScope();
+        var gates = await CoordinatorAssemblyGateResolver.ResolveAsync(
+            gateScope.ServiceProvider, retryPlan.Id, CancellationToken.None);
+        gates.Single(g => g.GateKind == "human-review").Label.Should().Be("Original Review");
+        var graph = await _owner.GetAsync($"/api/runs/{retryId}/graph");
+        graph.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await graph.Content.ReadAsStringAsync()).Should().Contain("Original Review",
+            "the retry's visible graph must use the same saved review gate");
     }
 
     // =========================================================================
@@ -187,6 +316,176 @@ public sealed class RunRetryTests : IDisposable
         });
         found.Should().BeTrue();
         spec!.Value.GetProperty("status").GetString().Should().Be("confirmed");
+    }
+
+    [Fact]
+    public async Task PinnedStaticFanRetry_ReusesPinnedWorkflow_WithoutDuplicatePlanOrChildren()
+    {
+        await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
+        using var owner = factory.CreateOwnerClient();
+        factory.TestAgentRunner.Mode = TestFileEditAgentRunner.AgentMode.NoChange;
+
+        var projectId = await CreateProjectAsync(factory, owner);
+        var project = await factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId));
+        project.Should().NotBeNull();
+        Repository.Init(project!.WorkingDirectory);
+        using (var repository = new Repository(project.WorkingDirectory))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial workflow", signature, signature);
+            if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+                repository.Branches.Rename(repository.Head, "main");
+        }
+
+        const string yaml = """
+            id: retry-fan
+            name: Retry fan
+            version: "1"
+            start: fan
+            nodes:
+              - id: fan
+                type: fan_out
+                label: Parallel work
+              - id: branch-one
+                type: prompt
+                label: Branch one
+                agent: alpha
+                prompt: Produce branch one.
+              - id: branch-two
+                type: prompt
+                label: Branch two
+                agent: alpha
+                prompt: Produce branch two.
+              - id: join
+                type: fan_in
+                label: Join
+                target: fan
+              - id: done
+                type: terminal
+                label: Done
+            edges:
+              - from: fan
+                to: branch-one
+              - from: fan
+                to: branch-two
+              - from: branch-one
+                to: join
+              - from: branch-two
+                to: join
+              - from: join
+                to: done
+            """;
+        var source = await SeedRunAsync(
+            RunStatus.Failed,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            projectId: project.Id,
+            repoPath: project.WorkingDirectory,
+            approvalSnapshot: new RunApprovalPolicySnapshot(
+                new RunApprovalPolicy(AutoApproveTools: false, Autopilot: false),
+                "direct",
+                DateTimeOffset.UtcNow),
+            executableWorkflowYaml: yaml,
+            factory: factory);
+
+        await factory.PrepareAiExecutionAsync(owner, "orchestration", projectId, source.Id.ToString());
+        var response = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var retryRunId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("run_id").GetString()!;
+
+        JsonElement plan = default;
+        var attached = await PollUntilAsync(async () =>
+        {
+            var planResponse = await owner.GetAsync($"/api/runs/{retryRunId}/work-plan");
+            if (planResponse.StatusCode != HttpStatusCode.OK)
+                return false;
+            plan = await planResponse.Content.ReadFromJsonAsync<JsonElement>();
+            return plan.GetProperty("subtasks").GetArrayLength() == 2;
+        });
+        attached.Should().BeTrue(
+            "retry must execute the pinned fan without generic decomposition; last plan: {0}",
+            plan.ValueKind == JsonValueKind.Undefined ? "<none>" : plan.GetRawText());
+
+        var retried = await factory.Services.GetRequiredService<IRunStore>()
+            .GetAsync(RunId.Parse(retryRunId));
+        retried!.RetriedFrom.Should().Be(source.Id.ToString());
+        retried.ExecutableWorkflowDefinitionId.Should().Be(source.ExecutableWorkflowDefinitionId);
+        retried.ExecutableWorkflowContentDigest.Should().Be(source.ExecutableWorkflowContentDigest);
+        retried.ExecutableWorkflowDefinitionYaml.Should().Be(source.ExecutableWorkflowDefinitionYaml);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plans = await db.WorkPlans
+            .Where(row => row.ParentRunId == retryRunId || row.CoordinatorRunId == retryRunId)
+            .ToListAsync();
+        plans.Should().ContainSingle();
+        var children = await db.Subtasks
+            .Where(row => row.WorkPlanId == plans[0].Id)
+            .ToListAsync();
+        children.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task PinnedNonFanRetry_UsesAgentTurnExecutionContext()
+    {
+        await using var factory = CoordinatorWebApplicationFactory.CreateWithFakeWorkflowAgents();
+        using var owner = factory.CreateOwnerClient();
+        factory.TestAgentRunner.Mode = TestFileEditAgentRunner.AgentMode.NoChange;
+
+        var projectId = await CreateProjectAsync(factory, owner);
+        var project = await factory.Services.GetRequiredService<IProjectStore>()
+            .GetAsync(ProjectId.Parse(projectId));
+        project.Should().NotBeNull();
+        Repository.Init(project!.WorkingDirectory);
+        using (var repository = new Repository(project.WorkingDirectory))
+        {
+            Commands.Stage(repository, "*");
+            var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            repository.Commit("Initial workflow", signature, signature);
+            if (!string.Equals(repository.Head.FriendlyName, "main", StringComparison.Ordinal))
+                repository.Branches.Rename(repository.Head, "main");
+        }
+
+        const string yaml = """
+            id: retry-linear
+            name: Retry linear
+            version: "1"
+            start: work
+            nodes:
+              - id: work
+                type: prompt
+                label: Work
+                agent: alpha
+                prompt: Complete the work.
+              - id: done
+                type: terminal
+                label: Done
+            edges:
+              - from: work
+                to: done
+            """;
+        var source = await SeedRunAsync(
+            RunStatus.Failed,
+            CoordinatorWebApplicationFactory.OwnerUser,
+            projectId: project.Id,
+            repoPath: project.WorkingDirectory,
+            executableWorkflowYaml: yaml,
+            executableWorkflowId: "retry-linear",
+            factory: factory);
+
+        await factory.PrepareAiExecutionAsync(owner, "agent_turn", projectId, source.Id.ToString());
+        var response = await owner.PostAsync($"/api/runs/{source.Id}/retry", content: null);
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+        var retryRunId = (await response.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("run_id").GetString()!;
+
+        var retried = await factory.Services.GetRequiredService<IRunStore>()
+            .GetAsync(RunId.Parse(retryRunId));
+        retried!.RetriedFrom.Should().Be(source.Id.ToString());
+        retried.ExecutableWorkflowDefinitionId.Should().Be("retry-linear");
+        retried.ExecutableWorkflowDefinitionYaml.Should().Be(yaml);
     }
 
     // =========================================================================
@@ -665,7 +964,10 @@ public sealed class RunRetryTests : IDisposable
         string? modelId = "gpt-4o",
         ModelSource modelSource = ModelSource.GitHubCopilot,
         RunApprovalPolicySnapshot? approvalSnapshot = null,
-        CoordinatorWebApplicationFactory? factory = null)
+        string? executableWorkflowYaml = null,
+        string executableWorkflowId = "retry-fan",
+        CoordinatorWebApplicationFactory? factory = null,
+        string? result = null)
     {
         factory ??= _factory;
         if (repoPath is null && projectId is not null)
@@ -684,6 +986,7 @@ public sealed class RunRetryTests : IDisposable
             Task = task,
             SubmittingUser = submittingUser,
             Status = status,
+            Result = result,
             StartedAt = DateTimeOffset.UtcNow,
             EndedAt = status is RunStatus.Failed or RunStatus.MergeFailed or RunStatus.Declined or RunStatus.Merged
                 ? DateTimeOffset.UtcNow : null,
@@ -692,6 +995,19 @@ public sealed class RunRetryTests : IDisposable
             ParentRunId = parentRunId,
             Origin = origin,
             RetriedFrom = retriedFrom,
+            ExecutableWorkflowPinRequired = executableWorkflowYaml is not null,
+            ExecutableWorkflowManifestSchemaVersion = executableWorkflowYaml is null
+                ? null
+                : ExecutableWorkflowPin.CurrentSchemaVersion,
+            ExecutableWorkflowDefinitionId = executableWorkflowYaml is null ? null : executableWorkflowId,
+            ExecutableWorkflowDefinitionVersion = executableWorkflowYaml is null ? null : "1",
+            ExecutableWorkflowSource = executableWorkflowYaml is null ? null : "test",
+            ExecutableWorkflowContentDigest = executableWorkflowYaml is null
+                ? null
+                : "sha256:" + Convert.ToHexString(
+                    SHA256.HashData(Encoding.UTF8.GetBytes(executableWorkflowYaml))).ToLowerInvariant(),
+            ExecutableWorkflowDefinitionYaml = executableWorkflowYaml,
+            ExecutableWorkflowPinnedAt = executableWorkflowYaml is null ? null : DateTimeOffset.UtcNow,
         };
         if (approvalSnapshot is not null)
             run = run.WithApprovalPolicySnapshot(approvalSnapshot);

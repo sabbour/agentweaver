@@ -108,6 +108,187 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         events[0].EventType.Should().Be("run.failed");
     }
 
+    [Fact]
+    public async Task RecoverInterruptedRunsAsync_PartialDraftOutput_TerminalizesWithoutReplay()
+    {
+        var runId = RunId.New();
+        await _runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            AgentName = "Coordinator",
+            ParentRunId = null,
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "test partial draft recovery",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            Origin = RunOrigin.Interactive,
+        });
+
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = "project-partial-draft",
+                CoordinatorRunId = runId.ToString(),
+                Goal = "test partial draft recovery",
+                DesiredOutcome = string.Empty,
+                Scope = string.Empty,
+                Assumptions = string.Empty,
+                Status = "drafting",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            });
+            db.RunEvents.AddRange(
+                new RunEventRecord
+                {
+                    RunId = runId.ToString(),
+                    Sequence = 1,
+                    EventType = EventTypes.CoordinatorOutcomeSpecDrafting,
+                    PayloadJson = "{}",
+                    CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                },
+                new RunEventRecord
+                {
+                    RunId = runId.ToString(),
+                    Sequence = 2,
+                    EventType = EventTypes.AgentMessageDelta,
+                    PayloadJson = """{"text":"{\"desired_outcome\":\"partial"}""",
+                    CreatedAt = DateTime.UtcNow.AddMinutes(-9),
+                });
+            await db.SaveChangesAsync();
+        }
+
+        var streamStore = new RunStreamStore();
+        var svc = BuildCoordinatorRunService(_runStore, streamStore,
+            leaseStore: new SqliteRunLeaseStore(_runDb.Db));
+
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        await Task.Delay(200);
+
+        var updated = await _runStore.GetAsync(runId);
+        updated!.Status.Should().Be(RunStatus.Failed);
+        updated.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+
+        using var assertScope = _scopeFactory.CreateScope();
+        var assertDb = assertScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await assertDb.RunEvents.AnyAsync(
+            e => e.RunId == runId.ToString()
+                 && e.EventType == EventTypes.AgentMessageDelta))
+            .Should().BeTrue("the partial model output remains durable diagnostic evidence");
+        (await assertDb.RunEvents.AnyAsync(
+            e => e.RunId == runId.ToString()
+                 && e.EventType == EventTypes.CoordinatorOutcomeSpecDraftRetrying))
+            .Should().BeFalse("partial observable output makes replay unsafe");
+    }
+
+    [Fact]
+    public async Task RecoverInterruptedRunsAsync_RevisionWithNoOutput_DoesNotRepeatModelCall()
+    {
+        var runId = RunId.New();
+        await _runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            AgentName = "Coordinator",
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "retain the reviewed revision boundary",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            Origin = RunOrigin.Interactive,
+        });
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = "project-revision",
+                CoordinatorRunId = runId.ToString(),
+                Goal = "retain the reviewed revision boundary",
+                DesiredOutcome = "original reviewed draft",
+                Scope = "one endpoint",
+                Assumptions = "original assumptions",
+                Status = "drafting",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            });
+            db.RunEvents.Add(new RunEventRecord
+            {
+                RunId = runId.ToString(),
+                Sequence = 1,
+                EventType = EventTypes.CoordinatorOutcomeSpecDrafting,
+                PayloadJson = """{"revise":true}""",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await BuildCoordinatorRunService(_runStore, new RunStreamStore(),
+                leaseStore: new SqliteRunLeaseStore(_runDb.Db))
+            .RecoverInterruptedRunsAsync(CancellationToken.None);
+
+        (await _runStore.GetAsync(runId))!.Result.Should().Be(CoordinatorFailureCodes.OutcomeSpecDraftStalled);
+        using var verification = _scopeFactory.CreateScope();
+        (await verification.ServiceProvider.GetRequiredService<MemoryDbContext>().RunEvents
+            .AnyAsync(e => e.RunId == runId.ToString()
+                && e.EventType == EventTypes.CoordinatorOutcomeSpecDraftRetrying))
+            .Should().BeFalse("a revision whose model invocation outcome is unknown must never replay");
+    }
+
+    [Fact]
+    public async Task RecoverInterruptedRunsAsync_PeerOwnsDraftLease_DoesNotReplayOrTerminalize()
+    {
+        var runId = RunId.New();
+        await _runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            AgentName = "Coordinator",
+            ParentRunId = null,
+            Status = RunStatus.InProgress,
+            RepositoryPath = _checkpointsPath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "test replica lease fencing",
+            SubmittingUser = "test-user",
+            StartedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            Origin = RunOrigin.Interactive,
+        });
+
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            db.OutcomeSpecs.Add(new OutcomeSpec
+            {
+                ProjectId = "project-peer-lease",
+                CoordinatorRunId = runId.ToString(),
+                Goal = "test replica lease fencing",
+                DesiredOutcome = string.Empty,
+                Scope = string.Empty,
+                Assumptions = string.Empty,
+                Status = "drafting",
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(-10),
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var leaseStore = new DenyingRunLeaseStore();
+        var service = BuildCoordinatorRunService(
+            _runStore,
+            new RunStreamStore(),
+            leaseStore: leaseStore);
+
+        await service.RecoverInterruptedRunsAsync(CancellationToken.None);
+
+        (await _runStore.GetAsync(runId))!.Status.Should().Be(RunStatus.InProgress);
+        leaseStore.ClaimedRunIds.Should().Equal(runId.ToString());
+    }
+
     // =========================================================================
     // Test 2 (RC-2 fix): Loser pod — TrySetTerminalStatusAsync no-op → must
     // NOT write any RunEvents and must NOT add events to the stream entry.
@@ -429,6 +610,37 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RecoverInterruptedRunsAsync_RecoveredAppliedMerge_DoesNotEnqueueMissingScribe()
+    {
+        var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
+        var (planId, _) = await SeedPlanAsync(
+            coordinatorRun.Id.ToString(),
+            [(SubtaskStatus.Completed, (string?)null)]);
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(w => w.Id == planId);
+            plan.Status = WorkPlanStatus.Complete;
+            plan.MergeEffectId = $"{coordinatorRun.Id}:g1:collective-merge";
+            plan.MergeLifecycleGeneration = 1;
+            plan.MergeEffectState = MergeEffectState.Applied;
+            plan.MergeRecoveryAction = "finalize_without_replaying_merge_or_scribe";
+            await db.SaveChangesAsync();
+        }
+
+        var streamStore = new RunStreamStore();
+        var pipeline = new CountingScribePipeline();
+        var config = BuildConfiguration();
+        var assembly = BuildAssembly(_runStore, streamStore, pipeline, config);
+        var svc = BuildCoordinatorRunService(_runStore, streamStore, assembly, config);
+
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        await Task.Delay(100);
+
+        pipeline.InvocationCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task RecoverInterruptedRunsAsync_ThreeFailedScribes_DoesNotReenqueue()
     {
         var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
@@ -466,6 +678,37 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RecoverInterruptedRunsAsync_NonRetryableScribeFailure_DoesNotReenqueue()
+    {
+        var coordinatorRun = await SeedTerminalCoordinatorRunAsync(
+            RunStatus.MergeFailed, "needs_resolution: integration_conflict");
+        var config = BuildConfiguration();
+        var streamStore = new RunStreamStore();
+        var pipeline = new CountingScribePipeline(nonRetryableFailure: true);
+        var assembly = BuildAssembly(_runStore, streamStore, pipeline, config);
+
+        assembly.EnsureFinalScribe(coordinatorRun);
+        await WaitUntilAsync(async () =>
+        {
+            var children = await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString());
+            return children.Any(r => IsScribe(r) && r.Status == RunStatus.Failed);
+        });
+
+        var svc = BuildCoordinatorRunService(_runStore, streamStore, assembly, config);
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
+        assembly.EnsureFinalScribe(coordinatorRun);
+        await Task.Delay(100);
+
+        pipeline.InvocationCount.Should().Be(1);
+        (await _runStore.GetRunsByParentAsync(coordinatorRun.Id.ToString()))
+            .Where(IsScribe).Should().ContainSingle()
+            .Which.Result.Should().Be("scribe_infrastructure_failure (non-retryable)");
+        var parent = (await _runStore.GetAsync(coordinatorRun.Id))!;
+        parent.Status.Should().Be(RunStatus.MergeFailed);
+        parent.Result.Should().Be("needs_resolution: integration_conflict");
+    }
+
+    [Fact]
     public async Task EnsureFinalScribe_ConcurrentCallsForSameRun_ExecutesPipelineOnce()
     {
         var coordinatorRun = await SeedTerminalCoordinatorRunAsync();
@@ -496,16 +739,12 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
     }
 
     // =========================================================================
-    // #240: cross-pod / restart recovery must ADOPT already-completed children,
-    // not re-run them. A mid-flight subtask whose child run reached a durable
-    // SUCCESS terminal (assemble_ready / completed / merged) but whose subtask
-    // row never advanced (the dispatch loop died in the ApplyChildResult window)
-    // must be LEFT in place (dispatched/running + ChildRunId intact) so the
-    // recovery-aware re-arm resolves and adopts it. Only genuinely-incomplete
-    // children (still in progress, or terminal in a FAILURE state) are reset.
+    // Startup recovery must leave plans with subtasks untouched until the
+    // reconciler claims plan ownership. Even an in-progress child can belong
+    // to a healthy worker when only an API replica restarts.
     // =========================================================================
     [Fact]
-    public async Task ResetInFlightSubtasks_AdoptsCompletedChildren_ResetsOnlyIncompleteOnes()
+    public async Task StartupRecovery_DoesNotResetUnclaimedInFlightChildren()
     {
         var coord = RunId.New().ToString();
         await SeedCoordinatorRunAsync(coord);
@@ -522,14 +761,14 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             (SubtaskStatus.Running, (string?)assembleReady),   // 0 → adopt
             (SubtaskStatus.Dispatched, (string?)completed),    // 1 → adopt
             (SubtaskStatus.Running, (string?)merged),          // 2 → adopt
-            (SubtaskStatus.Dispatched, (string?)inProgress),   // 3 → reset (still running)
-            (SubtaskStatus.Running, (string?)failed),          // 4 → reset (failure terminal)
-            (SubtaskStatus.Running, (string?)null),            // 5 → reset (no child)
+            (SubtaskStatus.Dispatched, (string?)inProgress),   // 3 → healthy worker may own
+            (SubtaskStatus.Running, (string?)failed),          // 4 → reconciler must claim
+            (SubtaskStatus.Running, (string?)null),            // 5 → legacy row
             (SubtaskStatus.AssembleReady, (string?)null),      // 6 → untouched (already terminal)
         });
 
         var svc = BuildCoordinatorRunService(_runStore, new RunStreamStore());
-        await svc.ResetInFlightSubtasksAsync(planId, CancellationToken.None);
+        await svc.RecoverInterruptedRunsAsync(CancellationToken.None);
 
         // Adopted: left in-flight with ChildRunId intact so the re-arm resolves the completed child.
         var s0 = await GetSubtaskAsync(ids[0]);
@@ -544,17 +783,17 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         s2.Status.Should().Be(SubtaskStatus.Running, "a merged child must be adopted, not re-run");
         s2.ChildRunId.Should().Be(merged);
 
-        // Reset: genuinely-incomplete work redispatched with a fresh child.
+        // No plan mutation occurs without the reconciler's distributed plan claim.
         var s3 = await GetSubtaskAsync(ids[3]);
-        s3.Status.Should().Be(SubtaskStatus.Pending, "an in-progress child crashed and must redispatch");
-        s3.ChildRunId.Should().BeNull();
+        s3.Status.Should().Be(SubtaskStatus.Dispatched, "a healthy worker-owned child must not be redispatched");
+        s3.ChildRunId.Should().Be(inProgress);
 
         var s4 = await GetSubtaskAsync(ids[4]);
-        s4.Status.Should().Be(SubtaskStatus.Pending, "a failed child must redispatch a fresh attempt");
-        s4.ChildRunId.Should().BeNull();
+        s4.Status.Should().Be(SubtaskStatus.Running, "only the claimed plan owner can recover a failed child");
+        s4.ChildRunId.Should().Be(failed);
 
         var s5 = await GetSubtaskAsync(ids[5]);
-        s5.Status.Should().Be(SubtaskStatus.Pending, "a mid-flight subtask with no child must redispatch");
+        s5.Status.Should().Be(SubtaskStatus.Running, "legacy rows require a correlated-child check by the owner");
         s5.ChildRunId.Should().BeNull();
 
         // Already-terminal subtask is never touched by the reset.
@@ -683,7 +922,8 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         RunStreamStore streamStore,
         ICoordinatorAssembly? assembly = null,
         IConfiguration? configuration = null,
-        TerminalOutcomeProjector? terminalOutcomeProjector = null)
+        TerminalOutcomeProjector? terminalOutcomeProjector = null,
+        IRunLeaseStore? leaseStore = null)
     {
         var config = configuration ?? BuildConfiguration();
 
@@ -746,7 +986,45 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             lifetime: new TestHostApplicationLifetime(),
             configuration: config,
             logger: NullLogger<CoordinatorRunService>.Instance,
-            terminalOutcomeProjector: terminalOutcomeProjector);
+            terminalOutcomeProjector: terminalOutcomeProjector,
+            leaseStore: leaseStore);
+    }
+
+    private sealed class DenyingRunLeaseStore : IRunLeaseStore
+    {
+        public List<string> ClaimedRunIds { get; } = [];
+
+        public Task<(bool Claimed, long FencingToken)> TryClaimAsync(
+            string runId,
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default)
+        {
+            ClaimedRunIds.Add(runId);
+            return Task.FromResult((false, 0L));
+        }
+
+        public Task<bool> TryRenewAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task ReleaseAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<bool> IsLeaseOwnerAsync(
+            string runId,
+            string ownerId,
+            long fencingToken,
+            CancellationToken ct = default) =>
+            Task.FromResult(false);
     }
 
     private static void CreateRunEventsTable(string memoryDbPath)
@@ -806,14 +1084,15 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             configuration,
             providerBoundaryResolver: new FixedRunModelProviderBoundaryResolver());
 
-    private async Task<Run> SeedTerminalCoordinatorRunAsync()
+    private async Task<Run> SeedTerminalCoordinatorRunAsync(
+        RunStatus status = RunStatus.Completed, string result = "complete")
     {
         var run = new Run
         {
             Id = RunId.New(),
             AgentName = "Coordinator",
             ParentRunId = null,
-            Status = RunStatus.Completed,
+            Status = status,
             RepositoryPath = _checkpointsPath,
             OriginatingBranch = "main",
             ModelSource = ModelSource.GitHubCopilot,
@@ -821,7 +1100,7 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             SubmittingUser = "test-user",
             StartedAt = DateTimeOffset.UtcNow,
             EndedAt = DateTimeOffset.UtcNow,
-            Result = "complete",
+            Result = result,
             Origin = RunOrigin.Interactive,
         };
         await _runStore.InsertAsync(run);
@@ -936,7 +1215,8 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
 
     private sealed class CountingScribePipeline(
         bool block = false,
-        bool failScribes = false) : ICollectiveAssemblyPipeline
+        bool failScribes = false,
+        bool nonRetryableFailure = false) : ICollectiveAssemblyPipeline
     {
         private readonly TaskCompletionSource<bool> _release = CreateRelease(block);
         private int _invocationCount;
@@ -957,7 +1237,9 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
             {
                 await _release.Task.WaitAsync(ct);
                 if (failScribes)
-                    throw new InvalidOperationException("simulated Scribe failure");
+                    throw new ScribeTurnException("scribe_transport_failure", retryable: true);
+                if (nonRetryableFailure)
+                    throw new ScribeTurnException("scribe_infrastructure_failure", retryable: false);
             }
             finally
             {
@@ -1023,8 +1305,12 @@ public sealed class CoordinatorRunServiceRecoveryTests : IAsyncDisposable
         public bool ReviewerWorktreeMatchesAggregate(string reviewerWorktreePath, string aggregateTreeHash) =>
             throw new NotImplementedException();
 
-        public Task<CollectiveMergeResult> MergeAsync(
-            CollectiveMergeRequest request,
+        public PrepareGitMergeResult PrepareMerge(CollectiveMergeRequest request) =>
+            throw new NotImplementedException();
+
+        public Task<CollectiveMergeResult> ExecutePreparedMergeAsync(
+            CollectivePreparedMergeRequest request,
+            Func<CancellationToken, Task<bool>> authorize,
             CancellationToken ct) =>
             throw new NotImplementedException();
     }

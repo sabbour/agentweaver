@@ -11,22 +11,110 @@ public interface IRunStore
 {
     Task InsertAsync(Run run, CancellationToken ct = default);
     Task<Run?> GetAsync(RunId runId, CancellationToken ct = default);
+    Task<bool> TryBindExecutionInputAsync(
+        RunId runId,
+        int expectedLifecycleGeneration,
+        string sourceCommitHash,
+        string executionCommitHash,
+        string compositeId,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support immutable execution inputs.");
     Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default);
+    /// <summary>All direct child run identities (including prior revision attempts) of a coordinator.</summary>
+    Task<IReadOnlyList<string>> GetChildRunIdsAsync(string parentRunId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support child sandbox cleanup.");
+
+    /// <summary>One bounded page of terminal root coordinators, newest outcomes first.</summary>
+    Task<IReadOnlyList<string>> GetTerminalCoordinatorRunIdsAsync(int offset, int limit, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support terminal sandbox reconciliation.");
     Task UpdateStatusAsync(RunId runId, RunStatus status, DateTimeOffset? endedAt, CancellationToken ct = default);
+    async Task<bool> TryUpdateStatusAsync(
+        RunId runId, RunStatus status, DateTimeOffset? endedAt, RunLeaseClaim requiredLease,
+        CancellationToken ct = default)
+    {
+        await UpdateStatusAsync(runId, status, endedAt, ct).ConfigureAwait(false);
+        return true;
+    }
     Task UpdateResultAsync(RunId runId, RunStatus status, string result, DateTimeOffset endedAt, CancellationToken ct = default);
     Task UpdateAssemblyArtifactsAsync(RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Task.CompletedTask;
+    /// <summary>Caller holds the parent-run claim and child-work plan fence across Git apply and this receipt.</summary>
+    Task<bool> TryRecordFanInputProjectionAsync(
+        RunId runId, int generation, string expectedBaseTree, string projectedTree,
+        string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot record a fan input projection.");
+    async Task<bool> TryUpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,
+        CancellationToken ct = default)
+    {
+        await UpdateAssemblyArtifactsAsync(runId, treeHash, diff, ct).ConfigureAwait(false);
+        return true;
+    }
     Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        throw new NotSupportedException($"{GetType().Name} cannot retain review-ready tree content.");
+    Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
+        int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
+        throw new NotSupportedException($"{GetType().Name} does not support generation-fenced output publication.");
+    Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
+        int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        throw new NotSupportedException($"{GetType().Name} cannot retain generation-fenced tree content.");
+    Task<RunOutputRevision?> GetOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
+    async Task<RunOutputRevision> ResolveOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default)
+    {
+        var revision = await GetOutputRevisionAsync(runId, revisionId, ct).ConfigureAwait(false)
+            ?? throw new RunOutputRevisionUnavailableException("missing_content");
+        revision.ResolveFiles();
+        return revision;
+    }
+    Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
+    Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(RunId runId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support output revisions.");
+    Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot publish collective candidates.");
+    Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct, RunLeaseClaim requiredLease) =>
+        PublishCollectiveCandidateAsync(runId, generation, workPlanId, treeHash, diff, treeContent, ct);
+    Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot approve collective candidates.");
+    Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct,
+        RunLeaseClaim requiredLease) =>
+        ApproveCollectiveCandidateAsync(runId, generation, revisionId, ct);
     Task<bool> TryTransitionReviewToInProgressAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task<bool> TryParkForChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
+    Task<bool> TryResumeFromChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
     Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not implement terminal reopen.");
     Task<bool> TryTransitionReviewAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? reviewer = null, CancellationToken ct = default);
     Task<bool> TryTransitionToCommittingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task<bool> TryTransitionToCommittingRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot bind a reviewed revision for commit.");
     Task<bool> TryRevertCommittingAsync(RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> TryStartMergingAsync(RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null);
+    Task<bool> TryStartMergingRevisionAsync(RunId runId, string revisionId, string? reviewer = null, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot bind a reviewed revision for merge.");
     Task<bool> RevertMergingAsync(RunId runId, CancellationToken ct = default, DateTimeOffset? now = null);
     Task<bool> CompleteMergingAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, string? mergeConflicts = null, CancellationToken ct = default, string? mergedCommitHash = null);
     Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default);
+    /// <summary>Publishes a composed agent commit only while the original root and its run lease still match.</summary>
+    Task<bool> TryPublishComposedAgentTreeAsync(
+        Run expected, string treeHash, RunLeaseClaim requiredLease, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} cannot publish a fenced composed agent tree.");
     Task<bool> SetAssembleReadyAsync(RunId runId, string treeHash, string worktreeBranch, string diff, int stepCount, DateTimeOffset endedAt, CancellationToken ct = default);
     Task<bool> TrySetTerminalStatusAsync(RunId runId, RunStatus toStatus, DateTimeOffset endedAt, string? result, CancellationToken ct = default);
 
@@ -46,7 +134,10 @@ public interface IRunStore
         RunId runId,
         TerminalRunMutation mutation,
         CancellationToken ct = default) =>
-        TrySetTerminalOutcomeAsync(runId, mutation.Outcome, mutation.Result, ct);
+        mutation.RequiredLease is not null || mutation.CollectiveOutput is not null || mutation.NoChangeOutput is not null
+            ? throw new NotSupportedException(
+                $"{GetType().Name} does not implement lease-fenced terminal mutations.")
+            : TrySetTerminalOutcomeAsync(runId, mutation.Outcome, mutation.Result, ct);
 
     /// <summary>Returns durable winners that have not yet been projected into RunEvents.</summary>
     Task<IReadOnlyList<PendingTerminalRunOutcome>> GetUnprojectedTerminalOutcomesAsync(
@@ -91,15 +182,33 @@ public interface IRunStore
 
     /// <summary>
     /// Atomically acquires a preview-publication lease for one publication attempt. A current lease
-    /// owned by another attempt must be refused until it expires.
+    /// owned by another attempt must be refused until it expires. The run must still have
+    /// <paramref name="expectedLifecycleGeneration"/> at the atomic update boundary.
     /// </summary>
     Task<bool> TryAcquirePreviewPublicationAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
         Task.FromResult(false);
 
-    /// <summary>Renews a preview-publication lease only when <paramref name="ownerId"/> still owns it.</summary>
+    /// <summary>Renews only a live lease owned by <paramref name="ownerId"/>.
+    /// An expired owner or an owner from an earlier lifecycle cannot revive authority.</summary>
     Task<bool> TryRenewPreviewPublicationAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    /// <summary>Reserves a terminal run's process cleanup when no live publication exists.
+    /// The reservation blocks reopening until the bounded stop finishes or its lease expires.</summary>
+    Task<bool> TryReserveTerminalPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    /// <summary>Reserves cleanup of an unpublished process before publication has been claimed.
+    /// Only an active run with no recorded owner or lease can grant it.</summary>
+    Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
         Task.FromResult(false);
 
     /// <summary>
@@ -155,12 +264,23 @@ public interface IRunStore
     Task SetSandboxInfoAsync(RunId runId, string? backend, string? claimName, string? podName, string? @namespace, CancellationToken ct = default);
     Task<bool> ArchiveAsync(RunId runId, DateTimeOffset archivedAt, CancellationToken ct = default);
     Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default);
+    async Task<Run?> FindChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) =>
+        (await GetRunsByParentAsync(parentRunId, ct).ConfigureAwait(false))
+            .Where(run => string.Equals(run.SubtaskId, subtaskId, StringComparison.Ordinal))
+            .OrderByDescending(run => run.StartedAt)
+            .FirstOrDefault();
     Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default);
     Task<IReadOnlyList<Run>> GetRunsByProjectAsync(ProjectId projectId, bool includeChildren = false, CancellationToken ct = default);
     Task<IReadOnlyList<Run>> GetRunsByProjectAndStatusesAsync(ProjectId projectId, IEnumerable<RunStatus> statuses, CancellationToken ct = default);
     Task<bool> TryCreateProjectRunAsync(Run run, CancellationToken ct = default);
     Task<Run?> GetByWorkflowRunIdAsync(string workflowRunId, CancellationToken ct = default);
     Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default);
+
+    Task UpdateExecutableWorkflowPinAsync(
+        RunId runId,
+        ExecutableWorkflowPin pin,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not implement UpdateExecutableWorkflowPinAsync.");
 
     /// <summary>
     /// Repoints a run at a different <see cref="ModelSource"/>. Used by long-lived Assistant/Operator

@@ -126,6 +126,12 @@ public sealed class GitHubRepositorySelectionCodeRecord
     [System.Text.Json.Serialization.JsonIgnore]
     public string RepoAppAuthorizationId { get; set; } = "";
     /// <summary>
+    /// The exact Repo App installation through which GitHub exposed the selected repository.
+    /// This is server-only capability identity, not a client-visible installation handle.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long InstallationId { get; set; }
+    /// <summary>
     /// The authenticated GitHub authority model that minted this code. This prevents a code from
     /// being consumed after an auth-mode change as a different kind of caller.
     /// </summary>

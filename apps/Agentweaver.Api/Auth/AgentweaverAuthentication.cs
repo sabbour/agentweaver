@@ -33,7 +33,8 @@ internal static class AgentweaverAuthentication
         if (authorization?.Kind == EndpointAuthorizationKind.InternalService)
             return AgentweaverAuthenticationSchemes.InternalServiceKey;
 
-        if (authorization?.Kind == EndpointAuthorizationKind.RunCapability
+        if (authorization?.Kind is (EndpointAuthorizationKind.RunCapability
+                or EndpointAuthorizationKind.PlatformMcpOrRunCapability)
             && token is not null
             && FixedTimeEquals(token, context.Request.Headers[RunAuthorshipHeaders.RunToken].ToString()))
             return AgentweaverAuthenticationSchemes.RunCapability;
@@ -45,7 +46,8 @@ internal static class AgentweaverAuthentication
             return AgentweaverAuthenticationSchemes.InternalServiceKey;
 
         if ((authorization?.Kind is EndpointAuthorizationKind.PlatformOrMcp
-                or EndpointAuthorizationKind.AuthenticatedSelfOrMcp)
+                or EndpointAuthorizationKind.AuthenticatedSelfOrMcp
+                or EndpointAuthorizationKind.PlatformMcpOrRunCapability)
             && token is not null
             && IsBrokerToken(token, context.RequestServices.GetRequiredService<OAuthServerConfiguration>()))
             return AgentweaverAuthenticationSchemes.BrokerBearer;
@@ -297,7 +299,8 @@ internal sealed class RunCapabilityAuthenticationHandler(
         var modelValidation = HttpMethods.IsPost(Request.Method)
             && Context.GetEndpoint()?.Metadata.GetMetadata<Microsoft.AspNetCore.Routing.IEndpointNameMetadata>()
                 ?.EndpointName == "ValidateRunModelProvider";
-        if (metadata?.Kind != EndpointAuthorizationKind.RunCapability
+        if (metadata?.Kind is not (EndpointAuthorizationKind.RunCapability
+                or EndpointAuthorizationKind.PlatformMcpOrRunCapability)
             || (!HttpMethods.IsGet(Request.Method) && !modelValidation)
             || string.IsNullOrWhiteSpace(runId)
             || !string.Equals(runId, headerRunId, StringComparison.Ordinal)

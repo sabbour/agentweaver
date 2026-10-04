@@ -91,7 +91,7 @@ public sealed class RepoAppInstallationAuthorizationServiceTests
         result.ProjectId.Should().Be(project.ToString());
         var installation = await db.GitHubInstallations.SingleAsync();
         installation.InstallationId.Should().Be(72);
-        installation.ProjectId.Should().Be(project.ToString());
+        installation.ProjectId.Should().BeNull();
         var grant = await db.GitHubRepositoryGrants.SingleAsync();
         grant.RepositoryId.Should().Be(99);
         grant.ProjectId.Should().Be(project.ToString());

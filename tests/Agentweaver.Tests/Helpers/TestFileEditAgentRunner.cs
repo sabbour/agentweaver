@@ -35,6 +35,7 @@ public sealed class TestFileEditAgentRunner : IAgentRunner
     /// Optional file content. Defaults to a deterministic string.
     /// </summary>
     public string FileContent { get; set; } = "deterministic agent output for testing";
+    public Func<string, string, string>? ExecuteOverride { get; set; }
 
     private long _invocationCount;
 
@@ -56,6 +57,8 @@ public sealed class TestFileEditAgentRunner : IAgentRunner
         _ = repositoryPath;
         LastTask = task;
         Interlocked.Increment(ref _invocationCount);
+        if (ExecuteOverride is not null)
+            return Task.FromResult(ExecuteOverride(task, workingDirectory));
         return Mode switch
         {
             AgentMode.MakesChange => ExecuteWithChangeAsync(workingDirectory, stream),

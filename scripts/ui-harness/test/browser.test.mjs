@@ -49,6 +49,43 @@ test('semantic repository automation uses the exact accessible option target', (
   }]);
 });
 
+test('stable parent test ID scopes exact semantic and test ID targets', () => {
+  const calls = [];
+  const child = {};
+  const parent = {
+    getByRole: (role, options) => {
+      calls.push({ role, options });
+      return child;
+    },
+    getByTestId: (testId) => {
+      calls.push({ testId });
+      return child;
+    },
+  };
+  const page = {
+    getByTestId: (testId) => {
+      calls.push({ parentTestId: testId });
+      return parent;
+    },
+  };
+  assert.equal(keyedLocator(page, {
+    withinTestId: 'workflow-card-custom-fan-coordinator-demo',
+    role: 'button',
+    name: 'View graph',
+  }), child);
+  assert.equal(keyedLocator(page, {
+    withinTestId: 'workflow-card-custom-fan-coordinator-demo', testId: 'workflow-graph-button',
+  }), child);
+  assert.deepEqual(calls, [
+    { parentTestId: 'workflow-card-custom-fan-coordinator-demo' },
+    { role: 'button', options: { name: 'View graph', exact: true } },
+    { parentTestId: 'workflow-card-custom-fan-coordinator-demo' },
+    { testId: 'workflow-graph-button' },
+  ]);
+  assert.throws(() => keyedLocator(page, { withinTestId: true, role: 'button', name: 'View graph' }), /--within-test-id/);
+  assert.throws(() => keyedLocator(page, { withinTestId: 'missing' }), /UI target must specify/);
+});
+
 test('UI sessions launch installed Google Chrome rather than Playwright Chromium', () => {
   const launch = installedChromeLaunchOptions(
     { headless: true },

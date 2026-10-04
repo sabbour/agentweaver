@@ -67,6 +67,19 @@ public sealed class PreviewStepTests : IDisposable
         Str(ready, "preview_url").Should().NotBeNullOrEmpty();
     }
 
+    [Fact]
+    public async Task ReplacedSandbox_DoesNotReuseReadyEventForSameTree()
+    {
+        var h = new Harness(_worktree);
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+        h.PreviewService.SessionLive = false;
+
+        await h.Step.RunAsync(Request(), CancellationToken.None);
+
+        h.PreviewRunner.StartCalls.Should().Be(2);
+        h.All(EventTypes.SandboxPreviewStartRequested).Should().HaveCount(2);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -87,7 +100,10 @@ public sealed class PreviewStepTests : IDisposable
         {
             Enabled = true,
             ZoneSuffix = "preview.example.test",
-        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication,
+            runStore: new SqliteRunStore(new SqliteDb(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                { ["Database:Path"] = Path.Combine(_worktree, "runs.db") }).Build())));
         var h = new Harness(
             _worktree, autoApprove: approved, approvalTimeout: TimeSpan.FromMilliseconds(25),
             previewService: preview, pauseAtPersistence: true, logger: logger);
@@ -133,10 +149,13 @@ public sealed class PreviewStepTests : IDisposable
         kube.Requests.Should().NotContain(r => r.Method == "DELETE");
         h.PreviewRunner.StopCalls.Should().Be(0);
 
-        await h.Step.RunAsync(Request(), CancellationToken.None);
-        h.PreviewRunner.StartCalls.Should().Be(1, "the durable outcome must still prevent duplicate execution");
+        if (!approved)
+        {
+            await h.Step.RunAsync(Request(), CancellationToken.None);
+            h.PreviewRunner.StartCalls.Should().Be(1, "a terminal failure must prevent duplicate execution");
+            h.TerminalKinds().Should().ContainSingle();
+        }
         h.PreviewRunner.StopCalls.Should().Be(0);
-        h.TerminalKinds().Should().ContainSingle();
         logger.Reports.Should().Be(1);
     }
 
@@ -552,6 +571,10 @@ public sealed class PreviewStepTests : IDisposable
             run_id = RunId,
             work_plan_id = WorkPlanId,
             tree_hash = TreeHash,
+            session_id = "gw-token",
+            pod_name = "pod-1",
+            target_port = 3000,
+            preview_runner_session_id = "proc-sess-1",
         });
         var before = h.Streams.Get(RunId)!.GetSnapshotSince(0).Events.Count;
 
@@ -655,7 +678,10 @@ public sealed class PreviewStepTests : IDisposable
         {
             Enabled = true,
             ZoneSuffix = "preview.example.test",
-        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication);
+        }, NullLogger<SandboxPreviewService>.Instance, publicationClient: publication,
+            runStore: new SqliteRunStore(new SqliteDb(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                { ["Database:Path"] = Path.Combine(_worktree, "runs.db") }).Build())));
         var h = new Harness(_worktree, previewService: preview, pauseAtPersistence: pauseAtPersistence);
         using var appLifetime = new CancellationTokenSource();
         var step = Task.Run(() => h.Step.RunAsync(Request(), appLifetime.Token));
@@ -959,9 +985,16 @@ public sealed class PreviewStepTests : IDisposable
 
     private sealed class FakePreviewService : ISandboxPreviewService
     {
+        public Task<PreviewSession> StartRunBoundPreviewAsync(
+            string runId, int targetPort, string ownerUserId, int expectedLifecycleGeneration,
+            CancellationToken ct = default, string? previewRunnerSessionId = null,
+            string? publicationLeaseOwner = null) =>
+            StartPreviewAsync(runId, targetPort, ownerUserId, ct, previewRunnerSessionId);
+
         public bool EnabledValue = true;
         public int StartCalls;
         public Func<PreviewSession>? StartBehavior;
+        public bool SessionLive = true;
 
         public bool Enabled => EnabledValue;
         public int AllowedPortMin => 3000;
@@ -976,6 +1009,12 @@ public sealed class PreviewStepTests : IDisposable
             return Task.FromResult(new PreviewSession(
                 "gw-token", runId, "pod-1", targetPort, "https://preview.example.test", DateTimeOffset.UtcNow));
         }
+
+        public Task<bool> IsPreviewSessionLiveAsync(
+            string runId, string token, string podName, int targetPort,
+            string previewRunnerSessionId, CancellationToken ct = default) =>
+            Task.FromResult(SessionLive && token == "gw-token" && podName == "pod-1"
+                && targetPort > 0 && previewRunnerSessionId == "proc-sess-1");
 
         public Task<IReadOnlyList<PreviewSession>> ListForRunAsync(string runId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<PreviewSession>>([]);

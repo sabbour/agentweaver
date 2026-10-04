@@ -19,4 +19,7 @@ public sealed class NoOpRunLeaseStore : IRunLeaseStore
 
     public Task<bool> IsLeaseOwnerAsync(string runId, string ownerId, long fencingToken, CancellationToken ct = default)
         => Task.FromResult(true);
+
+    public Task<RunLeaseClaim?> GetActiveClaimAsync(string runId, CancellationToken ct = default)
+        => Task.FromResult<RunLeaseClaim?>(null);
 }

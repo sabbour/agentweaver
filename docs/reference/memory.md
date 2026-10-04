@@ -9,11 +9,11 @@ it is historical data, never prompt structure or executable instructions.
 
 ## How context is built
 
-`MemoryContextCompiler.CompileAsync(projectId, agentName)` gathers approved decisions, eligible memory, and the current session into one envelope-aware compilation result. The total token budget applies to the complete serialized context block, not just memory content. Its bounded composition metadata reports only omitted memory/session counts and causes; it never exposes record content or identifiers.
+`MemoryContextCompiler.CompileAsync(projectId, agentName)` gathers approved decisions, eligible memory, and the current session into one envelope-aware compilation result. The total token budget applies to the complete serialized context block, not just memory content. Its bounded composition metadata reports omitted memory/session counts and causes plus the stable record id, revision number, and immutable revision id of every selected knowledge record. It never emits record content in telemetry.
 
 ```text
 Decisions: active, approved architectural/scope records, ordered by creation time
-Memory candidates: eligible own core context + learnings/patterns
+Memory candidates: eligible active own core context + active learnings/patterns
 Selection for runs: decisions mandatory; then task relevance, importance, recency, and record id; one bounded item/envelope budget
 Session: most recent open session (ties by record id), included only as one complete record
 ```
@@ -120,6 +120,35 @@ Superseding or archiving a decision changes its identity. A later write may ther
 create a new active version with the same content without reviving or overwriting the
 historical record.
 
+### Immutable revisions and optimistic writes
+
+Every memory and decision record has a stable numeric id plus a current `revision` and
+`current_revision_id`. Creation and every content, provenance, trust, approval, or
+lifecycle change append an immutable snapshot. Revision history stores a predecessor,
+actor or source run, timestamp, and reason. History responses redact recognized secrets
+and PII and expose fingerprints instead of raw source identities.
+
+Updates, approvals, and restores require `expected_revision`. If another writer already
+advanced the record, the API returns `409` with `error: stale_revision` and the current
+revision. A restore copies the selected snapshot into a new active, pending revision; it
+never edits or deletes an older revision and never silently carries approval forward.
+
+Memory lifecycle states are `active`, `superseded`, and `archived`. Superseded memory
+must identify a replacement in the same project, and replacement chains cannot cycle.
+Normal list/search and prompt compilation include only active memory. Pass
+`status=all`, or request a specific state, to inspect inactive records explicitly.
+
+Project memory search accepts `q`, `type`, and comma-separated `tags`, applies all
+filters before paging, orders by update time and stable id, and caps pages at 100 items.
+The revision list, single-revision, compare, and restore routes use the same project
+authorization boundary.
+
+In-run agents use the native `get_memory` and `list_decisions` tools with `page` and
+`pageSize` to retrieve later pages. `get_memory` also accepts text, agent, type, tag,
+and lifecycle filters. The read-only `get_memory_history` and
+`get_decision_history` tools expose paginated immutable revisions without exposing raw
+source or approver identities.
+
 ### `AgentMemory`
 
 Per-agent long-term memory. New entries are written through `record_memory` and retain
@@ -139,6 +168,8 @@ working-tree changes are not staged or committed.
 | `Type` | `core_context` — eligible for Layer 2 when non-legacy; `learning` — observation from a run; `pattern` — reusable practice; `update` — correction to prior knowledge |
 | `Importance` | `high` (injected in L3) · `medium` · `low` |
 | `Tags` | Comma-separated. `cross-team` makes approved memory eligible for another agent's Layer 3 |
+| `Status` | `active` by default; `superseded` requires an acyclic same-project replacement; `archived` is retained but inactive |
+| `Revision` | Monotonic expected-revision token used for updates, approvals, and restores |
 
 ### `Decision`
 
@@ -211,7 +242,12 @@ END_AGENTWEAVER_UNTRUSTED_CONTEXT_JSON
 
 If there is no memory yet for a project, the block is omitted entirely and the agent runs with only the base prompt.
 
-`memory.context_composition` records this structured-context selection on the run stream. Its payload is limited to `included`, `omittedMemoryCount`, `omittedSessionCount`, and `omissionCauses`; causes include `relevance`, `item_limit`, and `budget`. Prompt text, stored records, identifiers, and character/token measurements are deliberately excluded. This is distinct from per-turn cross-section size telemetry.
+`memory.context_composition` records this structured-context selection on the run stream.
+Its payload includes `included`, omission counts and causes, and `revisionReferences`.
+Each reference contains only the knowledge kind, stable record id, revision number, and
+immutable revision id. Prompt text, source identities, and character/token measurements
+are deliberately excluded. Consumers must treat a changed revision reference as a new
+approval/cache input rather than reusing an approval for an older snapshot.
 
 ---
 
@@ -227,7 +263,11 @@ runs. Compilation non-budget failures are logged as warnings and the child proce
 its charter alone. A mandatory-decision budget failure is terminalized before model
 invocation.
 
-Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `export_memory` correspond to public MCP `memory_record`, `decision_inbox_submit`, `session_update` and `memory_export`.
+Runtime tools `record_memory`, `submit_inbox_entry`, `update_session` and `export_memory`
+correspond to public MCP `memory_record`, `decision_inbox_submit`, `session_update` and
+`memory_export`. MCP also exposes bounded `memory_search`, `memory_history`,
+`memory_compare`, `memory_restore`, `decision_history`, `decision_compare`, and
+`decision_restore`; mutation tools require the current expected revision.
 
 <details id="diagram-context-canonical-memory-context" v-pre>
 <summary>Diagram details and constraints</summary>

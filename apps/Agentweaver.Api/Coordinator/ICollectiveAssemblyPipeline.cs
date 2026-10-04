@@ -1,4 +1,5 @@
 using Agentweaver.Api.Git;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Coordinator;
 
@@ -14,6 +15,9 @@ namespace Agentweaver.Api.Coordinator;
 /// </summary>
 public interface ICollectiveAssemblyPipeline
 {
+    /// <summary>Captures the verified immutable tree before any mutable ref or worktree is removed.</summary>
+    byte[] CaptureOutputTree(string repositoryPath, string treeHash) =>
+        RunOutputTreeCapture.Capture(repositoryPath, treeHash);
     /// <summary>Builds the COMBINED integration branch (D1) — pure git, no agent.</summary>
     IntegrationBranchResult BuildIntegrationBranch(CollectiveIntegrationRequest request);
 
@@ -40,7 +44,16 @@ public interface ICollectiveAssemblyPipeline
     /// Returns the absolute worktree path. Callers should only invoke this when the integration has
     /// changes; empty-diff assemblies never need a worktree.
     /// </summary>
-    string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch);
+    string PrepareReviewerWorktree(
+        string coordinatorRunId,
+        string repositoryPath,
+        string integrationBranch);
+    string PrepareReviewerWorktree(
+        string coordinatorRunId,
+        string repositoryPath,
+        string integrationBranch,
+        string? assemblyAttemptToken) =>
+        PrepareReviewerWorktree(coordinatorRunId, repositoryPath, integrationBranch);
 
     /// <summary>Verifies that the reviewer worktree still represents the reviewed aggregate.</summary>
     bool ReviewerWorktreeMatchesAggregate(
@@ -52,6 +65,12 @@ public interface ICollectiveAssemblyPipeline
         string coordinatorRunId,
         string repositoryPath,
         CancellationToken ct = default);
+    Task CleanupBuildTestResourcesAsync(
+        string coordinatorRunId,
+        string repositoryPath,
+        CancellationToken ct,
+        string? assemblyAttemptToken) =>
+        CleanupBuildTestResourcesAsync(coordinatorRunId, repositoryPath, ct);
 
     /// <summary>
     /// Absolute path of the coordinator's detached Build/Test worktree (spec-006 decouple-preview).
@@ -60,20 +79,31 @@ public interface ICollectiveAssemblyPipeline
     /// <see cref="RunBuildTestAsync"/> creates the worktree until <see cref="CleanupBuildTestResourcesAsync"/>.
     /// </summary>
     string GetBuildTestWorktreePath(string coordinatorRunId);
+    string GetBuildTestWorktreePath(string coordinatorRunId, string? assemblyAttemptToken) =>
+        GetBuildTestWorktreePath(coordinatorRunId);
 
-    /// <summary>Performs the ONE collective merge of the integration branch into the originating branch.</summary>
-    Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct);
+    /// <summary>Creates an immutable merge commit/intention without moving any ref.</summary>
+    PrepareGitMergeResult PrepareMerge(CollectiveMergeRequest request);
+
+    /// <summary>
+    /// Reconciles or applies a durable merge intention under the repository lock. The authorization
+    /// callback runs while that lock is held, immediately before the compare-and-swap.
+    /// </summary>
+    Task<CollectiveMergeResult> ExecutePreparedMergeAsync(
+        CollectivePreparedMergeRequest request,
+        Func<CancellationToken, Task<bool>> authorize,
+        CancellationToken ct);
 
     /// <summary>Runs the ONE collective scribe pass after a successful merge.</summary>
     Task RunScribeAsync(CollectiveScribeRequest request, CancellationToken ct);
 }
 
-/// <summary>Inputs to build the integration branch: eligible child branches in dependency order.</summary>
+/// <summary>Inputs to build the integration branch: verified immutable child commits in dependency order.</summary>
 public sealed record CollectiveIntegrationRequest(
     string RepositoryPath,
     string OriginatingBranch,
     string IntegrationBranch,
-    IReadOnlyList<string> ChildBranchesInOrder);
+    IReadOnlyList<IntegrationChildInput> ChildInputsInOrder);
 
 /// <summary>Inputs to the collective RAI review of the aggregate diff.</summary>
 /// <param name="WorktreePath">
@@ -143,7 +173,9 @@ public sealed record CollectiveBuildTestRequest(
     string? DisplayLabel = null,
     string? AgentId = null,
     string? ModelSource = null,
-    string? ByokProviderFingerprint = null);
+    string? ByokProviderFingerprint = null,
+    string? AssemblyAttemptToken = null,
+    int? LifecycleGeneration = null);
 
 /// <summary>Normalized pass/revise decision from an authored collective assembly gate.</summary>
 /// <param name="TargetFiles">
@@ -179,7 +211,14 @@ public sealed record CollectiveMergeRequest(
     string RepositoryPath,
     string OriginatingBranch,
     string IntegrationBranch,
-    string TreeHash);
+    string TreeHash,
+    string EffectId,
+    int LifecycleGeneration);
+
+public sealed record CollectivePreparedMergeRequest(
+    string CoordinatorRunId,
+    string RepositoryPath,
+    PreparedGitMergeIntent Intent);
 
 /// <summary>Outcome of the single collective merge.</summary>
 public sealed record CollectiveMergeResult
@@ -187,19 +226,79 @@ public sealed record CollectiveMergeResult
     public CollectiveMergeOutcome Outcome { get; init; }
     public string? CommitHash { get; init; }
     public string? Reason { get; init; }
+    public string? CurrentTargetCommit { get; init; }
+    public string? CheckoutOutcome { get; init; }
     public IReadOnlyList<string> ConflictingFiles { get; init; } = [];
 
-    public static CollectiveMergeResult Merged(string? commitHash) =>
-        new() { Outcome = CollectiveMergeOutcome.Merged, CommitHash = commitHash };
+    public static CollectiveMergeResult AppliedNow(
+        string? commitHash,
+        string? currentTargetCommit = null,
+        string? checkoutOutcome = null) =>
+        new()
+        {
+            Outcome = CollectiveMergeOutcome.AppliedNow,
+            CommitHash = commitHash,
+            CurrentTargetCommit = currentTargetCommit ?? commitHash,
+            CheckoutOutcome = checkoutOutcome,
+        };
+
+    public static CollectiveMergeResult RecoveredApplied(
+        string? commitHash,
+        string? currentTargetCommit,
+        string? checkoutOutcome = null) =>
+        new()
+        {
+            Outcome = CollectiveMergeOutcome.RecoveredApplied,
+            CommitHash = commitHash,
+            CurrentTargetCommit = currentTargetCommit,
+            CheckoutOutcome = checkoutOutcome,
+        };
 
     public static CollectiveMergeResult Conflict(IReadOnlyList<string> files, string? reason) =>
         new() { Outcome = CollectiveMergeOutcome.Conflict, ConflictingFiles = files, Reason = reason };
+
+    public static CollectiveMergeResult NotApplied(string? currentTargetCommit, string? reason) =>
+        new()
+        {
+            Outcome = CollectiveMergeOutcome.NotApplied,
+            CurrentTargetCommit = currentTargetCommit,
+            Reason = reason,
+        };
+
+    public static CollectiveMergeResult Unauthorized(string? currentTargetCommit, string? reason) =>
+        new()
+        {
+            Outcome = CollectiveMergeOutcome.Unauthorized,
+            CurrentTargetCommit = currentTargetCommit,
+            Reason = reason,
+        };
+
+    public static CollectiveMergeResult Unknown(
+        string? currentTargetCommit,
+        string? reason,
+        string? checkoutOutcome = null) =>
+        new()
+        {
+            Outcome = CollectiveMergeOutcome.Unknown,
+            CurrentTargetCommit = currentTargetCommit,
+            Reason = reason,
+            CheckoutOutcome = checkoutOutcome,
+        };
 
     public static CollectiveMergeResult Failed(string? reason, IReadOnlyList<string>? conflictingFiles = null) =>
         new() { Outcome = CollectiveMergeOutcome.Failed, Reason = reason, ConflictingFiles = conflictingFiles ?? [] };
 }
 
-public enum CollectiveMergeOutcome { Merged, Conflict, Failed }
+public enum CollectiveMergeOutcome
+{
+    AppliedNow,
+    RecoveredApplied,
+    NotApplied,
+    Unauthorized,
+    Unknown,
+    Conflict,
+    Failed,
+}
 
 /// <summary>Inputs to the single collective scribe pass.</summary>
 public sealed record CollectiveScribeRequest(

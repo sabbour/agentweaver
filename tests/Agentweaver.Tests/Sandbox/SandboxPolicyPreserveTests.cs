@@ -238,6 +238,244 @@ public sealed class SandboxPolicyPreserveTests : IClassFixture<ProjectsWebApplic
         policy.DestructiveCommandPatterns.Should().NotContain("gh workflow run");
     }
 
+    [Fact]
+    public async Task GetPolicy_MalformedYaml_FailsClosed()
+    {
+        await WriteSettingsAsync("sandbox: [unterminated");
+
+        var act = () => _factory.Services.GetRequiredService<ISandboxPolicyStore>()
+            .GetPolicyAsync(_repoPath);
+
+        await act.Should().ThrowAsync<EffectivePermissionBindingException>()
+            .WithMessage("*malformed or unreadable*");
+    }
+
+    [Fact]
+    public async Task EffectiveBinding_ChildCannotExceedParentsDurableLaunchCeiling()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"permission-ceiling-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var parentId = RunId.New();
+        var childId = RunId.New();
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var policyStore = _factory.Services.GetRequiredService<ISandboxPolicyStore>();
+        var provider = _factory.Services.GetRequiredService<IEffectivePermissionBindingProvider>();
+        var startedAt = DateTimeOffset.UtcNow;
+
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = _repoPath,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "inspect",
+            SubmittingUser = "permission-test",
+            Status = RunStatus.InProgress,
+            StartedAt = startedAt,
+        });
+        await policyStore.SetPolicyAsync(SandboxPolicy.Default(_repoPath) with
+        {
+            AllowedOperations =
+            [
+                EffectivePermissionOperations.WorkspaceRead,
+                EffectivePermissionOperations.WorkspaceSearch,
+            ],
+        });
+        var parentLaunch = await provider.ResolveAsync(parentId.ToString(), _repoPath);
+        parentLaunch.Allows(EffectivePermissionOperations.WorkspaceWrite).Should().BeFalse();
+
+        await policyStore.SetPolicyAsync(SandboxPolicy.Default(_repoPath));
+        await runStore.InsertAsync(new Run
+        {
+            Id = childId,
+            RepositoryPath = _repoPath,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "edit",
+            SubmittingUser = "permission-test",
+            Status = RunStatus.InProgress,
+            StartedAt = startedAt,
+            ParentRunId = parentId.ToString(),
+        });
+
+        var child = await provider.ResolveAsync(childId.ToString(), _repoPath);
+
+        child.Allows(EffectivePermissionOperations.WorkspaceRead).Should().BeTrue();
+        child.Allows(EffectivePermissionOperations.WorkspaceWrite).Should().BeFalse(
+            "a later project-policy widening cannot expand a child beyond its parent's persisted launch ceiling");
+    }
+
+    [Fact]
+    public async Task EffectivePermissionInspection_ReturnsAuthorizedSafeCrossSurfaceProjection()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"permission-inspection-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var projectId = ProjectId.Parse(project.GetProperty("project_id").GetString()!);
+        var runId = RunId.New();
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var policyStore = _factory.Services.GetRequiredService<ISandboxPolicyStore>();
+        var provider = _factory.Services.GetRequiredService<IEffectivePermissionBindingProvider>();
+        var eventStream = _factory.Services.GetRequiredService<IRunEventStream>();
+
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            ProjectId = projectId,
+            RepositoryPath = _repoPath,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "inspect",
+            SubmittingUser = "permission-test",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await policyStore.SetPolicyAsync(SandboxPolicy.Default(_repoPath) with
+        {
+            AllowedOperations =
+            [
+                EffectivePermissionOperations.WorkspaceRead,
+                EffectivePermissionOperations.WorkspaceWrite,
+                EffectivePermissionOperations.NetworkAccess,
+            ],
+        });
+        var launch = await provider.ResolveAsync(runId.ToString(), _repoPath);
+        await policyStore.SetPolicyAsync(SandboxPolicy.Default(_repoPath) with
+        {
+            NetworkEnabled = false,
+            AllowedOperations = [EffectivePermissionOperations.WorkspaceRead],
+        });
+        await eventStream.AppendAsync(
+            runId.ToString(),
+            new RunEvent(0, EventTypes.RunDegraded, new
+            {
+                toolName = "write_file",
+                reason = $"Operation denied by effective permission binding {launch.BindingId} " +
+                         $"({launch.Version}, source={launch.Source}): " +
+                         $"'{EffectivePermissionOperations.WorkspaceWrite}' is not allowed.",
+                permissionBindingId = launch.BindingId,
+                permissionBindingVersion = launch.Version,
+                permissionSource = launch.Source,
+                permissionAttempt = launch.Attempt,
+                arguments = new { command = "do-not-expose", api_key = "do-not-expose" },
+            }));
+
+        var response = await _client.GetAsync($"/api/runs/{runId}/effective-permissions");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var raw = await response.Content.ReadAsStringAsync();
+        raw.Should().NotContain("do-not-expose");
+        raw.Should().NotContain("arguments");
+        using var body = JsonDocument.Parse(raw);
+        body.RootElement.GetProperty("configured_policy")
+            .GetProperty("allowed_operations")
+            .EnumerateArray()
+            .Select(value => value.GetString())
+            .Should().Equal(EffectivePermissionOperations.WorkspaceRead);
+        body.RootElement.GetProperty("effective_policy")
+            .GetProperty("allowed_operations")
+            .EnumerateArray()
+            .Select(value => value.GetString())
+            .Should().Equal(EffectivePermissionOperations.WorkspaceRead);
+        body.RootElement.GetProperty("current_revocation").GetProperty("active").GetBoolean()
+            .Should().BeTrue();
+        body.RootElement.GetProperty("overrides").GetProperty("parent_restriction_active").GetBoolean()
+            .Should().BeFalse();
+        body.RootElement.GetProperty("latest_denial").GetProperty("reason_code").GetString()
+            .Should().Be("operation_not_allowed");
+        body.RootElement.GetProperty("coverage").GetArrayLength()
+            .Should().Be(EffectivePermissionOperations.Known.Count);
+    }
+
+    [Fact]
+    public async Task EffectivePermissionInspection_DoesNotEstablishTheLaunchCeiling()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"permission-read-only-inspection-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = RunId.New();
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        var eventStream = _factory.Services.GetRequiredService<IRunEventStream>();
+
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            ProjectId = ProjectId.Parse(project.GetProperty("project_id").GetString()!),
+            RepositoryPath = _repoPath,
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "inspect without binding",
+            SubmittingUser = "permission-test",
+            Status = RunStatus.Pending,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+
+        var response = await _client.GetAsync($"/api/runs/{runId}/effective-permissions");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("binding").GetProperty("launch_binding_id").ValueKind
+            .Should().Be(JsonValueKind.Null);
+        var events = await eventStream.GetPersistedEventsAsync(runId.ToString());
+        events.Should().NotContain(evt => evt.Type == EventTypes.PermissionBindingBound);
+    }
+
+    [Fact]
+    public async Task ExecutionIdentityInspection_ReadsTheLocalDescriptorAndRedactsSensitiveFields()
+    {
+        var createResponse = await _client.PostAsJsonAsync("/api/projects", new
+        {
+            name = $"execution-identity-inspection-{Guid.NewGuid():N}",
+            origin = "blank",
+            working_directory = _repoPath,
+        });
+        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
+        var project = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var runId = RunId.New();
+        var runStore = _factory.Services.GetRequiredService<IRunStore>();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            ProjectId = ProjectId.Parse(project.GetProperty("project_id").GetString()!),
+            RepositoryPath = @"C:\private\customer-repository",
+            OriginatingBranch = "dev",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "private prompt text",
+            SubmittingUser = "private-user@example.test",
+            Status = RunStatus.Pending,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Tank",
+        });
+
+        var response = await _client.GetAsync($"/api/runs/{runId}/execution-identity");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var raw = await response.Content.ReadAsStringAsync();
+        raw.Should().NotContain("private-user@example.test");
+        raw.Should().NotContain("private prompt text");
+        raw.Should().NotContain(@"C:\private\customer-repository");
+        using var body = JsonDocument.Parse(raw);
+        body.RootElement.GetProperty("descriptor").GetProperty("descriptor_id").GetString()
+            .Should().StartWith("execution-");
+        body.RootElement.GetProperty("descriptor").GetProperty("principal_ref").GetString()
+            .Should().StartWith("principal-");
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────
 
     private async Task SeedFullPolicyAsync()

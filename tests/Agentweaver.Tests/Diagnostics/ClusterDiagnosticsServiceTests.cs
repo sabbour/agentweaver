@@ -27,7 +27,7 @@ public sealed class ClusterDiagnosticsServiceTests
             BuildConfiguration(),
             ClientFor(QuotaHandler(podUsed, podLimit, sandboxClaimUsed, sandboxClaimLimit)));
 
-        var dto = await service.GetClusterDiagnosticsAsync();
+        var dto = await service.GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects);
 
         var quota = dto.Checks.Single(c => c.Name == "agent_pod_quota");
         quota.Status.Should().Be(expectedStatus);
@@ -48,7 +48,7 @@ public sealed class ClusterDiagnosticsServiceTests
                 .Build(),
             ClientFor(QuotaHandler(150, 200, 150, 200)));
 
-        var dto = await service.GetClusterDiagnosticsAsync();
+        var dto = await service.GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects);
 
         dto.Checks.Select(c => c.Name).Should().NotContain("github_installation_token");
     }
@@ -66,7 +66,8 @@ public sealed class ClusterDiagnosticsServiceTests
                 .Build(),
             ClientFor(QuotaHandler(150, 200, 150, 200)));
 
-        var keyVault = (await service.GetClusterDiagnosticsAsync()).Checks.Single(c => c.Name == "key_vault");
+        var keyVault = (await service.GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects))
+            .Checks.Single(c => c.Name == "key_vault");
 
         keyVault.Status.Should().Be("healthy");
         keyVault.Message.Should().Contain("mcp-api-key").And.NotContain("mcp-oauth-signing-key");
@@ -84,7 +85,8 @@ public sealed class ClusterDiagnosticsServiceTests
                 .Build(),
             ClientFor(QuotaHandler(150, 200, 150, 200)));
 
-        var keyVault = (await service.GetClusterDiagnosticsAsync()).Checks.Single(c => c.Name == "key_vault");
+        var keyVault = (await service.GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects))
+            .Checks.Single(c => c.Name == "key_vault");
 
         keyVault.Status.Should().Be("critical");
         keyVault.Message.Should().Contain("mcp-api-key");
@@ -97,7 +99,7 @@ public sealed class ClusterDiagnosticsServiceTests
             BuildConfiguration(),
             ClientFor(QuotaHandler(190, 200, 185, 200)));
 
-        var dto = await service.GetClusterDiagnosticsAsync();
+        var dto = await service.GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects);
 
         dto.Checks.Single(c => c.Name == "agent_pod_quota").Status.Should().Be("healthy");
     }
@@ -109,10 +111,58 @@ public sealed class ClusterDiagnosticsServiceTests
             BuildConfiguration(),
             ClientFor(ClaimsHandler()));
 
-        var dto = await service.GetClusterDiagnosticsAsync();
+        var dto = await service.GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects);
 
         dto.SandboxClaims.Should().ContainSingle();
         dto.SandboxClaims[0].WarmPool.Should().Be("agentweaver-agent-host");
+    }
+
+    [Fact]
+    public async Task GetClusterDiagnosticsAsync_DistinguishesNoResourcesFromUnavailableInventory()
+    {
+        var handler = QuotaHandler(150, 200, 150, 200);
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxwarmpools",
+            """{"items":[]}""");
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxclaims",
+            """{"items":[]}""");
+        handler.OnGet("/api/v1/namespaces/agentweaver/pods", """{"items":[]}""");
+
+        var dto = await NewClusterService(BuildConfiguration(), ClientFor(handler))
+            .GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects);
+
+        dto.InventorySources.Single(source => source.Name == "warm_pool_objects")
+            .Outcome.Should().Be("no_resources");
+        dto.InventorySources.Single(source => source.Name == "sandbox_claims")
+            .Outcome.Should().Be("no_resources");
+        dto.InventorySources.Where(source => source.Outcome == "no_resources")
+            .Should().OnlyContain(source => source.Complete);
+    }
+
+    [Fact]
+    public async Task GetClusterDiagnosticsAsync_ReportsForbiddenAndMalformedInventoriesAsIncomplete()
+    {
+        var handler = QuotaHandler(150, 200, 150, 200);
+        handler.OnStatus(
+            "GET",
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxwarmpools",
+            System.Net.HttpStatusCode.Forbidden,
+            """{"kind":"Status","code":403}""");
+        handler.OnGet(
+            "/apis/extensions.agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxclaims",
+            """{"items":""");
+
+        var dto = await NewClusterService(BuildConfiguration(), ClientFor(handler))
+            .GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects);
+
+        dto.InventorySources.Single(source => source.Name == "warm_pool_objects")
+            .Should().Match<InventoryCollectionStatusDto>(source =>
+                source.Outcome == "forbidden" && !source.Complete);
+        dto.InventorySources.Single(source => source.Name == "sandbox_claims")
+            .Should().Match<InventoryCollectionStatusDto>(source =>
+                source.Outcome == "malformed" && !source.Complete);
+        dto.Details!.Status.Should().NotBe("healthy");
     }
 
     [Fact]
@@ -122,7 +172,8 @@ public sealed class ClusterDiagnosticsServiceTests
             BuildConfiguration(),
             ClientFor(PendingClaimHandler()));
 
-        var claim = (await service.GetClusterDiagnosticsAsync()).SandboxClaims.Should().ContainSingle().Subject;
+        var claim = (await service.GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects))
+            .SandboxClaims.Should().ContainSingle().Subject;
 
         claim.Phase.Should().Be("pending");
         claim.Details!.AttentionRequired.Should().BeTrue();
@@ -166,7 +217,7 @@ public sealed class ClusterDiagnosticsServiceTests
                     AnnotatedRunId: runId),
             ]));
 
-        var dto = await service.GetClusterDiagnosticsAsync();
+        var dto = await service.GetClusterDiagnosticsAsync(ClusterDiagnosticsProjectScope.AllProjects);
 
         dto.SandboxClaims.Should().ContainSingle();
         dto.SandboxClaims[0].RunId.Should().Be(runId);

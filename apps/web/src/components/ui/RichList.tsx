@@ -95,6 +95,10 @@ const useRowStyles = makeStyles({
     ':focus-within': { '--aw-row-actions-opacity': '1' },
     '@media (prefers-reduced-motion: reduce)': { transitionDuration: '0.01ms' },
   },
+  stacked: {
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
+    alignItems: 'start',
+  },
   interactive: {
     cursor: 'pointer',
     ':hover': { backgroundColor: tokens.colorSubtleBackgroundHover, '--aw-row-actions-opacity': '1' },
@@ -123,6 +127,9 @@ const useRowStyles = makeStyles({
     gap: tokens.spacingVerticalXXS,
     minWidth: 0,
   },
+  stackedText: {
+    overflowWrap: 'anywhere',
+  },
   primaryRow: {
     display: 'flex',
     alignItems: 'center',
@@ -145,12 +152,23 @@ const useRowStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
     flexShrink: 0,
   },
+  stackedTrailing: {
+    gridColumn: '1 / -1',
+    flexWrap: 'wrap',
+    flexShrink: 1,
+    minWidth: 0,
+  },
   meta: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     color: tokens.colorNeutralForeground3,
     whiteSpace: 'nowrap',
+  },
+  stackedMeta: {
+    minWidth: 0,
+    whiteSpace: 'normal',
+    overflowWrap: 'anywhere',
   },
   // Actions are quiet at rest and revealed on hover/focus so rows stay calm.
   actions: {
@@ -162,6 +180,10 @@ const useRowStyles = makeStyles({
     transitionDuration: '150ms',
     transitionTimingFunction: 'ease-out',
     '@media (prefers-reduced-motion: reduce)': { transitionDuration: '0.01ms' },
+  },
+  stackedActions: {
+    flexWrap: 'wrap',
+    minWidth: 0,
   },
   actionsVisible: {
     opacity: 1,
@@ -183,6 +205,8 @@ export interface ListRowProps {
   meta?: ReactNode;
   /** Hover/focus-revealed actions. */
   actions?: ReactNode;
+  /** Place metadata and actions on a separate, wrapping row below the summary. */
+  stacked?: boolean;
   /** Keep actions always visible instead of hover-revealing them. */
   actionsAlwaysVisible?: boolean;
   /** Click handler — makes the whole row interactive. */
@@ -201,6 +225,7 @@ export function ListRow({
   secondary,
   meta,
   actions,
+  stacked = false,
   actionsAlwaysVisible = false,
   onClick,
   as,
@@ -213,7 +238,7 @@ export function ListRow({
 
   const rootProps: Record<string, unknown> = {
     role: 'listitem',
-    className: mergeClasses(styles.root, interactive && styles.interactive, className),
+    className: mergeClasses(styles.root, stacked && styles.stacked, interactive && styles.interactive, className),
     ...rest,
   };
   if (onClick) rootProps.onClick = onClick;
@@ -224,7 +249,7 @@ export function ListRow({
       {media && (
         <span className={mergeClasses(styles.media, bubble && styles.mediaBubble)}>{media}</span>
       )}
-      <div className={styles.text} style={media ? undefined : { gridColumn: '1 / 2' }}>
+      <div className={mergeClasses(styles.text, stacked && styles.stackedText)} style={media ? undefined : { gridColumn: '1 / 2' }}>
         <div className={styles.primaryRow}>
           <Body as="span" className={styles.primary}>
             {primary}
@@ -238,12 +263,13 @@ export function ListRow({
         )}
       </div>
       {(meta || actions) && (
-        <div className={styles.trailing}>
-          {meta && <span className={styles.meta}>{meta}</span>}
+        <div className={mergeClasses(styles.trailing, stacked && styles.stackedTrailing)}>
+          {meta && <span className={mergeClasses(styles.meta, stacked && styles.stackedMeta)}>{meta}</span>}
           {actions && (
             <span
               className={mergeClasses(
                 styles.actions,
+                stacked && styles.stackedActions,
                 actionsAlwaysVisible && styles.actionsVisible,
               )}
             >

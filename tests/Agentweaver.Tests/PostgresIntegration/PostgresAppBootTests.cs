@@ -1,6 +1,7 @@
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
@@ -22,8 +23,9 @@ namespace Agentweaver.Tests.PostgresIntegration;
 /// <para>This test boots the REAL application (<see cref="Program"/>) with
 /// <c>Database:Provider=Postgres</c> against a real <c>postgres:16</c> Testcontainer, applies
 /// migrations, and exercises the EXACT crash path: <c>Program.cs</c> calls
-/// <c>WorkflowRestartService.RecoverAsync</c> (→ <c>IRunStore.GetByStatusAsync</c>) at startup,
-/// so a successful boot alone proves the regression is fixed. It additionally asserts that in
+/// <c>StartupRecoveryService</c> calls <c>WorkflowRestartService.RecoverAsync</c>
+/// (→ <c>IRunStore.GetByStatusAsync</c>) after the host starts. The explicit recovery
+/// assertion below proves that path works. It additionally asserts that in
 /// Postgres mode the <see cref="IRunStore"/> chain contains <see cref="EfRunStore"/> and the
 /// concrete <see cref="SqliteRunStore"/> is NOT registered, then runs a full run lifecycle
 /// through the interface.</para>
@@ -34,13 +36,97 @@ namespace Agentweaver.Tests.PostgresIntegration;
 /// change them back to <c>BeOfType</c> — the backing store is what this test protects, not the
 /// identity of the outermost wrapper.</para>
 ///
-/// <para>Skipped automatically when Docker is unavailable (Testcontainers throws on startup).</para>
+/// <para>Requires a running Docker daemon for the Postgres Testcontainer.</para>
 /// </summary>
 [Trait("Category", "PostgresIntegration")]
-public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.AppFixture>
+public sealed partial class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.AppFixture>
 {
     private readonly AppFixture _fixture;
     public PostgresAppBootTests(AppFixture fixture) => _fixture = fixture;
+
+    [PostgresFact]
+    public async Task WorkerHost_ProjectionClaimDoesNotBlockPostgresApprovalLookup()
+    {
+        using var worker = new PostgresWebApplicationFactory(_fixture.ConnectionString, AppRole.Worker);
+        using var client = worker.CreateClient();
+        (await client.GetAsync("/readyz")).EnsureSuccessStatusCode();
+
+        var services = worker.Services;
+        var childWork = services.GetRequiredService<Agentweaver.Api.Workflows.WorkflowChildWorkService>();
+        childWork.Should().NotBeNull();
+        var guard = services.GetRequiredService<RunActiveClaimGuard>();
+        using var scope = services.CreateScope();
+        scope.ServiceProvider.GetRequiredService<RunActiveClaimGuard>().Should().BeSameAs(guard);
+
+        var runId = RunId.New();
+        await using (var claim = await guard.AcquireAsync(runId, CancellationToken.None))
+        {
+            using var waiting = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+            var acquireAgain = async () =>
+            {
+                await using var second = await scope.ServiceProvider
+                    .GetRequiredService<RunActiveClaimGuard>()
+                    .AcquireAsync(runId, waiting.Token);
+            };
+            await acquireAgain.Should().ThrowAsync<OperationCanceledException>();
+        }
+
+        await services.GetRequiredService<IRunStore>().InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = "/repo",
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "approval lookup under fan projection claim",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var gate = services.GetRequiredService<DurableToolApprovalGate>();
+        (await gate.PersistAgentHostApprovalAsync(
+            runId.ToString(), "req-policy", "web_fetch", "https://example.test",
+            ApprovalScope.Run)).Should().BeTrue();
+
+        await using var projectionClaim = await guard.AcquireAsync(runId, CancellationToken.None);
+        var lookup = Task.Run(() => gate.IsAutoApproved(runId.ToString(), "web_fetch", "https://example.test"));
+        (await lookup.WaitAsync(TimeSpan.FromSeconds(3))).Should().BeTrue();
+    }
+
+    [PostgresFact]
+    public async Task PostgresLeader_ExcludesOtherRole_UntilLeaderExits()
+    {
+        const long isolatedTestLockKey = 0x4157_5243_5652_5903L;
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Database:Provider"] = "postgres",
+                ["ConnectionStrings:Postgres"] = _fixture.ConnectionString,
+                ["App:Role"] = AppRole.Web,
+            }).Build();
+        var worker = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Database:Provider"] = "postgres",
+                ["ConnectionStrings:Postgres"] = _fixture.ConnectionString,
+                ["App:Role"] = AppRole.Worker,
+            }).Build();
+        StartupRecoveryLeader.LockKeyForRole(configuration)
+            .Should().Be(StartupRecoveryLeader.LockKeyForRole(worker));
+        await using (var leader = await StartupRecoveryLeader.AcquireAsync(
+            configuration, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
+        {
+            leader.IsLeader.Should().BeTrue();
+            await using var waiter = await StartupRecoveryLeader.AcquireAsync(
+                worker, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey);
+            waiter.IsLeader.Should().BeFalse("other-role sweeps cannot follow a successful leader");
+        }
+
+        await using (var waiter = await StartupRecoveryLeader.AcquireAsync(
+            worker, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, isolatedTestLockKey))
+        {
+            waiter.IsLeader.Should().BeTrue("a different role can take over after the leader exits");
+        }
+    }
 
     [PostgresFact]
     public void AppBoot_InPostgresMode_ResolvesEfRunStore_AndDoesNotRegisterSqliteRunStore()
@@ -56,6 +142,8 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
             "Postgres mode must bind IRunStore to EfRunStore");
         RunStoreChain.Find<SqliteRunStore>(runStore).Should().BeNull(
             "no SQLite store may appear anywhere in the Postgres run-store chain");
+        sp.GetRequiredService<RunActiveClaimGuard>().Should().BeSameAs(
+            _fixture.Services.GetRequiredService<RunActiveClaimGuard>());
 
         // Nothing may resolve a concrete SqliteRunStore in Postgres mode — the raw SQLite
         // registration is gone, so a stray concrete injection would fail fast at boot instead
@@ -151,14 +239,13 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         private PostgresWebApplicationFactory _factory = null!;
 
         public IServiceProvider Services => _factory.Services;
+        public string ConnectionString => _container.GetConnectionString();
 
         public async Task InitializeAsync()
         {
             await _container.StartAsync();
             _factory = new PostgresWebApplicationFactory(_container.GetConnectionString());
-            // Force the host to build and run startup (which calls WorkflowRestartService.RecoverAsync,
-            // CoordinatorRunService.RecoverInterruptedRunsAsync and CoordinatorReconciler.SweepAsync —
-            // all against Postgres). A throw here is the regression reproducing.
+            // Force the host to build and start; recovery now runs independently of boot.
             using var client = _factory.CreateClient();
         }
 
@@ -176,9 +263,12 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
         private readonly string _checkpointsPath;
         private readonly string _coordinatorCheckpointsPath;
 
-        public PostgresWebApplicationFactory(string connectionString)
+        private readonly string _role;
+
+        public PostgresWebApplicationFactory(string connectionString, string role = AppRole.Web)
         {
             _connectionString = connectionString;
+            _role = role;
             _worktreesPath = Path.Combine(Path.GetTempPath(), $"aw-pg-wt-{Guid.NewGuid():N}");
             _checkpointsPath = Path.Combine(Path.GetTempPath(), $"aw-pg-cp-{Guid.NewGuid():N}");
             _coordinatorCheckpointsPath = Path.Combine(Path.GetTempPath(), $"aw-pg-ccp-{Guid.NewGuid():N}");
@@ -186,6 +276,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            builder.UseTestSandboxExecutor();
             // Database:Provider is read SYNCHRONOUSLY during service registration in Program.cs,
             // before ConfigureAppConfiguration sources are layered in. UseSetting writes to host
             // configuration, which IS visible to builder.Configuration at registration time — this
@@ -194,6 +285,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
             // for it.
             builder.UseSetting("Database:Provider", "postgres");
             builder.UseSetting("ConnectionStrings:Postgres", _connectionString);
+            builder.UseSetting("App:Role", _role);
 
             // Program.cs registers BOTH AddDbContextFactory<MemoryDbContext> (singleton) and
             // AddDbContext<MemoryDbContext> (scoped) in Postgres mode. That is a valid production
@@ -214,6 +306,7 @@ public sealed class PostgresAppBootTests : IClassFixture<PostgresAppBootTests.Ap
                     // Belt-and-suspenders: also present as app configuration for lazy reads.
                     ["Database:Provider"] = "postgres",
                     ["ConnectionStrings:Postgres"] = _connectionString,
+                    ["App:Role"] = _role,
 
                     ["Worktrees:BasePath"] = _worktreesPath,
                     ["Checkpoints:Path"] = _checkpointsPath,

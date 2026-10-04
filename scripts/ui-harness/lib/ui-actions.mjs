@@ -55,8 +55,8 @@ export function viewportOptions(args) {
         height: viewportDimension(args.height, 'height'),
       };
   const focusMode = args['focus-mode'] ?? 'available';
-  if (!['available', 'standard', 'focused'].includes(focusMode)) {
-    throw new Error('viewport --focus-mode must be available, standard, or focused');
+  if (!['available', 'standard', 'focused', 'not-applicable'].includes(focusMode)) {
+    throw new Error('viewport --focus-mode must be available, standard, focused, or not-applicable');
   }
   return {
     size: { ...size },
@@ -98,6 +98,11 @@ export async function executeUiAction({
   const command = args._[0];
   let readiness = null;
   let target = { testId: args['test-id'], role: args.role, name: args.name };
+  if (command === 'click' || command === 'type-coordinator') {
+    target.withinTestId = args['within-test-id'];
+  } else if (args['within-test-id'] !== undefined) {
+    throw new Error('--within-test-id is supported only for click and type-coordinator');
+  }
   let responsiveTargets = null;
 
   try {
@@ -108,12 +113,14 @@ export async function executeUiAction({
         testId: args['test-id'],
         role: args.role,
         name: args.name,
+        withinTestId: args['within-test-id'],
       }).click({ timeout: Number(args.timeout ?? 10_000) });
     } else if (command === 'type-coordinator') {
       await keyedLocator(runtime.page, {
-        testId: args['test-id'] ?? 'coordinator-composer',
+        testId: args['test-id'] ?? (args.role || args.name ? undefined : 'coordinator-composer'),
         role: args.role,
         name: args.name,
+        withinTestId: args['within-test-id'],
       }).fill(args.text ?? '');
     } else if (command === 'drag') {
       const fromTestId = args['from-test-id'];
@@ -146,6 +153,9 @@ export async function executeUiAction({
       target = { mode: viewport.mode, viewport: viewport.size };
       responsiveTargets = viewport.responsiveTargets;
       await runtime.page.setViewportSize(viewport.size);
+      await runtime.page.evaluate(() => new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      readiness = await waitForAppReadiness(runtime.page, readinessOptions(args));
     } else if (command === 'resolve-approval') {
       assertApprovalAllowed({
         adapterText: session.persona.text,
@@ -182,7 +192,7 @@ export async function executeUiAction({
     throw failure;
   }
 
-  return captureTurn({
+  const step = await captureTurn({
     page: runtime.page,
     capture,
     directory: transcriptDirectory,
@@ -194,4 +204,12 @@ export async function executeUiAction({
     readiness,
     responsiveTargets,
   });
+  if (command === 'viewport') {
+    await waitForAppReadiness(runtime.page, {
+      ...readinessOptions(args),
+      timeout: 0,
+      snapshotPage: async () => step.domSnapshot,
+    });
+  }
+  return step;
 }

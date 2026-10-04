@@ -29,6 +29,9 @@ public static class WorkflowDefinitionYamlSerializer
             Line(sb, "    gate_kind", gateKind);
             Line(sb, "    agent", node.Agent);
             BlockOrLine(sb, "    prompt", node.Prompt);
+            if (node.Independent.HasValue)
+                sb.AppendLine($"    independent: {(node.Independent.Value ? "true" : "false")}");
+            List(sb, "    declared_output_paths", node.DeclaredOutputPaths);
             BlockOrLine(sb, "    charter", node.Charter);
             Line(sb, "    target", node.Target);
             List(sb, "    steps", node.Steps);

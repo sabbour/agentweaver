@@ -21,6 +21,7 @@ public enum RepoAppAuthorizationOutcome
     AuthorizationTransactionInvalid,
     AuthorizationTransactionConsumed,
     GitHubBindingUnavailable,
+    GitHubProviderUnavailable,
     RateLimited,
 }
 
@@ -77,6 +78,7 @@ public sealed class RepoAppUserAuthorizationService(
     private static readonly TimeSpan TransactionLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(10);
     private static readonly ConcurrentDictionary<string, RateWindow> RateWindows = new(StringComparer.Ordinal);
+    private static readonly JsonSerializerOptions CredentialReadOptions = new(JsonSerializerDefaults.Web);
     private static readonly IReadOnlyDictionary<string, string> ReturnRoutes =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -499,26 +501,79 @@ public sealed class RepoAppUserAuthorizationService(
     {
         if (HumanEntraSubjectAuthorization.Evaluate(caller, principal) != HumanEntraSubjectState.Allowed)
             return RepoAppAuthorizationOutcome.HumanEntraSubjectRequired;
-        var reference = await persistence.GetActiveRepoAppCredentialAsync(caller.EntraObjectId!, ct).ConfigureAwait(false);
+        return await RefreshForRepositoryAsync(caller.EntraObjectId!, force: true, ct).ConfigureAwait(false);
+    }
+
+    internal async Task<RepoAppAuthorizationOutcome> RefreshForRepositoryAsync(
+        string entraObjectId,
+        bool force,
+        CancellationToken ct,
+        string? authorizationId = null)
+    {
+        var reference = authorizationId is null
+            ? await persistence.GetActiveRepoAppCredentialAsync(entraObjectId, ct).ConfigureAwait(false)
+            : await persistence.GetLiveRepoAppCredentialAsync(entraObjectId, authorizationId, ct).ConfigureAwait(false);
         if (reference is null)
             return RepoAppAuthorizationOutcome.GitHubBindingUnavailable;
+
+        if (!force)
+        {
+            SecretGetResult current;
+            try
+            {
+                current = await secretStore.GetSecretAsync(reference.CredentialReference, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsTransientCredentialStoreFailure(ex, ct))
+            {
+                logger.LogWarning("Repo App credential read failed for subject {EntraObjectId}; error type {ErrorType}.",
+                    entraObjectId, ex.GetType().Name);
+                return RepoAppAuthorizationOutcome.GitHubProviderUnavailable;
+            }
+            var stored = current.Found ? DeserializeCredential(current.Value) : null;
+            if (stored is null || stored.Status != CredentialStatusSignedIn || string.IsNullOrWhiteSpace(stored.AccessToken))
+                return RepoAppAuthorizationOutcome.GitHubBindingUnavailable;
+            if (stored.ExpiresAt is null || stored.ExpiresAt > DateTimeOffset.UtcNow.AddMinutes(5))
+                return RepoAppAuthorizationOutcome.Success;
+        }
 
         await using var lease = await persistence.TryAcquireRepoAppCredentialLeaseAsync(reference, ct).ConfigureAwait(false);
         if (lease is null)
             return RepoAppAuthorizationOutcome.GitHubBindingUnavailable;
 
-        var secret = await secretStore.GetSecretAsync(reference.CredentialReference, ct).ConfigureAwait(false);
+        SecretGetResult secret;
+        try
+        {
+            secret = await secretStore.GetSecretAsync(reference.CredentialReference, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsTransientCredentialStoreFailure(ex, ct))
+        {
+            logger.LogWarning("Repo App credential read during renewal failed for subject {EntraObjectId}; error type {ErrorType}.",
+                entraObjectId, ex.GetType().Name);
+            return RepoAppAuthorizationOutcome.GitHubProviderUnavailable;
+        }
         var credential = secret.Found ? DeserializeCredential(secret.Value) : null;
-        if (credential is null || credential.Status != CredentialStatusSignedIn || string.IsNullOrWhiteSpace(credential.RefreshToken))
+        if (credential is null || credential.Status != CredentialStatusSignedIn || string.IsNullOrWhiteSpace(credential.AccessToken))
+            return RepoAppAuthorizationOutcome.GitHubBindingUnavailable;
+        if (!force && (credential.ExpiresAt is null || credential.ExpiresAt > DateTimeOffset.UtcNow.AddMinutes(5)))
+            return RepoAppAuthorizationOutcome.Success;
+        if (string.IsNullOrWhiteSpace(credential.RefreshToken))
             return RepoAppAuthorizationOutcome.GitHubBindingUnavailable;
 
         var refreshed = await RefreshCredentialAsync(credential, ct).ConfigureAwait(false);
-        if (refreshed is null)
+        if (refreshed.Status == RepoAppRefreshStatus.Unavailable)
         {
+            logger.LogWarning("Repo App credential refresh failed transiently for subject {EntraObjectId}; provider status {ProviderStatus}.",
+                entraObjectId, refreshed.ProviderStatus);
+            return RepoAppAuthorizationOutcome.GitHubProviderUnavailable;
+        }
+        if (refreshed.Status == RepoAppRefreshStatus.Rejected)
+        {
+            logger.LogWarning("GitHub rejected the Repo App refresh token for subject {EntraObjectId}; provider status {ProviderStatus}.",
+                entraObjectId, refreshed.ProviderStatus);
             await WriteTombstoneAsync(reference.CredentialReference, ct).ConfigureAwait(false);
             var revoked = await persistence.RevokeRepoAppCredentialUnderLeaseAsync(
                 reference,
-                CreateAudit(caller.EntraObjectId!, GitHubAuditOutcome.Failed, GitHubAuditReasonCode.BindingUnavailable, reference.CredentialVersion),
+                CreateAudit(entraObjectId, GitHubAuditOutcome.Failed, GitHubAuditReasonCode.BindingUnavailable, reference.CredentialVersion),
                 ct).ConfigureAwait(false);
             await lease.CommitAsync(ct).ConfigureAwait(false);
             return revoked
@@ -530,7 +585,7 @@ public sealed class RepoAppUserAuthorizationService(
         {
             await secretStore.SetSecretAsync(
                 reference.CredentialReference,
-                JsonSerializer.Serialize(refreshed with { Status = CredentialStatusSignedIn }),
+                JsonSerializer.Serialize(refreshed.Credential! with { Status = CredentialStatusSignedIn }),
                 secret.ETag,
                 ct).ConfigureAwait(false);
             await lease.CommitAsync(ct).ConfigureAwait(false);
@@ -538,13 +593,13 @@ public sealed class RepoAppUserAuthorizationService(
         }
         catch (SecretPreconditionFailedException)
         {
-            await MarkRefreshPersistenceFailureAsync(reference, caller.EntraObjectId!, lease).ConfigureAwait(false);
-            return RepoAppAuthorizationOutcome.GitHubBindingUnavailable;
+            logger.LogWarning("Repo App credential refresh conflicted with another credential write for subject {EntraObjectId}.", entraObjectId);
+            return RepoAppAuthorizationOutcome.GitHubProviderUnavailable;
         }
-        catch (Exception) when (!ct.IsCancellationRequested)
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            await MarkRefreshPersistenceFailureAsync(reference, caller.EntraObjectId!, lease).ConfigureAwait(false);
-            return RepoAppAuthorizationOutcome.GitHubBindingUnavailable;
+            logger.LogWarning(ex, "Repo App credential refresh could not be persisted for subject {EntraObjectId}.", entraObjectId);
+            return RepoAppAuthorizationOutcome.GitHubProviderUnavailable;
         }
     }
 
@@ -844,10 +899,10 @@ public sealed class RepoAppUserAuthorizationService(
         }
     }
 
-    private async Task<RepoAppCredential?> RefreshCredentialAsync(RepoAppCredential credential, CancellationToken ct)
+    private async Task<RepoAppRefreshResult> RefreshCredentialAsync(RepoAppCredential credential, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(_clientId) || string.IsNullOrWhiteSpace(_clientSecret))
-            return null;
+            return new(RepoAppRefreshStatus.Unavailable, null, null);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(ProviderTimeout);
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl.TrimEnd('/')}/login/oauth/access_token")
@@ -865,30 +920,34 @@ public sealed class RepoAppUserAuthorizationService(
         {
             using var response = await httpClientFactory.CreateClient("github-authz")
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-            if (response.StatusCode != HttpStatusCode.OK || response.Content.Headers.ContentLength is > 64 * 1024)
-                return null;
+            if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.BadRequest) ||
+                response.Content.Headers.ContentLength is > 64 * 1024)
+                return new(RepoAppRefreshStatus.Unavailable, null, response.StatusCode);
             var body = await ReadBoundedAsync(response.Content, timeout.Token).ConfigureAwait(false);
             var result = JsonSerializer.Deserialize<ProviderTokenResponse>(body);
-            return result is { Error: null, AccessToken: not null } && !string.IsNullOrWhiteSpace(result.AccessToken)
-                ? credential with
-                {
-                    AccessToken = result.AccessToken,
-                    RefreshToken = string.IsNullOrWhiteSpace(result.RefreshToken) ? credential.RefreshToken : result.RefreshToken,
-                    ExpiresAt = result.ExpiresIn is > 0 ? DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn.Value) : null,
-                }
-                : null;
+            if (result?.Error is "bad_refresh_token" or "invalid_grant" or "expired_refresh_token")
+                return new(RepoAppRefreshStatus.Rejected, null, response.StatusCode);
+            if (response.StatusCode != HttpStatusCode.OK || !string.IsNullOrWhiteSpace(result?.Error) ||
+                string.IsNullOrWhiteSpace(result?.AccessToken))
+                return new(RepoAppRefreshStatus.Unavailable, null, response.StatusCode);
+            return new(RepoAppRefreshStatus.Succeeded, credential with
+            {
+                AccessToken = result.AccessToken,
+                RefreshToken = string.IsNullOrWhiteSpace(result.RefreshToken) ? credential.RefreshToken : result.RefreshToken,
+                ExpiresAt = result.ExpiresIn is > 0 ? DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn.Value) : null,
+            }, response.StatusCode);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return null;
+            return new(RepoAppRefreshStatus.Unavailable, null, null);
         }
         catch (HttpRequestException)
         {
-            return null;
+            return new(RepoAppRefreshStatus.Unavailable, null, null);
         }
         catch (JsonException)
         {
-            return null;
+            return new(RepoAppRefreshStatus.Unavailable, null, null);
         }
     }
 
@@ -936,20 +995,6 @@ public sealed class RepoAppUserAuthorizationService(
         catch { }
     }
 
-    private async Task MarkRefreshPersistenceFailureAsync(
-        RepoAppCredentialReference reference,
-        string entraObjectId,
-        RepoAppCredentialLease lease)
-    {
-        try { await WriteTombstoneAsync(reference.CredentialReference, CancellationToken.None).ConfigureAwait(false); }
-        catch { }
-        await persistence.RevokeRepoAppCredentialUnderLeaseAsync(
-            reference,
-            CreateAudit(entraObjectId, GitHubAuditOutcome.Failed, GitHubAuditReasonCode.BindingUnavailable, reference.CredentialVersion),
-            CancellationToken.None).ConfigureAwait(false);
-        await lease.CommitAsync(CancellationToken.None).ConfigureAwait(false);
-    }
-
     private async Task<IReadOnlyList<RepoAppCredentialReference>> RevokeAllWithRetryAsync(
         string entraObjectId,
         CancellationToken ct)
@@ -982,9 +1027,13 @@ public sealed class RepoAppUserAuthorizationService(
 
     private static RepoAppCredential? DeserializeCredential(string? value)
     {
-        try { return string.IsNullOrWhiteSpace(value) ? null : JsonSerializer.Deserialize<RepoAppCredential>(value); }
+        try { return string.IsNullOrWhiteSpace(value) ? null : JsonSerializer.Deserialize<RepoAppCredential>(value, CredentialReadOptions); }
         catch (JsonException) { return null; }
     }
+
+    internal static bool IsTransientCredentialStoreFailure(Exception ex, CancellationToken ct) =>
+        ex is Azure.RequestFailedException or HttpRequestException or TimeoutException ||
+        ex is OperationCanceledException && !ct.IsCancellationRequested;
 
     private static GitHubAuditRecord CreateAudit(
         string entraObjectId,
@@ -1034,6 +1083,7 @@ public sealed class RepoAppUserAuthorizationService(
         RepoAppAuthorizationOutcome.AuthorizationTransactionInvalid => "authorization_transaction_invalid",
         RepoAppAuthorizationOutcome.AuthorizationTransactionConsumed => "authorization_transaction_consumed",
         RepoAppAuthorizationOutcome.GitHubBindingUnavailable => "github_binding_unavailable",
+        RepoAppAuthorizationOutcome.GitHubProviderUnavailable => "github_provider_unavailable",
         RepoAppAuthorizationOutcome.RateLimited => "rate_limited",
         _ => "success",
     };
@@ -1111,6 +1161,8 @@ public sealed class RepoAppUserAuthorizationService(
         string? RefreshToken,
         DateTimeOffset? ExpiresAt,
         string? GitHubLogin = null);
+    private enum RepoAppRefreshStatus { Succeeded, Rejected, Unavailable }
+    private sealed record RepoAppRefreshResult(RepoAppRefreshStatus Status, RepoAppCredential? Credential, HttpStatusCode? ProviderStatus);
     private sealed class ProviderTokenResponse
     {
         [System.Text.Json.Serialization.JsonPropertyName("access_token")] public string? AccessToken { get; init; }

@@ -119,6 +119,9 @@ if (!isWorker)
 // SqliteDb is still registered so SQLite-dependent singletons that aren't yet migrated compile fine;
 // it is harmless when Postgres is used (the DB is simply never opened).
 builder.Services.AddSingleton<SqliteDb>();
+// Fan projection also takes this per-run claim on Postgres workers. SQLite's run-store
+// decorator uses the same singleton to fence status transitions.
+builder.Services.AddSingleton<RunActiveClaimGuard>();
 // Provider-aware run stores. In Postgres mode the EF-backed equivalents are registered in the
 // Database:Provider block below; the concrete SQLite stores must NOT be registered or injected then,
 // otherwise consumers binding the concrete type would open an empty ephemeral SQLite DB and crash.
@@ -133,7 +136,6 @@ builder.Services.AddSingleton<SqliteDb>();
         // ACID transaction with the run store the way Postgres's FOR UPDATE does. Wrapping the
         // store in RunActiveClaimGuardedRunStore gives DurableToolApprovalGate a real in-process
         // mutual-exclusion claim to close that gap instead of relying on another racy pre-read.
-        builder.Services.AddSingleton<RunActiveClaimGuard>();
         // PreviewPublicationLeaseRunStore sits OUTSIDE the claim guard: it waits for an in-flight
         // preview publication before terminalizing, and the publication's conditional append takes
         // the very same claim, so waiting while holding it would deadlock (#1315).
@@ -149,6 +151,7 @@ builder.Services.AddSingleton<SqliteDb>();
     }
 }
 builder.Services.AddSingleton<ISandboxPolicyStore, YamlSandboxPolicyStore>();
+builder.Services.AddSingleton<IEffectivePermissionBindingProvider, RunEffectivePermissionBindingProvider>();
 builder.Services.AddSingleton<RunStreamStore>();
 builder.Services.AddSingleton<TerminalOutcomeProjector>();
 builder.Services.AddHostedService<TerminalOutcomeRecoveryService>();
@@ -158,15 +161,22 @@ builder.Services.AddSingleton<Agentweaver.Api.Sandbox.Preview.AgentPreviewGate>(
 builder.Services.AddSingleton<WorktreeManager>();
 builder.Services.AddSingleton<RepositoryMergeLock>();
 builder.Services.AddScoped<DecisionLedgerSyncService>();
+builder.Services.AddScoped<AddressedMessageService>();
 
 // Workflow services
 builder.Services.AddSingleton<RunWorkflowRegistry>();
 builder.Services.AddSingleton<PendingRequestStore>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.IWorkflowChildWorkRuntime,
+    Agentweaver.Api.Workflows.WorkflowChildWorkRuntime>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowChildWorkService>();
+builder.Services.AddSingleton<Agentweaver.Api.Workflows.WorkflowComposedRecoveryService>();
 builder.Services.AddSingleton<IWorktreeOperations, WorktreeOperationsAdapter>();
 builder.Services.AddSingleton<IMergeCoordinator, MergeCoordinator>();
 builder.Services.AddSingleton<RunWorkflowFactory>();
 builder.Services.AddSingleton<RunWatchLoopService>();
 builder.Services.AddSingleton<WorkflowRestartService>();
+builder.Services.AddSingleton<StartupRecoveryStages>();
+builder.Services.AddHostedService<StartupRecoveryService>();
 
 // Orchestration
 builder.Services.AddSingleton<RunOrchestrator>();
@@ -204,6 +214,7 @@ builder.Services.AddSingleton<Func<Agentweaver.Api.Infrastructure.IRevisionEffec
 // a DEFERRED accessor avoids a ctor DI cycle (decider -> index -> RunWorkflowFactory -> confirmer -> decider).
 builder.Services.AddSingleton<Func<Agentweaver.Api.Infrastructure.IRevisionCheckpointIndex?>>(
     sp => () => sp.GetService<RunWorkflowFactory>());
+builder.Services.AddSingleton<Agentweaver.Api.Infrastructure.RunLeaseFenceRegistry>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.ICoordinatorSpecDrafter,
     Agentweaver.Api.Coordinator.CopilotCoordinatorSpecDrafter>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.IWorkflowSelectionModel,
@@ -246,6 +257,7 @@ if (!isWorker)
 // errors that look like transient auth bugs. Log loudly if that happens outside Development.
 SecretClient? keyVaultSecretClient = null;
 var kvUri = builder.Configuration["Auth:KeyVault:Uri"];
+var fileSecretStorePath = builder.Configuration["Auth:FileSecretStore:Path"];
 if (!string.IsNullOrWhiteSpace(kvUri))
 {
     var secretClient = new SecretClient(new Uri(kvUri), new DefaultAzureCredential());
@@ -253,6 +265,14 @@ if (!string.IsNullOrWhiteSpace(kvUri))
     var kvSecretStore = new KeyVaultSecretStore(secretClient);
     builder.Services.AddSingleton<ISecretStore>(kvSecretStore);
     builder.Services.AddSingleton(secretClient);
+}
+else if (!string.IsNullOrWhiteSpace(fileSecretStorePath))
+{
+    var allowOutsideDevelopment = builder.Configuration.GetValue<bool>("Auth:FileSecretStore:AllowOutsideDevelopment");
+    if (!builder.Environment.IsDevelopment() && !allowOutsideDevelopment)
+        throw new InvalidOperationException(
+            "Auth:FileSecretStore:Path is Development-only unless Auth:FileSecretStore:AllowOutsideDevelopment is explicitly true.");
+    builder.Services.AddSingleton<ISecretStore>(_ => new FileSecretStore(fileSecretStorePath));
 }
 else
 {
@@ -343,6 +363,9 @@ if (!isWorker)
         options.AddPolicy(
             EndpointAuthorizationPolicies.RunCapability,
             Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformOrRunCapabilityRequirement()).Build());
+        options.AddPolicy(
+            EndpointAuthorizationPolicies.PlatformMcpOrRunCapability,
+            Authenticated().RequireAuthenticatedUser().AddRequirements(new PlatformMcpOrRunCapabilityRequirement()).Build());
 
         options.FallbackPolicy = Authenticated()
             .RequireAuthenticatedUser()
@@ -365,6 +388,7 @@ builder.Services.AddScoped<AutomationInvocationService>();
 builder.Services.AddScoped<IAutomationInvocationService>(sp => sp.GetRequiredService<AutomationInvocationService>());
 builder.Services.AddScoped<IGitHubConnectionsCredentialVault, GitHubConnectionsCredentialVault>();
 builder.Services.AddScoped<GitHubRepositorySelectionClient>();
+builder.Services.AddScoped<RepoAppUserAuthorizationService>();
 builder.Services.AddScoped<GitHubRepositorySelectionBroker>();
 builder.Services.AddScoped<Agentweaver.Api.Webhooks.RepoAppInstallationTokenService>();
 builder.Services.AddScoped<CopilotCredentialRefreshService>(sp => new(
@@ -528,6 +552,7 @@ builder.Services.AddSingleton<Agentweaver.Api.Runs.PendingToolApprovalRunsQuery>
 builder.Services.AddSingleton<Agentweaver.Api.Runs.BoardProjectionService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorPickupService>();
 builder.Services.AddSingleton<Agentweaver.Api.Coordinator.CoordinatorReconciler>();
+builder.Services.AddSingleton<Agentweaver.Api.Coordinator.TerminalCoordinatorChildSandboxCleanup>();
 builder.Services.AddSingleton<Agentweaver.Api.Diagnostics.HeartbeatStatusStore>();
 builder.Services.AddHostedService<Agentweaver.Api.Coordinator.CoordinatorHeartbeatService>();
 
@@ -554,7 +579,18 @@ builder.Services.AddAgentRuntime();
 builder.Services.AddSingleton<DurableRunControlState>();
 builder.Services.AddSingleton<DurableShellApprovalStore>();
 builder.Services.AddSingleton<IShellApprovalStore>(sp => sp.GetRequiredService<DurableShellApprovalStore>());
-builder.Services.AddSingleton<DurableToolApprovalGate>();
+builder.Services.AddSingleton<DurableToolApprovalGate>(sp =>
+{
+    var runStore = sp.GetRequiredService<IRunStore>();
+    return new DurableToolApprovalGate(
+        sp.GetRequiredService<DurableRunControlState>(),
+        sp.GetRequiredService<RunStreamStore>(),
+        sp.GetRequiredService<ILogger<DurableToolApprovalGate>>(),
+        runStore,
+        RunStoreChain.Find<RunActiveClaimGuardedRunStore>(runStore) is not null
+            ? sp.GetRequiredService<RunActiveClaimGuard>()
+            : null);
+});
 builder.Services.AddSingleton<IToolApprovalGate>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
 builder.Services.AddSingleton<IAgentHostToolApprovalPersistence>(sp => sp.GetRequiredService<DurableToolApprovalGate>());
 builder.Services.AddSingleton<DurableQuestionGate>();
@@ -925,7 +961,8 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
         builder.Services.AddScoped<OAuthDynamicClientRegistrationService>();
         builder.Services.AddScoped<OAuthRefreshTokenFamilyRevoker>();
         builder.Services.AddScoped<OAuthBrokerTransactionService>();
-        builder.Services.AddHostedService<OAuthStaticClientReconciler>();
+        builder.Services.AddSingleton<OAuthStaticClientReconciler>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<OAuthStaticClientReconciler>());
         builder.Services.AddHostedService<OAuthMaintenanceService>();
         builder.Services.Configure<ForwardedHeadersOptions>(
             options => OAuthForwardedHeaders.Configure(options, oauthConfiguration));
@@ -1089,10 +1126,13 @@ builder.Services.AddSingleton<RepositoryRootValidator>();
     if (_provider is "postgres" or "postgresql")
         builder.Services.AddSingleton<IRunLeaseStore, PostgresRunLeaseStore>();
     else
-        builder.Services.AddSingleton<IRunLeaseStore, NoOpRunLeaseStore>();
+        builder.Services.AddSingleton<IRunLeaseStore, SqliteRunLeaseStore>();
 }
 builder.Services.AddScoped<MemoryContextCompiler>();
 builder.Services.AddScoped<PostRunScribeService>();
+builder.Services.AddScoped<Agentweaver.Api.Execution.ExecutionIdentityReader>();
+builder.Services.AddScoped<RunTerminalDiagnosticReader>();
+builder.Services.AddScoped<RunFailureExplanationService>();
 builder.Services.AddScoped<IScribeExportOperation, ScribeExportOperation>();
 builder.Services.AddScoped<ScribeHousekeepingService>();
 builder.Services.AddScoped<ScribeFinalizationService>();
@@ -1222,6 +1262,7 @@ using (var scope = app.Services.CreateScope())
     // EF that AddRunEvents is already applied, so only the subsequent migrations are executed.
     // On a fresh install or an already-migrated DB this is the normal migration path.
     await memoryDb.Database.MigrateAsync();
+    await KnowledgeRevisionBackfill.EnsureLegacyFingerprintsAsync(memoryDb);
 }
 
 // --migrate-data: run SQLite → Postgres data migration then exit.
@@ -1238,29 +1279,6 @@ if (args.Contains("--migrate-data"))
     Environment.Exit(0);
     return;
 }
-// Startup recovery — run on exactly one replica via a Postgres advisory lock so concurrent pod
-// restarts do not race on orphaned-run recovery and trigger Postgres 40001 serialization failures.
-// On SQLite (dev) the lock is always granted and the startup path is unchanged.
-await using var recoveryLeader = await StartupRecoveryLeader.AcquireAsync(
-    app.Configuration, app.Logger, CancellationToken.None);
-
-if (recoveryLeader.IsLeader)
-{
-    await app.Services.GetRequiredService<WorkflowRestartService>().RecoverAsync(CancellationToken.None);
-    // Coordinator (parent) runs are recovered AFTER the generic sweep (which has already failed any
-    // stranded child runs) so a re-dispatched subtask always launches a fresh child. This re-arms the
-    // dispatch / collective-assembly engine from the persisted work plan, or resumes the spec-phase MAF
-    // workflow from checkpoint, instead of failing interrupted orchestrations.
-    await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorRunService>()
-        .RecoverInterruptedRunsAsync(CancellationToken.None);
-    // Immediate watchdog sweep at startup: re-arm any coordinator whose work plan is still dispatching
-    // but has no active loop (orphaned after a crash/restart that the run-status recovery above did not
-    // re-arm), so a restart recovers stuck dispatch fast instead of waiting for the first heartbeat tick.
-    await app.Services.GetRequiredService<Agentweaver.Api.Coordinator.CoordinatorReconciler>()
-        .SweepAsync(CancellationToken.None);
-}
-// recoveryLeader disposed here → Postgres advisory lock released so future restarts can acquire it.
-
 // Startup mount-health warning: runs on ALL replicas so every pod logs its own volume state.
 // The app continues — the /healthz/workspace readiness probe will keep unmounted pods out of the
 // Service until the volume attaches, so traffic is not served. This log aids incident diagnosis.
@@ -1295,6 +1313,24 @@ else
     }));
 
     app.UseRouting();
+    var bypassInitializationGate =
+        (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Testing"))
+        && app.Configuration.GetValue<bool>("Testing:BypassOAuthInitializationGate");
+    app.Use(async (context, next) =>
+    {
+        var path = context.Request.Path;
+        if (!bypassInitializationGate
+            && (path.StartsWithSegments("/oauth", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWithSegments("/healthz/workspace", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWithSegments("/api/health", StringComparison.OrdinalIgnoreCase))
+            && !context.RequestServices.GetRequiredService<OAuthStaticClientReconciler>().IsInitialized)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new { error = "oauth_initialization_pending" });
+            return;
+        }
+        await next(context);
+    });
     app.UseCors();
     app.UseRateLimiter();
     app.UseMiddleware<EndpointAuthorizationIntegrityMiddleware>();
@@ -1334,6 +1370,7 @@ else
     applicationEndpoints.MapUserModelProviderEndpoints();
     applicationEndpoints.MapGitHubRepositorySelectionEndpoints();
     applicationEndpoints.MapDecisionsEndpoints();
+    applicationEndpoints.MapAddressedMessagesEndpoints();
     applicationEndpoints.MapMemoryEndpoints();
     applicationEndpoints.MapWorkflowDefinitionEndpoints();
     applicationEndpoints.MapWorkflowTriggerEndpoints();

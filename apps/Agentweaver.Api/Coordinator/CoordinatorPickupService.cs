@@ -1,8 +1,12 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using System.Security.Cryptography;
+using System.Text;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
+using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
@@ -24,6 +28,7 @@ public sealed class CoordinatorPickupService
     private readonly IBacklogTaskStore _backlogStore;
     private readonly IRunStore _runStore;
     private readonly CoordinatorRunService _coordinatorRunService;
+    private readonly RunOrchestrator _runOrchestrator;
     private readonly ILogger<CoordinatorPickupService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly AiExecutionPlanAccessor _executionPlanAccessor;
@@ -32,6 +37,7 @@ public sealed class CoordinatorPickupService
         IBacklogTaskStore backlogStore,
         IRunStore runStore,
         CoordinatorRunService coordinatorRunService,
+        RunOrchestrator runOrchestrator,
         ILogger<CoordinatorPickupService> logger,
         IServiceScopeFactory scopeFactory,
         AiExecutionPlanAccessor executionPlanAccessor)
@@ -39,6 +45,7 @@ public sealed class CoordinatorPickupService
         _backlogStore = backlogStore;
         _runStore = runStore;
         _coordinatorRunService = coordinatorRunService;
+        _runOrchestrator = runOrchestrator;
         _logger = logger;
         _scopeFactory = scopeFactory;
         _executionPlanAccessor = executionPlanAccessor;
@@ -56,10 +63,11 @@ public sealed class CoordinatorPickupService
     {
         var now = DateTimeOffset.UtcNow;
         var runId = RunId.New();
+        var staticFanWorkflow = ResolveStaticFanWorkflow(task);
         var goal = string.IsNullOrWhiteSpace(task.Description)
             ? task.Title
             : $"{task.Title}\n\n{task.Description}";
-        if (!string.IsNullOrWhiteSpace(task.WorkflowOverrideId))
+        if (staticFanWorkflow is null && !string.IsNullOrWhiteSpace(task.WorkflowOverrideId))
             goal = $"use {task.WorkflowOverrideId.Trim()}\n\n{goal}";
 
         AiExecutionPlan? acceptedPlan = null;
@@ -78,7 +86,7 @@ public sealed class CoordinatorPickupService
                     task.AiExecutionProviderKey,
                     operation,
                     project.Id,
-                    task.CapturedByUserId ?? task.CapturedBy,
+                    task.ReadyByUserId ?? task.CapturedByUserId ?? task.CapturedBy,
                     ct).ConfigureAwait(false);
                 effectiveProvider = acceptedPlan.Provider;
                 if (effectiveProvider is EffectiveModelProviderResult.Byok expectedByok)
@@ -109,11 +117,10 @@ public sealed class CoordinatorPickupService
         else
         {
             effectiveProvider = await ResolveEffectiveProviderAsync(project.Id, ct).ConfigureAwait(false);
-            if (effectiveProvider is EffectiveModelProviderResult.Byok
-                && !WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
-                blockedReason = "operation_requires_github_copilot";
+            if (!WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
+                blockedReason = "queued_model_provider_confirmation_required";
         }
-        if (effectiveProvider is EffectiveModelProviderResult.Unavailable unavailable)
+        if (blockedReason is null && effectiveProvider is EffectiveModelProviderResult.Unavailable unavailable)
         {
             blockedReason = unavailable.UnavailableReason ==
                 EffectiveModelProviderUnavailableReason.ProjectBindingRequiresReauthorization
@@ -139,16 +146,30 @@ public sealed class CoordinatorPickupService
             // Keep the human-facing GitHub login in CapturedBy while carrying the durable auth
             // subject into background execution. Legacy and automation tasks retain their existing
             // behavior through the fallback.
-            SubmittingUser = task.CapturedByUserId ?? task.CapturedBy,
-            Status = RunStatus.InProgress,
+            SubmittingUser = task.ReadyByUserId ?? task.CapturedByUserId ?? task.CapturedBy,
+            Status = staticFanWorkflow is null ? RunStatus.InProgress : RunStatus.Pending,
             StartedAt = now,
             ProjectId = project.Id,
-            AgentName = "Coordinator",                // parent coordinator run
+            AgentName = staticFanWorkflow is null ? "Coordinator" : null,
             ParentRunId = null,
             SubtaskId = null,
             WorkflowRunId = null,                     // identity parity with interactive coordinator runs:
                                                       // detail page + endpoints resolve by run_id (no envelope)
             Origin = RunOrigin.BacklogPickup,         // durable origin marker; persisted atomically in step (b)
+            ExecutableWorkflowPinRequired = staticFanWorkflow is not null,
+            ExecutableWorkflowManifestSchemaVersion = staticFanWorkflow is null
+                ? null
+                : ExecutableWorkflowPin.CurrentSchemaVersion,
+            ExecutableWorkflowDefinitionId = staticFanWorkflow?.Id,
+            ExecutableWorkflowDefinitionVersion = staticFanWorkflow?.Version,
+            ExecutableWorkflowSource = staticFanWorkflow is null ? null : "backlog_snapshot",
+            ExecutableWorkflowContentDigest = staticFanWorkflow is null
+                ? null
+                : ComputeSha256Digest(task.WorkflowDefinitionSnapshotYaml!),
+            ExecutableWorkflowDefinitionYaml = staticFanWorkflow is null
+                ? null
+                : task.WorkflowDefinitionSnapshotYaml,
+            ExecutableWorkflowPinnedAt = staticFanWorkflow is null ? null : now,
         };
 
         if (blockedReason is not null)
@@ -188,7 +209,8 @@ public sealed class CoordinatorPickupService
         }
 
         var claim = await _backlogStore
-            .TryClaimAndReserveCoordinatorRunWithPolicyAsync(project.Id, task.Id, run, now, ct)
+            .TryClaimAndReserveCoordinatorRunWithPolicyAsync(project.Id, task.Id, run, now, ct,
+                task.AiExecutionProviderKey, task.ReadyByUserId)
             .ConfigureAwait(false);
 
         switch (claim.Result)
@@ -218,6 +240,67 @@ public sealed class CoordinatorPickupService
             return;
         }
 
+        // The claim, not the heartbeat's Ready snapshot, owns the pinned prerequisite identities.
+        // Materialize their retained bytes against one exact project commit, then bind that immutable
+        // input to the reserved run before any launch path can provision a worktree.
+        var claimedTask = await _backlogStore.GetAsync(project.Id, task.Id, CancellationToken.None)
+            .ConfigureAwait(false);
+        try
+        {
+            if (claimedTask?.RunId != runId)
+                throw new RunOutputRevisionUnavailableException("missing_claimed_prerequisites");
+            var inputs = await ClaimedPrerequisiteResolver.ResolveAsync(
+                claimedTask.ClaimedPrerequisitesJson,
+                (id, revisionId, token) => _runStore.ResolveOutputRevisionAsync(id, revisionId, token),
+                CancellationToken.None).ConfigureAwait(false);
+            if (inputs.Count > 0)
+            {
+                run = run with { ExecutionInputRequired = true };
+                var source = RunOutputTreeCapture.CaptureSource(
+                    project.WorkingDirectory,
+                    project.DefaultBranch);
+                var plan = ImmutableExecutionInputPlan.Compose(
+                    source.CommitHash,
+                    source.TreeHash,
+                    source.TreeContent,
+                    inputs.Select(input => (input.Claim, input.Revision)).ToArray());
+                var executionCommitHash = RunOutputTreeCapture.Materialize(
+                    project.WorkingDirectory,
+                    plan);
+                if (!await _runStore.TryBindExecutionInputAsync(
+                        runId,
+                        run.LifecycleGeneration,
+                        source.CommitHash,
+                        executionCommitHash,
+                        plan.CompositeId,
+                        CancellationToken.None).ConfigureAwait(false))
+                {
+                    throw new RunOutputRevisionUnavailableException("execution_input_binding_conflict");
+                }
+                run = run with
+                {
+                    ExecutionInputSourceCommitHash = source.CommitHash,
+                    ExecutionInputCommitHash = executionCommitHash,
+                    ExecutionInputCompositeId = plan.CompositeId,
+                };
+            }
+        }
+        catch (RunOutputRevisionUnavailableException ex)
+        {
+            _logger.LogWarning(ex,
+                "Pickup blocked for task {TaskId} and run {RunId}: prerequisite {Reason}",
+                task.Id, runId, ex.Reason);
+            var terminalized = await _runStore.TrySetTerminalOutcomeAsync(
+                runId,
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed,
+                    new { reason = ex.Reason }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                ex.Reason,
+                CancellationToken.None).ConfigureAwait(false);
+            if (!terminalized)
+                _logger.LogError("Pickup could not terminalize prerequisite-blocked run {RunId}", runId);
+            return;
+        }
+
         if (WorkflowTriggerBacklogFactory.IsTrustedAutomationTask(task))
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
@@ -243,14 +326,22 @@ public sealed class CoordinatorPickupService
                 : _executionPlanAccessor.Push(acceptedPlan);
             if (acceptedPlan is not null && acceptedByokConfiguration is not null)
                 _executionPlanAccessor.FreezeByokConfiguration(acceptedByokConfiguration);
-            await _coordinatorRunService.StartReservedCoordinatorRunAsync(
-                    run,
-                    approvalSnapshot,
-                    confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
-                    ct: CancellationToken.None,
-                    effectiveProvider: effectiveProvider,
-                    effectiveProviderBoundary: effectiveProviderBoundary)
-                .ConfigureAwait(false);
+            if (staticFanWorkflow is not null)
+            {
+                await _runOrchestrator.StartReservedProjectRunAsync(run, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await _coordinatorRunService.StartReservedCoordinatorRunAsync(
+                        run,
+                        approvalSnapshot,
+                        confirmedBy: task.CapturedBy,         // named human accountable for the auto-confirm (Principle IX)
+                        ct: CancellationToken.None,
+                        effectiveProvider: effectiveProvider,
+                        effectiveProviderBoundary: effectiveProviderBoundary)
+                    .ConfigureAwait(false);
+            }
         }
         catch (CoordinatorStartupException ex)
         {
@@ -262,11 +353,14 @@ public sealed class CoordinatorPickupService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Pickup: coordinator start failed for run {RunId}", runId);
+            _logger.LogError(ex, "Pickup: run start failed for run {RunId}", runId);
+            var failureCode = staticFanWorkflow is null
+                ? "coordinator_start_failed"
+                : "workflow_start_failed";
             var terminalized = await _runStore.TrySetTerminalOutcomeAsync(
                     runId,
-                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = "coordinator_start_failed" }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
-                    "coordinator_start_failed",
+                    TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason = failureCode }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                    failureCode,
                     CancellationToken.None).ConfigureAwait(false);
             if (!terminalized)
             {
@@ -278,6 +372,26 @@ public sealed class CoordinatorPickupService
             // Task stays Claimed -> Failed coordinator run shown in the terminal column. No silent re-queue (FR-012).
         }
     }
+
+    private static WorkflowDefinition? ResolveStaticFanWorkflow(BacklogTask task)
+    {
+        if (string.IsNullOrWhiteSpace(task.WorkflowDefinitionSnapshotYaml))
+            return null;
+
+        var loaded = WorkflowDefinitionLoader.Load(
+            task.WorkflowDefinitionSnapshotYaml,
+            "backlog_snapshot",
+            validationMode: WorkflowDefinitionValidationMode.LegacyCompatible);
+        if (!loaded.IsValid || loaded.Definition is null)
+            return null;
+
+        return RunWorkflowGraphBinder.ContainsStaticFanRegion(loaded.Definition)
+                ? loaded.Definition
+                : null;
+    }
+
+    private static string ComputeSha256Digest(string content) =>
+        "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 
     /// <summary>
     /// Resolves the effective model provider for <paramref name="projectId"/> through the single

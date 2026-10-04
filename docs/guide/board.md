@@ -24,6 +24,22 @@ the coordinator and agents.
 You can only drag tasks between **Backlog** and **Ready**. The coordinator owns every other column transition. Dragging a task back from Ready to Backlog pulls it out of the queue before the heartbeat picks it up.
 :::
 
+Moving one task or the entire backlog to **Ready** requires a signed-in Microsoft Entra
+user with a Contributor project role and an available model provider. Ready records
+the accepting user's identity and the selected provider separately from the original
+capturer; accepting a teammate's task does not change who captured it or who is
+accountable for its confirmation. Internal service credentials cannot accept tasks
+on a user's behalf. Moving a task back to Backlog clears its accepted provider and
+Ready identity; moving it to Ready again accepts the current provider and user.
+An empty bulk move changes nothing.
+REST callers use `POST /api/projects/{projectId}/backlog/tasks/{taskId}/ready`
+or `POST /api/projects/{projectId}/backlog/ready-all`; the latter returns
+`{ "moved": number }`. The MCP Ready tools delegate to these same routes.
+Both reject callers without a human Entra subject with
+`403 human_entra_subject_required`, and unavailable model providers with
+`409 model_provider_connection_required`. The accepted key and user subject
+are not part of the task response.
+
 ## Capturing tasks
 
 The **Backlog** column has a capture bar at the top. Type a short task title and press **Enter** or click **Add**.
@@ -39,6 +55,75 @@ From the **Workspace** page, you can browse the project repository and import Ma
 ## Ranking the backlog
 
 Drag tasks within the Backlog column to rank them. The coordinator picks up Ready tasks in order, so ranking determines priority. Move your highest-priority tasks to the top of the Backlog, then drag them to Ready when you're ready for the coordinator to act on them.
+
+## Linking separate story runs
+
+Use **Links** on a Backlog or Ready card to set prerequisite task IDs. Preview first to
+see which downstream cards may be affected; then save. The edit uses the board's project
+graph revision: if someone else changed links meanwhile, refresh and preview again.
+Only links *from* unclaimed, unarchived tasks can be edited. A claimed run keeps the
+prerequisite graph revision, producer run/lifecycle-generation identities, the immutable
+collective output revision ID (when available), and merged commit/tree hashes
+it accepted at claim time; editing another task never rewrites those consumed inputs.
+Archived prerequisite tasks retain their links and run identity, but block new claims.
+
+Ready cards with unmet prerequisites stay in Ready and are skipped before the pickup
+limit is applied. Their card lists each upstream outcome: **integrated**, **accepted
+no change**, **pending**, **failed**, **cancelled**, **delegated**, or **archived**.
+An integrated run must also have a recorded merged commit and tree: otherwise the
+dependent remains Ready with the `upstream_output_identity_unavailable` blocker,
+rather than claiming an unidentified output. Successful collective assembly records
+both identities atomically with its terminal outcome before settling the work plan.
+Delegation is not execution. A completed coordinator run satisfies dependents only
+after integration; an explicitly accepted no-change completion remains blocked until
+its immutable receipt is available. A failed run must
+recover successfully first. Ready cards without blockers can still wait for a capacity
+slot. Human Review and Problems are run gates, not prerequisite wait states.
+
+Make each independently deliverable story a separate backlog task/run and link them
+when one consumes another's accepted output. Keep tightly coupled steps that must
+share one review/assembly boundary as subtasks *inside* a single coordinator run;
+do not model every implementation step as a separate story. The per-project editor
+does not create cross-project links.
+
+The claim records the accepted producer generation, commit/tree and collective output
+revision ID in the existing run revision store. A completed collective assembly lacking
+an immutable revision stays blocked with `upstream_output_revision_unavailable`; a missing
+commit/tree stays blocked with `upstream_output_identity_unavailable`. Retrying or
+archiving a producer does not rewrite a dependent's claimed snapshot. The revision
+retains the assembly diff and exact committed tree/file bytes in the run database,
+independent of the Git branch and worktree. REST
+`/api/runs/{runId}/output-revisions` lists history; the exact revision route returns
+its file inventory; `/files/{path}` returns exact base64 bytes, and
+`/compare/{otherRevisionId}` compares retained file identities. MCP exposes the same
+history, revision, file and compare routes as `run_output_history`,
+`run_output_revision`, `run_output_file` and `run_output_compare`. Missing/corrupt
+content returns an explicit unavailable error; older diff-only revisions have no
+retained files and cannot be resolved as exact inputs.
+
+At pickup, Agentweaver resolves the claimed revisions, composes their retained files in
+the recorded prerequisite order, and materializes a deterministic execution commit
+against one pinned project commit. Non-overlapping outputs compose; divergent edits to
+the same path, missing lineage, unsupported manifests, and missing or corrupt content
+fail closed with a typed prerequisite error. The run persists the source commit,
+materialized commit, and composite digest before launch or recovery. Its worktree starts
+from that exact commit while `originating_branch` remains the separate publication
+target, so later branch movement cannot change the consumed input.
+
+Collective review is bound to an immutable candidate published before the review
+request; approval of a replaced candidate is stale.
+New accepted no-change completions retain a tree and receipt and can satisfy a
+prerequisite; historical completions without a receipt stay blocked with
+`upstream_output_revision_unavailable`. A `confirmed` result cannot borrow an
+ordinary collective revision as a no-change receipt.
+
+For REST callers, read `graph_revision` on a task or GET
+`/api/projects/{projectId}/backlog/dependencies/revision`, then POST
+`/api/projects/{projectId}/backlog/tasks/{taskId}/dependencies?preview=true`
+with `expected_revision` and `add`, `remove`, or `replace` task-ID arrays.
+Repeat without `preview` to save. Responses include the resulting revision,
+prerequisites, and affected task IDs. The MCP tools `backlog_get_dependency_revision`
+and `backlog_edit_dependencies` use the same contract.
 
 ## The heartbeat
 
@@ -84,6 +169,10 @@ From Problems, you can:
 - Open the run to read the full trace and understand what went wrong
 - Use the run's explicit retry or recovery controls after inspecting the failure
 - Capture revised work separately when a new task is needed; Problems cards cannot be dragged to Ready
+
+For an older Ready task without a recorded provider acceptance, capture a replacement
+task or move the unclaimed task back to Backlog and then to Ready again. The failed
+run itself stays in Problems; it is not automatically requeued.
 
 ## Human Review column
 

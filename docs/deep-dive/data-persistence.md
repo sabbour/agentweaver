@@ -43,6 +43,10 @@ Agentweaver’s durable domain has two halves: **work execution** and **team mem
 - **Project**: a repository workspace plus its Agentweaver settings. It defines where work happens, which branch is default, who owns it, what model/provider defaults apply, which workflows are allowed, and what sandbox/review policies are active.
 - **Workflow run**: a stable envelope for a user-submitted job. A workflow can create one or many child runs and may own a shared orchestration worktree.
 - **Run**: one concrete agent execution. It records the prompt/task, model choice, submitting user, status, timestamps, worktree path, worktree branch, produced tree hash, diff, merge result, parent/child linkage, retry origin, and archive state.
+- **Execution identity descriptor**: an immutable record for one run lifecycle attempt.
+  It links the initiating principal, assigned agent, delegation/retry lineage, workflow
+  and approval-policy references, and execution service. Backend, sandbox, permission,
+  tool, and gate evidence is joined into a safe projection when read.
 - **Backlog task**: a project-scoped unit of future work. It can move from backlog to ready to claimed, and a claimed task points to at most one run.
 - **Run revision**: immutable review feedback against a run. Revisions are append-only because they are part of the audit trail.
 - **Run event**: an ordered event in a run’s stream. Events power live UI updates and restart-safe replay.
@@ -55,6 +59,7 @@ Agentweaver’s durable domain has two halves: **work execution** and **team mem
 | Backlog task / claimed run | The task is project-scoped and points to at most one claimed run. |
 | Run / revision | Append-only numbered review feedback belongs to the run. |
 | Run / event | Ordered events are unique by `(run_id, sequence)`. |
+| Run attempt / execution descriptor | Descriptors are unique by `(run_id, attempt)` and are inserted atomically with launch or retry. |
 
 This table describes participation and ownership, not a universal execution sequence.
 
@@ -116,6 +121,7 @@ It should hold:
 - **Workflow runs**: durable envelopes around user-submitted workflows, including shared orchestration worktree metadata.
 - **Backlog tasks**: ordered project work items, claim state, and run linkage.
 - **Run revisions**: immutable review feedback history.
+- **Execution identity descriptors**: append-only launch provenance for each run attempt.
 - **Cast proposals**: persisted casting proposals that should survive API restarts.
 - **Model-usage events**: durable `agent.turn.usage` events record per-turn token and nano-AIU data. Metrics and trace endpoints query telemetry and supported stored data.
 
@@ -128,6 +134,11 @@ Operational writes should be small, explicit, and guarded by invariants:
 - **A backlog task can point to at most one run**. This prevents duplicated execution for the same claimed task.
 - **Active backlog order keys are unique per project/state** for unclaimed work, so ordered board operations remain deterministic.
 - **Run revisions are append-only**. Review comments are evidence and should not be silently edited or deleted.
+- **Execution descriptors are append-only and transactional with launch**. A run attempt
+  cannot be created without its descriptor, and a failed descriptor insert rolls back
+  the run insert.
+- **Historical provenance does not grant authority**. Reads resolve the current effective
+  permission binding, so a descriptor cannot restore permissions revoked after launch.
 - **Worktree metadata is durable before work begins**. If the process restarts, the system can find or recreate the run’s worktree from stored path/branch data.
 
 ### Migration approach
@@ -141,6 +152,22 @@ The local raw SQLite operational database uses a bootstrap-and-patch model:
 This model is simple and robust for additive SQLite changes. Its trade-off is that complex schema refactors require extra care because there is no full migration history table for this store.
 
 Where this lives: `apps/Agentweaver.Api/Infrastructure`, `packages/Agentweaver.Domain`.
+
+### Safe execution identity projection
+
+The persisted descriptor contains internal principal and sandbox linkage needed for
+audit joins. API consumers receive only an authorization-filtered projection:
+
+- principal and sandbox identities are one-way opaque references;
+- repository roots, prompts, command arguments, credentials, tokens, and raw event
+  payloads are excluded;
+- tool and gate decisions expose bounded identifiers, outcomes, and reason codes;
+- missing tool-call correlation, remote sandbox evidence, or legacy descriptors is
+  reported explicitly instead of being inferred.
+
+The same projection is used by REST, MCP, the run UI, and terminal-diagnostic
+correlation. Local SQLite stores the descriptor beside the run in `agentweaver.db`;
+PostgreSQL stores both through `MemoryDbContext`.
 
 ## Memory and Orchestration Store: `memory.db`
 

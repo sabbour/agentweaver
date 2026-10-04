@@ -54,4 +54,29 @@ public sealed record TerminalRunMutation(
     string? MergedCommitHash = null,
     string? TreeHash = null,
     string? WorktreeBranch = null,
-    string? Diff = null);
+    string? Diff = null,
+    RunLeaseFence? RequiredLease = null,
+    int? ExpectedParentLifecycleGeneration = null,
+    CollectiveOutputPublication? CollectiveOutput = null,
+    NoChangeOutputPublication? NoChangeOutput = null,
+    string? ApprovedCollectiveRevisionId = null,
+    FanDeclaredFilesPublication? FanDeclaredFiles = null);
+
+public sealed record FanDeclaredFilesPublication(
+    string WorkPlanId,
+    string CommitHash,
+    string TreeHash,
+    byte[] TreeContent);
+
+public sealed record CollectiveOutputPublication(
+    string WorkPlanId,
+    string MergeEffectId,
+    string CommitHash,
+    string TreeHash,
+    bool AcceptedNoChange,
+    byte[]? TreeContent = null);
+
+public sealed record NoChangeOutputPublication(
+    string CommitHash,
+    string TreeHash,
+    byte[] TreeContent);

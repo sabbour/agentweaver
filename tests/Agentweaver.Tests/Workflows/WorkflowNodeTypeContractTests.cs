@@ -75,6 +75,31 @@ public sealed class WorkflowNodeTypeContractTests
         result.Error.Should().Contain("unsupported capability 'publish'");
     }
 
+    [Fact]
+    public void SerialNode_IsRejectedAsUnsupportedNodeType()
+    {
+        var result = WorkflowDefinitionLoader.Load("""
+            id: serial-output
+            name: Serial output
+            start: first
+            nodes:
+              - id: first
+                type: prompt
+                prompt: Do the first thing.
+              - id: grouped
+                type: serial
+                steps:
+                  - first
+            edges:
+              - from: first
+                to: grouped
+            """, "serial-output");
+
+        result.IsValid.Should().BeFalse();
+        result.Error.Should().Contain("unsupported node type 'serial'");
+        result.Error.Should().Contain("ordinary workflow edges");
+    }
+
     private static WorkflowDefinition DefinitionWith(WorkflowNodeType type) => new()
     {
         Id = "contract",

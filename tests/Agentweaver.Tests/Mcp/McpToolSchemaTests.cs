@@ -342,6 +342,45 @@ public sealed class McpToolSchemaTests
             .Should().Be("null");
     }
 
+    [Fact]
+    public async Task OrchestrationTopology_ComposesMatchingPlanAndChildrenFromTwoReads()
+    {
+        var paths = new List<string>();
+        var tools = new CoordinatorTools(CreateApiClient((request, _) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = path switch
+                {
+                    "/api/runs/parent/work-plan" => JsonContent.Create(new
+                    {
+                        workPlanId = 42,
+                        parentWorkflowNodeId = "composed",
+                        subtasks = new[] { new { subtaskId = 7, childRunId = "child-b" } },
+                    }),
+                    "/api/runs/parent/children" => JsonContent.Create(new[]
+                    {
+                        new { subtaskId = 7, childRunId = "child-b", parentWorkflowNodeId = "composed" },
+                    }),
+                    _ => throw new InvalidOperationException($"Unexpected path {path}"),
+                },
+            });
+        }));
+
+        using var payload = JsonDocument.Parse(
+            await tools.OrchestrationTopologyAsync("parent", CancellationToken.None));
+        paths.Should().Equal("/api/runs/parent/work-plan", "/api/runs/parent/children");
+        var plan = payload.RootElement.GetProperty("workPlan");
+        var child = payload.RootElement.GetProperty("children")[0];
+        plan.GetProperty("workPlanId").GetInt32().Should().Be(42);
+        plan.GetProperty("subtasks")[0].GetProperty("subtaskId").GetInt32()
+            .Should().Be(child.GetProperty("subtaskId").GetInt32());
+        plan.GetProperty("parentWorkflowNodeId").GetString()
+            .Should().Be(child.GetProperty("parentWorkflowNodeId").GetString());
+    }
+
     [Theory]
     [InlineData("assembly_blocked")]
     [InlineData("assembly_failed")]
@@ -366,6 +405,36 @@ public sealed class McpToolSchemaTests
 
         diagnostic.Code.Should().Be(code);
         diagnostic.Message.Should().Be($"Run failed with code '{code}'. Retry availability is unknown.");
+    }
+
+    [Theory]
+    [InlineData(
+        "coordinator_outcome_spec_draft_stalled",
+        "Outcome-spec drafting stalled before a complete response was available. Partial output was retained when available. Retry the run or choose another model.")]
+    [InlineData(
+        "mandatory_context_budget_exceeded",
+        "Run failed with code 'mandatory_context_budget_exceeded'. Retry is not available.")]
+    public async Task RunFailureDiagnostic_PreservesValidTerminalCodes(string code, string expectedMessage)
+    {
+        var tools = new DiagnosticsTools(CreateApiClient((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new
+                {
+                    code,
+                    message = "untrusted",
+                    component = "coordinator",
+                    timestamp = "2026-09-26T00:00:00Z",
+                    retryable = false,
+                    correlation_ids = new Dictionary<string, string>(),
+                    cause_chain = Array.Empty<string>(),
+                }),
+            })));
+
+        var diagnostic = await tools.RunFailureDiagnosticAsync("run-1");
+
+        diagnostic.Code.Should().Be(code);
+        diagnostic.Message.Should().Be(expectedMessage);
     }
 
     [Fact]

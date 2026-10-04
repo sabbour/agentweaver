@@ -9,6 +9,17 @@ public sealed record Run
     public required RunId Id { get; init; }
     public required string RepositoryPath { get; init; }
     public required string OriginatingBranch { get; init; }
+    /// <summary>
+    /// True when execution must start from a durably bound immutable input rather than resolving
+    /// <see cref="OriginatingBranch"/> at launch time.
+    /// </summary>
+    public bool ExecutionInputRequired { get; init; }
+    /// <summary>The pinned project commit used as the base of the immutable execution input.</summary>
+    public string? ExecutionInputSourceCommitHash { get; init; }
+    /// <summary>The materialized commit whose tree contains the exact retained prerequisite bytes.</summary>
+    public string? ExecutionInputCommitHash { get; init; }
+    /// <summary>Deterministic identity of the ordered prerequisite composition.</summary>
+    public string? ExecutionInputCompositeId { get; init; }
     public required ModelSource ModelSource { get; init; }
     public required string Task { get; init; }
     public required string SubmittingUser { get; init; }
@@ -53,6 +64,9 @@ public sealed record Run
     /// Used by the workspace endpoint to serve file content from git after the worktree is deleted.
     /// </summary>
     public string? MergedCommitHash { get; init; }
+    /// <summary>The exact review-ready output accepted for merge; null on legacy or unreviewed runs.</summary>
+    public string? ApprovedOutputRevisionId { get; init; }
+    public string? CurrentOutputRevisionId { get; init; }
     /// <summary>The coordinator run that launched this child run. Null for the coordinator run itself and for ordinary single-agent runs.</summary>
     public string? ParentRunId { get; init; }
     /// <summary>The Subtask.Id this child run executes. Null for non-orchestrated runs.</summary>
@@ -108,6 +122,39 @@ public sealed record Run
     /// coordinator during orchestration; null for runs where no workflow selection reasoning was captured.
     /// </summary>
     public string? WorkflowSelectionReason { get; init; }
+
+    /// <summary>
+    /// True for post-v0.34 root workflow runs, whose resume path must use the pinned executable
+    /// workflow definition or fail explicitly. False/null preserves legacy in-flight runs.
+    /// </summary>
+    public bool ExecutableWorkflowPinRequired { get; init; }
+
+    public int? ExecutableWorkflowManifestSchemaVersion { get; init; }
+    public string? ExecutableWorkflowDefinitionId { get; init; }
+    public string? ExecutableWorkflowDefinitionVersion { get; init; }
+    public string? ExecutableWorkflowSource { get; init; }
+    public string? ExecutableWorkflowContentDigest { get; init; }
+    public string? ExecutableWorkflowDefinitionYaml { get; init; }
+    public DateTimeOffset? ExecutableWorkflowPinnedAt { get; init; }
+
+    public ExecutableWorkflowPin? GetExecutableWorkflowPin() =>
+        ExecutableWorkflowManifestSchemaVersion is not { } schemaVersion
+        || string.IsNullOrWhiteSpace(ExecutableWorkflowDefinitionId)
+        || string.IsNullOrWhiteSpace(ExecutableWorkflowSource)
+        || string.IsNullOrWhiteSpace(ExecutableWorkflowContentDigest)
+        || string.IsNullOrWhiteSpace(ExecutableWorkflowDefinitionYaml)
+        || ExecutableWorkflowPinnedAt is not { } pinnedAt
+            ? null
+            : new ExecutableWorkflowPin
+            {
+                ManifestSchemaVersion = schemaVersion,
+                DefinitionId = ExecutableWorkflowDefinitionId!,
+                DefinitionVersion = ExecutableWorkflowDefinitionVersion,
+                Source = ExecutableWorkflowSource!,
+                ContentDigest = ExecutableWorkflowContentDigest!,
+                DefinitionYaml = ExecutableWorkflowDefinitionYaml!,
+                PinnedAt = pinnedAt,
+            };
 
     /// <summary>When set, the run is archived off project board/list projections.</summary>
     public DateTimeOffset? ArchivedAt { get; init; }

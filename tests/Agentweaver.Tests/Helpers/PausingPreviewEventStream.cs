@@ -40,6 +40,17 @@ internal sealed class PausingPreviewEventStream(IRunEventStream inner) : IRunEve
         return await inner.AppendWhileRunActiveAsync(runId, events, runStore, ct);
     }
 
+    public async Task<IReadOnlyList<RunEvent>> AppendWhilePreviewPublicationOwnedAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore,
+        string ownerId, int lifecycleGeneration, CancellationToken ct = default)
+    {
+        await PauseAsync();
+        if (ConditionalFailure is not null)
+            throw ConditionalFailure;
+        return await inner.AppendWhilePreviewPublicationOwnedAsync(
+            runId, events, runStore, ownerId, lifecycleGeneration, ct);
+    }
+
     private async Task PauseAsync()
     {
         Entered.TrySetResult();

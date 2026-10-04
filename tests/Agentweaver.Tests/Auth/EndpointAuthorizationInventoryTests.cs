@@ -117,6 +117,30 @@ public sealed class EndpointAuthorizationInventoryTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("/api/runs/{id}/output-revisions", "/api/runs/{id}/output-revisions")]
+    [InlineData("/api/runs/{id}/output-revisions/{revisionId}", "/api/runs/{id}/output-revisions/{revisionId}")]
+    [InlineData("/api/runs/{id}/output-revisions/{revisionId}/compare/{otherId}", "/api/runs/{id}/output-revisions/{revisionId}/compare/{otherId}")]
+    [InlineData("/api/runs/{id}/output-revisions/{revisionId}/files/{**path}", "/api/runs/{id}/output-revisions/{revisionId}/files/{path}")]
+    public async Task OutputRevisionReaders_RequirePlatformOrMcpBearer_InRuntimeAndOpenApi(
+        string routePath,
+        string openApiPath)
+    {
+        var endpoint = GetRouteEndpoints().Single(e => e.RoutePattern.RawText == routePath
+            && HttpMethods(e).Contains("GET"));
+        var authorization = endpoint.Metadata.GetRequiredMetadata<EndpointAuthorizationMetadata>();
+        authorization.Kind.Should().Be(EndpointAuthorizationKind.PlatformOrMcp);
+        authorization.RequiresBearerAuthentication.Should().BeTrue();
+
+        using var response = await _client.GetAsync("/openapi/v1.json");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var security = document.RootElement.GetProperty("paths")
+            .GetProperty(openApiPath).GetProperty("get").GetProperty("security");
+        security.GetArrayLength().Should().BeGreaterThan(0,
+            $"GET {openApiPath} must document the bearer policy enforced at runtime");
+    }
+
     private RouteEndpoint[] GetRouteEndpoints() =>
         _factory.Services.GetRequiredService<EndpointDataSource>().Endpoints
             .OfType<RouteEndpoint>()

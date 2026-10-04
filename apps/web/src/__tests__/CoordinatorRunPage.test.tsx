@@ -3,6 +3,8 @@ import { ApiError } from '../api/client';
 import { AzureFluentProvider } from '../copilot-fluent-system';
 import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
 import { CoordinatorRunPage } from '../pages/CoordinatorRunPage';
+import { latestPreviewStateFromEvents } from '../state/runPreviewState';
+import type { PortForwardSessionDto } from '../api/types';
 import { COORDINATOR_GRAPH_DESCRIPTOR, COORDINATOR_GRAPH_DESCRIPTOR_DELEGATED, COORDINATOR_GRAPH_DRAFTING_DESCRIPTOR } from './fixtures/graphDescriptor';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -29,6 +31,10 @@ const coordinatorRunPageSource = readFileSync(
   resolve(process.cwd(), 'src/pages/CoordinatorRunPage.tsx'),
   'utf8',
 );
+const gatewayPreviewList = JSON.parse(readFileSync(
+  resolve(process.cwd(), 'src/__tests__/fixtures/gatewayPreviewList.json'),
+  'utf8',
+)) as PortForwardSessionDto[];
 
 const mockRunStreamState = vi.hoisted(() => ({
   current: {
@@ -49,6 +55,8 @@ vi.mock('../api/apiClient', () => ({
     steerCoordinator: vi.fn(),
     reviewAssembly: vi.fn(),
     getRun: vi.fn(),
+    getRunEffectivePermissions: vi.fn(),
+    getRunExecutionIdentity: vi.fn(),
     getRunTerminalDiagnostic: vi.fn().mockRejectedValue(new Error('not found')),
     getProject: vi.fn(),
     getRunTokenBreakdown: vi.fn().mockResolvedValue({
@@ -150,6 +158,85 @@ beforeEach(() => {
   vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
   vi.mocked(apiClient.getCoordinatorChildren).mockRejectedValue(new Error('not found'));
   vi.mocked(apiClient.getRun).mockResolvedValue({ run_id: 'coord-run-1', status: 'in_progress' } as never);
+  vi.mocked(apiClient.getRunEffectivePermissions).mockResolvedValue({
+    run_id: 'coord-run-1',
+    binding: {
+      schema_version: 1,
+      binding_id: 'epb-visible',
+      version: 'sha256:effective',
+      source: 'current-project-sandbox-policy+ceiling',
+      attempt: 1,
+      scope: 'project:p1',
+      parent_binding_id: null,
+      parent_version: null,
+      launch_binding_id: 'epb-launch',
+      launch_version: 'sha256:launch',
+    },
+    configured_policy: {
+      version: 'sha256:configured',
+      shell_enabled: true,
+      direct_execution: false,
+      network_enabled: true,
+      require_approval_for_all_shell: false,
+      redact_pii: true,
+      max_output_bytes: 4194304,
+      allowed_repository_root_count: 0,
+      destructive_command_pattern_count: 24,
+      allowed_operations: ['workspace.read', 'workspace.write', 'network.access'],
+    },
+    effective_policy: {
+      version: 'sha256:effective',
+      shell_enabled: true,
+      direct_execution: false,
+      network_enabled: false,
+      require_approval_for_all_shell: false,
+      redact_pii: true,
+      max_output_bytes: 4194304,
+      allowed_repository_root_count: 0,
+      destructive_command_pattern_count: 24,
+      allowed_operations: ['workspace.read'],
+    },
+    overrides: {
+      is_narrowed: true,
+      removed_operations: ['network.access', 'workspace.write'],
+      tightened_controls: ['network_disabled'],
+      launch_ceiling_active: true,
+      parent_restriction_active: false,
+    },
+    current_revocation: {
+      active: true,
+      removed_since_launch: ['network.access'],
+      tightened_controls: ['network_disabled'],
+      shell_revoked: false,
+      network_revoked: true,
+      direct_execution_revoked: false,
+    },
+    coverage: [
+      {
+        operation: 'workspace.read',
+        allowed: true,
+        tool_family: 'file and directory reads',
+        enforcement_gate: 'binding, then path containment',
+      },
+      {
+        operation: 'workspace.write',
+        allowed: false,
+        tool_family: 'create, edit, replace, and patch',
+        enforcement_gate: 'binding, then path containment and tool validation',
+      },
+    ],
+    latest_denial: {
+      reason_code: 'operation_not_allowed',
+      reason: "Operation 'workspace.write' was not allowed by the effective binding.",
+      operation: 'workspace.write',
+      tool_name: 'write_file',
+      binding_id: 'epb-visible',
+      binding_version: 'sha256:effective',
+      binding_source: 'current-project-sandbox-policy+ceiling',
+      sequence: 12,
+      timestamp_utc: '2026-01-02T03:04:05Z',
+    },
+  });
   vi.mocked(apiClient.getRunTerminalDiagnostic).mockRejectedValue(new ApiError(404, 'not found'));
   vi.mocked(apiClient.getProject).mockResolvedValue({
     project_id: 'p1',
@@ -167,6 +254,50 @@ beforeEach(() => {
     created_at: '2026-07-07T00:00:00.000Z',
     updated_at: '2026-07-07T00:00:00.000Z',
   } as never);
+  vi.mocked(apiClient.getRunExecutionIdentity).mockResolvedValue({
+    evidence_state: 'complete',
+    descriptor: {
+      descriptor_id: 'execution-safe',
+      schema_version: 1,
+      run_id: 'coord-run-1',
+      attempt: 1,
+      principal_ref: 'principal-safe',
+      executing_service: 'service:agentweaver-api',
+      agent_assignment_id: 'assignment-safe',
+      agent_role: 'Coordinator',
+      agent_display_name: 'Coordinator',
+      parent_descriptor_id: null,
+      retry_of_descriptor_id: null,
+      workflow_run_id: null,
+      subtask_id: null,
+      approval_policy_snapshot_id: 'approval-safe',
+      executable_workflow_digest: 'sha256:workflow-safe',
+      created_at: '2026-09-26T12:00:00Z',
+    },
+    backend: { kind: 'agenthost', sandbox_ref: 'sandbox-safe', evidence_state: 'observed' },
+    launch_permission_binding: {
+      binding_id: 'epb-launch',
+      version: 'sha256:permission-launch',
+      source: 'launch',
+      attempt: 1,
+    },
+    permission_binding: {
+      binding_id: 'epb-safe',
+      version: 'sha256:permission-safe',
+      source: 'current-project-sandbox-policy',
+      attempt: 1,
+    },
+    decisions: [{
+      sequence: 4,
+      tool_call_id: 'call-safe',
+      tool_name: 'run_command',
+      gate: 'human_approval',
+      outcome: 'denied',
+      reason_code: 'operation_not_allowed',
+      correlation_state: 'matched',
+      timestamp_utc: '2026-09-26T12:01:00Z',
+    }],
+  } as never);
   vi.mocked(apiClient.getRunTokenBreakdown).mockResolvedValue({
     runId: 'coord-run-1',
     source: 'events',
@@ -177,6 +308,7 @@ beforeEach(() => {
   });
   vi.mocked(apiClient.getRunTraces).mockResolvedValue({ runId: 'coord-run-1', spans: [] });
   vi.mocked(apiClient.getRunEvents).mockResolvedValue([]);
+  vi.mocked(apiClient.listPortForwards).mockResolvedValue([]);
   vi.mocked(apiClient.getPendingApprovals).mockResolvedValue({
     run_id: 'coord-run-1',
     count: 0,
@@ -256,6 +388,37 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     );
   });
 
+  it('shows the authorized effective permission projection without tool arguments', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    fireEvent.click(await screen.findByTestId('open-effective-permissions', undefined, { timeout: 4000 }));
+
+    const inspection = await screen.findByTestId('effective-permissions-inspection');
+    expect(apiClient.getRunEffectivePermissions).toHaveBeenCalledWith('coord-run-1');
+    expect(within(inspection).getByText('Configured policy')).toBeTruthy();
+    expect(within(inspection).getByText('Effective narrowed policy')).toBeTruthy();
+    expect(within(inspection).getByText('Active: network.access, network_disabled')).toBeTruthy();
+    expect(within(inspection).getByText(/Latest denial:/)).toBeTruthy();
+    expect(within(inspection).getAllByText(/workspace.write/).length).toBeGreaterThan(0);
+    expect(inspection.textContent).not.toContain('command');
+    expect(inspection.textContent).not.toContain('arguments');
+    expect(inspection.textContent).not.toContain('api_key');
+  });
+
+  it('shows the safe execution identity and decision lineage', async () => {
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    fireEvent.click(await screen.findByTestId('open-execution-identity', undefined, { timeout: 4000 }));
+
+    const inspection = await screen.findByTestId('execution-identity');
+    expect(apiClient.getRunExecutionIdentity).toHaveBeenCalledWith('coord-run-1');
+    expect(within(inspection).getByText('execution-safe')).toBeTruthy();
+    expect(within(inspection).getByText('principal-safe')).toBeTruthy();
+    expect(within(inspection).getByText(/run_command/)).toBeTruthy();
+    expect(inspection.textContent).not.toContain('repository');
+    expect(inspection.textContent).not.toContain('arguments');
+  });
+
   it('renders an explicit not-found state for a missing coordinator run', async () => {
     vi.mocked(apiClient.getRunGraph).mockRejectedValue(new ApiError(404, 'not found'));
     vi.mocked(apiClient.getRun).mockRejectedValue(new ApiError(404, 'not found'));
@@ -294,6 +457,26 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       retryable: false,
       correlation_ids: {},
       cause_chain: ['step:preview:started', 'tool:start_preview:failed:3', '******example.test/trace'],
+      attempt: 2,
+      completeness: 'partial',
+      observed_facts: [{
+        code: 'tool_error_recovered',
+        summary: 'A tool error was followed by a success for the same call.',
+        evidence_reference_ids: ['event-3'],
+      }],
+      supported_interpretations: [],
+      unknowns: [{
+        code: 'root_cause_not_attributable',
+        summary: 'No recorded gate is directly referenced by the terminal failure.',
+        evidence_reference_ids: ['event-7'],
+      }],
+      next_actions: [{
+        kind: 'investigate_unknown',
+        label: 'Inspect the referenced durable events.',
+        preconditions: ['Viewer access remains authorized.'],
+        expected_effect: 'Narrows the unknown evidence without mutating the run.',
+        mutating: false,
+      }],
     });
 
     vi.mocked(apiClient.getWorkPlan).mockRejectedValue(new ApiError(404, 'not found'));
@@ -323,6 +506,10 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain(
       'Cause chain: step:preview:started -> tool:start_preview:failed:3.',
     );
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain('Evidence: partial · attempt 2.');
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain('Observed: A tool error was followed by a success');
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain('Unknown: No recorded gate is directly referenced');
+    expect(screen.getByTestId('terminal-failure-diagnostic').textContent).toContain('Next action: Inspect the referenced durable events.');
     expect(screen.getByText('Used GitHub Copilot. Model: gpt-5.')).toBeTruthy();
     expect(screen.getByTestId('run-header').textContent).not.toContain('Expected provider: GitHub Copilot');
     expect(getComputedStyle(screen.getByTestId('run-header-actions')).flexWrap).toBe('wrap');
@@ -889,8 +1076,16 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
     });
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
-      { sequence: 2, type: 'sandbox.preview_ready', payload: { preview_url: 'https://preview.example.test', target_port: 3000 } },
+      { sequence: 2, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'build-test', treeHash: 'tree-current' } },
+      { sequence: 3, type: 'sandbox.preview_applicability', payload: { tree_hash: 'tree-current', state: 'preview_required' } },
+      { sequence: 4, type: 'sandbox.preview_ready', payload: {
+        preview_url: gatewayPreviewList[0].preview_url, target_port: gatewayPreviewList[0].target_port,
+        tree_hash: 'tree-current', session_id: gatewayPreviewList[0].session_id,
+        pod_name: gatewayPreviewList[0].pod_name,
+        preview_runner_session_id: gatewayPreviewList[0].preview_runner_session_id,
+      } },
     ]);
+    vi.mocked(apiClient.listPortForwards).mockResolvedValue([gatewayPreviewList[0]]);
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
@@ -903,6 +1098,98 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
     const previewCta = await screen.findByTestId('selected-build-preview-cta', undefined, { timeout: 4000 });
     expect(previewCta.textContent).toContain('Preview from Build & Test is active');
     expect(previewCta.textContent).toContain('Open preview');
+  });
+
+  it.each([
+    ['prior tree', 'old-tree', 'old-pod', 'old-pod'],
+    ['replaced sandbox', 'current-tree', 'old-pod', 'new-pod'],
+  ])('does not offer a %s preview as current readiness', (_, previewTree, previewPod, listedPod) => {
+    const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
+      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'old-tree', gateKind: 'build-test' } },
+      { sequence: 2, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 3, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'current-tree', gateKind: 'build-test' } },
+      { sequence: 4, type: 'sandbox.preview_applicability', payload: { tree_hash: 'current-tree', state: 'preview_required' } },
+      { sequence: 5, type: 'sandbox.preview_ready', payload: {
+        tree_hash: previewTree, session_id: gatewayPreviewList[0].session_id, pod_name: previewPod,
+        target_port: 8235, preview_url: gatewayPreviewList[0].preview_url,
+        preview_runner_session_id: gatewayPreviewList[0].preview_runner_session_id,
+      } },
+    ];
+    const sessions = [{ ...gatewayPreviewList[0], pod_name: listedPod }];
+
+    expect(latestPreviewStateFromEvents(events, sessions)).toEqual({ status: 'none' });
+  });
+
+  it('accepts the Gateway GET contract as current ready evidence', () => {
+    const session = gatewayPreviewList[0];
+    expect(latestPreviewStateFromEvents([
+      { sequence: 1, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 2, type: 'sandbox.preview_applicability', payload: { tree_hash: 'current-tree', state: 'preview_required' } },
+      { sequence: 3, type: 'sandbox.preview_ready', payload: {
+        tree_hash: 'current-tree', session_id: session.session_id,
+        pod_name: session.pod_name, target_port: session.target_port,
+        preview_runner_session_id: session.preview_runner_session_id,
+        preview_url: session.preview_url,
+      } },
+    ], [session])).toEqual({
+      status: 'ready', previewUrl: session.preview_url,
+      targetPort: '8235', eventSequence: 3,
+    });
+  });
+
+  it.each(['sandbox.preview_pending', 'sandbox.preview_failed'] as const)(
+    'ignores a late %s from an older tree after current applicability is recorded',
+    (type) => {
+      const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
+        { sequence: 1, type: 'coordinator.assembly_started', payload: {} },
+        { sequence: 2, type: 'sandbox.preview_applicability', payload: {
+          tree_hash: 'current-tree', state: 'preview_required',
+        } },
+        { sequence: 3, type: 'sandbox.preview_pending', payload: {
+          tree_hash: 'current-tree', target_port: 8235,
+        } },
+        { sequence: 4, type, payload: {
+          tree_hash: 'old-tree', target_port: 3000, reason: 'old_runner_stopped',
+        } },
+      ];
+      expect(latestPreviewStateFromEvents(events, [])).toEqual({
+        status: 'pending', targetPort: '8235',
+      });
+    },
+  );
+
+  it('shows in-flight current-tree pending and failure, then honors review and revision boundaries', () => {
+    const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
+      { sequence: 1, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'old-tree' } },
+      { sequence: 2, type: 'sandbox.preview_ready', payload: {
+        tree_hash: 'old-tree', session_id: gatewayPreviewList[0].session_id,
+        pod_name: gatewayPreviewList[0].pod_name, target_port: 8235,
+        preview_runner_session_id: gatewayPreviewList[0].preview_runner_session_id,
+        preview_url: gatewayPreviewList[0].preview_url,
+      } },
+      { sequence: 3, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 4, type: 'sandbox.preview_applicability', payload: { tree_hash: 'new-tree', state: 'preview_required' } },
+      { sequence: 5, type: 'sandbox.preview_pending', payload: { tree_hash: 'new-tree', target_port: 8235 } },
+    ];
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toEqual({
+      status: 'pending', targetPort: '8235',
+    });
+    events.push({ sequence: 6, type: 'sandbox.preview_failed', payload: {
+      tree_hash: 'new-tree', reason: 'port_not_found', message: 'No app server.',
+    } });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toMatchObject({
+      status: 'failed', reason: 'port_not_found',
+    });
+    events.push({ sequence: 7, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'other-tree' } });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toEqual({ status: 'none' });
+    events.push({ sequence: 8, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'new-tree' } });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toMatchObject({
+      status: 'failed', reason: 'port_not_found',
+    });
+    events.push({ sequence: 9, type: 'coordinator.assembly_changes_requested', payload: {} });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toEqual({ status: 'none' });
+    events.push({ sequence: 10, type: 'sandbox.preview_ready', payload: events[1].payload });
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[0]])).toEqual({ status: 'none' });
   });
 
   it('projects Build & Test running/completed from build-test gateKind events without arming human review', async () => {
@@ -1283,13 +1570,63 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       ...mockRunStreamState.current,
       events: [
         { sequence: 1, type: 'sandbox.selected', payload: { backend: 'kubernetes-sandbox-claim' } },
-        { sequence: 2, type: 'sandbox.preview_pending', payload: { target_port: 5173 } },
+        { sequence: 2, type: 'coordinator.assembly_started', payload: {} },
+        { sequence: 3, type: 'sandbox.preview_applicability', payload: { tree_hash: 'current-tree', state: 'preview_required' } },
+        { sequence: 4, type: 'sandbox.preview_pending', payload: { tree_hash: 'current-tree', target_port: 5173 } },
       ],
     };
 
     render(<Wrapper><CoordinatorRunPage /></Wrapper>);
 
     expect(await screen.findByRole('button', { name: 'Preview Sandbox' }, { timeout: 4000 })).toBeTruthy();
+  });
+
+  it('reopens a server-listed manual preview after reload without asserting Build & Test readiness', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
+    const events: Parameters<typeof latestPreviewStateFromEvents>[0] = [
+      { sequence: 1, type: 'sandbox.selected', payload: { backend: 'kubernetes-sandbox-claim' } },
+      { sequence: 2, type: 'coordinator.assembly_started', payload: {} },
+      { sequence: 3, type: 'coordinator.assembly_review_requested', payload: { treeHash: 'current-tree' } },
+    ];
+    mockRunStreamState.current = { ...mockRunStreamState.current, events };
+    vi.mocked(apiClient.listPortForwards).mockResolvedValue([gatewayPreviewList[1]]);
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Sandbox' }));
+    expect(await screen.findByText(/Preview active for port 7234/)).toBeTruthy();
+    expect(screen.getByTitle('Sandbox preview').getAttribute('src')).toBe(gatewayPreviewList[1].preview_url);
+    expect(latestPreviewStateFromEvents(events, [gatewayPreviewList[1]])).toEqual({ status: 'none' });
+    expect(screen.queryByText('Preview from Build & Test is active')).toBeNull();
+  });
+
+  it('shows a port-forward lookup error instead of claiming no preview', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({ kubernetes: true, podName: 'agentweaver-api-pod-1' });
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      ...COORDINATOR_GRAPH_DESCRIPTOR,
+      nodes: [
+        { id: 'coordinator', label: 'Coordinator', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'build-test', label: 'Build & Test', role: 'review', kind: 'live', node_type: 'gate', status: 'running' },
+      ],
+      edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
+    });
+    mockRunStreamState.current = {
+      ...mockRunStreamState.current,
+      events: [
+        { sequence: 1, type: 'coordinator.outcome_spec.confirmed', payload: {} },
+        { sequence: 2, type: 'sandbox.selected', payload: { backend: 'kubernetes-sandbox-claim' } },
+      ],
+    };
+    vi.mocked(apiClient.listPortForwards).mockRejectedValue(new Error('lookup failed'));
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview Sandbox' }));
+    expect(await screen.findByText(/lookup failed/)).toBeTruthy();
+    const buildRow = await screen.findByRole('treeitem', { name: /Select Build & Test: Running/i });
+    fireEvent.click(buildRow);
+    expect((await screen.findByTestId('selected-build-preview-cta')).textContent)
+      .toContain('Preview availability could not be checked');
   });
 
   it('retries an expired preview approval from the Build & Test state', async () => {
@@ -1306,10 +1643,12 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       edges: [{ from: 'coordinator', to: 'build-test', cardinality: 'direct', loopback: false }],
     });
     vi.mocked(apiClient.getRunEvents).mockResolvedValue([
+      { sequence: 2, type: 'coordinator.assembly_review_requested', payload: { gateKind: 'build-test', treeHash: 'current-tree' } },
       {
-        sequence: 2,
+        sequence: 3,
         type: 'sandbox.preview_failed',
         payload: {
+          tree_hash: 'current-tree',
           reason: 'approval_timed_out',
           approval_request_id: 'expired-preview-request',
           retry_available: true,
@@ -1623,6 +1962,49 @@ describe('CoordinatorRunPage — work-plan 404 (no plan yet / stuck run)', () =>
 });
 
 describe('CoordinatorRunPage — child run (non-coordinator) skips coordinator artifacts', () => {
+  it('treats an embedded fan coordinator as a coordinator and never offers human review', async () => {
+    vi.mocked(apiClient.getRun).mockResolvedValue({
+      run_id: 'embedded-coordinator-1',
+      status: 'awaiting_review',
+      parent_run_id: 'parent-workflow-1',
+      is_coordinator_plan: true,
+      pending_request_kind: 'workflow_child_work',
+      coordinator_status: 'dispatching',
+    } as never);
+    vi.mocked(apiClient.getWorkPlan).mockResolvedValue({
+      work_plan_id: 42,
+      coordinator_run_id: 'embedded-coordinator-1',
+      status: 'dispatching',
+      subtasks: [],
+      dependencies: [],
+      parent_run_id: 'parent-workflow-1',
+      parent_workflow_node_id: 'fan',
+      parent_join_node_id: 'join',
+    } as never);
+    vi.mocked(apiClient.getRunGraph).mockResolvedValue({
+      graph_id: 'coordinator:embedded-coordinator-1',
+      variant: 'coordinator',
+      start_node_id: 'coordinator',
+      nodes: [
+        { id: 'coordinator', label: 'fan', role: 'coordinator', kind: 'live', node_type: 'agent' },
+        { id: 'workflow:fan-in', label: 'join', role: 'join', kind: 'live', node_type: 'action' },
+      ],
+      edges: [{ from: 'coordinator', to: 'workflow:fan-in', cardinality: 'direct', loopback: false }],
+    });
+
+    render(<Wrapper><CoordinatorRunPage /></Wrapper>);
+
+    await waitFor(
+      () => expect(vi.mocked(apiClient.getWorkPlan)).toHaveBeenCalledWith('coord-run-1'),
+      { timeout: 2000 },
+    );
+    const inspector = await openTopologyInspector();
+    await waitFor(() => expect(inspector.textContent).toContain('join'), { timeout: 4000 });
+    expect(inspector.textContent).not.toContain('Human Review');
+    expect(screen.queryByRole('button', { name: 'Approve & merge' })).toBeNull();
+    expect(screen.queryByLabelText('Approvals and gates')).toBeNull();
+  });
+
   it('does not call getWorkPlan for a child run (parent_run_id is set)', async () => {
     // A child run has parent_run_id set. The work-plan and outcome-plan endpoints do not exist
     // for child runs; calling them produces expected 404s that add noise without value.

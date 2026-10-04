@@ -21,6 +21,7 @@ using Agentweaver.Squad.Model;
 using Agentweaver.Squad.Squad;
 using Agentweaver.Squad.Analysis;
 using Agentweaver.Squad.Sync;
+using Agentweaver.SandboxExec;
 
 namespace Agentweaver.Api.Endpoints;
 
@@ -326,14 +327,9 @@ app.MapGet("/api/projects/{id}/decisions", async (
         .Where(d => type == null || d.Type == type)
         .Where(d => agent == null || d.AgentName == agent)
         .ToListAsync(ct))
-        .OrderByDescending(d => d.CreatedAt)
-        .Select(d => new
-        {
-            d.Id, d.AgentName, d.Type, d.Status, d.Title, d.Content, d.Rationale, d.Tags,
-            d.SourceKind, d.SourceIdentity, d.SourceRunId, d.TrustState, d.ApprovedBy, d.ApprovedAt,
-            superseded_by_id = d.SupersededById,
-            created_at = d.CreatedAt, updated_at = d.UpdatedAt,
-        })
+        .OrderByDescending(d => d.UpdatedAt)
+        .ThenByDescending(d => d.Id)
+        .Select(DecisionResponse)
         .ToList();
     return Results.Ok(Paging.Of(decisions, page, page_size));
 });
@@ -355,21 +351,14 @@ app.MapGet("/api/projects/{id}/decisions/{decisionId}", async (
     if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
     var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
     if (decision is null || decision.ProjectId != id) return Results.NotFound();
-    return Results.Ok(new
-    {
-        decision.Id, decision.AgentName, decision.Type, decision.Status,
-        decision.Title, decision.Content, decision.Rationale, decision.Tags,
-        decision.SourceKind, decision.SourceIdentity, decision.SourceRunId,
-        decision.TrustState, decision.ApprovedBy, decision.ApprovedAt,
-        superseded_by_id = decision.SupersededById,
-        created_at = decision.CreatedAt, updated_at = decision.UpdatedAt,
-    });
+    return Results.Ok(DecisionResponse(decision));
 });
 
 // POST /api/projects/{id}/decisions/{decisionId}/approve
 app.MapPost("/api/projects/{id}/decisions/{decisionId}/approve", async (
     string id,
     int decisionId,
+    ExpectedRevisionRequest request,
     HttpContext httpContext,
     IProjectStore projectStore,
     IConfiguration configuration,
@@ -382,21 +371,37 @@ app.MapPost("/api/projects/{id}/decisions/{decisionId}/approve", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (request.ExpectedRevision is null or < 1)
+        return Results.BadRequest(new { error = "expected_revision is required." });
     var (approver, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
         httpContext, project, configuration, runResolver, turnTokens, ct);
     if (approvalFailure is not null) return approvalFailure;
 
     var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
     if (decision is null || decision.ProjectId != id) return Results.NotFound();
+    if (decision.Revision != request.ExpectedRevision.Value)
+        return RevisionConflict(decision.Revision);
 
     decision.TrustState = MemoryTrustStates.Approved;
     decision.ApprovedBy = approver!.SourceIdentity;
     decision.ApprovedAt = DateTimeOffset.UtcNow;
     decision.UpdatedAt = decision.ApprovedAt.Value;
-    await memoryDb.SaveChangesAsync(ct);
+    decision.RevisionActor = approver.SourceKind == MemorySourceKinds.Run ? approver.AgentName : "project-owner";
+    decision.RevisionReason = request.Reason ?? "approved";
+    try
+    {
+        await memoryDb.SaveChangesAsync(ct);
+    }
+    catch (DbUpdateConcurrencyException)
+    {
+        memoryDb.ChangeTracker.Clear();
+        var current = await memoryDb.Decisions.AsNoTracking()
+            .SingleOrDefaultAsync(d => d.Id == decisionId && d.ProjectId == id, ct);
+        return current is null ? Results.NotFound() : RevisionConflict(current.Revision);
+    }
     return Results.Ok(new
     {
-        decision.Id, decision.TrustState, decision.ApprovedBy, decision.ApprovedAt,
+        decision.Id, decision.TrustState, decision.ApprovedBy, decision.ApprovedAt, decision.Revision,
     });
 });
 
@@ -458,14 +463,7 @@ app.MapPost("/api/projects/{id}/decisions", async (
     {
         return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
     }
-    var response = new
-    {
-        storedDecision.Id, storedDecision.AgentName, storedDecision.Type, storedDecision.Status,
-        storedDecision.Title, storedDecision.Content, storedDecision.Rationale, storedDecision.Tags,
-        storedDecision.SourceKind, storedDecision.SourceIdentity, storedDecision.SourceRunId,
-        storedDecision.TrustState, storedDecision.ApprovedBy, storedDecision.ApprovedAt,
-        created_at = storedDecision.CreatedAt,
-    };
+    var response = DecisionResponse(storedDecision);
     return created
         ? Results.Created($"/api/projects/{id}/decisions/{storedDecision.Id}", response)
         : Results.Ok(response);
@@ -489,36 +487,41 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
         return Results.BadRequest(new { error = "Invalid project id." });
     var project = await projectStore.GetAsync(projectId, ct);
     if (project is null) return Results.NotFound();
+    if (request.ExpectedRevision is null or < 1)
+        return Results.BadRequest(new { error = "expected_revision is required." });
     var (approver, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
         httpContext, project, configuration, runResolver, turnTokens, ct);
     if (approvalFailure is not null) return approvalFailure;
 
-    var decision = await memoryDb.Decisions.FindAsync(new object[] { decisionId }, ct);
+    var decision = await memoryDb.Decisions.AsNoTracking()
+        .SingleOrDefaultAsync(d => d.Id == decisionId, ct);
     if (decision is null || decision.ProjectId != id) return Results.NotFound();
 
-    if (!string.IsNullOrWhiteSpace(request.Content)) decision.Content = request.Content!;
-    if (request.Rationale is not null) decision.Rationale = request.Rationale;
+    var content = !string.IsNullOrWhiteSpace(request.Content) ? request.Content! : decision.Content;
+    var rationale = request.Rationale ?? decision.Rationale;
+    var status = decision.Status;
     if (!string.IsNullOrWhiteSpace(request.Status))
     {
-        var status = request.Status.Trim().ToLowerInvariant();
-        if (status is not ("active" or "superseded" or "archived"))
+        status = request.Status.Trim().ToLowerInvariant();
+        if (!KnowledgeLifecycleStates.IsValid(status))
             return Results.BadRequest(new { error = "status must be active, superseded, or archived." });
-        decision.Status = status;
     }
     if (request.SupersededById is not null)
-    {
-        var supersedingDecision = await memoryDb.Decisions
-            .FirstOrDefaultAsync(d => d.Id == request.SupersededById.Value && d.ProjectId == id, ct);
-        if (supersedingDecision is null) return Results.NotFound();
-        decision.SupersededById = request.SupersededById.Value;
-        decision.Status = "superseded";
-    }
-    decision.TrustState = MemoryTrustStates.Approved;
-    decision.ApprovedBy = approver!.SourceIdentity;
-    decision.ApprovedAt = DateTimeOffset.UtcNow;
-    decision.UpdatedAt = DateTimeOffset.UtcNow;
-    MemoryWriteDeduplicator.RefreshDecisionIdentity(decision);
-    await memoryDb.SaveChangesAsync(ct);
+        status = KnowledgeLifecycleStates.Superseded;
+
+    var result = await KnowledgeRevisionWriter.UpdateDecisionAsync(
+        memoryDb, decisionId, request.ExpectedRevision.Value, content, rationale, status,
+        status == KnowledgeLifecycleStates.Superseded
+            ? request.SupersededById ?? decision.SupersededById
+            : null,
+        approver!.SourceKind == MemorySourceKinds.Run ? approver.AgentName : "project-owner",
+        request.Reason ?? "updated through API", approver.SourceIdentity, ct);
+    if (result.Status == KnowledgeWriteStatus.NotFound) return Results.NotFound();
+    if (result.Status == KnowledgeWriteStatus.Stale) return RevisionConflict(result.CurrentRevision);
+    if (result.Status is KnowledgeWriteStatus.InvalidReplacement or KnowledgeWriteStatus.ReplacementCycle)
+        return Results.Conflict(new { error = result.Status == KnowledgeWriteStatus.ReplacementCycle
+            ? "replacement_cycle" : "invalid_replacement" });
+    decision = result.Record!;
     try
     {
         await ledgerSync.RefreshAsync(id, project.WorkingDirectory, ct);
@@ -527,12 +530,179 @@ app.MapPut("/api/projects/{id}/decisions/{decisionId}", async (
     {
         return Results.Conflict(new { error = "decision_ledger_conflict", conflicts = ex.Conflicts });
     }
-    return Results.Ok(new
-    {
-        decision.Id, decision.Status, decision.Content, decision.Rationale,
-        superseded_by_id = decision.SupersededById,
-        updated_at = decision.UpdatedAt,
-    });
+    return Results.Ok(DecisionResponse(decision));
 });
+
+// GET /api/projects/{id}/decisions/{decisionId}/revisions
+app.MapGet("/api/projects/{id}/decisions/{decisionId}/revisions", async (
+    string id,
+    int decisionId,
+    int? page,
+    int? page_size,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+    if (!await memoryDb.Decisions.AsNoTracking()
+            .AnyAsync(d => d.Id == decisionId && d.ProjectId == id, ct))
+        return Results.NotFound();
+    var revisions = (await memoryDb.DecisionRevisions.AsNoTracking()
+            .Where(r => r.ProjectId == id && r.DecisionId == decisionId)
+            .ToListAsync(ct))
+        .OrderByDescending(r => r.Revision)
+        .Select(DecisionRevisionResponse)
+        .ToList();
+    return Results.Ok(Paging.Of(revisions, page, page_size));
+});
+
+// GET /api/projects/{id}/decisions/{decisionId}/revisions/{revision}
+app.MapGet("/api/projects/{id}/decisions/{decisionId}/revisions/{revision}", async (
+    string id,
+    int decisionId,
+    int revision,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+    var item = await memoryDb.DecisionRevisions.AsNoTracking()
+        .SingleOrDefaultAsync(r => r.ProjectId == id && r.DecisionId == decisionId && r.Revision == revision, ct);
+    return item is null ? Results.NotFound() : Results.Ok(DecisionRevisionResponse(item));
+});
+
+// GET /api/projects/{id}/decisions/{decisionId}/compare
+app.MapGet("/api/projects/{id}/decisions/{decisionId}/compare", async (
+    string id,
+    int decisionId,
+    int from_revision,
+    int to_revision,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    if (await ProjectAuthorization.RequireAccessAsync(httpContext, project, configuration, ProjectRole.Viewer, ct) is { } forbid) return forbid;
+    var revisions = await memoryDb.DecisionRevisions.AsNoTracking()
+        .Where(r => r.ProjectId == id && r.DecisionId == decisionId
+            && (r.Revision == from_revision || r.Revision == to_revision))
+        .ToListAsync(ct);
+    var from = revisions.SingleOrDefault(r => r.Revision == from_revision);
+    var to = revisions.SingleOrDefault(r => r.Revision == to_revision);
+    return from is null || to is null
+        ? Results.NotFound()
+        : Results.Ok(new { from = DecisionRevisionResponse(from), to = DecisionRevisionResponse(to) });
+});
+
+// POST /api/projects/{id}/decisions/{decisionId}/restore
+app.MapPost("/api/projects/{id}/decisions/{decisionId}/restore", async (
+    string id,
+    int decisionId,
+    RestoreKnowledgeRequest request,
+    HttpContext httpContext,
+    IProjectStore projectStore,
+    IConfiguration configuration,
+    MemoryDbContext memoryDb,
+    DecisionLedgerSyncService ledgerSync,
+    IRunSubmittingUserResolver runResolver,
+    IRunAuthorshipCapabilityStore turnTokens,
+    CancellationToken ct) =>
+{
+    if (!ProjectId.TryParse(id, out var projectId))
+        return Results.BadRequest(new { error = "Invalid project id." });
+    var project = await projectStore.GetAsync(projectId, ct);
+    if (project is null) return Results.NotFound();
+    var (approver, approvalFailure) = await RunAuthorship.ResolveApproverAsync(
+        httpContext, project, configuration, runResolver, turnTokens, ct);
+    if (approvalFailure is not null) return approvalFailure;
+    if (request.ExpectedRevision is null or < 1 || request.Revision is null or < 1)
+        return Results.BadRequest(new { error = "expected_revision and revision are required." });
+    if (!await memoryDb.Decisions.AsNoTracking()
+            .AnyAsync(d => d.Id == decisionId && d.ProjectId == id, ct))
+        return Results.NotFound();
+
+    var result = await KnowledgeRevisionWriter.RestoreDecisionAsync(
+        memoryDb, decisionId, request.ExpectedRevision.Value, request.Revision.Value,
+        approver!.SourceKind == MemorySourceKinds.Run ? approver.AgentName : "project-owner",
+        request.Reason ?? $"restored revision {request.Revision.Value}", ct);
+    if (result.Status == KnowledgeWriteStatus.NotFound) return Results.NotFound();
+    if (result.Status == KnowledgeWriteStatus.Stale) return RevisionConflict(result.CurrentRevision);
+    await ledgerSync.TryRefreshAsync(id, project.WorkingDirectory, ct);
+    return Results.Ok(DecisionResponse(result.Record!));
+});
+
+        static object DecisionResponse(Decision decision) => new
+        {
+            decision.Id,
+            decision.AgentName,
+            decision.Type,
+            decision.Status,
+            decision.Title,
+            decision.Content,
+            decision.Rationale,
+            decision.Tags,
+            decision.SourceKind,
+            decision.SourceIdentity,
+            decision.SourceRunId,
+            decision.TrustState,
+            decision.ApprovedBy,
+            decision.ApprovedAt,
+            superseded_by_id = decision.SupersededById,
+            decision.Revision,
+            current_revision_id = decision.CurrentRevisionId,
+            created_at = decision.CreatedAt,
+            updated_at = decision.UpdatedAt,
+        };
+
+        static object DecisionRevisionResponse(DecisionRevision revision) => new
+        {
+            revision_id = revision.RevisionId,
+            decision_id = revision.DecisionId,
+            revision = revision.Revision,
+            previous_revision_id = revision.PreviousRevisionId,
+            revision.Actor,
+            source_run_id = revision.SourceRunId,
+            reason = SandboxOutputRedactor.Default.Redact(revision.Reason),
+            agent_name = revision.AgentName,
+            revision.Type,
+            revision.Status,
+            title = SandboxOutputRedactor.Default.Redact(revision.Title),
+            content = SandboxOutputRedactor.Default.Redact(revision.Content),
+            rationale = SandboxOutputRedactor.Default.Redact(revision.Rationale ?? ""),
+            tags = SandboxOutputRedactor.Default.Redact(revision.Tags ?? ""),
+            superseded_by_id = revision.SupersededById,
+            source_kind = revision.SourceKind,
+            source_identity_fingerprint = revision.SourceIdentityFingerprint,
+            source_run_reference = revision.SourceRunReference,
+            trust_state = revision.TrustState,
+            approved_by_fingerprint = revision.ApprovedByFingerprint,
+            approved_at = revision.ApprovedAt,
+            created_at = revision.CreatedAt,
+        };
+
+        static IResult RevisionConflict(int? currentRevision) =>
+            Results.Conflict(new
+            {
+                error = "stale_revision",
+                message = "The decision changed. Reload it and retry with the current revision.",
+                current_revision = currentRevision,
+            });
     }
 }

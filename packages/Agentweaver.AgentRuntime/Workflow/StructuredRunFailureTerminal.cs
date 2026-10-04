@@ -23,6 +23,9 @@ public static class StructuredRunFailureTerminal
         "agent_host_turn_incomplete",
         "coordinator_execution_failed",
         "coordinator_direct_execution_failed",
+        "coordinator_outcome_spec_draft_stalled",
+        "coordinator_outcome_spec_invalid_response",
+        "coordinator_outcome_spec_model_refused",
         "coordinator_startup_failed",
         "github_copilot_auth_required",
         "github_copilot_capability_snapshot_unavailable",
@@ -138,6 +141,7 @@ public static class StructuredRunFailureTerminal
 
         string? errorCode = null;
         bool? retryable = null;
+        string? toolCallId = null;
         IReadOnlyList<string>? causeChain = null;
         try
         {
@@ -154,6 +158,10 @@ public static class StructuredRunFailureTerminal
                     else if (property.Name.Equals("retryable", StringComparison.OrdinalIgnoreCase) &&
                              property.Value.ValueKind is JsonValueKind.True or JsonValueKind.False)
                         retryable = property.Value.GetBoolean();
+                    else if ((property.Name.Equals("toolCallId", StringComparison.OrdinalIgnoreCase)
+                              || property.Name.Equals("callId", StringComparison.OrdinalIgnoreCase)) &&
+                             property.Value.ValueKind == JsonValueKind.String)
+                        toolCallId = property.Value.GetString();
                     else if (property.Name.Equals("causeChain", StringComparison.OrdinalIgnoreCase) &&
                              property.Value.ValueKind == JsonValueKind.Array)
                         causeChain = ReadCauseChain(property.Value);
@@ -170,7 +178,15 @@ public static class StructuredRunFailureTerminal
         return new RunEvent(
             runEvent.Sequence,
             EventTypes.RunFailed,
-            CreatePayload(normalizedCode, CreateDiagnosticMessage(errorCode, retryable), null, retryable, null, null, causeChain),
+            CreatePayload(
+                normalizedCode,
+                CreateDiagnosticMessage(errorCode, retryable),
+                null,
+                retryable,
+                null,
+                null,
+                causeChain,
+                toolCallId),
             runEvent.TimestampUtc);
     }
 
@@ -253,6 +269,13 @@ public static class StructuredRunFailureTerminal
     public static string CreateDiagnosticMessage(string? errorCode, bool? retryable)
     {
         var code = NormalizeErrorCode(errorCode);
+        if (code == "coordinator_outcome_spec_model_refused")
+            return "The model declined to draft the outcome spec after one correction attempt. Retry the run or choose another model.";
+        if (code == "coordinator_outcome_spec_draft_stalled")
+            return "Outcome-spec drafting stalled before a complete response was available. Partial output was retained when available. Retry the run or choose another model.";
+        if (code == "coordinator_outcome_spec_invalid_response")
+            return "The model returned an invalid outcome-spec response after one correction attempt. Retry the run or choose another model.";
+
         var retrySummary = retryable switch
         {
             true => " Retry is available.",
@@ -263,7 +286,7 @@ public static class StructuredRunFailureTerminal
     }
 
     private static object CreatePayload(string? errorCode, string? message, string? diagnostic, bool? retryable)
-        => CreatePayload(errorCode, message, diagnostic, retryable, null, null, null);
+        => CreatePayload(errorCode, message, diagnostic, retryable, null, null, null, null);
 
     private static object CreatePayload(
         string? errorCode,
@@ -272,7 +295,8 @@ public static class StructuredRunFailureTerminal
         bool? retryable,
         string? correlationId,
         string? traceId,
-        IReadOnlyList<string>? causeChain)
+        IReadOnlyList<string>? causeChain,
+        string? toolCallId = null)
     {
         var normalizedCode = NormalizeErrorCode(errorCode);
         var normalizedMessage = NormalizeTrustedMessage(message, normalizedCode);
@@ -288,6 +312,8 @@ public static class StructuredRunFailureTerminal
             payload["correlationId"] = correlationId;
         if (IsServerGeneratedId(traceId))
             payload["traceId"] = traceId;
+        if (IsSafeEvidenceId(toolCallId))
+            payload["toolCallId"] = toolCallId;
         if (causeChain is { Count: > 0 })
         {
             var safeCauseChain = NormalizeCauseChain(causeChain);
@@ -344,6 +370,11 @@ public static class StructuredRunFailureTerminal
 
     private static bool IsServerGeneratedId(string? value) =>
         value is { Length: 32 } && value.All(Uri.IsHexDigit);
+
+    private static bool IsSafeEvidenceId(string? value) =>
+        value is { Length: > 0 and <= 128 }
+        && value.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.' or ':');
 
     private static string NormalizeTrustedMessage(string? message, string errorCode)
     {

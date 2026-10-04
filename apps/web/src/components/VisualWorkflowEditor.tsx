@@ -38,7 +38,6 @@ import {
   PersonRegular,
   ShieldCheckmarkRegular,
   SparkleRegular,
-  TextBulletListLtrRegular,
   WarningRegular,
 } from '@fluentui/react-icons';
 import { ScheduleTriggerDialog } from './ScheduleTriggerDialog';
@@ -115,7 +114,6 @@ const TYPE_ROLE: Record<string, string> = {
   fan_out: 'subtask',
   fan_in: 'assembly',
   coordinator_composed: 'coordinator',
-  serial: 'agent',
   merge: 'merge',
   scribe: 'scribe',
   terminal: 'assembly',
@@ -130,7 +128,6 @@ const TYPE_GRAPHNODE: Record<string, GraphNodeType> = {
   fan_out: 'action',
   fan_in: 'action',
   coordinator_composed: 'subtask',
-  serial: 'action',
   merge: 'action',
   scribe: 'action',
   terminal: 'terminal',
@@ -217,7 +214,6 @@ const NODE_TYPE_META: Record<string, { Icon: ComponentType; description: string;
   fan_out: { Icon: ArrowSplitRegular, description: 'Split work into parallel subtasks.', group: 'flow' },
   fan_in: { Icon: ArrowJoinRegular, description: 'Gather parallel subtask results back together.', group: 'flow' },
   coordinator_composed: { Icon: FlowchartRegular, description: 'Delegate to a nested coordinator sub-workflow.', group: 'flow' },
-  serial: { Icon: TextBulletListLtrRegular, description: 'Run a fixed sequence of steps in order.', group: 'flow' },
   terminal: { Icon: FlagRegular, description: 'Terminal end-state for a branch of the workflow.', group: 'flow' },
 };
 

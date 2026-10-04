@@ -254,6 +254,11 @@ They use the API image and injected `ConnectionStrings__MemoryDb` /
 embedded in the image or manifest. Local design-time commands default to SQLite;
 use `--postgres-migrations` only with configured PostgreSQL credentials.
 
+For release-candidate acceptance, deploy the committed candidate with
+`npm run azure:deploy-from-commit -- <candidate-sha>` and run representative
+integration plus feature-specific API/UI tests against that exact-SHA deployment
+before preparing or publishing the release. See [RELEASING.md](../../RELEASING.md).
+
 ### Ephemeral storage for testing
 
 For throwaway SQLite testing, set `Database__Provider=Sqlite` and replace the shared

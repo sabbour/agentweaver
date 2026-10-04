@@ -1,3 +1,3 @@
 namespace Agentweaver.Domain;
 
-public enum ProjectState { Active, Deleting }
+public enum ProjectState { Creating, Active, Failed, Deleting }

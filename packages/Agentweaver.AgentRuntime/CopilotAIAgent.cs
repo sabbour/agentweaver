@@ -77,6 +77,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private readonly ISandboxRepositoryCredentialProvider? _repositoryCredentialProvider;
     private readonly IByokProviderConfigurationProvider? _byokProviderConfiguration;
     private readonly IModelInvocationGuard? _modelInvocationGuard;
+    private readonly IEffectivePermissionBindingProvider _permissionBindingProvider;
     private ByokProviderConfiguration? _activeByokProviderConfiguration;
     private ModelSource? _acceptedModelSource;
     private string? _acceptedByokProviderFingerprint;
@@ -136,6 +137,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private SandboxToolContext? _toolContext;
     private ISandboxExecutor? _activeExecutor;
     private SandboxPolicy? _sandboxPolicy;
+    private EffectivePermissionBinding? _effectivePermissionBinding;
     private IReadOnlyList<string> _registeredToolNames = [];
     private List<AIFunctionDeclaration> _toolDeclarations = [];
     private AgentPromptComposition? _promptComposition;
@@ -195,6 +197,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     private volatile bool _degradedFlagged;
     private string? _degradedToolName;
     private string? _degradedReason;
+    private string? _degradedCallId;
     private int _runDegradedEmitted;
     private int _shellTimeoutFailureEmitted;
     private int _nativeShellDenyAttempts;
@@ -247,6 +250,11 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         get => _shellExecutionTracker;
         set => _shellExecutionTracker = value;
     }
+    internal EffectivePermissionBinding? EffectivePermissionBindingForTesting
+    {
+        get => _effectivePermissionBinding;
+        set => _effectivePermissionBinding = value;
+    }
 
     /// <summary>
     /// Cadence for the <see cref="EventTypes.ToolApprovalPending"/> heartbeat emitted while the
@@ -284,7 +292,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         IEnumerable<IAgentRuntimeToolProvider>? toolProviders = null,
         ISandboxRepositoryCredentialProvider? repositoryCredentialProvider = null,
         IByokProviderConfigurationProvider? byokProviderConfiguration = null,
-        IModelInvocationGuard? modelInvocationGuard = null)
+        IModelInvocationGuard? modelInvocationGuard = null,
+        IEffectivePermissionBindingProvider? permissionBindingProvider = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _executor = executor ?? throw new ArgumentNullException(nameof(executor));
@@ -298,6 +307,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _repositoryCredentialProvider = repositoryCredentialProvider;
         _byokProviderConfiguration = byokProviderConfiguration;
         _modelInvocationGuard = modelInvocationGuard;
+        _permissionBindingProvider = permissionBindingProvider
+            ?? new SandboxPolicyPermissionBindingProvider(sandboxPolicyStore);
     }
 
     /// <summary>
@@ -362,6 +373,9 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? apiCapabilityToken = null,
         bool preferModelIdOverByokConfiguration = false)
     {
+        var permissionCeiling = string.Equals(_runId, runId, StringComparison.Ordinal)
+            ? _effectivePermissionBinding
+            : null;
         _acceptedModelSource = _pendingModelSource;
         _acceptedByokProviderFingerprint = _pendingByokProviderFingerprint;
         _pendingModelSource = null;
@@ -395,6 +409,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _degradedFlagged = false;
         _degradedToolName = null;
         _degradedReason = null;
+        _degradedCallId = null;
         _runDegradedEmitted = 0;
         _turnInputTokens = 0;
         _turnOutputTokens = 0;
@@ -409,16 +424,13 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             "SetupAsync entered — workingDirectory={WorkingDirectory}, runId={RunId}, streamIsNull={StreamIsNull}",
             workingDirectory, runId, streamWriter is null);
 
-        // --- Governance kernel (per-run) ---
-        var sandboxPolicy = await _sandboxPolicyStore.GetPolicyAsync(repositoryPath, ct).ConfigureAwait(false);
-        _sandboxPolicy = sandboxPolicy;
-        var executor = sandboxPolicy.Direct
-            ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
-            : _executor;
-        if (executor is IRunWorkspaceRegistrar workspaceRegistrar)
-            workspaceRegistrar.RegisterTrustedWorkspace(workingDirectory);
-        _activeExecutor = executor;
-        _governance = SandboxGovernance.Create(workingDirectory, runId, executor, sandboxPolicy, _logger);
+        // Resolve the current run-scoped binding before exposing any tool. Missing, malformed,
+        // unsupported, or mismatched bindings abort setup rather than falling back to permissions.
+        var permissionBinding = await _permissionBindingProvider
+            .ResolveAsync(runId, repositoryPath, permissionCeiling, ct)
+            .ConfigureAwait(false);
+        permissionBinding.Validate(runId, permissionBinding.Attempt);
+        ConfigurePermissionBinding(permissionBinding, purpose);
 
         // Re-resolve the active model source for this run (a pooled pod instance can be set up more
         // than once), then create the matching client through the single provider-aware seam.
@@ -438,10 +450,35 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
 
         _logger.LogInformation("Copilot client started");
 
-        var fileTools = new SandboxedFileTools(workingDirectory, sandboxPolicy.MaxOutputBytes);
-        var searchTools = new SandboxedSearchTools(workingDirectory, sandboxPolicy.MaxOutputBytes);
+        RebuildInnerAgent();
+    }
+
+    private void ConfigurePermissionBinding(
+        EffectivePermissionBinding binding,
+        AgentHostPurpose purpose)
+    {
+        binding.Validate(_runId, binding.Attempt);
+        var sandboxPolicy = binding.Policy;
+        _effectivePermissionBinding = binding;
+        _sandboxPolicy = sandboxPolicy;
+        var executor = sandboxPolicy.Direct
+            ? new PassthroughExecutor("direct execution — sandbox disabled via settings.yml", _logger)
+            : _executor;
+        if (executor is IRunWorkspaceRegistrar workspaceRegistrar)
+            workspaceRegistrar.RegisterTrustedWorkspace(_workingDirectory);
+        _activeExecutor = executor;
+        _governance?.Dispose();
+        _governance = SandboxGovernance.Create(
+            _workingDirectory,
+            _runId,
+            executor,
+            sandboxPolicy,
+            _logger);
+
+        var fileTools = new SandboxedFileTools(_workingDirectory, sandboxPolicy.MaxOutputBytes);
+        var searchTools = new SandboxedSearchTools(_workingDirectory, sandboxPolicy.MaxOutputBytes);
         var redactor = SandboxOutputRedactor.Default;
-        var agentId = $"did:mesh:agentweaver:copilot:{runId}";
+        var agentId = $"did:mesh:agentweaver:copilot:{_runId}";
 
         var controlledBuildTestShell = purpose == AgentHostPurpose.AssemblyBuildTest;
         var runCommandDefaultTimeoutMs = SandboxToolOptions.ResolveDefaultRunCommandTimeoutMs();
@@ -454,7 +491,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             AllowedRepositoryRoots = [.. sandboxPolicy.AllowedRepositoryRoots],
             DestructiveCommandPatterns = [.. sandboxPolicy.DestructiveCommandPatterns],
             RequireApprovalForAllShell = sandboxPolicy.RequireApprovalForAllShell,
-            UnattendedRun = IsUnattendedRun(runId),
+            UnattendedRun = IsUnattendedRun(_runId),
             NetworkEnabled = sandboxPolicy.NetworkEnabled,
             RejectDestructiveCommands = controlledBuildTestShell,
             RejectBackgroundCommands = controlledBuildTestShell,
@@ -473,8 +510,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         _shellExecutionTracker = new ShellExecutionTracker();
         var toolContext = new SandboxToolContext(
             AgentId: agentId,
-            WorkingDirectory: workingDirectory,
-            SandboxRoot: workingDirectory,
+            WorkingDirectory: _workingDirectory,
+            SandboxRoot: _workingDirectory,
             Executor: executor,
             FileTools: fileTools,
             SearchTools: searchTools,
@@ -482,16 +519,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
             Options: toolOptions,
             Logger: _logger,
             EmitEvent: Emit,
-            RunId: runId,
-            IsCommandApproved: hash => _approvalStore.IsApproved(runId, hash),
-            IsCommandDenied: hash => _approvalStore.IsDenied(runId, hash),
+            RunId: _runId,
+            IsCommandApproved: hash => _approvalStore.IsApproved(_runId, hash),
+            IsCommandDenied: hash => _approvalStore.IsDenied(_runId, hash),
             QuestionGate: _questionGate,
             ShellExecutionTracker: _shellExecutionTracker,
             ScratchDirectory: Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH")
                 ?? Environment.GetEnvironmentVariable("AGENTWEAVER_SCRATCH_DIR"));
         _toolContext = toolContext;
-
-        RebuildInnerAgent();
+        _logger.LogInformation(
+            "Effective permission binding applied — RunId={RunId} BindingId={BindingId} Version={Version} Source={Source} Attempt={Attempt} Scope={Scope}",
+            _runId,
+            binding.BindingId,
+            binding.Version,
+            binding.Source,
+            binding.Attempt,
+            binding.Scope);
     }
 
     /// <summary>
@@ -636,7 +679,8 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         string? projectId,
         string? agentName,
         string? apiBaseUrl = null,
-        string? apiKey = null)
+        string? apiKey = null,
+        EffectivePermissionBinding? permissionBinding = null)
     {
         // Not provisioned yet (no SetupAsync). Nothing to re-apply onto — the startup path will
         // build the inner agent from these same fields.
@@ -650,8 +694,31 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         var newApiBaseUrl = string.IsNullOrWhiteSpace(apiBaseUrl) ? _apiBaseUrl : apiBaseUrl;
         var newApiKey = string.IsNullOrWhiteSpace(apiKey) ? _apiKey : apiKey;
         var newContext = systemPromptContext;
+        var bindingChanged = false;
+        if (permissionBinding is not null)
+        {
+            permissionBinding.Validate(_runId, permissionBinding.Attempt);
+            if (_effectivePermissionBinding is not null
+                && permissionBinding.Attempt != _effectivePermissionBinding.Attempt)
+            {
+                throw new EffectivePermissionBindingException(
+                    "Refreshed effective permission binding attempt does not match the active binding.");
+            }
+
+            var narrowed = _effectivePermissionBinding is null
+                ? permissionBinding
+                : EffectivePermissionBinding.Intersect(permissionBinding, _effectivePermissionBinding);
+            bindingChanged = _effectivePermissionBinding is null
+                || !string.Equals(
+                    narrowed.Version,
+                    _effectivePermissionBinding.Version,
+                    StringComparison.Ordinal);
+            if (bindingChanged)
+                ConfigurePermissionBinding(narrowed, _purpose);
+        }
 
         var changed =
+            bindingChanged ||
             !string.Equals(_systemPromptContext, newContext, StringComparison.Ordinal) ||
             !string.Equals(_projectId, newProjectId, StringComparison.Ordinal) ||
             !string.Equals(_agentName, newAgentName, StringComparison.Ordinal) ||
@@ -863,6 +930,16 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         if (_inner is null || _activeExecutor is null || _sandboxPolicy is null)
             throw new InvalidOperationException("SetupAsync must be called before ExecuteStreamingLoopAsync.");
 
+        _sb = new StringBuilder();
+        _deltaCount = 0;
+        _streamedMessageIds.Clear();
+        _anyDeltaEmittedForNullId = false;
+        _turnInputTokens = 0;
+        _turnOutputTokens = 0;
+        _turnNanoAiu = 0;
+        _turnModelId = null;
+        _turnTimeToFirstTokenMs = null;
+
         var executor = _activeExecutor;
         var sandboxPolicy = _sandboxPolicy;
 
@@ -1006,7 +1083,10 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         // live clients can stop reading on `done` and miss the event, showing green live while a
         // later refresh (full-history replay) shows the amber "Incomplete" badge.
         if (_degradedFlagged)
-            EmitRunDegradedOnce(_degradedToolName ?? "unknown", _degradedReason ?? "Sandbox denied a tool call.");
+            EmitRunDegradedOnce(
+                _degradedCallId,
+                _degradedToolName ?? "unknown",
+                _degradedReason ?? "Sandbox denied a tool call.");
 
         Emit(EventTypes.AgentTurnUsage, new
         {
@@ -1533,13 +1613,23 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
     /// guarantees the event is in history BEFORE agent.turn.end and the run's completion
     /// events, so live SSE clients always receive it ahead of the `done` sentinel.
     /// </summary>
-    private void EmitRunDegradedOnce(string toolName, string reason)
+    private void EmitRunDegradedOnce(string? callId, string toolName, string reason)
     {
         _degradedFlagged = true;
+        _degradedCallId ??= callId;
         _degradedToolName ??= toolName;
         _degradedReason ??= reason;
         if (Interlocked.Exchange(ref _runDegradedEmitted, 1) == 0)
-            Emit(EventTypes.RunDegraded, new { toolName, reason });
+            Emit(EventTypes.RunDegraded, new
+            {
+                callId,
+                toolName,
+                reason,
+                permissionBindingId = _effectivePermissionBinding?.BindingId,
+                permissionBindingVersion = _effectivePermissionBinding?.Version,
+                permissionSource = _effectivePermissionBinding?.Source,
+                permissionAttempt = _effectivePermissionBinding?.Attempt,
+            });
     }
 
     private void EmitDelta(string text, string? messageId)
@@ -1891,7 +1981,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 RecordDeniedToolSpan(shellCallId, "run_command", "policy_denied", shellArgs);
                 emitToolCallOnce(shellCallId, "run_command", shellArgs);
                 emitToolErrorOnce(shellCallId, denyReason);
-                EmitRunDegradedOnce("run_command", denyReason);
+                EmitRunDegradedOnce(shellCallId, "run_command", denyReason);
                 return Task.FromResult<PermissionDecision>(
                     PermissionDecision.Reject(denyReason));
             }
@@ -1909,6 +1999,17 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 {
                     ["url"] = rawUrl,
                 });
+
+                var urlPermission = EffectivePermissionClassifier.Evaluate(
+                    _effectivePermissionBinding,
+                    "web_fetch");
+                if (!urlPermission.Allowed)
+                {
+                    RecordDeniedToolSpan(urlCallId, "web_fetch", "effective_permission_denied");
+                    emitToolErrorOnce(urlCallId, urlPermission.Reason);
+                    EmitRunDegradedOnce(urlCallId, "web_fetch", urlPermission.Reason);
+                    return Task.FromResult(PermissionDecision.Reject(urlPermission.Reason));
+                }
 
                 // Short-circuit: skip the HITL card if a run-scoped or always-allowed policy already covers this tool+URL.
                 if (_toolApprovalGate.IsAutoApproved(runId, "web_fetch", rawUrl))
@@ -2005,6 +2106,22 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 var toolName = customTool.ToolName ?? "unknown";
                 try
                 {
+                    var effectivePermission = EffectivePermissionClassifier.Evaluate(
+                        _effectivePermissionBinding,
+                        toolName);
+                    if (!effectivePermission.Allowed)
+                    {
+                        RecordDeniedToolSpan(
+                            customCallId,
+                            toolName,
+                            "effective_permission_denied");
+                        emitToolCallOnce(customCallId, toolName, null);
+                        emitToolErrorOnce(customCallId, effectivePermission.Reason);
+                        EmitRunDegradedOnce(customCallId, toolName, effectivePermission.Reason);
+                        return Task.FromResult(
+                            PermissionDecision.Reject(effectivePermission.Reason));
+                    }
+
                     // report_intent is a side-effect-free observability call: approve without
                     // governance, emit agent.intent (not tool.call / tool.result), and return.
                     if (string.Equals(toolName, "report_intent", StringComparison.Ordinal))
@@ -2102,7 +2219,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                         emitToolCallOnce(customCallId, toolName, args);
                         var denyReason = reason ?? "Operation denied by sandbox policy.";
                         emitToolErrorOnce(customCallId, denyReason);
-                        EmitRunDegradedOnce(toolName, denyReason);
+                        EmitRunDegradedOnce(customCallId, toolName, denyReason);
                         return Task.FromResult(PermissionDecision.Reject(denyReason));
                     }
 
@@ -2119,7 +2236,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     emitToolCallOnce(customCallId, toolName, null);
                     var failReason = "Operation denied: internal error evaluating sandbox policy.";
                     emitToolErrorOnce(customCallId, failReason);
-                    EmitRunDegradedOnce(toolName, failReason);
+                    EmitRunDegradedOnce(customCallId, toolName, failReason);
                     return Task.FromResult(PermissionDecision.Reject(failReason));
                 }
             }
@@ -2143,6 +2260,23 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 if (realCallId is not null)
                     emitToolCallOnce(callId, toolName, args);
 
+                var effectivePermission = EffectivePermissionClassifier.Evaluate(
+                    _effectivePermissionBinding,
+                    toolName);
+                if (!effectivePermission.Allowed)
+                {
+                    RecordDeniedToolSpan(
+                        callId,
+                        toolName,
+                        "effective_permission_denied",
+                        args);
+                    emitToolCallOnce(callId, toolName, args);
+                    emitToolErrorOnce(callId, effectivePermission.Reason);
+                    EmitRunDegradedOnce(callId, toolName, effectivePermission.Reason);
+                    return Task.FromResult(
+                        PermissionDecision.Reject(effectivePermission.Reason));
+                }
+
                 var (allowed, reason) = governance.EvaluateToolCall(
                     agentId: $"did:mesh:agentweaver:copilot:{runId}",
                     toolName: toolName,
@@ -2158,7 +2292,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                     RecordDeniedToolSpan(callId, toolName, "policy_denied", args);
                     emitToolCallOnce(callId, toolName, args);
                     emitToolErrorOnce(callId, denyReason2);
-                    EmitRunDegradedOnce(toolName, denyReason2);
+                    EmitRunDegradedOnce(callId, toolName, denyReason2);
                     return Task.FromResult(PermissionDecision.Reject(denyReason2));
                 }
                 else if (request is PermissionRequestShell shell && realCallId is not null)
@@ -2178,7 +2312,7 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
                 RecordDeniedToolSpan(callId, request.Kind ?? "unknown", "policy_evaluation_failed");
                 emitToolCallOnce(callId, request.Kind ?? "unknown", null);
                 emitToolErrorOnce(callId, failReason2);
-                EmitRunDegradedOnce(request.Kind ?? "unknown", failReason2);
+                EmitRunDegradedOnce(callId, request.Kind ?? "unknown", failReason2);
                 return Task.FromResult(PermissionDecision.Reject(failReason2));
             }
         };
@@ -2281,30 +2415,6 @@ public class CopilotAIAgent : AIAgent, IAsyncDisposable, Workflow.IWorkflowTurnA
         }
 
         return ("read_file", args);
-    }
-
-    /// <summary>
-    /// Wraps an <see cref="AIFunction"/> and injects
-    /// <see cref="CopilotTool.OverridesBuiltInToolKey"/> into <see cref="AITool.AdditionalProperties"/>
-    /// so the Copilot SDK accepts tools whose names match a native built-in.
-    /// </summary>
-    private sealed class CopilotOverrideAIFunction(AIFunction inner) : AIFunction
-    {
-        private const string OverridesBuiltInToolKey = "overridesBuiltInTool";
-
-        private readonly IReadOnlyDictionary<string, object?> _additionalProperties =
-            new Dictionary<string, object?>(inner.AdditionalProperties)
-            {
-                [OverridesBuiltInToolKey] = true,
-            };
-
-        public override string Name => inner.Name;
-        public override string Description => inner.Description;
-        public override IReadOnlyDictionary<string, object?> AdditionalProperties => _additionalProperties;
-
-        protected override ValueTask<object?> InvokeCoreAsync(
-            AIFunctionArguments arguments, CancellationToken cancellationToken) =>
-            inner.InvokeAsync(arguments, cancellationToken);
     }
 
     /// <summary>

@@ -24,6 +24,34 @@ public interface IRunEventStream
     ValueTask<int> AppendAsync(string runId, RunEvent evt, CancellationToken ct = default);
 
     /// <summary>
+    /// Appends one logical event exactly once across retries, restarts, and replicas.
+    /// The identity is scoped to the run and must always describe the same event type.
+    /// </summary>
+    async Task<RunEvent> AppendIdentifiedAsync(
+        string runId,
+        string eventIdentity,
+        RunEvent evt,
+        CancellationToken ct = default)
+    {
+        var sequence = await AppendAsync(runId, evt, ct).ConfigureAwait(false);
+        return evt with { Sequence = sequence };
+    }
+
+    /// <summary>
+    /// Appends one logical successful child-work ready event exactly once while the correlated work
+    /// plan is still complete and ready. The eligibility claim and event append are one transaction,
+    /// so cancellation and readiness have a durable order across retries and replicas.
+    /// </summary>
+    Task<RunEvent?> AppendWorkflowChildWorkReadyAsync(
+        int workPlanId,
+        string runId,
+        string eventIdentity,
+        RunEvent evt,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            $"{GetType().Name} does not support conditional workflow child-work ready events.");
+
+    /// <summary>
     /// Appends a terminal-outcome winner exactly once for its lifecycle generation. Production
     /// streams persist the uniqueness claim with the event; the default keeps simple test streams
     /// compatible while production callers never fall back to a read-then-append sequence.
@@ -58,6 +86,25 @@ public interface IRunEventStream
     Task<IReadOnlyList<RunEvent>> AppendWhileRunActiveAsync(
         string runId, IReadOnlyList<RunEvent> events, IRunStore runStore, CancellationToken ct = default) =>
         throw new NotSupportedException($"{GetType().Name} does not support conditional event batches.");
+
+    /// <summary>Commits preview-ready events only while this attempt owns the live publication lease
+    /// for the same run generation. Ownership and append must be atomic across API replicas.</summary>
+    Task<IReadOnlyList<RunEvent>> AppendWhilePreviewPublicationOwnedAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore,
+        string ownerId, int lifecycleGeneration, CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support publication-fenced event batches.");
+
+    /// <summary>
+    /// Appends events only while the exact coordinator lease and lifecycle generation remain current.
+    /// PostgreSQL and SQLite implementations fence the lease check and append in one transaction.
+    /// </summary>
+    Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedAsync(
+        string runId,
+        IReadOnlyList<RunEvent> events,
+        IRunStore runStore,
+        RunLeaseFence lease,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException($"{GetType().Name} does not support lease-fenced event batches.");
 
     /// <summary>
     /// Subscribes to a run's event stream. Replays persisted events from <paramref name="fromSequence"/>,

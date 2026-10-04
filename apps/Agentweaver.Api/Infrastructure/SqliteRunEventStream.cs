@@ -4,6 +4,9 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Coordinator;
+using Agentweaver.Api.Memory;
+using Agentweaver.Api.Runs;
 using Agentweaver.Api.Runs.Graph;
 using Agentweaver.Domain;
 using Microsoft.Data.Sqlite;
@@ -31,6 +34,7 @@ namespace Agentweaver.Api.Infrastructure;
 public sealed class SqliteRunEventStream : IRunEventStream
 {
     private const int ChannelCapacity = 1000;
+    private const int MaxIdentifiedWriteAttempts = 4;
 
     private static readonly HashSet<string> TerminalTypes = new(StringComparer.Ordinal)
     {
@@ -82,6 +86,7 @@ public sealed class SqliteRunEventStream : IRunEventStream
             Pooling = true,
         }.ToString();
         EnsureTerminalOutcomeProjectionTable();
+        EnsureRunEventIdentityColumn();
     }
 
     /// <inheritdoc />
@@ -126,6 +131,281 @@ public sealed class SqliteRunEventStream : IRunEventStream
         }
 
         return ValueTask.FromResult(sequence);
+    }
+
+    public async Task<RunEvent> AppendIdentifiedAsync(
+        string runId,
+        string eventIdentity,
+        RunEvent evt,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventIdentity);
+        evt = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(evt));
+
+        for (var attempt = 1; attempt <= MaxIdentifiedWriteAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var connection = new SqliteConnection(_connectionString);
+            await connection.OpenAsync(ct).ConfigureAwait(false);
+            connection.DefaultTimeout = 1;
+            try
+            {
+                using var tx = connection.BeginTransaction();
+                var priorEvent = ReadIdentifiedEvent(connection, tx, runId, eventIdentity, evt.Type);
+                if (priorEvent is not null)
+                {
+                    tx.Commit();
+                    return priorEvent;
+                }
+
+                using var append = connection.CreateCommand();
+                append.Transaction = tx;
+                append.CommandTimeout = 1;
+                append.CommandText =
+                    """
+                    INSERT OR IGNORE INTO "RunEvents"
+                        ("RunId", "Sequence", "EventIdentity", "EventType", "PayloadJson", "CreatedAt")
+                    SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $eventIdentity, $type, $payload, $createdAt
+                    FROM "RunEvents" WHERE "RunId" = $runId
+                    RETURNING "Sequence";
+                    """;
+                append.Parameters.AddWithValue("$runId", runId);
+                append.Parameters.AddWithValue("$eventIdentity", eventIdentity);
+                append.Parameters.AddWithValue("$type", evt.Type);
+                append.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(evt.Payload));
+                append.Parameters.AddWithValue("$createdAt",
+                    evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+                var inserted = append.ExecuteScalar();
+                if (inserted is not null)
+                {
+                    var assignedSequence = Convert.ToInt32(inserted, CultureInfo.InvariantCulture);
+                    tx.Commit();
+                    var recorded = evt with { Sequence = assignedSequence };
+                    PublishDurableEvent(runId, recorded);
+                    return recorded;
+                }
+
+                var persisted = ReadIdentifiedEvent(connection, tx, runId, eventIdentity, evt.Type);
+                if (persisted is null)
+                    throw new SqliteRunEventSequenceConflictException(runId, eventIdentity);
+                tx.Commit();
+                return persisted;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (IsRetryableIdentifiedWrite(ex))
+            {
+                var persisted = TryReadIdentifiedEvent(runId, eventIdentity, evt.Type);
+                if (persisted is not null)
+                    return persisted;
+
+                if (attempt >= MaxIdentifiedWriteAttempts)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to durably append identified RunEvent for run '{runId}' " +
+                        $"after {MaxIdentifiedWriteAttempts} attempts.",
+                        ex);
+                }
+
+                var delay = ComputeIdentifiedWriteRetryDelay(attempt);
+                _logger?.LogWarning(
+                    ex,
+                    "Retrying identified SQLite RunEvent append for run {RunId} " +
+                    "(attempt {Attempt}/{MaxAttempts}, delay {DelayMs}ms)",
+                    runId, attempt, MaxIdentifiedWriteAttempts, (int)delay.TotalMilliseconds);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Failed to durably append identified RunEvent for run '{runId}' after {MaxIdentifiedWriteAttempts} attempts.");
+    }
+
+    private RunEvent? TryReadIdentifiedEvent(
+        string runId,
+        string eventIdentity,
+        string expectedEventType)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+            connection.DefaultTimeout = 1;
+            return ReadIdentifiedEvent(connection, null, runId, eventIdentity, expectedEventType);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode is 5 or 6)
+        {
+            return null;
+        }
+    }
+
+    private RunEvent? ReadIdentifiedEvent(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string runId,
+        string eventIdentity,
+        string expectedEventType)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandTimeout = 1;
+        command.CommandText =
+            """
+            SELECT "Sequence", "EventType", "PayloadJson", "CreatedAt"
+            FROM "RunEvents"
+            WHERE "RunId" = $runId AND "EventIdentity" = $eventIdentity;
+            """;
+        command.Parameters.AddWithValue("$runId", runId);
+        command.Parameters.AddWithValue("$eventIdentity", eventIdentity);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return null;
+        var sequence = reader.GetInt32(0);
+        var eventType = reader.GetString(1);
+        if (!string.Equals(eventType, expectedEventType, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Run event identity '{eventIdentity}' for run '{runId}' is already bound to event type '{eventType}'.");
+        return new RunEvent(
+            sequence,
+            eventType,
+            DeserializePayload(runId, sequence, eventType, reader.GetString(2)),
+            DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+    }
+
+    private static bool IsRetryableIdentifiedWrite(Exception exception) =>
+        ExceptionChain.Contains(
+            exception,
+            current => current is SqliteRunEventSequenceConflictException
+                or SqliteException { SqliteErrorCode: 5 or 6 or 19 });
+
+    private static TimeSpan ComputeIdentifiedWriteRetryDelay(int attempt) =>
+        TimeSpan.FromMilliseconds((20 * attempt) + Random.Shared.Next(5, 30));
+
+    private sealed class SqliteRunEventSequenceConflictException(string runId, string eventIdentity)
+        : InvalidOperationException(
+            $"Run event identity '{eventIdentity}' for run '{runId}' lost a concurrent sequence allocation race.");
+
+    public Task<RunEvent?> AppendWorkflowChildWorkReadyAsync(
+        int workPlanId,
+        string runId,
+        string eventIdentity,
+        RunEvent evt,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventIdentity);
+        ct.ThrowIfCancellationRequested();
+        evt = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(evt));
+
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var tx = connection.BeginTransaction();
+        using var claim = connection.CreateCommand();
+        claim.Transaction = tx;
+        claim.CommandText =
+            """
+            UPDATE "WorkPlans"
+            SET "UpdatedAt" = "UpdatedAt"
+            WHERE "Id" = $workPlanId
+              AND "Status" = $complete
+              AND "ParentResumeState" = $ready
+              AND "ParentResumeResultJson" IS NOT NULL;
+            """;
+        claim.Parameters.AddWithValue("$workPlanId", workPlanId);
+        claim.Parameters.AddWithValue("$complete", WorkPlanStatus.Complete);
+        claim.Parameters.AddWithValue("$ready", Workflows.WorkflowChildWorkResumeStates.Ready);
+        var eligible = claim.ExecuteNonQuery();
+
+        using var prior = connection.CreateCommand();
+        prior.Transaction = tx;
+        prior.CommandText =
+            """
+            SELECT "Sequence", "EventType", "PayloadJson", "CreatedAt"
+            FROM "RunEvents"
+            WHERE "RunId" = $runId AND "EventIdentity" = $eventIdentity;
+            """;
+        prior.Parameters.AddWithValue("$runId", runId);
+        prior.Parameters.AddWithValue("$eventIdentity", eventIdentity);
+        using (var priorReader = prior.ExecuteReader())
+        {
+            if (priorReader.Read())
+            {
+                var priorSequence = priorReader.GetInt32(0);
+                var priorEventType = priorReader.GetString(1);
+                if (!string.Equals(priorEventType, evt.Type, StringComparison.Ordinal))
+                    throw new InvalidOperationException(
+                        $"Run event identity '{eventIdentity}' for run '{runId}' is already bound to event type '{priorEventType}'.");
+                var priorEvent = new RunEvent(
+                    priorSequence,
+                    priorEventType,
+                    DeserializePayload(runId, priorSequence, priorEventType, priorReader.GetString(2)),
+                    DateTimeOffset.Parse(priorReader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+                priorReader.Dispose();
+                tx.Commit();
+                return Task.FromResult<RunEvent?>(priorEvent);
+            }
+        }
+
+        if (eligible == 0)
+        {
+            tx.Commit();
+            return Task.FromResult<RunEvent?>(null);
+        }
+
+        using var append = connection.CreateCommand();
+        append.Transaction = tx;
+        append.CommandText =
+            """
+            INSERT OR IGNORE INTO "RunEvents"
+                ("RunId", "Sequence", "EventIdentity", "EventType", "PayloadJson", "CreatedAt")
+            SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $eventIdentity, $type, $payload, $createdAt
+            FROM "RunEvents" WHERE "RunId" = $runId
+            RETURNING "Sequence";
+            """;
+        append.Parameters.AddWithValue("$runId", runId);
+        append.Parameters.AddWithValue("$eventIdentity", eventIdentity);
+        append.Parameters.AddWithValue("$type", evt.Type);
+        append.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(evt.Payload));
+        append.Parameters.AddWithValue("$createdAt",
+            evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+        var inserted = append.ExecuteScalar();
+        if (inserted is not null)
+        {
+            var assignedSequence = Convert.ToInt32(inserted, CultureInfo.InvariantCulture);
+            tx.Commit();
+            var recorded = evt with { Sequence = assignedSequence };
+            PublishDurableEvent(runId, recorded);
+            return Task.FromResult<RunEvent?>(recorded);
+        }
+
+        using var existing = connection.CreateCommand();
+        existing.Transaction = tx;
+        existing.CommandText =
+            """
+            SELECT "Sequence", "EventType", "PayloadJson", "CreatedAt"
+            FROM "RunEvents"
+            WHERE "RunId" = $runId AND "EventIdentity" = $eventIdentity;
+            """;
+        existing.Parameters.AddWithValue("$runId", runId);
+        existing.Parameters.AddWithValue("$eventIdentity", eventIdentity);
+        using var reader = existing.ExecuteReader();
+        if (!reader.Read())
+            throw new InvalidOperationException(
+                $"Run event identity '{eventIdentity}' for run '{runId}' was not persisted after a duplicate append.");
+        var sequence = reader.GetInt32(0);
+        var eventType = reader.GetString(1);
+        if (!string.Equals(eventType, evt.Type, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Run event identity '{eventIdentity}' for run '{runId}' is already bound to event type '{eventType}'.");
+        var persisted = new RunEvent(
+            sequence,
+            eventType,
+            DeserializePayload(runId, sequence, eventType, reader.GetString(2)),
+            DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+        reader.Dispose();
+        tx.Commit();
+        return Task.FromResult<RunEvent?>(persisted);
     }
 
     public Task<RunEvent> AppendTerminalOutcomeAsync(
@@ -283,6 +563,102 @@ public sealed class SqliteRunEventStream : IRunEventStream
         lock (_channelsGate)
         {
             if (recorded.Count > 0 && !_completedRuns.ContainsKey(runId))
+            {
+                var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
+                foreach (var evt in recorded)
+                    channel.Writer.TryWrite(evt);
+            }
+        }
+        return recorded;
+    }
+
+    public Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedAsync(
+        string runId,
+        IReadOnlyList<RunEvent> events,
+        IRunStore runStore,
+        RunLeaseFence lease,
+        CancellationToken ct = default)
+    {
+        return AppendWhileRunLeaseOwnedCoreAsync(runId, events, lease, null, null, ct);
+    }
+
+    public Task<IReadOnlyList<RunEvent>> AppendWhilePreviewPublicationOwnedAsync(
+        string runId, IReadOnlyList<RunEvent> events, IRunStore runStore,
+        string ownerId, int lifecycleGeneration, CancellationToken ct = default) =>
+        AppendWhileRunLeaseOwnedCoreAsync(runId, events, null, ownerId, lifecycleGeneration, ct);
+
+    private async Task<IReadOnlyList<RunEvent>> AppendWhileRunLeaseOwnedCoreAsync(
+        string runId, IReadOnlyList<RunEvent> events, RunLeaseFence? lease,
+        string? publicationOwner, int? publicationGeneration, CancellationToken ct)
+    {
+        if (events.Count == 0)
+            return [];
+
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder(_runConnectionString) { Pooling = false }.ToString());
+        await connection.OpenAsync(ct).ConfigureAwait(false);
+        using (var attach = connection.CreateCommand())
+        {
+            attach.CommandText = "ATTACH DATABASE $path AS event_store;";
+            attach.Parameters.AddWithValue("$path", new SqliteConnectionStringBuilder(_connectionString).DataSource);
+            await attach.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+
+        using var tx = connection.BeginTransaction();
+        using (var owned = connection.CreateCommand())
+        {
+            owned.Transaction = tx;
+            owned.CommandText = lease is null ? """
+                UPDATE runs SET status=status
+                 WHERE run_id=$runId AND lifecycle_generation=$generation
+                   AND status NOT IN ('merged','declined','failed','completed','merge_failed','assemble_ready','cancelled')
+                   AND preview_publication_lease_owner=$owner
+                   AND preview_publication_lease_until>$now;
+                """ : """
+                UPDATE runs SET status=status
+                 WHERE run_id=$runId AND lifecycle_generation=$generation
+                   AND status NOT IN ('merged','declined','failed','completed','merge_failed','assemble_ready','cancelled')
+                   AND EXISTS (SELECT 1 FROM run_execution_leases
+                        WHERE run_id=$runId AND owner_id=$owner AND fencing_token=$token
+                          AND lease_expires_at>$now);
+                """;
+            owned.Parameters.AddWithValue("$runId", runId);
+            owned.Parameters.AddWithValue("$generation", lease?.LifecycleGeneration ?? publicationGeneration
+                ?? throw new ArgumentException("Publication generation is required."));
+            owned.Parameters.AddWithValue("$owner", lease?.OwnerId ?? publicationOwner
+                ?? throw new ArgumentException("Publication owner is required."));
+            if (lease is not null)
+                owned.Parameters.AddWithValue("$token", lease.FencingToken);
+            owned.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            if (await owned.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 0)
+                return [];
+        }
+
+        var recorded = new List<RunEvent>(events.Count);
+        foreach (var rawEvent in events)
+        {
+            ct.ThrowIfCancellationRequested();
+            var evt = StampTimestamp(StructuredRunFailureTerminal.NormalizeFailure(rawEvent));
+            using var insert = connection.CreateCommand();
+            insert.Transaction = tx;
+            insert.CommandText = """
+                INSERT INTO event_store."RunEvents" ("RunId", "Sequence", "EventType", "PayloadJson", "CreatedAt")
+                SELECT $runId, COALESCE(MAX("Sequence"), 0) + 1, $type, $payload, $createdAt
+                FROM event_store."RunEvents" WHERE "RunId"=$runId
+                RETURNING "Sequence";
+                """;
+            insert.Parameters.AddWithValue("$runId", runId);
+            insert.Parameters.AddWithValue("$type", evt.Type);
+            insert.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(evt.Payload));
+            insert.Parameters.AddWithValue("$createdAt",
+                evt.TimestampUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fffffff", CultureInfo.InvariantCulture));
+            recorded.Add(evt with { Sequence = Convert.ToInt32(await insert.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture) });
+        }
+        ct.ThrowIfCancellationRequested();
+        tx.Commit();
+        lock (_channelsGate)
+        {
+            if (!_completedRuns.ContainsKey(runId))
             {
                 var channel = _channels.GetOrAdd(runId, _ => CreateChannel());
                 foreach (var evt in recorded)
@@ -459,6 +835,23 @@ public sealed class SqliteRunEventStream : IRunEventStream
             "ALTER TABLE terminal_run_outcome_projections ADD COLUMN event_sequence INTEGER NOT NULL DEFAULT 0;";
         try { command.ExecuteNonQuery(); }
         catch (SqliteException) { }
+    }
+
+    private void EnsureRunEventIdentityColumn()
+    {
+        using var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "ALTER TABLE \"RunEvents\" ADD COLUMN \"EventIdentity\" TEXT NULL;";
+        try { command.ExecuteNonQuery(); }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1) { }
+        command.CommandText =
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_RunEvents_RunId_EventIdentity"
+            ON "RunEvents" ("RunId", "EventIdentity")
+            WHERE "EventIdentity" IS NOT NULL;
+            """;
+        command.ExecuteNonQuery();
     }
 
     private CurrentLifecycleTerminalProjection? GetCurrentLifecycleTerminalProjection(string runId)

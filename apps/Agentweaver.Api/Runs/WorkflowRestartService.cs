@@ -1,9 +1,12 @@
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 
 using RunStatus = Agentweaver.Domain.RunStatus;
@@ -19,6 +22,10 @@ namespace Agentweaver.Api.Runs;
 /// </summary>
 public sealed class WorkflowRestartService
 {
+    internal Func<DomainRun, CancellationToken, Task>? RestartChildRunOverride { get; set; }
+    internal Func<DomainRun, RunLeaseClaim, CancellationToken, Task>? RestartPinnedWorkflowRunOverride { get; set; }
+    internal Func<DomainRun, CancellationToken, Task>? BeforeRecoveredTerminalWriteOverride { get; set; }
+
     private readonly IRunStore _runStore;
     private readonly RunStreamStore _streamStore;
     private readonly RunWorkflowRegistry _registry;
@@ -27,9 +34,12 @@ public sealed class WorkflowRestartService
     private readonly IWorktreeOperations _worktreeOps;
     private readonly RunWatchLoopService _watchLoop;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRunLeaseStore _leaseStore;
     private readonly IRunEventStream? _eventStream;
     private readonly TerminalOutcomeProjector? _terminalOutcomeProjector;
     private readonly ILogger<WorkflowRestartService> _logger;
+    private static readonly TimeSpan RecoveryLeaseTtl = TimeSpan.FromMinutes(5);
+    private readonly string _recoveryOwnerId = $"{Environment.MachineName}/startup-recovery/{Guid.NewGuid():N}";
 
     public WorkflowRestartService(
         IRunStore runStore,
@@ -40,6 +50,7 @@ public sealed class WorkflowRestartService
         IWorktreeOperations worktreeOps,
         RunWatchLoopService watchLoop,
         IServiceScopeFactory scopeFactory,
+        IRunLeaseStore leaseStore,
         ILogger<WorkflowRestartService> logger,
         IRunEventStream? eventStream = null,
         TerminalOutcomeProjector? terminalOutcomeProjector = null)
@@ -52,6 +63,7 @@ public sealed class WorkflowRestartService
         _worktreeOps = worktreeOps;
         _watchLoop = watchLoop;
         _scopeFactory = scopeFactory;
+        _leaseStore = leaseStore;
         _eventStream = eventStream;
         _terminalOutcomeProjector = terminalOutcomeProjector;
         _logger = logger;
@@ -59,12 +71,145 @@ public sealed class WorkflowRestartService
 
     public async Task RecoverAsync(CancellationToken ct)
     {
+        WorkflowChildWorkService? childWork;
+        using (var scope = _scopeFactory.CreateScope())
+            childWork = scope.ServiceProvider.GetService<WorkflowChildWorkService>();
+        if (childWork is not null)
+            await childWork.PrepareRestartRecoveryAsync(ct).ConfigureAwait(false);
+
         // 1. Fail stranded InProgress runs. Child turns stranded by a worker restart are safe to
         // redispatch as a fresh child: the coordinator owns their retry budget and will release
         // the old pod before dispatching. Root turns remain non-replayable.
         var inProgress = await _runStore.GetByStatusAsync(RunStatus.InProgress, ct).ConfigureAwait(false);
         foreach (var run in inProgress)
         {
+            if (await TryRestartComposedRecoveryAsync(run, ct).ConfigureAwait(false))
+                continue;
+            var parentGeneration = RunId.TryParse(run.ParentRunId, out var parentIdAtScan)
+                ? (await _runStore.GetAsync(parentIdAtScan, ct).ConfigureAwait(false))?.LifecycleGeneration
+                : null;
+            var childWorkCorrelation = await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false);
+            if (run.ParentRunId is null
+                && run.GetExecutableWorkflowPin() is { } pin
+                && RunWorkflowGraphBinder.ContainsStaticFanRegion(pin))
+            {
+                await using var parentRecoveryLease = await TryAcquireRecoveryLeaseAsync(
+                    run.Id.ToString(), ct).ConfigureAwait(false);
+                if (parentRecoveryLease is null)
+                {
+                    _logger.LogInformation(
+                        "Leaving pinned workflow parent {RunId} untouched because a peer owns its recovery lease",
+                        run.Id);
+                    continue;
+                }
+
+                if (childWorkCorrelation == WorkflowChildWorkCorrelation.ParentOrCoordinator
+                    && childWork is not null
+                    && await childWork.HasDeliveredParentResumeAsync(
+                        run.Id.ToString(), ct).ConfigureAwait(false))
+                {
+                    _logger.LogError(
+                        "Pinned workflow parent {RunId} lost its execution owner after the fan resume was delivered; " +
+                        "synthesis cannot be replayed safely", run.Id);
+                    await FailRecoveredRunAsync(
+                        run, "workflow_parent_active_recovery_unavailable",
+                        entry: null, cleanupWorktree: false, lease: parentRecoveryLease.Claim, ct: ct)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                var checkpoint = await _factory.GetLatestCheckpointAsync(
+                    run.Id.ToString(), ct).ConfigureAwait(false);
+                if (checkpoint is null)
+                {
+                    await RestartCheckpointlessPinnedWorkflowAsync(
+                            run, entry: null, parentRecoveryLease, ct)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                if (childWorkCorrelation == WorkflowChildWorkCorrelation.ParentOrCoordinator)
+                {
+                    await _runStore.TryParkForChildWorkAsync(
+                        run.Id,
+                        run.LifecycleGeneration,
+                        ct).ConfigureAwait(false);
+                    continue;
+                }
+            }
+
+            if (childWorkCorrelation != WorkflowChildWorkCorrelation.None)
+            {
+                if (childWorkCorrelation == WorkflowChildWorkCorrelation.Branch)
+                {
+                    await using var childRecoveryLease = await TryAcquireRecoveryLeaseAsync(
+                        run.Id.ToString(), ct).ConfigureAwait(false);
+                    if (childRecoveryLease is null)
+                    {
+                        _logger.LogInformation(
+                            "Leaving workflow child branch {RunId} untouched because a peer owns its recovery lease",
+                            run.Id);
+                        continue;
+                    }
+
+                    try
+                    {
+                        var restart = RestartChildRunOverride;
+                        var transferLease = restart is null;
+                        if (restart is null)
+                        {
+                            using var restartScope = _scopeFactory.CreateScope();
+                            var orchestrator = restartScope.ServiceProvider.GetService<RunOrchestrator>();
+                            if (orchestrator is not null)
+                                restart = (childRun, token) =>
+                                    orchestrator.RestartInterruptedChildRunAsync(
+                                        childRun, childRecoveryLease.Claim, token);
+                        }
+
+                        if (restart is not null)
+                        {
+                            await restart(run, ct).ConfigureAwait(false);
+                            if (transferLease)
+                                childRecoveryLease.MarkTransferred();
+                            _logger.LogInformation(
+                                "Restarted workflow child branch {RunId} under its original durable identity",
+                                run.Id);
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "Preserving workflow child branch {RunId}; no restart launcher is registered",
+                                run.Id);
+                        }
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(
+                            ex,
+                            "Failed to restart workflow child branch {RunId} under its original identity",
+                            run.Id);
+                        await FailRecoveredRunAsync(
+                            run,
+                            "workflow_child_restart_failed",
+                            entry: null,
+                            cleanupWorktree: false,
+                            retryable: true,
+                            lease: childRecoveryLease.Claim,
+                            expectedParentGeneration: parentGeneration,
+                            ct: ct).ConfigureAwait(false);
+                    }
+                }
+
+                _logger.LogInformation(
+                    "Deferring correlated workflow child-work run {RunId} to child-work restart recovery",
+                    run.Id);
+                continue;
+            }
+
             // A coordinator (parent) run is intentionally left InProgress while it dispatches children
             // and runs collective assembly (its stream stays open across that window). Those engines
             // are NOT MAF-checkpointed (D3 — service-driven), but every bit of their state is persisted
@@ -78,19 +223,105 @@ public sealed class WorkflowRestartService
                 continue;
             }
 
+            await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(run.Id.ToString(), ct)
+                .ConfigureAwait(false);
+            if (recoveryLease is null)
+            {
+                _logger.LogInformation(
+                    "Leaving InProgress run {RunId} untouched because a peer owns its unexpired execution lease",
+                    run.Id);
+                continue;
+            }
+
+            if (run.ParentRunId is not null)
+            {
+                using var restartScope = _scopeFactory.CreateScope();
+                var orchestrator = restartScope.ServiceProvider.GetService<RunOrchestrator>();
+                if (orchestrator is not null || RestartChildRunOverride is not null)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var parent = RunId.TryParse(run.ParentRunId, out var parentId)
+                        ? await _runStore.GetAsync(parentId, ct).ConfigureAwait(false)
+                        : null;
+                    var db = restartScope.ServiceProvider.GetService<MemoryDbContext>();
+                    var activePlanChild = false;
+                    if (db is not null)
+                        activePlanChild = await db.WorkPlans.AsNoTracking()
+                            .AnyAsync(plan => plan.CoordinatorRunId == run.ParentRunId
+                                && plan.Status == "dispatching"
+                                && plan.CoordinatorCancellationRequestedAt == null
+                                && db.Subtasks.Any(subtask => subtask.WorkPlanId == plan.Id
+                                    && subtask.ChildRunId == run.Id.ToString()
+                                    && subtask.CancellationRequestedAt == null), ct).ConfigureAwait(false);
+                    if (parent?.Status == RunStatus.InProgress && activePlanChild)
+                    {
+                        try
+                        {
+                            if (RestartChildRunOverride is { } restart)
+                                await restart(run, ct).ConfigureAwait(false);
+                            else
+                            {
+                                var restartDb = db ?? throw new InvalidOperationException(
+                                    "Coordinator child restart requires the plan database.");
+                                var expectedGeneration = parent.LifecycleGeneration;
+                                async Task<bool> IsStillAuthorizedAsync(CancellationToken token)
+                                {
+                                    if (!await _leaseStore.IsLeaseOwnerAsync(
+                                            run.Id.ToString(), recoveryLease.Claim.OwnerId,
+                                            recoveryLease.FencingToken, token).ConfigureAwait(false))
+                                        return false;
+                                    return await restartDb.WorkPlans.AsNoTracking()
+                                        .AnyAsync(plan => plan.CoordinatorRunId == run.ParentRunId
+                                            && plan.Status == "dispatching"
+                                            && plan.CoordinatorCancellationRequestedAt == null
+                                            && restartDb.Subtasks.Any(subtask => subtask.WorkPlanId == plan.Id
+                                                && subtask.ChildRunId == run.Id.ToString()
+                                                && subtask.CancellationRequestedAt == null)
+                                            && restartDb.Runs.Any(candidate => candidate.RunId == run.ParentRunId
+                                                && candidate.Status == "in_progress"
+                                                && candidate.LifecycleGeneration == expectedGeneration),
+                                            token).ConfigureAwait(false);
+                                }
+                                await orchestrator!.RestartInterruptedChildRunAsync(
+                                    run, recoveryLease.Claim, ct, IsStillAuthorizedAsync, expectedGeneration).ConfigureAwait(false);
+                                recoveryLease.MarkTransferred();
+                            }
+                            _logger.LogInformation(
+                                "Restarted coordinator child {RunId} under its existing execution identity",
+                                run.Id);
+                            continue;
+                        }
+                        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Unable to restart coordinator child {RunId}; leaving its identity for a later recovery sweep",
+                                run.Id);
+                            continue;
+                        }
+                    }
+                }
+            }
+
             var retryableChildTransportFailure = run.ParentRunId is not null;
             var reason = retryableChildTransportFailure
                 ? "a2a_transport_interrupted"
                 : "stranded_in_progress";
             _logger.LogWarning(
-                "Failing stranded InProgress run {RunId} (reason={Reason}, retryable={Retryable})",
-                run.Id, reason, retryableChildTransportFailure);
+                "Failing abandoned InProgress run {RunId} after acquiring recovery lease " +
+                "(reason={Reason}, retryable={Retryable}, fencingToken={FencingToken})",
+                run.Id, reason, retryableChildTransportFailure, recoveryLease.FencingToken);
             await FailRecoveredRunAsync(
                     run,
                     reason,
                     entry: null,
                     cleanupWorktree: true,
                     retryable: retryableChildTransportFailure,
+                    lease: recoveryLease.Claim,
+                    expectedParentGeneration: parentGeneration,
                     ct: ct)
                 .ConfigureAwait(false);
         }
@@ -101,11 +332,22 @@ public sealed class WorkflowRestartService
         var committing = await _runStore.GetByStatusAsync(RunStatus.Committing, ct).ConfigureAwait(false);
         foreach (var run in committing)
         {
+            await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(run.Id.ToString(), ct)
+                .ConfigureAwait(false);
+            if (recoveryLease is null)
+            {
+                _logger.LogInformation(
+                    "Leaving Committing run {RunId} untouched because a peer owns its unexpired execution lease",
+                    run.Id);
+                continue;
+            }
+
             _logger.LogWarning("Reverting interrupted commit for run {RunId} back to awaiting_review", run.Id);
             string? recoveredTreeHash = null;
             if (run.WorktreePath is not null && _worktreeOps.WorktreeExists(run.WorktreePath))
                 recoveredTreeHash = _worktreeOps.GetTreeHash(run.WorktreePath);
-            var reverted = await _runStore.TryRevertCommittingAsync(run.Id, recoveredTreeHash, CancellationToken.None).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            var reverted = await _runStore.TryRevertCommittingAsync(run.Id, recoveredTreeHash, ct).ConfigureAwait(false);
             if (!reverted)
                 _logger.LogWarning("TryRevertCommittingAsync was a no-op for run {RunId} — status may have changed concurrently", run.Id);
         }
@@ -114,25 +356,89 @@ public sealed class WorkflowRestartService
         var merging = await _runStore.GetByStatusAsync(RunStatus.Merging, ct).ConfigureAwait(false);
         foreach (var run in merging)
         {
+            await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(run.Id.ToString(), ct)
+                .ConfigureAwait(false);
+            if (recoveryLease is null)
+            {
+                _logger.LogInformation(
+                    "Leaving Merging run {RunId} untouched because a peer owns its unexpired execution lease",
+                    run.Id);
+                continue;
+            }
+
             _logger.LogWarning("Reverting interrupted merge for run {RunId} back to awaiting_review", run.Id);
-            await _runStore.RevertMergingAsync(run.Id, CancellationToken.None).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            await _runStore.RevertMergingAsync(run.Id, ct).ConfigureAwait(false);
         }
 
         // 4. Resume AwaitingReview runs from checkpoint.
         var awaiting = await _runStore.GetByStatusAsync(RunStatus.AwaitingReview, ct).ConfigureAwait(false);
         foreach (var awaitingRun in awaiting)
         {
+            if (await TryRestartComposedRecoveryAsync(awaitingRun, ct).ConfigureAwait(false))
+                continue;
             // Mutable local shadow: reattach (P0-A, #246) may swap in a corrected WorktreePath/
             // WorktreeBranch mid-iteration; the foreach iteration variable itself can't be reassigned.
             var run = awaitingRun;
+            var parentGeneration = RunId.TryParse(run.ParentRunId, out var parentIdAtScan)
+                ? (await _runStore.GetAsync(parentIdAtScan, ct).ConfigureAwait(false))?.LifecycleGeneration
+                : null;
             var runIdStr = run.Id.ToString();
+            await using var recoveryLease = await TryAcquireRecoveryLeaseAsync(runIdStr, ct)
+                .ConfigureAwait(false);
+            if (recoveryLease is null)
+            {
+                _logger.LogInformation(
+                    "Leaving AwaitingReview run {RunId} untouched because a peer owns its unexpired execution lease",
+                    run.Id);
+                continue;
+            }
 
             var entry = _streamStore.Create(runIdStr, run.SubmittingUser);
+            if ((await _pendingStore.GetDeliveryStateAsync(
+                    runIdStr, PendingRequestDeliveryKinds.WorkflowChildWork, ct)
+                    .ConfigureAwait(false))?.State == PendingRequestDeliveryStates.Delivered
+                && await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false)
+                    == WorkflowChildWorkCorrelation.ParentOrCoordinator)
+            {
+                _logger.LogError(
+                    "Pinned workflow parent {RunId} was parked after its fan resume was delivered; " +
+                    "the synthesis step cannot be restarted safely", run.Id);
+                await FailRecoveredRunAsync(
+                    run, "workflow_parent_parked_after_resume",
+                    entry, cleanupWorktree: false, lease: recoveryLease.Claim, ct: ct)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
             entry.MarkAwaitingReview();
 
             var checkpointInfo = await _factory.GetLatestCheckpointAsync(runIdStr, ct).ConfigureAwait(false);
             if (checkpointInfo is null)
             {
+                if (run.GetExecutableWorkflowPin() is { } executablePin
+                    && RunWorkflowGraphBinder.ContainsStaticFanRegion(executablePin)
+                    && await GetWorkflowChildWorkCorrelationAsync(run, ct).ConfigureAwait(false)
+                        == WorkflowChildWorkCorrelation.ParentOrCoordinator)
+                {
+                    if (!await _runStore.TryTransitionReviewToInProgressAsync(run.Id, ct)
+                            .ConfigureAwait(false))
+                    {
+                        _logger.LogInformation(
+                            "Pinned workflow parent {RunId} changed state before checkpointless restart recovery",
+                            run.Id);
+                        continue;
+                    }
+
+                    run = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException(
+                            $"Pinned workflow parent {run.Id} disappeared during restart recovery.");
+                    await RestartCheckpointlessPinnedWorkflowAsync(
+                            run, entry, recoveryLease, ct)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
                 // No checkpoint — cannot resume via MAF. Auto-expire runs older than 24 hours
                 // to prevent stale dev/test runs accumulating forever on every restart.
                 if (DateTimeOffset.UtcNow - run.StartedAt > TimeSpan.FromHours(24))
@@ -140,7 +446,7 @@ public sealed class WorkflowRestartService
                     _logger.LogWarning(
                         "Auto-expiring stale no-checkpoint AwaitingReview run {RunId} (age={Age:g}); failing run",
                         run.Id, DateTimeOffset.UtcNow - run.StartedAt);
-                    await FailRecoveredRunAsync(run, "stale_no_checkpoint", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                    await FailRecoveredRunAsync(run, "stale_no_checkpoint", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -161,7 +467,7 @@ public sealed class WorkflowRestartService
                         _logger.LogError(
                             "Worktree missing for recovered AwaitingReview run {RunId} at {Path}; failing run",
                             run.Id, run.WorktreePath);
-                        await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                        await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                             .ConfigureAwait(false);
                         continue;
                     }
@@ -172,7 +478,7 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "WorktreeBranch missing for recovered AwaitingReview run {RunId}; failing run",
                         run.Id);
-                    await FailRecoveredRunAsync(run, "recovered_worktree_branch_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                    await FailRecoveredRunAsync(run, "recovered_worktree_branch_missing", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -182,19 +488,25 @@ public sealed class WorkflowRestartService
                     _logger.LogError(
                         "TreeHash missing for recovered AwaitingReview run {RunId}; failing run",
                         run.Id);
-                    await FailRecoveredRunAsync(run, "recovered_tree_hash_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_missing", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
 
                 // Fail-closed: null means the worktree is unreadable/corrupt.
                 var currentNoCheckpointHash = _worktreeOps.GetTreeHash(run.WorktreePath!);
+                if (currentNoCheckpointHash is not null
+                    && !string.Equals(currentNoCheckpointHash, run.TreeHash, StringComparison.Ordinal)
+                    && childWork is not null
+                    && await childWork.TryRestoreTransferredParentTreeAsync(run, currentNoCheckpointHash, ct)
+                        .ConfigureAwait(false))
+                    run = run with { TreeHash = currentNoCheckpointHash };
                 if (currentNoCheckpointHash is null || !string.Equals(currentNoCheckpointHash, run.TreeHash, StringComparison.Ordinal))
                 {
                     _logger.LogError(
                         "Worktree tree hash mismatch for recovered run {RunId}: expected={Expected} actual={Actual}; failing run",
                         run.Id, run.TreeHash, currentNoCheckpointHash);
-                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -204,7 +516,7 @@ public sealed class WorkflowRestartService
                 // ExecuteDirectReviewAsync, so approve/decline still works for these.
                 await RecordRecoveryEventAsync(
                     runIdStr, entry, EventTypes.ReviewRequested, new { tree_hash = run.TreeHash, recovered = true },
-                    CancellationToken.None).ConfigureAwait(false);
+                    ct).ConfigureAwait(false);
                 _logger.LogInformation(
                     "Recovered AwaitingReview run {RunId} without checkpoint; emitted synthetic review.requested for SSE clients.",
                     run.Id);
@@ -222,7 +534,7 @@ public sealed class WorkflowRestartService
                 else
                 {
                     _logger.LogError("Worktree missing for run {RunId} at {Path}; failing run", run.Id, run.WorktreePath);
-                    await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                    await FailRecoveredRunAsync(run, "recovered_worktree_missing", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -232,11 +544,17 @@ public sealed class WorkflowRestartService
             {
                 var currentTreeHash = _worktreeOps.GetTreeHash(run.WorktreePath!);
                 // Fail-closed: null means the worktree is unreadable/corrupt (FIX 2).
+                if (currentTreeHash is not null
+                    && !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal)
+                    && childWork is not null
+                    && await childWork.TryRestoreTransferredParentTreeAsync(run, currentTreeHash, ct)
+                        .ConfigureAwait(false))
+                    run = run with { TreeHash = currentTreeHash };
                 if (currentTreeHash is null || !string.Equals(currentTreeHash, run.TreeHash, StringComparison.Ordinal))
                 {
                     _logger.LogError("Worktree tree hash mismatch for run {RunId}: expected={Expected} actual={Actual}; failing run",
                         run.Id, run.TreeHash, currentTreeHash);
-                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                    await FailRecoveredRunAsync(run, "recovered_tree_hash_mismatch", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -260,7 +578,7 @@ public sealed class WorkflowRestartService
                 {
                     _logger.LogWarning(ex, "Model provider changed for recovered run {RunId}", run.Id);
                     await FailRecoveredRunAsync(
-                        run, "model_provider_changed", entry, cleanupWorktree: false, ct: ct)
+                        run, "model_provider_changed", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                         .ConfigureAwait(false);
                     continue;
                 }
@@ -281,6 +599,8 @@ public sealed class WorkflowRestartService
                         "github_capability_unavailable",
                         entry,
                         cleanupWorktree: false,
+                        lease: recoveryLease.Claim,
+                        expectedParentGeneration: parentGeneration,
                         ct: ct)
                     .ConfigureAwait(false);
                 continue;
@@ -294,12 +614,21 @@ public sealed class WorkflowRestartService
                 var ctsRegistered = false;
                 try
                 {
-                    var streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
+                    StreamingRun streamingRun;
+                    using (ct.Register(static state => ((CancellationTokenSource)state!).Cancel(), runCts))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        streamingRun = await _factory.ResumeAsync(checkpointInfo, runCts.Token).ConfigureAwait(false);
+                        ct.ThrowIfCancellationRequested();
+                    }
+                    ct.ThrowIfCancellationRequested();
                     var runCt = _registry.Register(runIdStr, streamingRun, runCts);
                     ctsRegistered = true;
-
-                    // Start the supervised watch loop.
-                    _watchLoop.StartWatching(runIdStr, streamingRun, entry, run.SubmittingUser, runCt);
+                    ct.ThrowIfCancellationRequested();
+                    _watchLoop.StartWatching(
+                        runIdStr, streamingRun, entry, run.SubmittingUser, runCt, run.LifecycleGeneration,
+                        recoveryLease.Claim);
+                    recoveryLease.MarkTransferred();
                 }
                 catch
                 {
@@ -310,12 +639,175 @@ public sealed class WorkflowRestartService
                     throw;
                 }
             }
+
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to resume workflow for run {RunId}; failing run", run.Id);
-                await FailRecoveredRunAsync(run, "workflow_resume_failed", entry, cleanupWorktree: false, ct: CancellationToken.None)
+                await FailRecoveredRunAsync(run, "workflow_resume_failed", entry, cleanupWorktree: false, lease: recoveryLease.Claim, expectedParentGeneration: parentGeneration, ct: ct)
                     .ConfigureAwait(false);
             }
+        }
+
+        if (childWork is not null)
+            await childWork.SweepAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task<bool> TryRestartComposedRecoveryAsync(DomainRun run, CancellationToken ct)
+    {
+        if (run.ParentRunId is not null)
+            return false;
+        using var scope = _scopeFactory.CreateScope();
+        var recovery = scope.ServiceProvider.GetService<WorkflowComposedRecoveryService>();
+        if (recovery is null || !await recovery.HasPendingRecoveryAsync(run, ct).ConfigureAwait(false))
+            return false;
+        await using var lease = await TryAcquireRecoveryLeaseAsync(run.Id.ToString(), ct).ConfigureAwait(false);
+        if (lease is null)
+            return true;
+        try
+        {
+            if (await recovery.TryRestartPendingAsync(
+                    run, lease.Claim with { LifecycleGeneration = run.LifecycleGeneration }, ct).ConfigureAwait(false))
+                lease.MarkTransferred();
+            else
+                _logger.LogInformation("Composed recovery marker changed while claiming {RunId}", run.Id);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Unable to restart composed recovery for {RunId}; preserving its durable recovery intent",
+                run.Id);
+        }
+        return true;
+    }
+
+    private async Task RestartCheckpointlessPinnedWorkflowAsync(
+        DomainRun run,
+        RunStreamEntry? entry,
+        RecoveryLeaseHandle recoveryLease,
+        CancellationToken ct)
+    {
+        try
+        {
+            var restart = RestartPinnedWorkflowRunOverride;
+            if (restart is null)
+            {
+                using var restartScope = _scopeFactory.CreateScope();
+                var orchestrator = restartScope.ServiceProvider.GetService<RunOrchestrator>();
+                if (orchestrator is not null)
+                    restart = (parentRun, lease, token) =>
+                        orchestrator.RestartInterruptedPinnedWorkflowRunAsync(parentRun, lease, token);
+            }
+
+            if (restart is null)
+                throw new InvalidOperationException("No pinned workflow restart launcher is registered.");
+
+            await restart(run, recoveryLease.Claim, ct).ConfigureAwait(false);
+            recoveryLease.MarkTransferred();
+            _logger.LogInformation(
+                "Restarted checkpointless pinned workflow parent {RunId} under its original durable identity",
+                run.Id);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to restart checkpointless pinned workflow parent {RunId}",
+                run.Id);
+            await FailRecoveredRunAsync(
+                run,
+                "workflow_parent_restart_failed",
+                entry,
+                cleanupWorktree: false,
+                retryable: true,
+                lease: recoveryLease.Claim,
+                ct: ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<WorkflowChildWorkCorrelation> GetWorkflowChildWorkCorrelationAsync(
+        DomainRun run,
+        CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var runId = run.Id.ToString();
+        if (await db.WorkPlans.AsNoTracking()
+            .AnyAsync(plan => plan.ParentRunId == runId || plan.CoordinatorRunId == runId, ct)
+            .ConfigureAwait(false))
+            return WorkflowChildWorkCorrelation.ParentOrCoordinator;
+
+        if (string.IsNullOrWhiteSpace(run.ParentRunId))
+            return WorkflowChildWorkCorrelation.None;
+
+        var hasSubtaskId = int.TryParse(run.SubtaskId, out var subtaskId);
+        return await (
+                from plan in db.WorkPlans.AsNoTracking()
+                join subtask in db.Subtasks.AsNoTracking() on plan.Id equals subtask.WorkPlanId
+                where plan.CoordinatorRunId == run.ParentRunId
+                    && (subtask.ChildRunId == runId
+                        || (hasSubtaskId && subtask.Id == subtaskId))
+                select subtask.Id)
+            .AnyAsync(ct)
+            .ConfigureAwait(false)
+                ? WorkflowChildWorkCorrelation.Branch
+                : WorkflowChildWorkCorrelation.None;
+    }
+
+    private enum WorkflowChildWorkCorrelation
+    {
+        None,
+        ParentOrCoordinator,
+        Branch,
+    }
+
+    private async Task<RecoveryLeaseHandle?> TryAcquireRecoveryLeaseAsync(string runId, CancellationToken ct)
+    {
+        var claim = await _leaseStore.TryClaimAsync(
+            runId,
+            _recoveryOwnerId,
+            RecoveryLeaseTtl,
+            ct).ConfigureAwait(false);
+        return claim.Claimed
+            ? new RecoveryLeaseHandle(_leaseStore, runId, _recoveryOwnerId, claim.FencingToken)
+            : null;
+    }
+
+    private sealed class RecoveryLeaseHandle(
+        IRunLeaseStore leaseStore,
+        string runId,
+        string ownerId,
+        long fencingToken) : IAsyncDisposable
+    {
+        private bool _transferred;
+
+        public long FencingToken => fencingToken;
+        public RunLeaseClaim Claim => new(ownerId, fencingToken);
+
+        public void MarkTransferred()
+        {
+            _transferred = true;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (!_transferred)
+                await leaseStore.ReleaseAsync(
+                    runId,
+                    ownerId,
+                    fencingToken,
+                    CancellationToken.None).ConfigureAwait(false);
         }
     }
 
@@ -364,13 +856,21 @@ public sealed class WorkflowRestartService
         RunStreamEntry? entry,
         bool cleanupWorktree,
         CancellationToken ct,
-        bool retryable = false)
+        bool retryable = false,
+        RunLeaseClaim? lease = null,
+        int? expectedParentGeneration = null)
     {
         var runId = run.Id.ToString();
-        var changed = await _runStore.TrySetTerminalOutcomeAsync(
+        var claim = lease ?? throw new InvalidOperationException("Recovery terminal transition requires its execution lease.");
+        if (BeforeRecoveredTerminalWriteOverride is { } beforeWrite)
+            await beforeWrite(run, ct).ConfigureAwait(false);
+        var changed = await _runStore.TryMutateTerminalOutcomeAsync(
             run.Id,
-            TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason, retryable }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
-            reason,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(RunStatus.Failed, EventTypes.RunFailed, new { reason, retryable }, DateTimeOffset.UtcNow, run.LifecycleGeneration),
+                reason,
+                RequiredLease: new RunLeaseFence(claim.OwnerId, claim.FencingToken, run.LifecycleGeneration),
+                ExpectedParentLifecycleGeneration: expectedParentGeneration),
             ct).ConfigureAwait(false);
         if (!changed)
         {
@@ -437,10 +937,14 @@ public sealed class WorkflowRestartService
     {
         try
         {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            if (await scope.ServiceProvider.GetRequiredService<WorkflowChildWorkService>()
+                .IsCorrelatedRunAsync(runId, CancellationToken.None).ConfigureAwait(false))
+                return;
+
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
             if (run is null) return;
 
-            await using var scope = _scopeFactory.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
             await service.RunAsync(run).ConfigureAwait(false);
         }

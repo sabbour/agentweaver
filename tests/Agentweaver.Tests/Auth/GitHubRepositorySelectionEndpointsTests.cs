@@ -9,6 +9,7 @@ using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -67,6 +68,34 @@ public sealed class GitHubRepositorySelectionEndpointsTests
     }
 
     [Fact]
+    public async Task BrowseAndIssue_RefreshExpiredRepoAppCredentialWithoutChangingThePublicResponse()
+    {
+        const string subject = "selection-subject";
+        using var factory = new RepositorySelectionWebApplicationFactory();
+        await factory.SeedRepoAppAuthorizationAsync(subject, JsonSerializer.Serialize(new
+        {
+            status = "signed-in",
+            accessToken = "stale-token",
+            refreshToken = "refresh-token",
+            expiresAt = DateTimeOffset.UtcNow.AddMinutes(-1),
+        }));
+        var client = factory.CreateAuthenticatedClientForObjectId(subject, PlatformRoles.ProjectCreator);
+
+        var browse = await client.GetAsync("/api/github/repository-selections");
+        var issue = await client.PostAsJsonAsync(
+            "/api/github/repository-selections",
+            new { full_name = "octo/secure-repo" });
+
+        browse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var list = await browse.Content.ReadFromJsonAsync<JsonElement>();
+        list.GetProperty("repositories").EnumerateArray().Should().ContainSingle();
+        issue.StatusCode.Should().Be(HttpStatusCode.OK);
+        var selection = await issue.Content.ReadFromJsonAsync<JsonElement>();
+        selection.GetProperty("selection_code").GetString().Should().HaveLength(43);
+        selection.TryGetProperty("access_token", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Issue_RejectsARepositoryOutsideTheCallerBrowseResultWithoutScopeDetails()
     {
         const string subject = "selection-subject";
@@ -85,7 +114,7 @@ public sealed class GitHubRepositorySelectionEndpointsTests
     }
 
     [Fact]
-    public async Task CreateGitHubProject_RejectsDirectRepositoryInputAndConsumesOnlyTheCallerBoundCode()
+    public async Task CreateGitHubProject_RejectsDirectRepositoryInputAndRetryReturnsTheSameProject()
     {
         const string subject = "selection-subject";
         using var factory = new RepositorySelectionWebApplicationFactory();
@@ -121,6 +150,45 @@ public sealed class GitHubRepositorySelectionEndpointsTests
         created.StatusCode.Should().Be(HttpStatusCode.Created);
         var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>();
         createdBody.GetProperty("source_repository").GetString().Should().Be("octo/secure-repo");
+        var projectId = createdBody.GetProperty("project_id").GetString();
+        var readiness = await client.GetAsync(
+            $"/api/projects/{projectId}/github/unattended-readiness");
+        readiness.StatusCode.Should().Be(HttpStatusCode.OK);
+        var readinessBody = await readiness.Content.ReadFromJsonAsync<JsonElement>();
+        readinessBody.GetProperty("repository_ready").GetBoolean().Should().BeTrue();
+        readinessBody.GetProperty("repo_app_installation_connected").GetBoolean().Should().BeTrue();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.GitHubInstallations.SingleAsync()).Should().BeEquivalentTo(new
+            {
+                InstallationId = 72L,
+                ProjectId = (string?)null,
+                RevokedAt = (DateTimeOffset?)null,
+            });
+            (await db.GitHubRepositoryGrants.SingleAsync()).Should().BeEquivalentTo(new
+            {
+                InstallationId = 72L,
+                RepositoryId = 42L,
+                ProjectId = projectId,
+                FullNameDisplay = "octo/secure-repo",
+                RevokedAt = (DateTimeOffset?)null,
+            });
+        }
+
+        // Simulate process termination after clone/scaffolding and durable authorization binding,
+        // but before the operational project row was activated.
+        using (var scope = factory.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<IProjectStore>();
+            await store.UpdateCreationStateAsync(
+                ProjectId.Parse(projectId!),
+                ProjectState.Creating,
+                "main",
+                DateTimeOffset.UtcNow,
+                CancellationToken.None);
+        }
 
         var reused = await client.PostAsJsonAsync("/api/projects", new
         {
@@ -129,10 +197,41 @@ public sealed class GitHubRepositorySelectionEndpointsTests
             working_directory = factory.NewWorkingDirectory(),
             repository_selection_code = code,
         });
-        reused.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        reused.StatusCode.Should().Be(HttpStatusCode.OK);
         var reusedBody = await reused.Content.ReadFromJsonAsync<JsonElement>();
-        reusedBody.GetProperty("error").GetString().Should().Be("github_repository_selection_unavailable");
-        reusedBody.GetRawText().Should().NotContain("repository_id");
+        reusedBody.GetProperty("project_id").GetString()
+            .Should().Be(projectId);
+        reusedBody.GetProperty("state").GetString().Should().Be("active");
+        reusedBody.GetProperty("source_repository").GetString().Should().Be("octo/secure-repo");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            (await db.GitHubInstallations.CountAsync()).Should().Be(1);
+            (await db.GitHubRepositoryGrants.CountAsync()).Should().Be(1);
+            var grant = await db.GitHubRepositoryGrants.SingleAsync();
+            grant.RevokedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync();
+        }
+
+        var retryAfterRevocation = await client.PostAsJsonAsync("/api/projects", new
+        {
+            name = "Retry after revocation",
+            origin = "github",
+            working_directory = factory.NewWorkingDirectory(),
+            repository_selection_code = code,
+        });
+        retryAfterRevocation.StatusCode.Should().Be(HttpStatusCode.OK);
+        var retryAfterRevocationBody =
+            await retryAfterRevocation.Content.ReadFromJsonAsync<JsonElement>();
+        retryAfterRevocationBody.GetProperty("project_id").GetString().Should().Be(projectId);
+
+        var revokedReadiness = await client.GetAsync(
+            $"/api/projects/{projectId}/github/unattended-readiness");
+        revokedReadiness.StatusCode.Should().Be(HttpStatusCode.OK);
+        var revokedReadinessBody = await revokedReadiness.Content.ReadFromJsonAsync<JsonElement>();
+        revokedReadinessBody.GetProperty("repository_ready").GetBoolean().Should().BeFalse();
+        revokedReadinessBody.GetProperty("repository").GetProperty("reason_code").GetString()
+            .Should().Be("repo_app_repository_grant_required");
     }
 
     [Fact]
@@ -249,7 +348,7 @@ public sealed class GitHubRepositorySelectionEndpointsTests
     {
         private readonly HttpMessageHandler _handler = handler ?? new RepositoryHandler();
 
-        public async Task SeedRepoAppAuthorizationAsync(string subject)
+        public async Task SeedRepoAppAuthorizationAsync(string subject, string? credential = null)
         {
             using var scope = Services.CreateScope();
             var secrets = scope.ServiceProvider.GetRequiredService<ISecretStore>();
@@ -257,7 +356,7 @@ public sealed class GitHubRepositorySelectionEndpointsTests
             await secrets.SetSecretAsync("repo-app-pem", rsa.ExportRSAPrivateKeyPem());
             await secrets.SetSecretAsync(
                 "repo-app-user-credential-version",
-                """{"status":"signed-in","accessToken":"test-token"}""");
+                credential ?? """{"status":"signed-in","accessToken":"test-token"}""");
 
             var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
             db.GitHubAppAuthorizations.Add(new GitHubAppAuthorizationRecord
@@ -284,12 +383,20 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                     ["Auth:RepoApp:AppId"] = "123",
                     ["Auth:RepoApp:PrivateKeySecretName"] = "repo-app-pem",
                     ["Auth:RepoApp:ApiUrl"] = "https://api.github.test",
+                    ["Auth:RepoApp:ClientId"] = "repo-client",
+                    ["Auth:RepoApp:ClientSecret"] = "test-secret",
                 });
             });
             builder.ConfigureServices(services =>
             {
                 services.Configure<Microsoft.Extensions.Http.HttpClientFactoryOptions>(
                     "github",
+                    options =>
+                    {
+                        options.HttpMessageHandlerBuilderActions.Add(build => build.PrimaryHandler = _handler);
+                    });
+                services.Configure<Microsoft.Extensions.Http.HttpClientFactoryOptions>(
+                    "github-authz",
                     options =>
                     {
                         options.HttpMessageHandlerBuilderActions.Add(build => build.PrimaryHandler = _handler);
@@ -308,8 +415,12 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                 Content = new StringContent(
                     request.RequestUri!.AbsolutePath switch
                     {
+                        "/login/oauth/access_token" => """{"access_token":"renewed-token","refresh_token":"rotated-token","expires_in":3600}""",
                         "/user/installations" => """{"installations":[{"id":72,"account":{"login":"octo"},"target_type":"User","repository_selection":"selected","html_url":"https://github.com/settings/installations/72","permissions":{"administration":"write"}}]}""",
                         "/user/installations/72/repositories" => """{"repositories":[{"id":42,"full_name":"octo/secure-repo","owner":{"login":"octo"},"private":true,"default_branch":"main","clone_url":"https://github.com/octo/secure-repo.git"}]}""",
+                        "/repositories/42/installation" => """{"id":72,"repository_selection":"selected","account":{"login":"octo"},"permissions":{"contents":"write","pull_requests":"write"}}""",
+                        "/app/installations/72/access_tokens" => """{"token":"ghs_metadata_token","expires_at":"2030-01-01T00:00:00Z"}""",
+                        "/repositories/42" => """{"id":42,"full_name":"octo/secure-repo"}""",
                         "/user/repos" when request.Method == HttpMethod.Post => """{"full_name":"octo/new-repo","clone_url":"https://github.com/octo/new-repo.git","html_url":"https://github.com/octo/new-repo"}""",
                         _ => "{}",
                     },
@@ -317,6 +428,7 @@ public sealed class GitHubRepositorySelectionEndpointsTests
                         "application/json"),
                 StatusCode = request.RequestUri!.AbsolutePath switch
                 {
+                    _ when request.Headers.Authorization?.Parameter == "stale-token" => HttpStatusCode.Unauthorized,
                     "/user/repos" when request.Method == HttpMethod.Post => HttpStatusCode.Created,
                     "/app/installations/72/access_tokens" => HttpStatusCode.Created,
                     _ => HttpStatusCode.OK,

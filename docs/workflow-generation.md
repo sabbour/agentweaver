@@ -72,7 +72,8 @@ contains:
 2. **Node-type vocabulary with runtime semantics** — `prompt`, `peer_review`,
    `build_test`, `check`, and `terminal`. The prompt explains platform-owned
    `merge`/`scribe` but tells the model not to author them. It explicitly forbids
-   `serial`, `fan_out`, `fan_in`, and `coordinator_composed`, which load but cannot bind.
+   `serial` because ordinary edges express sequential execution, and forbids
+   `fan_out`, `fan_in`, and `coordinator_composed` because they load but cannot bind.
 3. **Validation rules** — required fields, edge/`start` node-reference integrity,
    `check` nodes needing `branches:` with a matching outgoing edge per verdict, and
    the binder's supported runtime topology. The review-transition matrix is rendered

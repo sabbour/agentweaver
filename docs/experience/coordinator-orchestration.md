@@ -51,6 +51,13 @@ In the UI, the graph area remains intentionally quiet while the spec is being au
 
 The left-side **Outcome spec** panel carries the action from the start of the run. It no longer disappears when `GET /api/runs/{id}/outcome-spec` returns an expected early `404`; instead it stays visible with a **Drafting** badge and polls until REST or SSE delivers the draft (`apps/web/src/components/OutcomeSpecPanel.tsx:160`, `:233`, `:328`). It displays the goal, desired outcome, scope, assumptions, and clarifying questions once they arrive. While the coordinator is still drafting, the panel shows a spinner with **Drafting the outcome spec...**. During revision, it shows **Coordinator is incorporating your changes and re-drafting the spec...**. If the run fails, is declined, or merge-fails before any draft content lands, the panel shows **The run failed before the outcome spec could be drafted.** rather than hiding the gate (`OutcomeSpecPanel.tsx:162`, `:401`, `:537`).
 
+If the model's first drafting response is a refusal or is missing the required outcome-spec
+fields, the coordinator makes one bounded schema-correction turn and emits
+`coordinator.outcome_spec.draft_retrying`. A second refusal fails with
+`coordinator_outcome_spec_model_refused`; other unusable second responses fail with
+`coordinator_outcome_spec_invalid_response`. Both failures are explicit and retryable, preserve the
+drafting state for diagnosis, and never fabricate an outcome spec or bypass confirmation.
+
 ### What the gate prevents
 
 The gate prevents accidental fan-out. Without it, each child agent could receive an ambiguous version of the original request and independently choose scope. With it, every downstream subtask is grounded in the same confirmed OutcomeSpec.

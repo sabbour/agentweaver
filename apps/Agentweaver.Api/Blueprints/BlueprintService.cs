@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using System.Text.RegularExpressions;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Casting;
@@ -42,6 +43,20 @@ public sealed class BlueprintService
 
     private static readonly HashSet<string> _knownSandbox =
         new(KnownSandboxProfiles, StringComparer.OrdinalIgnoreCase);
+
+    private static readonly Regex _nonSoftwareIntent = new(
+        @"\b(?:content|documentation|document|docs|research|discovery|analysis|report|requirements?|"
+        + @"market|customer|user\s+interviews?|writing|editorial|brief|proposal|prototype)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex _softwareDeliveryIntent = new(
+        @"\b(?:implement|fix|refactor|patch|code|source|software|frontend|backend|api|database|migration|"
+        + @"deploy|compiler|library|application|web\s+app|mobile\s+app)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool IsClearlyNonSoftwareIntent(string description) =>
+        _nonSoftwareIntent.IsMatch(description) &&
+        !_softwareDeliveryIntent.IsMatch(description);
 
     private readonly CatalogReader _catalog;
     private readonly CatalogConformanceSnapshot _catalogSnapshot;
@@ -851,8 +866,10 @@ public sealed class BlueprintService
                     TeamRoles: blueprint.Roster.Count > 0 ? blueprint.Roster.ToList() : null,
                     UserId: userId,
                     TargetRepository: targetRepository,
-                    GenerationModel: workflowGenerationModel);
-                var wfResult = await _workflowGenerator.GenerateAsync(wfRequest, ct).ConfigureAwait(false);
+                    GenerationModel: workflowGenerationModel,
+                    ContentOnly: IsClearlyNonSoftwareIntent(description));
+                var wfResult = ConservativeWorkflowFanPolicy.Enforce(
+                    await _workflowGenerator.GenerateAsync(wfRequest, ct).ConfigureAwait(false));
                 generatedWorkflow = wfResult.Workflow;
                 generatedWorkflowYaml = wfResult.GeneratedYaml;
 

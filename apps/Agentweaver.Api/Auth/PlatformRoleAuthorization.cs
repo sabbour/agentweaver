@@ -7,6 +7,7 @@ public sealed class PlatformRoleRequirement : IAuthorizationRequirement;
 public sealed class PlatformOrBrokerRequirement : IAuthorizationRequirement;
 public sealed class InternalServiceRequirement : IAuthorizationRequirement;
 public sealed class PlatformOrRunCapabilityRequirement : IAuthorizationRequirement;
+public sealed class PlatformMcpOrRunCapabilityRequirement : IAuthorizationRequirement;
 
 public sealed class PlatformRoleAuthorizationHandler : AuthorizationHandler<PlatformRoleRequirement>
 {
@@ -47,6 +48,12 @@ public sealed class EndpointSchemeAuthorizationHandler : IAuthorizationHandler
                     break;
                 case PlatformOrRunCapabilityRequirement when
                     HasScheme(context.User, AgentweaverAuthenticationSchemes.RunCapability)
+                    || HasPlatformAccess(context.User):
+                    context.Succeed(requirement);
+                    break;
+                case PlatformMcpOrRunCapabilityRequirement when
+                    HasScheme(context.User, AgentweaverAuthenticationSchemes.BrokerBearer)
+                    || HasScheme(context.User, AgentweaverAuthenticationSchemes.RunCapability)
                     || HasPlatformAccess(context.User):
                     context.Succeed(requirement);
                     break;

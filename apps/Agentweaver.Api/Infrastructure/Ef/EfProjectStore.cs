@@ -75,7 +75,8 @@ public sealed class EfProjectStore : IProjectStore
         var pid = id.ToString();
         await using var db = await _factory.CreateDbContextAsync(ct);
         var rows = await db.Projects
-            .Where(p => p.ProjectId == pid && p.State == "active")
+            .Where(p => p.ProjectId == pid &&
+                        (p.State == "creating" || p.State == "active" || p.State == "failed"))
             .ExecuteUpdateAsync(s => s.SetProperty(p => p.State, "deleting"), ct);
         return rows > 0;
     }
@@ -177,6 +178,24 @@ public sealed class EfProjectStore : IProjectStore
                 .SetProperty(p => p.UpdatedAt, updatedAt), ct);
     }
 
+    public async Task UpdateCreationStateAsync(
+        ProjectId id,
+        ProjectState state,
+        string defaultBranch,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default)
+    {
+        var pid = id.ToString();
+        await using var db = await _factory.CreateDbContextAsync(ct);
+        var rows = await db.Projects.Where(p => p.ProjectId == pid)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(p => p.State, StateToString(state))
+                .SetProperty(p => p.DefaultBranch, defaultBranch)
+                .SetProperty(p => p.UpdatedAt, updatedAt), ct);
+        if (rows != 1)
+            throw new InvalidOperationException($"Project '{id}' was not found while updating creation state.");
+    }
+
     public async Task UpdateSourceBlueprintAsync(ProjectId id, string? blueprintId, string? blueprintType, DateTimeOffset updatedAt, CancellationToken ct = default)
     {
         var pid = id.ToString();
@@ -254,7 +273,7 @@ public sealed class EfProjectStore : IProjectStore
         DefaultProvider = p.ProviderSettings.DefaultProvider.ToApiString(),
         DefaultModelCopilot = p.ProviderSettings.GitHubCopilotModel,
         DefaultModelFoundry = p.ProviderSettings.MicrosoftFoundryModel,
-        State = p.State == ProjectState.Deleting ? "deleting" : "active",
+        State = StateToString(p.State),
         CreatedAt = p.CreatedAt,
         UpdatedAt = p.UpdatedAt,
         MaxReadyPerHeartbeat = p.MaxReadyPerHeartbeat,
@@ -304,7 +323,7 @@ public sealed class EfProjectStore : IProjectStore
                 GitHubCopilotModel = r.DefaultModelCopilot,
                 MicrosoftFoundryModel = r.DefaultModelFoundry,
             },
-            State = r.State == "deleting" ? ProjectState.Deleting : ProjectState.Active,
+            State = StateFromString(r.State),
             CreatedAt = r.CreatedAt,
             UpdatedAt = r.UpdatedAt,
             MaxReadyPerHeartbeat = r.MaxReadyPerHeartbeat,
@@ -326,6 +345,24 @@ public sealed class EfProjectStore : IProjectStore
             WebhookSecret = r.WebhookSecret,
         };
     }
+
+    private static string StateToString(ProjectState state) => state switch
+    {
+        ProjectState.Creating => "creating",
+        ProjectState.Active => "active",
+        ProjectState.Failed => "failed",
+        ProjectState.Deleting => "deleting",
+        _ => throw new ArgumentOutOfRangeException(nameof(state)),
+    };
+
+    private static ProjectState StateFromString(string state) => state switch
+    {
+        "creating" => ProjectState.Creating,
+        "active" => ProjectState.Active,
+        "failed" => ProjectState.Failed,
+        "deleting" => ProjectState.Deleting,
+        _ => throw new ArgumentException($"Unknown project state: {state}", nameof(state)),
+    };
 
     private sealed class EfProjectTeamMutationLease : IProjectTeamMutationLease
     {

@@ -1,7 +1,10 @@
+using System.Threading.Channels;
 using FluentAssertions;
 using Agentweaver.Api.Blueprints;
 using Agentweaver.Api.Workflows;
+using Agentweaver.Domain;
 using Agentweaver.Squad.Catalog;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.Tests.Blueprints;
@@ -166,6 +169,154 @@ public sealed class BlueprintGenerationParserTests
     }
 
     [Fact]
+    public async Task Generate_CustomWorkflowFallback_SharesConservativeFanPolicy()
+    {
+        const string raw = """
+            {
+              "id": "generated",
+              "name": "Generated",
+              "description": "Generated blueprint.",
+              "roster": ["backend-engineer"],
+              "workflows": [],
+              "review_policy": "default",
+              "sandbox_profile": "default"
+            }
+            """;
+        const string overlappingFanYaml = """
+            id: generated-fan
+            name: Generated Fan
+            description: Research in parallel before synthesis.
+            start: fan
+            nodes:
+              - id: fan
+                type: fan_out
+                label: Research
+              - id: first
+                type: prompt
+                label: First
+                role: backend-engineer
+                prompt: Write only reports/shared.md.
+                independent: true
+                declared_output_paths:
+                  - reports/shared.md
+              - id: second
+                type: prompt
+                label: Second
+                role: backend-engineer
+                prompt: Write only REPORTS/SHARED.MD.
+                independent: true
+                declared_output_paths:
+                  - REPORTS/SHARED.MD
+              - id: join
+                type: fan_in
+                label: Join
+                target: fan
+              - id: synthesize
+                type: prompt
+                label: Synthesize
+                role: backend-engineer
+                prompt: Synthesize the ordered findings.
+              - id: done
+                type: terminal
+                label: Done
+            edges:
+              - from: fan
+                to: first
+              - from: fan
+                to: second
+              - from: first
+                to: join
+              - from: second
+                to: join
+              - from: join
+                to: synthesize
+              - from: synthesize
+                to: done
+            """;
+        var generated = WorkflowDefinitionLoader.Load(overlappingFanYaml, "test");
+        generated.IsValid.Should().BeTrue(generated.Error);
+        var service = GenerationService(
+            raw,
+            new StubWorkflowGenerator(new WorkflowGenerationResult(
+                generated.Definition!,
+                overlappingFanYaml,
+                false)));
+
+        var result = await service.GenerateAsync("test", CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(string.Join("; ", result.Errors));
+        result.GeneratedWorkflow.Should().NotBeNull();
+        result.GeneratedWorkflow!.Nodes.Should().NotContain(node =>
+            node.Type == WorkflowNodeType.FanOut || node.Type == WorkflowNodeType.FanIn);
+        result.GeneratedWorkflow.Edges.Should().Contain(edge =>
+            edge.From == "first" && edge.To == "second");
+        result.GeneratedWorkflowYaml.Should().NotContain("type: fan_out");
+        RunWorkflowGraphBinder.GetBindabilityErrors(result.GeneratedWorkflow).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Generate_ResearchBlueprint_UsesProductionContentOnlyWorkflowPath()
+    {
+        const string raw = """
+            {
+              "id": "research-blueprint",
+              "name": "Research Blueprint",
+              "description": "Research customer evidence and publish a discovery report.",
+              "roster": ["customer-researcher", "docs-writer"],
+              "workflows": [],
+              "review_policy": "default",
+              "sandbox_profile": "default"
+            }
+            """;
+        const string contentWorkflow = """
+            id: research-discovery
+            name: Research Discovery
+            description: Research and synthesize customer evidence.
+            start: research
+            nodes:
+              - id: research
+                type: prompt
+                role: customer-researcher
+                prompt: Research customer evidence.
+              - id: synthesis
+                type: prompt
+                role: docs-writer
+                prompt: Write the discovery report.
+              - id: done
+                type: terminal
+            edges:
+              - from: research
+                to: synthesis
+              - from: synthesis
+                to: done
+            """;
+        var runner = new StaticAgentRunner(contentWorkflow);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Providers:GitHubCopilot:Model"] = "gpt-4o",
+            })
+            .Build();
+        var workflowGenerator = new CopilotWorkflowGenerator(
+            runner,
+            new CatalogReader(),
+            configuration,
+            NullLogger<CopilotWorkflowGenerator>.Instance);
+        var service = GenerationService(raw, workflowGenerator);
+
+        var result = await service.GenerateAsync(
+            "Research customer adoption evidence and write a discovery report.",
+            CancellationToken.None);
+
+        result.Succeeded.Should().BeTrue(string.Join("; ", result.Errors));
+        result.GeneratedWorkflow!.Id.Should().Be("research-discovery");
+        result.GeneratedWorkflow.Nodes.Should().NotContain(node =>
+            node.Type == WorkflowNodeType.BuildTest || node.Type == WorkflowNodeType.PeerReview);
+        runner.LastTask.Should().Contain("CONTENT-ONLY WORKFLOW");
+        runner.CallCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task Generate_FailedWorkflowFallback_ReturnsFailureInsteadOfDefaultWorkflow()
     {
         var raw = """
@@ -325,5 +476,28 @@ public sealed class BlueprintGenerationParserTests
             _exception is null
                 ? Task.FromResult(_result!)
                 : Task.FromException<WorkflowGenerationResult>(_exception);
+    }
+
+    private sealed class StaticAgentRunner(string response) : IAgentRunner
+    {
+        public int CallCount { get; private set; }
+        public string? LastTask { get; private set; }
+
+        public Task<string> ExecuteAsync(
+            string task,
+            string workingDirectory,
+            string repositoryPath,
+            ModelSource modelSource,
+            string runId,
+            string? modelId,
+            ChannelWriter<RunEvent>? stream,
+            CancellationToken ct,
+            string? systemPromptContext = null,
+            string? userId = null)
+        {
+            CallCount++;
+            LastTask = task;
+            return Task.FromResult(response);
+        }
     }
 }

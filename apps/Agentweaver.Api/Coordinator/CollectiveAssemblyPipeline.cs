@@ -4,6 +4,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Git;
+using Agentweaver.Api.Infrastructure;
 using LibGit2Sharp;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Sandbox;
@@ -44,6 +45,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
     private readonly IShellApprovalStore _approvalStore;
     private readonly IToolApprovalGate _toolApprovalGate;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly IRunLeaseStore? _runLeaseStore;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
     private readonly TimeSpan _buildTestTotalTimeout;
     private readonly TimeSpan _buildTestStallTimeout;
@@ -63,7 +65,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         ILoggerFactory loggerFactory,
         IAgentHostPodLifecycle? podLifecycle = null,
         IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IRunLeaseStore? runLeaseStore = null)
     {
         _worktreeManager = worktreeManager;
         _mergeLock = mergeLock;
@@ -75,6 +78,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         _approvalStore = approvalStore;
         _toolApprovalGate = toolApprovalGate;
         _podLifecycle = podLifecycle;
+        _runLeaseStore = runLeaseStore;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
         _buildTestTotalTimeout = TimeSpan.FromMinutes(Math.Max(
             0.01,
@@ -91,7 +95,7 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             request.RepositoryPath,
             request.OriginatingBranch,
             request.IntegrationBranch,
-            request.ChildBranchesInOrder);
+            request.ChildInputsInOrder);
 
     public void PrepareIntegrationBranchRetry(CollectiveIntegrationRequest request) =>
         _worktreeManager.TryCleanIntegrationRetryArtifacts(
@@ -198,10 +202,21 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         WorktreeInfo? detachedWorktree = null;
         try
         {
+            if (!await IsCurrentAssemblyAttemptAsync(
+                    request.CoordinatorRunId,
+                    request.AssemblyAttemptToken,
+                    gateCt).ConfigureAwait(false))
+            {
+                throw new CollectiveBuildTestInfrastructureException(
+                    "assembly_attempt_superseded",
+                    "Collective Build/Test no longer owns the durable assembly lease.",
+                    retryable: true);
+            }
+
             detachedWorktree = _worktreeManager.AddDetachedWorktree(
                 request.RepositoryPath,
                 request.IntegrationBranch,
-                BuildTestWorktreeName(request.CoordinatorRunId));
+                BuildTestWorktreeName(request.CoordinatorRunId, request.AssemblyAttemptToken));
 
             if (_sandboxRuntime.IsPodPerRun)
             {
@@ -238,7 +253,9 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                                 ExpectedTreeHash: request.AggregateTreeHash,
                                 WorkspaceMode: ExecutionWorkspaceMode.LocalReadOnly,
                                 Purpose: AgentHostPurpose.AssemblyBuildTest,
-                                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot),
+                                ScratchRoot: PodLocalExecutionWorkspace.DefaultScratchRoot,
+                                HolderToken: request.AssemblyAttemptToken,
+                                LifecycleGeneration: request.LifecycleGeneration),
                             gateCt).ConfigureAwait(false);
                         break;
                     }
@@ -254,10 +271,23 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                             ex.RecoveryAction,
                             launchAttempt,
                             MaxAgentHostConfigureAttempts);
+                        if (!await IsCurrentAssemblyAttemptAsync(
+                                request.CoordinatorRunId,
+                                request.AssemblyAttemptToken,
+                                CancellationToken.None).ConfigureAwait(false))
+                        {
+                            throw new CollectiveBuildTestInfrastructureException(
+                                "assembly_attempt_superseded",
+                                "Collective Build/Test lost its durable assembly lease before AgentHost recovery.",
+                                retryable: true,
+                                ex);
+                        }
                         try
                         {
-                            await _podLifecycle.ReleaseAgentHostPodAsync(
-                                request.CoordinatorRunId, CancellationToken.None).ConfigureAwait(false);
+                            await ReleaseAgentHostPodForAttemptAsync(
+                                request.CoordinatorRunId,
+                                request.AssemblyAttemptToken,
+                                CancellationToken.None).ConfigureAwait(false);
                         }
                         catch (Exception cleanupEx)
                         {
@@ -357,7 +387,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
                 await CleanupBuildTestResourcesAsync(
                     request.CoordinatorRunId,
                     request.RepositoryPath,
-                    CancellationToken.None).ConfigureAwait(false);
+                    CancellationToken.None,
+                    request.AssemblyAttemptToken).ConfigureAwait(false);
             }
 
             _logger.LogWarning(ex,
@@ -374,7 +405,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             await CleanupBuildTestResourcesAsync(
                 request.CoordinatorRunId,
                 request.RepositoryPath,
-                CancellationToken.None).ConfigureAwait(false);
+                CancellationToken.None,
+                request.AssemblyAttemptToken).ConfigureAwait(false);
             throw new CollectiveBuildTestInfrastructureException(
                 BuildTestTurnExecutor.WallClockTimeoutReason,
                 $"Collective Build/Test exceeded its total wall-clock timeout of {_buildTestTotalTimeout}.",
@@ -392,13 +424,25 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
     public async Task CleanupBuildTestResourcesAsync(
         string coordinatorRunId,
         string repositoryPath,
-        CancellationToken ct = default)
+        CancellationToken ct = default) =>
+        await CleanupBuildTestResourcesAsync(
+            coordinatorRunId, repositoryPath, ct, assemblyAttemptToken: null).ConfigureAwait(false);
+
+    public async Task CleanupBuildTestResourcesAsync(
+        string coordinatorRunId,
+        string repositoryPath,
+        CancellationToken ct,
+        string? assemblyAttemptToken)
     {
-        if (_sandboxRuntime.IsPodPerRun && _podLifecycle is not null)
+        if (_sandboxRuntime.IsPodPerRun
+            && _podLifecycle is not null
+            && await IsCurrentAssemblyAttemptAsync(
+                coordinatorRunId, assemblyAttemptToken, ct).ConfigureAwait(false))
         {
             try
             {
-                await _podLifecycle.ReleaseAgentHostPodAsync(coordinatorRunId, ct).ConfigureAwait(false);
+                await ReleaseAgentHostPodForAttemptAsync(
+                    coordinatorRunId, assemblyAttemptToken, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -408,7 +452,8 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
             }
         }
 
-        var path = _worktreeManager.DetachedWorktreePath(BuildTestWorktreeName(coordinatorRunId));
+        var path = _worktreeManager.DetachedWorktreePath(
+            BuildTestWorktreeName(coordinatorRunId, assemblyAttemptToken));
         try
         {
             _worktreeManager.RemoveDetachedWorktree(repositoryPath, path);
@@ -421,24 +466,123 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         }
     }
 
-    private static string BuildTestWorktreeName(string coordinatorRunId) =>
-        "assembly-build-test-" + coordinatorRunId;
+    private async Task ReleaseAgentHostPodForAttemptAsync(
+        string coordinatorRunId,
+        string? assemblyAttemptToken,
+        CancellationToken ct)
+    {
+        if (_podLifecycle is null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(assemblyAttemptToken))
+        {
+            await _podLifecycle.ReleaseAgentHostPodAsync(coordinatorRunId, ct).ConfigureAwait(false);
+            return;
+        }
+
+        var released = await _podLifecycle.TryReleaseHeldAgentHostPodAsync(
+            coordinatorRunId, assemblyAttemptToken, ct).ConfigureAwait(false);
+        if (!released)
+        {
+            _logger.LogInformation(
+                "Collective Build/Test: retained AgentHost pod for run {RunId}; " +
+                "assembly attempt {AttemptToken} no longer owns the claim",
+                coordinatorRunId,
+                assemblyAttemptToken);
+        }
+    }
+
+    private async Task<bool> IsCurrentAssemblyAttemptAsync(
+        string coordinatorRunId,
+        string? assemblyAttemptToken,
+        CancellationToken ct)
+    {
+        if (_runLeaseStore is null || string.IsNullOrWhiteSpace(assemblyAttemptToken))
+            return true;
+
+        if (!long.TryParse(
+                assemblyAttemptToken,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var fencingToken))
+        {
+            _logger.LogWarning(
+                "Collective Build/Test: refusing shared resource cleanup for run {RunId}; " +
+                "assembly attempt token {AttemptToken} is invalid",
+                coordinatorRunId,
+                assemblyAttemptToken);
+            return false;
+        }
+
+        try
+        {
+            var claim = await _runLeaseStore.GetActiveClaimAsync(coordinatorRunId, ct)
+                .ConfigureAwait(false);
+            if (claim?.FencingToken == fencingToken)
+                return true;
+
+            _logger.LogInformation(
+                "Collective Build/Test: skipping shared resource cleanup for superseded assembly " +
+                "attempt {AttemptToken} on run {RunId}",
+                assemblyAttemptToken,
+                coordinatorRunId);
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Collective Build/Test: refusing shared resource cleanup for run {RunId}; " +
+                "durable assembly ownership could not be verified",
+                coordinatorRunId);
+            return false;
+        }
+    }
+
+    private static string BuildTestWorktreeName(
+        string coordinatorRunId,
+        string? assemblyAttemptToken = null) =>
+        string.IsNullOrWhiteSpace(assemblyAttemptToken)
+            ? "assembly-build-test-" + coordinatorRunId
+            : $"assembly-build-test-{coordinatorRunId}-attempt-{assemblyAttemptToken}";
 
     public string GetBuildTestWorktreePath(string coordinatorRunId) =>
-        _worktreeManager.DetachedWorktreePath(BuildTestWorktreeName(coordinatorRunId));
+        GetBuildTestWorktreePath(coordinatorRunId, assemblyAttemptToken: null);
 
-    public string PrepareReviewerWorktree(string coordinatorRunId, string repositoryPath, string integrationBranch)
+    public string GetBuildTestWorktreePath(string coordinatorRunId, string? assemblyAttemptToken) =>
+        _worktreeManager.DetachedWorktreePath(
+            BuildTestWorktreeName(coordinatorRunId, assemblyAttemptToken));
+
+    public string PrepareReviewerWorktree(
+        string coordinatorRunId,
+        string repositoryPath,
+        string integrationBranch) =>
+        PrepareReviewerWorktree(
+            coordinatorRunId, repositoryPath, integrationBranch, assemblyAttemptToken: null);
+
+    public string PrepareReviewerWorktree(
+        string coordinatorRunId,
+        string repositoryPath,
+        string integrationBranch,
+        string? assemblyAttemptToken)
     {
-        // #236: provision a detached worktree at the assembled integration branch so the collective RAI
-        // + rubber-duck reviewers can read the integration files host-side. Reuse the SAME pattern (and
-        // deterministic name) as RunBuildTestAsync: AddDetachedWorktree destructively recreates the dir
-        // (Directory.Delete + prune + `git worktree add --detach`), so reviewer writes can never bleed
-        // into a later Build/Test run (Build/Test recreates the same-named worktree fresh), and teardown
-        // is handled by the existing CleanupBuildTestResourcesAsync path — no extra cleanup wiring.
+        var path = GetBuildTestWorktreePath(coordinatorRunId, assemblyAttemptToken);
+        using var repository = new Repository(repositoryPath);
+        var commit = repository.Branches[integrationBranch]?.Tip
+            ?? throw new InvalidOperationException("Reviewer integration ref is missing.");
+        var registered = repository.Worktrees[Path.GetFileName(path)];
+        if (registered is not null || Directory.Exists(path))
+        {
+            if (WorktreeManager.ReadDetachedWorktreeIdentity(
+                    repositoryPath, path, commit.Sha, commit.Tree.Sha) is null)
+                throw new InvalidOperationException(
+                    "Reviewer source worktree changed or was removed after Build/Test; refusing to replace it.");
+            return path;
+        }
         var info = _worktreeManager.AddDetachedWorktree(
             repositoryPath,
             integrationBranch,
-            BuildTestWorktreeName(coordinatorRunId));
+            BuildTestWorktreeName(coordinatorRunId, assemblyAttemptToken));
         return info.WorktreePath;
     }
 
@@ -469,7 +613,19 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
         }
     }
 
-    public async Task<CollectiveMergeResult> MergeAsync(CollectiveMergeRequest request, CancellationToken ct)
+    public PrepareGitMergeResult PrepareMerge(CollectiveMergeRequest request) =>
+        _worktreeManager.PrepareMerge(
+            request.RepositoryPath,
+            request.OriginatingBranch,
+            request.IntegrationBranch,
+            request.TreeHash,
+            request.EffectId,
+            request.LifecycleGeneration);
+
+    public async Task<CollectiveMergeResult> ExecutePreparedMergeAsync(
+        CollectivePreparedMergeRequest request,
+        Func<CancellationToken, Task<bool>> authorize,
+        CancellationToken ct)
     {
         string canonicalPath;
         try { canonicalPath = Path.GetFullPath(request.RepositoryPath); }
@@ -481,14 +637,37 @@ public sealed class CollectiveAssemblyPipeline : ICollectiveAssemblyPipeline
 
         try
         {
-            var outcome = _worktreeManager.MergeWorktree(
-                request.RepositoryPath, request.OriginatingBranch, request.IntegrationBranch, request.TreeHash);
-
-            return outcome.Kind switch
+            var inspected = _worktreeManager.InspectPreparedMerge(
+                request.RepositoryPath,
+                request.Intent);
+            if (inspected.Outcome == ApplyPreparedGitMergeOutcome.NotApplied
+                && !await authorize(ct).ConfigureAwait(false))
             {
-                MergeOutcomeKind.Merged => CollectiveMergeResult.Merged(outcome.CommitHash),
-                MergeOutcomeKind.Conflict => CollectiveMergeResult.Conflict(outcome.ConflictingFiles ?? [], outcome.Reason),
-                MergeOutcomeKind.Blocked => CollectiveMergeResult.Failed(outcome.Reason ?? "blocked", outcome.ConflictingFiles),
+                return CollectiveMergeResult.Unauthorized(
+                    inspected.CurrentTargetCommit,
+                    "merge_authorization_lost");
+            }
+
+            var outcome = inspected.Outcome == ApplyPreparedGitMergeOutcome.NotApplied
+                ? _worktreeManager.ApplyPreparedMerge(request.RepositoryPath, request.Intent)
+                : inspected;
+            return outcome.Outcome switch
+            {
+                ApplyPreparedGitMergeOutcome.AppliedNow => CollectiveMergeResult.AppliedNow(
+                    request.Intent.IntendedCommit,
+                    outcome.CurrentTargetCommit,
+                    outcome.CheckoutOutcome),
+                ApplyPreparedGitMergeOutcome.RecoveredApplied => CollectiveMergeResult.RecoveredApplied(
+                    request.Intent.IntendedCommit,
+                    outcome.CurrentTargetCommit,
+                    outcome.CheckoutOutcome),
+                ApplyPreparedGitMergeOutcome.NotApplied => CollectiveMergeResult.NotApplied(
+                    outcome.CurrentTargetCommit,
+                    outcome.Reason),
+                ApplyPreparedGitMergeOutcome.Unknown => CollectiveMergeResult.Unknown(
+                    outcome.CurrentTargetCommit,
+                    outcome.Reason,
+                    outcome.CheckoutOutcome),
                 _ => CollectiveMergeResult.Failed("unexpected_merge_outcome"),
             };
         }

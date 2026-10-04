@@ -3,26 +3,18 @@ using Agentweaver.Domain;
 namespace Agentweaver.AgentHost;
 
 /// <summary>
-/// Passthrough <see cref="ISandboxPolicyStore"/> for the in-pod AgentHost.
-/// The pod never accesses the database; enforcement relies on the Kata VM
-/// boundary and the NetworkPolicy egress allowlist applied by the platform team.
-/// Returns a permissive policy (shell enabled, network enabled) for every
-/// repository path so tool execution is not blocked inside the pod.
+/// Run-bound <see cref="ISandboxPolicyStore"/> for AgentHost. The API resolves the current
+/// effective binding and delivers its credential-free policy through the control plane.
+/// Missing bindings fail closed instead of restoring the former permissive pod policy.
 /// </summary>
-internal sealed class PodSandboxPolicyStore : ISandboxPolicyStore
+internal sealed class PodSandboxPolicyStore(AgentHostRuntimeState runtimeState) : ISandboxPolicyStore
 {
     public Task<SandboxPolicy> GetPolicyAsync(string repositoryPath, CancellationToken ct = default)
     {
-        var policy = new SandboxPolicy
-        {
-            RepositoryPath = repositoryPath,
-            ShellEnabled = true,
-            NetworkEnabled = true,
-            Direct = false,
-            AllowedRepositoryRoots = [],
-            RequireApprovalForAllShell = false,
-        };
-        return Task.FromResult(policy);
+        var binding = runtimeState.EffectivePermissionBinding
+            ?? throw new EffectivePermissionBindingException(
+                "AgentHost has no effective permission binding for this run.");
+        return Task.FromResult(binding.Policy with { RepositoryPath = repositoryPath });
     }
 
     public Task SetPolicyAsync(SandboxPolicy policy, CancellationToken ct = default) =>

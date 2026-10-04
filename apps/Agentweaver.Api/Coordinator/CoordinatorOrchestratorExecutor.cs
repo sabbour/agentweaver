@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Backlog;
@@ -113,10 +114,11 @@ public sealed class CoordinatorOrchestratorExecutor
 
     /// <summary>
     /// Orchestrates a confirmed spec into a persisted work plan. Idempotent: if a work plan already
-    /// exists for the run it returns without re-planning. Best-effort decomposition (model turn with
-    /// a deterministic fallback) — it always produces a valid, persisted plan.
+    /// exists for the run it returns without re-planning. Atomic outcomes can use a deterministic
+    /// fallback; explicitly enumerated deliverables require a verifiable decomposition.
     /// </summary>
-    public async Task<CoordinatorOrchestrationResult> OrchestrateAsync(CoordinatorDraftInput input, CancellationToken ct)
+    public async Task<CoordinatorOrchestrationResult> OrchestrateAsync(
+        CoordinatorDraftInput input, CancellationToken ct, RunLeaseFence? recoveredFence = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -130,12 +132,32 @@ public sealed class CoordinatorOrchestratorExecutor
             return new CoordinatorOrchestrationResult(0, 0, []);
         }
 
-        // Idempotency: never re-plan a run that already has a work plan (mirrors the draft upsert).
+        // A composed child reserves its correlated plan before decomposition. Only that empty,
+        // parent-correlated plan may be populated; every other existing plan remains idempotent.
         var existing = await db.WorkPlans
             .FirstOrDefaultAsync(w => w.CoordinatorRunId == input.RunId, ct)
             .ConfigureAwait(false);
-        if (existing is not null)
+        var composed = existing is { ParentRunId: not null, ParentWorkflowNodeId: not null, ParentJoinNodeId: null };
+        if (existing is not null && !composed)
         {
+            if (!string.IsNullOrWhiteSpace(existing.WorkflowId))
+            {
+                var run = await scope.ServiceProvider.GetRequiredService<IRunStore>()
+                    .GetAsync(RunId.Parse(input.RunId), ct).ConfigureAwait(false);
+                var pin = run?.GetExecutableWorkflowPin();
+                if (pin is not null)
+                {
+                    var saved = ExecutableWorkflowSnapshots.Load(input.RunId, pin);
+                    if (!string.Equals(saved.Id, existing.WorkflowId, StringComparison.OrdinalIgnoreCase))
+                        throw new WorkflowBindException(
+                            $"Coordinator run '{input.RunId}' saved workflow does not match its work plan.",
+                            input.RunId);
+                }
+                else if (run?.ExecutableWorkflowPinRequired == true)
+                    throw new WorkflowBindException(
+                        $"Coordinator run '{input.RunId}' has a committed work plan but its required saved workflow is missing.",
+                        input.RunId);
+            }
             _logger.LogInformation("Coordinator orchestrate: work plan already exists for run {RunId}; skipping", input.RunId);
             var promoted = await db.BacklogTasks.AsNoTracking()
                 .Where(t => t.ProjectId == input.ProjectId && t.ParentPrdRunId == input.RunId)
@@ -148,13 +170,33 @@ public sealed class CoordinatorOrchestratorExecutor
                 .ConfigureAwait(false);
             return new CoordinatorOrchestrationResult(existing.Id, inlineCount, promoted);
         }
+        if (composed && existing!.Status != WorkPlanStatus.Planned)
+            return new CoordinatorOrchestrationResult(
+                existing.Id,
+                await db.Subtasks.CountAsync(s => s.WorkPlanId == existing.Id, ct).ConfigureAwait(false),
+                []);
+        if (composed && await db.Subtasks.AnyAsync(s => s.WorkPlanId == existing!.Id, ct).ConfigureAwait(false))
+            return new CoordinatorOrchestrationResult(
+                existing!.Id,
+                await db.Subtasks.CountAsync(s => s.WorkPlanId == existing.Id, ct).ConfigureAwait(false),
+                []);
+        var composedParentGeneration = composed && db.Database.IsNpgsql()
+            ? await db.Runs.AsNoTracking()
+                .Where(run => run.RunId == existing!.ParentRunId)
+                .Select(run => (int?)run.LifecycleGeneration)
+                .SingleAsync(ct).ConfigureAwait(false)
+            : null;
 
         // Feature 015 US5: pick the best-fit functional workflow for THIS task from the project's
         // available set and surface it (with rationale + override hint). Single-workflow projects skip
         // selection silently. The resolved workflow DRIVES decomposition, then is validated against
         // the actual decomposition before persistence so an incompatible automatic topology cannot
         // silently bypass a required platform gate.
-        var workflowSelection = await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
+        // The child plan's prompt is its entire dynamic scope. Selecting a project workflow here
+        // could select the containing composed definition and recurse into another coordinator.
+        var workflowSelection = composed
+            ? WorkflowSelection.Empty
+            : await SelectWorkflowAsync(scope, input, spec, ct).ConfigureAwait(false);
 
         var drafts = await DecomposeWithModelAsync(input, spec, workflowSelection.Definition, ct).ConfigureAwait(false)
                      ?? DecomposeDeterministic(spec);
@@ -173,12 +215,14 @@ public sealed class CoordinatorOrchestratorExecutor
         if (drafts.Count == 0)
             drafts = DecomposeDeterministic(spec).Select(NormalizePlanningDraft).ToList();
 
+        ValidateExplicitDeliverables(spec, drafts);
         var (drafts2, cycleNote) = BreakCycles(drafts);
         drafts = drafts2;
 
         var workflowCompatibilityWarnings = new List<string>();
-        workflowSelection = await ValidateWorkflowAfterDecompositionAsync(
-            scope, input, spec, workflowSelection, drafts, workflowCompatibilityWarnings, ct).ConfigureAwait(false);
+        if (!composed)
+            workflowSelection = await ValidateWorkflowAfterDecompositionAsync(
+                scope, input, spec, workflowSelection, drafts, workflowCompatibilityWarnings, ct).ConfigureAwait(false);
 
         var partition = await PartitionStoriesAsync(input, spec, drafts, ct).ConfigureAwait(false);
         var promotionService = scope.ServiceProvider.GetRequiredService<IBacklogPromotionService>();
@@ -230,6 +274,35 @@ public sealed class CoordinatorOrchestratorExecutor
             assigned.Add(new AssignedSubtask(d, agentName, model));
         }
 
+        if (composed)
+        {
+            var (composedPlanId, composedSubtasks, created) = await PersistComposedPlanWithRetryAsync(
+                input, existing!.Id, composedParentGeneration, assigned, cycleNote, ct).ConfigureAwait(false);
+            if (created)
+                EmitWorkPlanEvent(input.RunId, composedPlanId, null, WorkPlanStatus.Planned,
+                    composedSubtasks, partition.Warnings.ToList());
+            return new CoordinatorOrchestrationResult(composedPlanId, composedSubtasks.Count, promotedTaskIds);
+        }
+
+        await using var planTx = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, input.RunId, recoveredFence, ct, scope.ServiceProvider.GetService<SqliteDb>(),
+            lockUnfenced: true).ConfigureAwait(false);
+        await using var sqlitePlanTx = db.Database.IsSqlite()
+            ? await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false)
+            : null;
+        if (planTx is not null)
+        {
+            // The earlier idempotency read precedes model planning; another owner may have
+            // committed the plan while we were planning. Recheck under the run-row write lock.
+            var persistedPlan = await db.WorkPlans.AsNoTracking()
+                .FirstOrDefaultAsync(w => w.CoordinatorRunId == input.RunId, ct).ConfigureAwait(false);
+            if (persistedPlan is not null)
+            {
+                var inlineCount = await db.Subtasks.AsNoTracking()
+                    .CountAsync(s => s.WorkPlanId == persistedPlan.Id, ct).ConfigureAwait(false);
+                return new CoordinatorOrchestrationResult(persistedPlan.Id, inlineCount, promotedTaskIds);
+            }
+        }
         var (workPlanId, persisted) = await PersistPlanAsync(
             db,
             input,
@@ -238,8 +311,22 @@ public sealed class CoordinatorOrchestratorExecutor
             cycleNote,
             workflowSelection.Definition?.Id,
             inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned,
-            ct)
+            ct,
+            null)
             .ConfigureAwait(false);
+        var definition = workflowSelection.Definition
+            ?? throw new InvalidOperationException(
+                $"Coordinator run '{input.RunId}' cannot commit a plan without a selected workflow.");
+        var selectedPin = ExecutableWorkflowSnapshots.Create(definition, "coordinator-selection");
+        await PinSelectedWorkflowAsync(db, planTx
+            ?? throw new InvalidOperationException("Coordinator plan write requires a run lock."),
+            input.RunId, selectedPin, ct).ConfigureAwait(false);
+        // SQLite keeps the run and work plan in separate databases. Commit the selected pin
+        // first: if the plan commit fails, a later attempt must reuse that durable choice.
+        if (planTx is not null)
+            await planTx.CommitAsync(ct).ConfigureAwait(false);
+        if (sqlitePlanTx is not null)
+            await sqlitePlanTx.CommitAsync(ct).ConfigureAwait(false);
 
         var workPlanStatus = inlineDrafts.Count == 0 && promotedTaskIds.Count > 0 ? WorkPlanStatus.Delegated : WorkPlanStatus.Planned;
         EmitWorkPlanEvent(
@@ -250,6 +337,170 @@ public sealed class CoordinatorOrchestratorExecutor
             persisted,
             partition.Warnings.Concat(workflowCompatibilityWarnings).ToList());
         return new CoordinatorOrchestrationResult(workPlanId, inlineDrafts.Count, promotedTaskIds);
+    }
+
+    private async Task<(int PlanId, List<PersistedSubtask> Subtasks, bool Created)> PersistComposedPlanWithRetryAsync(
+        CoordinatorDraftInput input, int planId, int? parentGeneration, List<AssignedSubtask> assigned,
+        string? cycleNote, CancellationToken ct)
+    {
+        return await RetryComposedSerializationAsync(async token =>
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var postgres = db.Database.IsNpgsql();
+            // The planning context predates the model turn. Lock and reload the reserved row
+            // using a fresh READ COMMITTED snapshot, rather than updating its stale tracked copy.
+            await using var tx = postgres
+                ? await db.Database.BeginTransactionAsync(
+                    System.Data.IsolationLevel.ReadCommitted, token).ConfigureAwait(false)
+                : await db.Database.BeginTransactionAsync(token).ConfigureAwait(false);
+            var locked = await db.WorkPlans
+                .Where(plan => plan.Id == planId && plan.CoordinatorRunId == input.RunId
+                    && plan.ParentRunId != null && plan.ParentWorkflowNodeId != null
+                    && plan.ParentJoinNodeId == null
+                    && (!postgres || plan.ParentResumeState == WorkflowChildWorkResumeStates.Waiting)
+                    && plan.Status == WorkPlanStatus.Planned
+                    && plan.CoordinatorCancellationRequestedAt == null)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(plan => plan.UpdatedAt, plan => plan.UpdatedAt), token)
+                .ConfigureAwait(false);
+            if (locked != 1)
+                throw new CoordinatorExecutionFenceLostException(input.RunId);
+            var plan = await db.WorkPlans.SingleAsync(row => row.Id == planId, token)
+                .ConfigureAwait(false);
+            if (postgres)
+            {
+                var parentLocked = await db.Runs
+                    .Where(run => run.RunId == plan.ParentRunId && run.Status == "awaiting_review"
+                        && run.LifecycleGeneration == parentGeneration)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(run => run.HeartbeatAt, run => run.HeartbeatAt), token)
+                    .ConfigureAwait(false);
+                var childLocked = await db.Runs
+                    .Where(run => run.RunId == input.RunId && run.ParentRunId == plan.ParentRunId
+                        && (run.Status == "pending" || run.Status == "in_progress"))
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(run => run.HeartbeatAt, run => run.HeartbeatAt), token)
+                    .ConfigureAwait(false);
+                if (parentLocked != 1 || childLocked != 1)
+                    throw new CoordinatorExecutionFenceLostException(input.RunId);
+            }
+            if (await db.Subtasks.AnyAsync(row => row.WorkPlanId == planId, token).ConfigureAwait(false))
+            {
+                var rows = await db.Subtasks.AsNoTracking()
+                    .Where(row => row.WorkPlanId == planId)
+                    .ToListAsync(token).ConfigureAwait(false);
+                return (planId, rows.Select(row => new PersistedSubtask(
+                    row.Id, row.Title, row.AssignedAgent, row.SelectedModelId,
+                    row.Phase, row.IsolationStrategy, Array.Empty<int>())).ToList(), false);
+            }
+            var spec = await db.OutcomeSpecs.SingleAsync(row => row.Id == plan.OutcomeSpecId, token)
+                .ConfigureAwait(false);
+            var persisted = await PersistPlanAsync(db, input, spec, assigned, cycleNote,
+                null, WorkPlanStatus.Planned, token, plan).ConfigureAwait(false);
+            await tx.CommitAsync(token).ConfigureAwait(false);
+            return (persisted.WorkPlanId, persisted.Subtasks, true);
+        }, _logger, planId, ct).ConfigureAwait(false);
+    }
+
+    internal static async Task<T> RetryComposedSerializationAsync<T>(
+        Func<CancellationToken, Task<T>> persist, ILogger logger, int planId, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await persist(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < 2 && DecisionPromotion.IsRetryable(ex))
+            {
+                logger.LogWarning(ex,
+                    "Retrying composed plan {PlanId} transaction after database contention (attempt {Attempt})",
+                    planId, attempt + 1);
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * (attempt + 1)), ct).ConfigureAwait(false);
+            }
+        }
+    }
+
+    internal static async Task PinSelectedWorkflowAsync(
+        MemoryDbContext db, CoordinatorFencedWrite tx, string runId,
+        ExecutableWorkflowPin pin, CancellationToken ct)
+    {
+        if (tx.RunConnection is { } connection)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = tx.RunTransaction;
+            command.CommandText = """
+                SELECT executable_workflow_definition_yaml, executable_workflow_content_digest,
+                       executable_workflow_definition_id, executable_workflow_manifest_schema_version
+                FROM runs WHERE run_id = $runId
+                """;
+            command.Parameters.AddWithValue("$runId", runId);
+            await using (var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false))
+            {
+                if (!await reader.ReadAsync(ct).ConfigureAwait(false))
+                    throw new CoordinatorExecutionFenceLostException(runId);
+                if (!reader.IsDBNull(0))
+                {
+                    ValidateExistingPin(runId, reader.GetString(0),
+                        reader.IsDBNull(1) ? null : reader.GetString(1),
+                        reader.IsDBNull(2) ? null : reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetInt32(3), pin);
+                    return;
+                }
+            }
+
+            command.CommandText = """
+                UPDATE runs SET executable_workflow_pin_required = 1,
+                    executable_workflow_manifest_schema_version = $schema,
+                    executable_workflow_definition_id = $id,
+                    executable_workflow_definition_version = $version,
+                    executable_workflow_source = $source,
+                    executable_workflow_content_digest = $digest,
+                    executable_workflow_definition_yaml = $yaml,
+                    executable_workflow_pinned_at = $pinnedAt
+                WHERE run_id = $runId AND executable_workflow_definition_yaml IS NULL
+                """;
+            command.Parameters.AddWithValue("$schema", pin.ManifestSchemaVersion);
+            command.Parameters.AddWithValue("$id", pin.DefinitionId);
+            command.Parameters.AddWithValue("$version", (object?)pin.DefinitionVersion ?? DBNull.Value);
+            command.Parameters.AddWithValue("$source", pin.Source);
+            command.Parameters.AddWithValue("$digest", pin.ContentDigest);
+            command.Parameters.AddWithValue("$yaml", pin.DefinitionYaml);
+            command.Parameters.AddWithValue("$pinnedAt", pin.PinnedAt.ToString("O"));
+            if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+                throw new CoordinatorExecutionFenceLostException(runId);
+            return;
+        }
+
+        var run = await db.Runs.SingleAsync(r => r.RunId == runId, ct).ConfigureAwait(false);
+        if (run.ExecutableWorkflowDefinitionYaml is { } existingYaml)
+        {
+            ValidateExistingPin(runId, existingYaml, run.ExecutableWorkflowContentDigest,
+                run.ExecutableWorkflowDefinitionId, run.ExecutableWorkflowManifestSchemaVersion, pin);
+            return;
+        }
+        run.ExecutableWorkflowPinRequired = true;
+        run.ExecutableWorkflowManifestSchemaVersion = pin.ManifestSchemaVersion;
+        run.ExecutableWorkflowDefinitionId = pin.DefinitionId;
+        run.ExecutableWorkflowDefinitionVersion = pin.DefinitionVersion;
+        run.ExecutableWorkflowSource = pin.Source;
+        run.ExecutableWorkflowContentDigest = pin.ContentDigest;
+        run.ExecutableWorkflowDefinitionYaml = pin.DefinitionYaml;
+        run.ExecutableWorkflowPinnedAt = pin.PinnedAt;
+        await db.SaveChangesAsync(ct).ConfigureAwait(false);
+    }
+
+    private static void ValidateExistingPin(
+        string runId, string yaml, string? digest, string? definitionId,
+        int? schemaVersion, ExecutableWorkflowPin selected)
+    {
+        if (!string.Equals(yaml, selected.DefinitionYaml, StringComparison.Ordinal)
+            || !string.Equals(digest, ExecutableWorkflowSnapshots.Digest(yaml), StringComparison.Ordinal)
+            || !string.Equals(definitionId, selected.DefinitionId, StringComparison.Ordinal)
+            || schemaVersion != ExecutableWorkflowPin.CurrentSchemaVersion)
+            throw new InvalidOperationException(
+                $"Coordinator run '{runId}' already pins an invalid or different executable workflow.");
     }
 
     // -----------------------------------------------------------------------
@@ -273,6 +524,9 @@ public sealed class CoordinatorOrchestratorExecutor
     {
         WorkflowDefinition? defaultDef = null;
         var runStore = scope.ServiceProvider.GetRequiredService<IRunStore>();
+        var savedSelection = await ResolveSavedSelectionAsync(scope, runStore, input, ct).ConfigureAwait(false);
+        if (savedSelection is not null)
+            return savedSelection;
         try
         {
             var projectStore = scope.ServiceProvider.GetRequiredService<IProjectStore>();
@@ -402,6 +656,85 @@ public sealed class CoordinatorOrchestratorExecutor
             }
             return new WorkflowSelection(defaultDef, IsExplicit: false, [], new HashSet<string>(StringComparer.Ordinal));
         }
+    }
+
+    private async Task<WorkflowSelection?> ResolveSavedSelectionAsync(
+        IServiceScope scope, IRunStore runStore, CoordinatorDraftInput input, CancellationToken ct)
+    {
+        if (!RunId.TryParse(input.RunId, out var runId))
+            return null;
+        var run = await runStore.GetAsync(runId, ct).ConfigureAwait(false);
+        if (run?.GetExecutableWorkflowPin() is { } ownPin)
+        {
+            var selected = ExecutableWorkflowSnapshots.Load(input.RunId, ownPin);
+            if ((!string.IsNullOrWhiteSpace(input.WorkflowOverrideId)
+                    && !string.Equals(input.WorkflowOverrideId, selected.Id, StringComparison.OrdinalIgnoreCase))
+                || (WorkflowSelector.TryParseOverride(input.ReviseFeedback, out var requested)
+                    && !string.Equals(requested, selected.Id, StringComparison.OrdinalIgnoreCase)))
+                throw new WorkflowBindException(
+                    $"Coordinator run '{input.RunId}' already saved workflow '{selected.Id}'; start a new run to change it.",
+                    input.RunId);
+            _logger.LogInformation(
+                "Coordinator run {RunId} is resuming its saved workflow '{WorkflowId}' before plan commit.",
+                input.RunId, selected.Id);
+            return new WorkflowSelection(selected, IsExplicit: true, [selected], new HashSet<string>(StringComparer.Ordinal));
+        }
+        if (run is not null && ExecutableWorkflowSnapshots.HasManifestData(run))
+            throw new WorkflowBindException(
+                $"Coordinator run '{input.RunId}' has an incomplete saved workflow manifest.", input.RunId);
+
+        if (run?.RetriedFrom is null
+            || !string.IsNullOrWhiteSpace(input.WorkflowOverrideId)
+            || WorkflowSelector.TryParseOverride(input.ReviseFeedback, out _))
+            return null;
+
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var sourceId = run.RetriedFrom;
+        for (var depth = 0; depth < 4 && sourceId is not null; depth++)
+        {
+            if (!RunId.TryParse(sourceId, out var parsed))
+                throw new WorkflowBindException(
+                    $"Coordinator retry '{input.RunId}' has an invalid source run id.", input.RunId);
+            var currentSourceId = parsed.ToString();
+            var source = await runStore.GetAsync(parsed, ct).ConfigureAwait(false);
+            if (source is null || source.ProjectId != run.ProjectId || source.AgentName != CoordinatorAgentName)
+                throw new WorkflowBindException(
+                    $"Coordinator retry '{input.RunId}' cannot resolve its source run '{sourceId}'.", input.RunId);
+
+            if (source.GetExecutableWorkflowPin() is { } pin)
+            {
+                var selected = ExecutableWorkflowSnapshots.Load(currentSourceId, pin);
+                var sourcePlan = await db.WorkPlans.AsNoTracking()
+                    .Where(w => w.CoordinatorRunId == currentSourceId)
+                    .Select(w => w.WorkflowId)
+                    .FirstOrDefaultAsync(ct).ConfigureAwait(false);
+                if (sourcePlan is not null
+                    && !string.Equals(sourcePlan, selected.Id, StringComparison.OrdinalIgnoreCase))
+                    throw new WorkflowBindException(
+                        $"Coordinator retry '{input.RunId}' source workflow does not match its work plan.",
+                        input.RunId);
+                var reason = $"Reused '{selected.Name}' from the saved workflow of retry source '{currentSourceId}'.";
+                EmitWorkflowSelectedEvent(input.RunId, selected, reason, wasAutoSelected: false, [selected]);
+                await PersistSelectionReasonAsync(runStore, input.RunId, reason, ct).ConfigureAwait(false);
+                return new WorkflowSelection(selected, IsExplicit: true, [selected], new HashSet<string>(StringComparer.Ordinal));
+            }
+            if (ExecutableWorkflowSnapshots.HasManifestData(source))
+                throw new WorkflowBindException(
+                    $"Coordinator retry '{input.RunId}' source run '{currentSourceId}' has an incomplete saved workflow manifest.",
+                    input.RunId);
+
+            if (source.ExecutableWorkflowPinRequired
+                && await db.WorkPlans.AsNoTracking().AnyAsync(
+                    w => w.CoordinatorRunId == currentSourceId && w.WorkflowId != null, ct).ConfigureAwait(false))
+                throw new WorkflowBindException(
+                    $"Coordinator retry '{input.RunId}' source work plan requires a saved workflow, but none is stored.",
+                    input.RunId);
+            sourceId = source.RetriedFrom;
+        }
+        if (sourceId is not null)
+            throw new WorkflowBindException(
+                $"Coordinator retry '{input.RunId}' exceeded the supported source run chain.", input.RunId);
+        return null;
     }
 
     private async Task<WorkflowSelection> ValidateWorkflowAfterDecompositionAsync(
@@ -585,7 +918,7 @@ public sealed class CoordinatorOrchestratorExecutor
     }
 
     // -----------------------------------------------------------------------
-    // Decomposition (real model turn + deterministic fallback)
+    // Decomposition (real model turn + atomic deterministic fallback)
     // -----------------------------------------------------------------------
 
     internal async Task<List<SubtaskDraft>?> DecomposeWithModelAsync(
@@ -886,15 +1219,17 @@ public sealed class CoordinatorOrchestratorExecutor
 
     internal static bool CanUseModelFallback(Exception exception) =>
         exception is not ModelProviderConnectionRequiredException
+            and not AgentProviderException { FailureKind: AgentProviderFailureKind.Authorization }
             and not MandatoryContextBudgetExceededException;
 
     /// <summary>
-    /// Deterministic, never-failing decomposition used when the model is unavailable or returns
-    /// unparseable output. Yields a single subtask covering the whole spec, with planning/prose
+    /// Deterministic decomposition used when the model is unavailable or returns
+    /// unparseable output. Explicitly enumerated deliverables are rejected before persistence.
+    /// Yields a single subtask covering the whole spec, with planning/prose
     /// deliverables classified deterministically so the
     /// decompose -> select -> persist path works fully offline.
     /// </summary>
-    private static List<SubtaskDraft> DecomposeDeterministic(OutcomeSpec spec)
+    internal static List<SubtaskDraft> DecomposeDeterministic(OutcomeSpec spec)
     {
         var scope = new StringBuilder()
             .Append("Deliver the confirmed outcome in a single pass. Desired outcome: ")
@@ -919,6 +1254,70 @@ public sealed class CoordinatorOrchestratorExecutor
                 PromotionOverride: "inline")
         ];
     }
+
+    internal static void ValidateExplicitDeliverables(OutcomeSpec spec, IReadOnlyList<SubtaskDraft> drafts)
+    {
+        // Only an explicit, labeled list is evidence of independently named deliverables.
+        // Do not guess task boundaries from conjunctions or enforce a minimum on atomic goals.
+        // The confirmed draft may paraphrase the original goal, so retain the user's
+        // explicit list even if the outcome-spec model flattened its formatting.
+        var text = spec.Goal + "\n" + spec.DesiredOutcome + "\n" + spec.Scope;
+        var sections = Regex.Matches(text,
+            @"(?im)^[ \t]*(?:#{1,6}[ \t]*)?(?:deliverables|outputs)[ \t]*:[ \t]*(?:\r?\n[ \t]*)+(?<items>(?:[ \t]*(?:[-*]|\d+[.)])[ \t]+[^\r\n]+(?:\r?\n[ \t]*)*)+)");
+        foreach (Match section in sections)
+        {
+            var items = Regex.Matches(section.Groups["items"].Value,
+                @"(?m)^[ \t]*(?:[-*]|\d+[.)])[ \t]+(?<item>[^\r\n]+)")
+                .Select(m => m.Groups["item"].Value)
+                .ToList();
+            if (items.Count < 2) continue;
+
+            // Each item needs a distinctive name in a different task title. Discard
+            // dependency clauses before comparison so references do not erase names.
+            var words = items.Select(item => Regex.Matches(
+                    Regex.Split(item, @"(?i)\b(?:after|depends on|following)\b")[0],
+                    @"[\p{L}\p{N}][\p{L}\p{N}_-]*")
+                    .Select(m => m.Value.ToLowerInvariant())
+                    .Where(word => word.Length >= 2 && !DecompositionCommonWords.Contains(word))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase))
+                .ToList();
+            var titleWords = drafts.Select(draft => Regex.Matches(draft.Title,
+                    @"[\p{L}\p{N}][\p{L}\p{N}_-]*")
+                .Select(m => m.Value).ToHashSet(StringComparer.OrdinalIgnoreCase)).ToList();
+            var candidates = words.Select((itemWords, index) =>
+            {
+                var distinctive = itemWords.Except(words.Where((_, i) => i != index)
+                    .SelectMany(other => other), StringComparer.OrdinalIgnoreCase).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                return Enumerable.Range(0, drafts.Count)
+                    .Where(i => distinctive.Any(titleWords[i].Contains)).ToList();
+            }).ToList();
+            var assigned = new int?[drafts.Count];
+            bool Match(int item, HashSet<int> visited)
+            {
+                foreach (var draft in candidates[item])
+                {
+                    if (!visited.Add(draft)) continue;
+                    if (assigned[draft] is int previous && !Match(previous, visited)) continue;
+                    assigned[draft] = item;
+                    return true;
+                }
+                return false;
+            }
+            var covered = Enumerable.Range(0, words.Count)
+                .All(item => Match(item, new HashSet<int>()));
+            if (!covered)
+                throw new CoordinatorDecompositionException(
+                    "Coordinator decomposition could not verify separate tasks for the explicitly listed deliverables. "
+                    + "Retry with the model available or clarify each deliverable with a distinct name; no work plan was saved.");
+        }
+    }
+
+    private static readonly HashSet<string> DecompositionCommonWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "build", "create", "write", "implement", "deliver", "produce", "update", "draft",
+        "make", "then", "with", "from", "into", "that", "this", "each", "using",
+        "an", "to", "of", "on", "in", "is", "as", "by", "or", "and", "the", "for",
+    };
 
     private static SubtaskDraft NormalizePlanningDraft(SubtaskDraft draft)
     {
@@ -1438,6 +1837,7 @@ public sealed class CoordinatorOrchestratorExecutor
             omittedMemoryCount = compilation?.OmittedMemoryCount ?? 0,
             omittedSessionCount = compilation?.OmittedSessionCount ?? 0,
             omissionCauses = compilation?.OmissionCauses ?? [],
+            revisionReferences = compilation?.RevisionReferences ?? [],
         });
     }
 
@@ -1831,7 +2231,8 @@ public sealed class CoordinatorOrchestratorExecutor
         string? cycleNote,
         string? workflowId,
         string workPlanStatus,
-        CancellationToken ct)
+        CancellationToken ct,
+        WorkPlan? reservedPlan = null)
     {
         var now = DateTimeOffset.UtcNow;
 
@@ -1841,18 +2242,20 @@ public sealed class CoordinatorOrchestratorExecutor
         if (cycleNote is not null)
             isolationSummary += " " + cycleNote;
 
-        var workPlan = new WorkPlan
+        var workPlan = reservedPlan ?? new WorkPlan
         {
             OutcomeSpecId = spec.Id,
             ProjectId = input.ProjectId,
             CoordinatorRunId = input.RunId,
-            WorkflowId = workflowId,
             Status = workPlanStatus,
-            IsolationSummary = isolationSummary,
             CreatedAt = now,
-            UpdatedAt = now,
         };
-        db.WorkPlans.Add(workPlan);
+        if (reservedPlan is null)
+            db.WorkPlans.Add(workPlan);
+        workPlan.WorkflowId = workflowId;
+        workPlan.Status = workPlanStatus;
+        workPlan.IsolationSummary = isolationSummary;
+        workPlan.UpdatedAt = now;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         // Persist subtasks first so they get ids, then wire up dependency edges by index.
@@ -2069,3 +2472,5 @@ public sealed class CoordinatorOrchestratorExecutor
 
     internal sealed record PromotionOverrideParseResult(string? Override, string CleanTitle, bool IsValid);
 }
+
+internal sealed class CoordinatorDecompositionException(string message) : InvalidOperationException(message);

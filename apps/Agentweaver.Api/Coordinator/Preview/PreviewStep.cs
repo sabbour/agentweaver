@@ -92,13 +92,17 @@ public sealed class PreviewStep
         var keepProcess = false;
         var skipProcessCleanup = false;
         var leased = false;
+        // Capture before command discovery/model fallback or process startup can outlive recovery.
+        var publicationGeneration = (await _runStore.GetAsync(RunId.Parse(runId), ct)
+            .ConfigureAwait(false))?.LifecycleGeneration;
         var stopReason = "registration_failed";
 
         try
         {
             // 1. Idempotency + applicability short-circuit. A terminal outcome (ready/failed/skipped)
             //    already recorded for this tree ⇒ nothing to do (also covers docs-only "skipped").
-            var latest = FindLatestTerminalKind(runId, request.WorkPlanId, request.TreeHash);
+            var latest = await FindLatestTerminalKindAsync(
+                runId, request.WorkPlanId, request.TreeHash, ct).ConfigureAwait(false);
             if (latest is not null)
             {
                 _logger.LogInformation(
@@ -169,7 +173,10 @@ public sealed class PreviewStep
             //    supervised so a fresh approval attempt can reuse it without duplicate execution.
             //    The publication lease starts here so process startup, observation, and the configured
             //    Gateway-convergence window cannot be cancelled by the run finishing its agent work.
-            leased = await TryLeaseAsync(runId, publicationLeaseOwner, ct).ConfigureAwait(false);
+            if (publicationGeneration is null)
+                return;
+            leased = await TryLeaseAsync(runId, publicationLeaseOwner, publicationGeneration.Value, ct)
+                .ConfigureAwait(false);
             if (!leased)
             {
                 stopReason = "run_terminal";
@@ -243,7 +250,6 @@ public sealed class PreviewStep
             //    be held open for that. The lease is claimed again once approval is granted.
             await ReleaseLeaseAsync(runId, publicationLeaseOwner, leased).ConfigureAwait(false);
             leased = false;
-            publicationLeaseOwner = started.SessionId;
             var approval = await _previewGate.RequestApprovalAsync(
                 runId, port.Port, ct, request.WorkPlanId, request.TreeHash).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
@@ -290,16 +296,13 @@ public sealed class PreviewStep
             }
 
             // Hold the run open again for registration and the preview_ready commit (#1315).
-            leased = await TryLeaseAsync(runId, publicationLeaseOwner, ct).ConfigureAwait(false);
+            leased = await TryLeaseAsync(runId, publicationLeaseOwner, publicationGeneration.Value, ct)
+                .ConfigureAwait(false);
             if (!leased)
             {
                 if (await SandboxEndpoints.IsPreviewRunActiveAsync(runId, _runStore, ct).ConfigureAwait(false))
                 {
-                    if (RunId.TryParse(runId, out var parsedRunId))
-                    {
-                        skipProcessCleanup = await _runStore.IsPreviewPublicationOwnerAsync(
-                            parsedRunId, publicationLeaseOwner, ct).ConfigureAwait(false);
-                    }
+                    skipProcessCleanup = true;
                     _logger.LogInformation(
                         "PreviewStep: run {RunId} already has an active publication attempt; joining its outcome.",
                         runId);
@@ -316,12 +319,24 @@ public sealed class PreviewStep
                 runId, port.Port, request.SubmittingUser, _previewService, ct,
                 previewRunnerSessionId: started.SessionId,
                 maintainPublicationLease: true,
-                publicationLeaseOwner: publicationLeaseOwner).ConfigureAwait(false);
+                publicationLeaseOwner: publicationLeaseOwner,
+                expectedLifecycleGeneration: publicationGeneration.Value).ConfigureAwait(false);
 
             if (registration.Status == PreviewRegistrationStatus.Success)
             {
-                if (!await EmitReadyAsync(request, registration.Session!, started.SessionId, ct).ConfigureAwait(false))
+                if (!await EmitReadyAsync(
+                    request, registration.Session!, started.SessionId, publicationLeaseOwner,
+                    publicationGeneration ?? throw new InvalidOperationException("Preview run disappeared."),
+                    ct).ConfigureAwait(false))
                 {
+                    if (await SandboxEndpoints.IsPreviewRunActiveAsync(runId, _runStore, ct).ConfigureAwait(false))
+                    {
+                        skipProcessCleanup = true;
+                        _logger.LogInformation(
+                            "PreviewStep: publication for run {RunId} lost its lease before ready was committed.",
+                            runId);
+                        return;
+                    }
                     stopReason = "run_terminal";
                     EmitFailed(request, stopReason, "The run ended before preview publication completed.", started.SessionId);
                     return;
@@ -371,13 +386,17 @@ public sealed class PreviewStep
         finally
         {
             var shouldStopProcess = started is not null && !keepProcess && !skipProcessCleanup;
-            if (shouldStopProcess && leased && RunId.TryParse(runId, out var parsedRunId))
+            var cleanupReserved = false;
+            if (shouldStopProcess && RunId.TryParse(runId, out var parsedRunId))
             {
                 using var ownershipCheck = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 try
                 {
                     shouldStopProcess = await SandboxEndpoints.CanCleanUpPreviewProcessAsync(
-                        _runStore, parsedRunId, publicationLeaseOwner, ownershipCheck.Token).ConfigureAwait(false);
+                        _runStore, parsedRunId, publicationLeaseOwner,
+                        publicationGeneration ?? throw new InvalidOperationException("Preview generation not captured."),
+                        ownershipCheck.Token).ConfigureAwait(false);
+                    cleanupReserved = shouldStopProcess;
                 }
                 catch (Exception ex)
                 {
@@ -395,7 +414,7 @@ public sealed class PreviewStep
                 await TryStopProcessAsync(
                     runId, bearer, started!.SessionId, stopReason, cleanup.Token).ConfigureAwait(false);
             }
-            await ReleaseLeaseAsync(runId, publicationLeaseOwner, leased).ConfigureAwait(false);
+            await ReleaseLeaseAsync(runId, publicationLeaseOwner, leased || cleanupReserved).ConfigureAwait(false);
         }
     }
 
@@ -403,7 +422,8 @@ public sealed class PreviewStep
     /// Claims the preview-publication lease so a run that finishes its agent work cannot terminalize
     /// while this step publishes (#1315). Returns <c>false</c> when the run is already terminal.
     /// </summary>
-    private async Task<bool> TryLeaseAsync(string runId, string ownerId, CancellationToken ct)
+    private async Task<bool> TryLeaseAsync(
+        string runId, string ownerId, int expectedLifecycleGeneration, CancellationToken ct)
     {
         if (!RunId.TryParse(runId, out var parsed))
             return false;
@@ -411,6 +431,7 @@ public sealed class PreviewStep
             parsed,
             ownerId,
             DateTimeOffset.UtcNow + PreviewPublicationLeaseRunStore.PublicationLeaseWindow,
+            expectedLifecycleGeneration,
             ct).ConfigureAwait(false);
     }
 
@@ -568,7 +589,8 @@ public sealed class PreviewStep
     }
 
     private async Task<bool> EmitReadyAsync(
-        PreviewStepRequest r, PreviewSession preview, string previewRunnerSessionId, CancellationToken ct)
+        PreviewStepRequest r, PreviewSession preview, string previewRunnerSessionId,
+        string publicationOwner, int publicationGeneration, CancellationToken ct)
     {
         var keepaliveUrl = $"/api/runs/{r.RunId}/sandbox/preview/{preview.Token}/keepalive";
         var payload = new
@@ -587,7 +609,8 @@ public sealed class PreviewStep
             timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
         };
         return await SandboxEndpoints.PublishPreviewReadyAsync(
-            preview, payload, _previewService, _streamStore, _runStore, ct).ConfigureAwait(false);
+            preview, payload, _previewService, _streamStore, _runStore, ct,
+            publicationOwner, publicationGeneration).ConfigureAwait(false);
     }
 
     private void EmitFailed(PreviewStepRequest r, string reason, string message, string? previewRunnerSessionId = null)
@@ -656,7 +679,8 @@ public sealed class PreviewStep
     /// <see langword="null"/> when none yet. Mirrors the coordinator guard's authoritative
     /// latest-state logic so the two never disagree on "already has an outcome".
     /// </summary>
-    private string? FindLatestTerminalKind(string runId, int workPlanId, string treeHash)
+    private async Task<string?> FindLatestTerminalKindAsync(
+        string runId, int workPlanId, string treeHash, CancellationToken ct)
     {
         var events = _streamStore.Get(runId)?.GetSnapshotSince(0).Events;
         if (events is null || events.Count == 0)
@@ -677,7 +701,18 @@ public sealed class PreviewStep
             if (node is null || !TreeMatches(node, workPlanId, treeHash))
                 continue;
 
-            if (evt.Type == EventTypes.SandboxPreviewReady) return "ready";
+            if (evt.Type == EventTypes.SandboxPreviewReady)
+            {
+                var token = GetString(node, "session_id");
+                var pod = GetString(node, "pod_name");
+                var runner = GetString(node, "preview_runner_session_id");
+                var port = GetInt(node, "target_port");
+                if (token is not null && pod is not null && runner is not null && port is > 0
+                    && await _previewService.IsPreviewSessionLiveAsync(
+                        runId, token, pod, port.Value, runner, ct).ConfigureAwait(false))
+                    return "ready";
+                return null;
+            }
             if (evt.Type == EventTypes.SandboxPreviewFailed) return "failed";
             if (evt.Type == EventTypes.SandboxPreviewSkippedNotApplicable) return "skipped";
             if (evt.Type == EventTypes.SandboxPreviewApplicability

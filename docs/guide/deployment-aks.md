@@ -211,6 +211,12 @@ Mints a new immutable image tag from `HEAD` (refuses a dirty working tree by def
 builds and pushes images, redeploys, verifies provenance, and cycles the
 AgentHost warm-pool sandboxes (reapply-and-wait on the SandboxWarmPool —
 never manual pod deletion).
+The post-deploy image check queries the controller's live
+`SandboxWarmPool.status.selector` and requires exactly the configured number of
+ready pods before comparing every pod's AgentHost digest (or AgentHost image
+repository and tag if the digest cannot be resolved). A missing selector,
+missing pods, or a count/readiness mismatch fails verification rather than
+reporting a successful deploy.
 
 For an intentional personal development test, `--allow-dirty` is the explicit escape
 hatch. It is not release-candidate evidence; use an exact committed candidate for release validation.
@@ -235,6 +241,12 @@ detached worktree, and identified by its short SHA. Uncommitted state is never
 included.
 
 ### Publishing and deploying a release
+
+First deploy the committed release candidate with
+`npm run azure:deploy-from-commit -- <candidate-sha>` and pass representative
+integration plus feature-specific API/UI E2E acceptance against that exact-SHA
+deployment. Only then prepare/promote and publish the release identity.
+See the [release runbook](../../RELEASING.md) for the complete sequence.
 
 ```bash
 npm run release:publish
@@ -339,6 +351,8 @@ npm run azure:verify
 The verifier checks cluster resources, routes, health, the canonical OAuth public
 origin and `/mcp` resource, runtime certificate-family configuration, Key Vault
 certificate versions, the canonical Repo App private-key secret, and JWKS.
+It also checks that the Worker ServiceAccount can read namespaced Sandboxes for
+post-configure AgentHost binding attestation; missing `sandboxes/get` fails verification.
 
 Useful follow-up commands:
 
@@ -366,4 +380,6 @@ described above.
 | ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
 | API/MCP auth failures | confirm Entra client/tenant IDs, canonical OAuth public origin, both configured Key Vault certificate families/versions, and readable `ghtok-repo-app-private-key` |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
+| Worker AgentHost launch fails with Sandbox GET 403 | Check `kubectl auth can-i get sandboxes.agents.x-k8s.io -n agentweaver --as=system:serviceaccount:agentweaver:agentweaver-worker`; redeploy the worker namespaced Role/RoleBinding if denied. Do not bypass binding attestation. |
+| Warm-pool image verification fails despite ready replicas | Inspect `status.selector` with `kubectl get sandboxwarmpool agentweaver-agent-host -n agentweaver -o json`, then query its selected pods; check membership, readiness, and image digests. Let the controller replace pods; do not delete them manually. |
 | Postgres connection failure | verify `agentweaver-postgres` secret and private DNS for `<server>.postgres.database.azure.com` |

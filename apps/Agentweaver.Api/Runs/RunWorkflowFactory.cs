@@ -1,10 +1,14 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using LibGit2Sharp;
 using Agentweaver.AgentRuntime;
 using Agentweaver.AgentRuntime.Providers;
 using Agentweaver.AgentRuntime.Workflow;
@@ -75,6 +79,50 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     internal string? ApiKey => _apiKey;
 
     internal IWorkflowAgentFactory AgentFactory => _agentFactory;
+
+    internal async Task PublishComposedAgentTreeAsync(
+        AgentTurnInput? previous, AgentTurnOutput output, RunLeaseClaim executionLease, CancellationToken ct)
+    {
+        if (previous is null || !RunId.TryParse(previous.RunId, out var rootId)
+            || output.RunId != previous.RunId || output.TerminalFailureReason is not null
+            || output.WorktreePath != previous.WorktreePath
+            || output.WorktreeBranch != previous.WorktreeBranch
+            || output.RepositoryPath != previous.RepositoryPath
+            || output.OriginatingBranch != previous.OriginatingBranch
+            || output.ProjectId != previous.ProjectId
+            || output.SubmittingUser != previous.SubmittingUser
+            || output.ModelSource != previous.ModelSource
+            || output.ModelId != previous.ModelId
+            || output.ByokProviderFingerprint != previous.ByokProviderFingerprint
+            || output.WorktreeBranch != Git.WorktreeManager.BranchNameFor(rootId)
+            || string.IsNullOrWhiteSpace(output.TreeHash)
+            || _worktreeOps.GetTreeHash(output.WorktreePath) != output.TreeHash)
+            throw new InvalidOperationException("Composed agent output does not match the root execution input.");
+        using (var repository = new Repository(output.WorktreePath))
+        {
+            if (repository.Info.IsHeadDetached
+                || repository.Head.FriendlyName != output.WorktreeBranch
+                || repository.RetrieveStatus(new StatusOptions { IncludeUntracked = true }).IsDirty)
+                throw new InvalidOperationException("Composed agent output worktree is not clean on the root branch.");
+        }
+        var expected = await _runStore.GetAsync(rootId, ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Composed root run is unavailable.");
+        if (expected.ParentRunId is not null
+            || expected.RepositoryPath != previous.RepositoryPath
+            || expected.OriginatingBranch != previous.OriginatingBranch
+            || expected.WorktreePath != previous.WorktreePath
+            || expected.WorktreeBranch != previous.WorktreeBranch
+            || expected.ModelSource.ToApiString() != previous.ModelSource
+            || expected.ModelId != previous.ModelId
+            || expected.SubmittingUser != previous.SubmittingUser
+            || expected.ProjectId?.ToString() != previous.ProjectId)
+            throw new InvalidOperationException("Composed root execution context changed.");
+        if (executionLease.LifecycleGeneration != expected.LifecycleGeneration)
+            throw new InvalidOperationException("Composed root lease changed.");
+        if (!await _runStore.TryPublishComposedAgentTreeAsync(expected, output.TreeHash, executionLease, ct)
+                .ConfigureAwait(false))
+            throw new InvalidOperationException("Composed agent output could not be published to the current root lifecycle.");
+    }
 
     internal async Task FinalizeScribeHousekeepingAsync(
         ScribeTurnInput input,
@@ -389,13 +437,46 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     /// </summary>
     internal const string MergeDataScope = "merge-data";
     internal const string MergeDataKey = "agent-output";
+    internal const string ReviewRequestKey = "review-request";
+
+    private async ValueTask<WorkflowReviewRequest> CaptureReviewRequestAsync(
+        AgentTurnOutput output, IWorkflowContext ctx, CancellationToken ct)
+    {
+        var run = await _runStore.GetAsync(RunId.Parse(output.RunId), ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Review-ready run no longer exists.");
+        var request = new WorkflowReviewRequest(
+            output.RunId, output.TreeHash, output.Diff, output.StepCount,
+            RaiSafetyFlagged: output.ContentSafetyFlagged,
+            LifecycleGeneration: run.LifecycleGeneration);
+        await ctx.QueueStateUpdateAsync(MergeDataKey, output, MergeDataScope, ct).ConfigureAwait(false);
+        // A blocked merge must reuse this checkpointed generation, never the run's later generation.
+        await ctx.QueueStateUpdateAsync(ReviewRequestKey, request, MergeDataScope, ct).ConfigureAwait(false);
+        return request;
+    }
+
+    internal static WorkflowReviewRequest RecreateBlockedReviewRequest(
+        AgentTurnOutput? output, WorkflowReviewRequest? reviewed)
+    {
+        if (output is null || reviewed?.LifecycleGeneration is not { } generation || generation < 1
+            || reviewed.RunId != output.RunId || reviewed.TreeHash != output.TreeHash
+            || reviewed.Diff != output.Diff || reviewed.StepCount != output.StepCount
+            || reviewed.RaiSafetyFlagged != output.ContentSafetyFlagged)
+            throw new InvalidOperationException("Blocked merge has no matching generation-bound reviewed output.");
+
+        return new WorkflowReviewRequest(
+            output.RunId, output.TreeHash, output.Diff, output.StepCount,
+            RaiSafetyFlagged: output.ContentSafetyFlagged,
+            LifecycleGeneration: generation);
+    }
 
     /// <summary>Maximum revision iterations before capping (Rai or Review).</summary>
     private const int MaxIterations = 3;
 
     private (Workflow Workflow, GraphDescriptor Descriptor, IReadOnlyDictionary<string, ExecutorNodeMeta> ExecutorMeta) BuildWorkflow(
         bool isChild = false,
-        WorkflowDefinition? effectiveDefinition = null)
+        WorkflowDefinition? effectiveDefinition = null,
+        string? recoveryComposedNodeId = null,
+        RunLeaseClaim? executionLease = null)
     {
         // A fresh worker agent per workflow build (per run), resolved through the injectable
         // IWorkflowAgentFactory seam. In production this builds a CopilotAIAgent — an AIAgent the
@@ -433,14 +514,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         // RaiSafetyFlagged is passed through so the reviewer sees Rai's verdict as context.
         ExecutorBinding reviewAdapter = new VisualFunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
             "review-adapter", "review-adapter", "Review adapter", "plumbing", "action", true,
-            async (input, ctx, ct) =>
-            {
-                await ctx.QueueStateUpdateAsync(MergeDataKey, input, MergeDataScope, ct)
-                    .ConfigureAwait(false);
-                return new WorkflowReviewRequest(
-                    input.RunId, input.TreeHash, input.Diff, input.StepCount,
-                    RaiSafetyFlagged: input.ContentSafetyFlagged);
-            });
+            (input, ctx, ct) => CaptureReviewRequestAsync(input, ctx, ct));
 
         // Adapter: maps WorkflowReviewDecision -> MergeInput by reading the stored
         // AgentTurnOutput from workflow state.
@@ -457,7 +531,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     agentOutput.WorktreeBranch,
                     agentOutput.RepositoryPath,
                     agentOutput.OriginatingBranch,
-                    ReviewedBy: decision.ReviewedBy);
+                    ReviewedBy: decision.ReviewedBy,
+                    OutputRevisionId: decision.OutputRevisionId);
             });
 
         ExecutorBinding policyAgentOutputAdapter = new VisualFunctionExecutor<WorkflowReviewDecision, AgentTurnOutput>(
@@ -559,9 +634,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             {
                 var agentOutput = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
                     .ConfigureAwait(false);
-                return new WorkflowReviewRequest(
-                    agentOutput!.RunId, agentOutput.TreeHash, agentOutput.Diff, agentOutput.StepCount,
-                    RaiSafetyFlagged: agentOutput.ContentSafetyFlagged);
+                var reviewed = await ctx.ReadStateAsync<WorkflowReviewRequest>(ReviewRequestKey, MergeDataScope, ct)
+                    .ConfigureAwait(false);
+                return RecreateBlockedReviewRequest(agentOutput, reviewed);
             });
 
         // Store AgentTurnInput in workflow state at workflow start so Scribe adapters
@@ -575,7 +650,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             });
 
         // Two separate ScribeTurnExecutor instances to avoid single-node-multiple-inputs
-        // ambiguity in MAF's graph builder. Each creates its own ephemeral ScribeAIAgent.
+        // ambiguity in MAF's graph builder. Each creates its own ephemeral Scribe role agent.
         var scribeMergeExec = new ScribeTurnExecutor(
             _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "scribe-turn-merge",
@@ -593,7 +668,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
 
         // Rai RAI gate: runs after the agent turn, before the content-safety/no-op/review
         // fork. A RED verdict flips ContentSafetyFlagged so the workflow routes to the
-        // safety terminal. Ephemeral RaiAIAgent per execution.
+        // safety terminal. Ephemeral Rai role agent per execution.
         var raiTurnExec = new RaiTurnExecutor(
             _copilotClientFactory, _sandboxExecutor, _sandboxPolicyStore,
             _approvalStore, _toolApprovalGate, _loggerFactory, GetRecordingWriter, "rai-turn",
@@ -742,6 +817,170 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         ExecutorBinding mergeBinding = mergeExecutor;
         ExecutorBinding reviewBinding = reviewPort;
         var fullDefinition = effectiveDefinition ?? Workflows.BuiltInWorkflows.Default.Definition!;
+        var fanOutNode = fullDefinition.Nodes.SingleOrDefault(node => node.Type == WorkflowNodeType.FanOut);
+        var fanInNode = fullDefinition.Nodes.SingleOrDefault(node => node.Type == WorkflowNodeType.FanIn);
+        var composedNode = fullDefinition.Nodes.SingleOrDefault(
+            node => node.Type == WorkflowNodeType.CoordinatorComposed);
+        ExecutorBinding? fanOutBinding = null;
+        ExecutorBinding? fanPauseBinding = null;
+        ExecutorBinding? fanInBinding = null;
+        ExecutorBinding? fanFailureBinding = null;
+        ExecutorBinding? composedBinding = null;
+        ExecutorBinding? composedPauseBinding = null;
+        ExecutorBinding? composedFailureBinding = null;
+        if (fanOutNode is not null && fanInNode is not null)
+        {
+            var branchNodes = fullDefinition.Edges
+                .Where(edge => string.Equals(edge.From, fanOutNode.Id, StringComparison.Ordinal))
+                .Select(edge => fullDefinition.Nodes.Single(node =>
+                    string.Equals(node.Id, edge.To, StringComparison.Ordinal)))
+                .ToArray();
+            var fanPort = RequestPort.Create<WorkflowChildWorkPauseRequest, WorkflowChildWorkResult>(
+                $"workflow-child-work-{fanOutNode.Id}");
+
+            fanOutBinding = new VisualFunctionExecutor<AgentTurnInput, WorkflowChildWorkPauseRequest>(
+                $"fan-out-{fanOutNode.Id}",
+                fanOutNode.Id,
+                fanOutNode.Label,
+                fanOutNode.Role ?? "assembly",
+                "fan-out",
+                false,
+                async (input, ctx, ct) =>
+                {
+                    if (!RunId.TryParse(input.RunId, out var parsedRunId))
+                        throw new InvalidOperationException($"Invalid parent workflow run id '{input.RunId}'.");
+                    var parentRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException($"Parent workflow run '{input.RunId}' was not found.");
+                    var branches = branchNodes.Select(node => new StaticWorkflowBranch(
+                        NodeId: node.Id,
+                        Title: node.Label,
+                        Scope: string.IsNullOrWhiteSpace(node.Prompt) ? node.Label : node.Prompt!,
+                        AssignedAgent: node.Agent ?? input.AgentName ?? "agent",
+                        SelectedModelId: input.ModelId ?? parentRun.ModelId ?? string.Empty,
+                        DeclaredOutputPaths: node.DeclaredOutputPaths,
+                        AgentCharter: node.Charter)).ToArray();
+
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    using var fanBase = new LibGit2Sharp.Repository(input.WorktreePath);
+                    var capturedInput = input with
+                    {
+                        FanExecutionBaseCommitHash = fanBase.Head.Tip?.Sha
+                            ?? throw new InvalidOperationException("Static fan has no committed execution base."),
+                    };
+                    var attachment = await scope.ServiceProvider
+                        .GetRequiredService<WorkflowChildWorkService>()
+                        .PrepareStaticAsync(
+                            new WorkflowChildWorkRequest(
+                                parentRun,
+                                fullDefinition.Id,
+                                fanOutNode.Id,
+                                fanInNode.Id,
+                                branches,
+                                capturedInput,
+                                _worktreeOps.GetTreeHash(input.WorktreePath)),
+                            ct)
+                        .ConfigureAwait(false);
+
+                    return new WorkflowChildWorkPauseRequest(
+                        attachment.WorkPlanId,
+                        input.RunId,
+                        fanOutNode.Id,
+                        fanInNode.Id,
+                        attachment.ChildCoordinatorRunId);
+                });
+            fanPauseBinding = fanPort;
+            fanInBinding = new VisualFunctionExecutor<WorkflowChildWorkResult, WorkflowFanInOutput>(
+                $"fan-in-{fanInNode.Id}",
+                fanInNode.Id,
+                fanInNode.Label,
+                fanInNode.Role ?? "assembly",
+                "fan-in",
+                false,
+                (result, ctx, ct) => new ValueTask<WorkflowFanInOutput>(new WorkflowFanInOutput(
+                    result.WorkPlanId,
+                    result.ChildCoordinatorRunId,
+                    result.Succeeded,
+                    result.FailureReason,
+                    result.Branches,
+                    result.JoinedOutput)));
+            fanFailureBinding = new VisualFunctionExecutor<WorkflowFanInOutput, AgentTurnFailedOutput>(
+                $"fan-failed-{fanInNode.Id}",
+                fanInNode.Id,
+                fanInNode.Label,
+                "plumbing",
+                "terminal",
+                true,
+                async (result, ctx, ct) =>
+                {
+                    var parentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    return new AgentTurnFailedOutput(
+                        parentInput?.RunId ?? string.Empty,
+                        result.FailureReason ?? "workflow_child_work_failed",
+                        Evidence: JsonSerializer.Serialize(result.Branches));
+                });
+        }
+        if (composedNode is not null)
+        {
+            var composedPort = RequestPort.Create<WorkflowChildWorkPauseRequest, WorkflowChildWorkResult>(
+                $"workflow-child-work-{composedNode.Id}");
+            composedBinding = new VisualFunctionExecutor<AgentTurnInput, WorkflowChildWorkPauseRequest>(
+                $"coordinator-composed-{composedNode.Id}",
+                composedNode.Id,
+                composedNode.Label,
+                composedNode.Role ?? "assembly",
+                "coordinator-composed",
+                false,
+                async (input, ctx, ct) =>
+                {
+                    if (!RunId.TryParse(input.RunId, out var parsedRunId))
+                        throw new InvalidOperationException($"Invalid parent workflow run id '{input.RunId}'.");
+                    var parentRun = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException($"Parent workflow run '{input.RunId}' was not found.");
+                    var baseTree = _worktreeOps.GetTreeHash(input.WorktreePath);
+                    if (string.IsNullOrWhiteSpace(baseTree) || baseTree != parentRun.TreeHash)
+                        throw new InvalidOperationException(
+                            $"Coordinator-composed node '{composedNode.Id}' cannot capture an unpublished parent tree.");
+
+                    await using var scope = _scopeFactory.CreateAsyncScope();
+                    var attachment = await scope.ServiceProvider
+                        .GetRequiredService<WorkflowChildWorkService>()
+                        .PrepareComposedAsync(
+                            new WorkflowComposedWorkRequest(
+                                parentRun,
+                                fullDefinition.Id,
+                                composedNode.Id,
+                                composedNode.Prompt!,
+                                input,
+                                baseTree),
+                            ct)
+                        .ConfigureAwait(false);
+
+                    return new WorkflowChildWorkPauseRequest(
+                        attachment.WorkPlanId,
+                        input.RunId,
+                        composedNode.Id,
+                        composedNode.Id,
+                        attachment.ChildCoordinatorRunId);
+                });
+            composedPauseBinding = composedPort;
+            composedFailureBinding = new VisualFunctionExecutor<WorkflowChildWorkResult, AgentTurnFailedOutput>(
+                $"coordinator-composed-failed-{composedNode.Id}",
+                composedNode.Id,
+                composedNode.Label,
+                "plumbing",
+                "terminal",
+                true,
+                async (result, ctx, ct) =>
+                {
+                    var parentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    return new AgentTurnFailedOutput(
+                        parentInput?.RunId ?? string.Empty,
+                        result?.FailureReason ?? "workflow_composed_child_work_failed",
+                        Evidence: result is null ? null : JsonSerializer.Serialize(result));
+                });
+        }
         var policyGateBindings = BuildPolicyGateBindings(fullDefinition);
 
         // Rai REVISE adapter: reads stored agent-input, appends Rai feedback to Task,
@@ -853,7 +1092,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         // The per-node / per-edge executor mint for generic catalog topologies (Feature 015 US3). Seeded
         // with the canonical "agent" node so the default + review-policy-composed pipelines keep the exact
         // same agent executor instance the policy plumbing references (golden descriptor parity).
-        var wiringSupport = new GenericWiringSupport(this, canonicalAgentNodeId: "agent", canonicalAgentBinding: agentBinding);
+        var wiringSupport = new GenericWiringSupport(
+            this, canonicalAgentNodeId: "agent", canonicalAgentBinding: agentBinding, executionLease);
 
         RunWorkflowGraphBinder.WireFull(
             fullBuilder,
@@ -884,10 +1124,18 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 BlockedAdapter: blockedAdapter,
                 ReviewChangesAdapter: reviewChangesAdapter,
                 TerminalDeclined: terminalDeclined,
+                FanOutBinding: fanOutBinding,
+                FanPauseBinding: fanPauseBinding,
+                FanInBinding: fanInBinding,
+                FanFailureBinding: fanFailureBinding,
+                ComposedBinding: composedBinding,
+                ComposedPauseBinding: composedPauseBinding,
+                ComposedFailureBinding: composedFailureBinding,
                 MaxIterations: MaxIterations,
-                Wiring: wiringSupport));
+                Wiring: wiringSupport),
+            recoveryComposedNodeId);
 
-        var wf = fullBuilder.Build();
+        var wf = fullBuilder.Build(validateOrphans: recoveryComposedNodeId is null);
         var descriptor = fullBuilder.BuildDescriptor("agentweaver-workflow-full", "full");
 
         return (wf, descriptor, fullBuilder.BuildExecutorMetaMap());
@@ -946,14 +1194,17 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     private sealed class GenericWiringSupport : IRunWorkflowWiringSupport
     {
         private readonly RunWorkflowFactory _factory;
+        private readonly RunLeaseClaim? _executionLease;
         private readonly Dictionary<string, ExecutorBinding> _agentNodes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ExecutorBinding> _peerReviewNodes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ExecutorBinding> _openPrNodes = new(StringComparer.Ordinal);
 
         public GenericWiringSupport(
-            RunWorkflowFactory factory, string canonicalAgentNodeId, ExecutorBinding canonicalAgentBinding)
+            RunWorkflowFactory factory, string canonicalAgentNodeId, ExecutorBinding canonicalAgentBinding,
+            RunLeaseClaim? executionLease)
         {
             _factory = factory;
+            _executionLease = executionLease;
             // Seed the canonical agent node so the DEFAULT (and review-policy-composed) pipeline keeps the
             // exact same agent executor instance the policy plumbing also references (b.AgentBinding) — this
             // is what preserves golden descriptor parity and keeps loop-backs targeting one agent node.
@@ -1067,7 +1318,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         private static string EdgeId(string role, WorkflowEdge e) =>
             $"{role}-{e.From}-{e.To}-{e.When ?? "x"}";
 
-        public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge)
+        public ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge, bool publishComposedTree = false)
         {
             var id = EdgeId("seq-turn", edge);
             return new VisualFunctionExecutor<AgentTurnOutput, AgentTurnInput>(
@@ -1075,6 +1326,12 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 async (output, ctx, ct) =>
                 {
                     var prev = await ctx.ReadStateAsync<AgentTurnInput>("agent-input", "run-context", ct).ConfigureAwait(false);
+                    if (publishComposedTree)
+                    {
+                        if (_executionLease is null)
+                            throw new InvalidOperationException("Composed agent output has no execution lease.");
+                        await _factory.PublishComposedAgentTreeAsync(prev, output, _executionLease, ct).ConfigureAwait(false);
+                    }
                     var next = ContinueTurn(prev, output, "Previous step output", isRevision: false);
                     await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
                     return next;
@@ -1146,7 +1403,8 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     var ao = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
                     return new MergeInput(
                         ao!.RunId, ao.TreeHash, ao.WorktreePath, ao.WorktreeBranch,
-                        ao.RepositoryPath, ao.OriginatingBranch, ReviewedBy: decision.ReviewedBy);
+                        ao.RepositoryPath, ao.OriginatingBranch, ReviewedBy: decision.ReviewedBy,
+                        OutputRevisionId: decision.OutputRevisionId);
                 });
         }
 
@@ -1155,13 +1413,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             var id = EdgeId("agent-to-review", edge);
             return new VisualFunctionExecutor<AgentTurnOutput, WorkflowReviewRequest>(
                 id, id, "Review adapter", "plumbing", "action", true,
-                async (output, ctx, ct) =>
-                {
-                    await ctx.QueueStateUpdateAsync(MergeDataKey, output, MergeDataScope, ct).ConfigureAwait(false);
-                    return new WorkflowReviewRequest(
-                        output.RunId, output.TreeHash, output.Diff, output.StepCount,
-                        RaiSafetyFlagged: output.ContentSafetyFlagged);
-                });
+                (output, ctx, ct) => _factory.CaptureReviewRequestAsync(output, ctx, ct));
         }
 
         public ExecutorBinding ReviewToReviewRequestAdapter(WorkflowEdge edge)
@@ -1171,10 +1423,10 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 id, id, "Approved → human review", "plumbing", "action", true,
                 async (decision, ctx, ct) =>
                 {
-                    var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct).ConfigureAwait(false);
-                    return new WorkflowReviewRequest(
-                        produced!.RunId, produced.TreeHash, produced.Diff, produced.StepCount,
-                        RaiSafetyFlagged: produced.ContentSafetyFlagged);
+                    var produced = await ctx.ReadStateAsync<AgentTurnOutput>(MergeDataKey, MergeDataScope, ct)
+                        .ConfigureAwait(false)
+                        ?? throw new InvalidOperationException("Approved automated review has no produced output.");
+                    return await _factory.CaptureReviewRequestAsync(produced, ctx, ct).ConfigureAwait(false);
                 });
         }
 
@@ -1232,6 +1484,91 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                     var next = ReviseTurn(prev, feedback: null);
                     await ctx.QueueStateUpdateAsync("agent-input", next, "run-context", ct).ConfigureAwait(false);
                     return next;
+                });
+        }
+
+        public ExecutorBinding FanInToAgentAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("fan-in-to-agent", edge);
+            return new VisualFunctionExecutor<WorkflowFanInOutput, AgentTurnInput>(
+                id, id, "Joined branches", "plumbing", "action", true,
+                async (output, ctx, ct) =>
+                {
+                    var previous = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    var basis = previous ?? EmptyTurn(string.Empty);
+                    var next = basis with
+                    {
+                        Task = $"{basis.Task}\n\n[Ordered parallel branch results]\n{output.JoinedOutput}",
+                        IsRevision = false,
+                    };
+                    await ctx.QueueStateUpdateAsync(
+                        "agent-input", next, "run-context", ct).ConfigureAwait(false);
+                    return next;
+                });
+        }
+
+        public ExecutorBinding FanInToTerminalAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("fan-in-to-terminal", edge);
+            return new VisualFunctionExecutor<WorkflowFanInOutput, WorkflowFanCompletedOutput>(
+                id, id, "Joined result", "plumbing", "terminal", true,
+                async (output, ctx, ct) =>
+                {
+                    var parentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    return new WorkflowFanCompletedOutput(
+                        parentInput?.RunId ?? string.Empty,
+                        output.JoinedOutput,
+                        output.WorkPlanId,
+                        output.ChildCoordinatorRunId);
+                });
+        }
+
+        public ExecutorBinding ComposedToAgentAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("composed-to-agent", edge);
+            return new VisualFunctionExecutor<WorkflowChildWorkResult, AgentTurnInput>(
+                id, id, "Composed result", "plumbing", "action", true,
+                async (output, ctx, ct) =>
+                {
+                    var previous = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    var basis = previous ?? EmptyTurn(string.Empty);
+                    var assembly = output.Assembly
+                        ?? throw new InvalidOperationException("Composed child work completed without an assembly.");
+                    var next = basis with
+                    {
+                        Task =
+                            $"{basis.Task}\n\n[Composed coordinator result]\n" +
+                            $"Work plan: {output.WorkPlanId}\n" +
+                            $"Child coordinator: {output.ChildCoordinatorRunId}\n" +
+                            $"Tree: {assembly.TreeHash}\n" +
+                            $"Included child runs: {string.Join(", ", assembly.IncludedChildRunIds)}",
+                        IsRevision = false,
+                    };
+                    await ctx.QueueStateUpdateAsync(
+                        "agent-input", next, "run-context", ct).ConfigureAwait(false);
+                    return next;
+                });
+        }
+
+        public ExecutorBinding ComposedToTerminalAdapter(WorkflowEdge edge)
+        {
+            var id = EdgeId("composed-to-terminal", edge);
+            return new VisualFunctionExecutor<WorkflowChildWorkResult, WorkflowComposedCompletedOutput>(
+                id, id, "Composed result", "plumbing", "terminal", true,
+                async (output, ctx, ct) =>
+                {
+                    var parentInput = await ctx.ReadStateAsync<AgentTurnInput>(
+                        "agent-input", "run-context", ct).ConfigureAwait(false);
+                    return new WorkflowComposedCompletedOutput(
+                        parentInput?.RunId ?? string.Empty,
+                        output.WorkPlanId,
+                        output.ChildCoordinatorRunId,
+                        output.Assembly
+                            ?? throw new InvalidOperationException(
+                                "Composed child work completed without an assembly."));
                 });
         }
 
@@ -1419,15 +1756,46 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     /// agent terminating assemble-ready, with no per-child RAI / review gate / merge / scribe.
     /// </summary>
     public async Task<StreamingRun> StartAsync(AgentTurnInput input, string runId, CancellationToken ct, bool isChild = false,
-        int? steeringDirectiveId = null, int? steeringAttempt = null)
+        int? steeringDirectiveId = null, int? steeringAttempt = null,
+        string? recoveryComposedNodeId = null, RunLeaseClaim? executionLease = null)
     {
-        var effectiveWorkflow = isChild
-            ? null
-            : await ResolveEffectiveWorkflowAsync(input.ProjectId, runId, ct).ConfigureAwait(false);
-        var effectiveDefinition = effectiveWorkflow?.Definition;
+        WorkflowDefinition? effectiveDefinition = null;
+        if (!isChild)
+        {
+            var parsedRunId = RunId.Parse(runId);
+            var run = await _runStore.GetAsync(parsedRunId, ct).ConfigureAwait(false);
+            if (run is null)
+            {
+                throw new WorkflowBindException(
+                    $"Run '{runId}' cannot start because its durable run record is missing.",
+                    runId);
+            }
+
+            if (run.GetExecutableWorkflowPin() is { } existingPin)
+            {
+                effectiveDefinition = ExecutableWorkflowSnapshots.Load(runId, existingPin);
+            }
+            else
+            {
+                if (input.IsRevision && run.ExecutableWorkflowPinRequired)
+                {
+                    throw new WorkflowBindException(
+                        $"Run '{runId}' requires a pinned executable workflow manifest before revision execution, but none is stored. " +
+                        "Revision launch cannot safely select the current project default.",
+                        runId);
+                }
+
+                var effectiveWorkflow = await ResolveEffectiveWorkflowAsync(input.ProjectId, runId, ct).ConfigureAwait(false);
+                effectiveDefinition = effectiveWorkflow.Definition;
+                await PersistExecutableWorkflowPinAsync(parsedRunId, effectiveWorkflow, ct).ConfigureAwait(false);
+            }
+        }
         if (!isChild)
             _workflowWorktreeMaterializer?.TryMaterialize(input.WorktreePath, effectiveDefinition);
-        var (workflow, descriptor, executorMeta) = BuildWorkflow(isChild, effectiveDefinition);
+        if (recoveryComposedNodeId is not null && (isChild || effectiveDefinition is null))
+            throw new WorkflowBindException("Composed recovery requires a pinned root workflow.", runId);
+        var (workflow, descriptor, executorMeta) = BuildWorkflow(
+            isChild, effectiveDefinition, recoveryComposedNodeId, executionLease);
         // Capture the executorId -> render-metadata map so the watch loop can translate MAF executor
         // lifecycle events into workflow.step UI events for nodes without a dedicated self-emitter.
         _runExecutorMeta[runId] = executorMeta;
@@ -1504,7 +1872,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         var isChild = run.ParentRunId is not null;
         var effectiveDefinition = isChild
             ? null
-            : (await ResolveEffectiveWorkflowAsync(run.ProjectId?.ToString(), run.Id.ToString(), ct).ConfigureAwait(false)).Definition;
+            : await ResolveExecutableWorkflowDefinitionAsync(
+                run, run.ProjectId?.ToString(), run.Id.ToString(), captureIfMissing: false, ct)
+                .ConfigureAwait(false);
         return BuildWorkflow(isChild, effectiveDefinition).Descriptor;
     }
 
@@ -1524,8 +1894,9 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
     /// lifecycle events into <c>workflow.step</c> UI events. Lets tests assert the gap-node mapping
     /// (e.g. <c>child-assemble-ready</c> -&gt; <c>assemble-ready</c>) without running a workflow.
     /// </summary>
-    internal IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaForTest(bool isChild) =>
-        BuildWorkflow(isChild).ExecutorMeta;
+    internal IReadOnlyDictionary<string, ExecutorNodeMeta> BuildExecutorMetaForTest(
+        bool isChild, WorkflowDefinition? effectiveDefinition = null) =>
+        BuildWorkflow(isChild, effectiveDefinition).ExecutorMeta;
 
     private async Task<WorkflowLoadResult> ResolveEffectiveWorkflowAsync(
         string? projectId,
@@ -1550,6 +1921,44 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
                 $"Project '{project.Id}' workflow could not be resolved: {workflowResult.Error ?? "unknown workflow error"}");
 
         return workflowResult;
+    }
+
+    private async Task<WorkflowDefinition?> ResolveExecutableWorkflowDefinitionAsync(
+        Agentweaver.Domain.Run? run,
+        string? projectId,
+        string runId,
+        bool captureIfMissing,
+        CancellationToken ct)
+    {
+        if (run?.GetExecutableWorkflowPin() is { } pin)
+            return ExecutableWorkflowSnapshots.Load(runId, pin);
+
+        if (run?.ExecutableWorkflowPinRequired == true && !captureIfMissing)
+        {
+            throw new WorkflowBindException(
+                $"Run '{runId}' requires a pinned executable workflow manifest, but none is stored. " +
+                "Resume cannot safely select the current project default; retry or recover the missing run manifest.",
+                runId);
+        }
+
+        var resolved = await ResolveEffectiveWorkflowAsync(projectId, runId, ct).ConfigureAwait(false);
+        if (captureIfMissing && run?.ExecutableWorkflowPinRequired == true && resolved.Definition is not null)
+            await PersistExecutableWorkflowPinAsync(RunId.Parse(runId), resolved, ct).ConfigureAwait(false);
+        return resolved.Definition;
+    }
+
+    private async Task PersistExecutableWorkflowPinAsync(
+        RunId runId,
+        WorkflowLoadResult resolved,
+        CancellationToken ct)
+    {
+        if (resolved.Definition is null)
+            throw new WorkflowBindException(
+                $"Run '{runId}' executable workflow could not be pinned because no resolved definition was available.",
+                runId.ToString());
+
+        var pin = ExecutableWorkflowSnapshots.Create(resolved.Definition, resolved.Source);
+        await _runStore.UpdateExecutableWorkflowPinAsync(runId, pin, ct).ConfigureAwait(false);
     }
 
     private async Task<string?> ResolveWorkflowOverrideIdAsync(string? runId, CancellationToken ct)
@@ -1603,14 +2012,35 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         if (RunId.TryParse(checkpointInfo.SessionId, out var rid))
         {
             var run = await _runStore.GetAsync(rid, ct).ConfigureAwait(false);
-            isChild = run?.ParentRunId is not null;
-            var effectiveWorkflow = isChild
+            if (run is null)
+            {
+                throw new WorkflowBindException(
+                    $"Run '{checkpointInfo.SessionId}' cannot resume because its durable run record is missing.",
+                    checkpointInfo.SessionId);
+            }
+
+            isChild = run.ParentRunId is not null;
+            var effectiveDefinition = isChild
                 ? null
-                : await ResolveEffectiveWorkflowAsync(run?.ProjectId?.ToString(), checkpointInfo.SessionId, ct).ConfigureAwait(false);
-            var effectiveDefinition = effectiveWorkflow?.Definition;
-            if (!isChild && run is not null)
+                : await ResolveExecutableWorkflowDefinitionAsync(
+                    run, run.ProjectId?.ToString(), checkpointInfo.SessionId, captureIfMissing: false, ct)
+                    .ConfigureAwait(false);
+            string? recoveryComposedNodeId = null;
+            if (!isChild)
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+                recoveryComposedNodeId = await db.WorkPlans.AsNoTracking()
+                    .Where(plan => plan.ParentRunId == run.Id.ToString()
+                        && plan.ParentRecoveryGeneration == run.LifecycleGeneration
+                        && plan.ParentJoinNodeId == null)
+                    .Select(plan => plan.ParentWorkflowNodeId)
+                    .SingleOrDefaultAsync(ct).ConfigureAwait(false);
+            }
+            if (!isChild)
                 _workflowWorktreeMaterializer?.TryMaterialize(run.WorktreePath ?? string.Empty, effectiveDefinition);
-            var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(isChild, effectiveDefinition);
+            var (workflowForRun, _, executorMetaForRun) = BuildWorkflow(
+                isChild, effectiveDefinition, recoveryComposedNodeId);
             _runExecutorMeta[checkpointInfo.SessionId] = executorMetaForRun;
             return await InProcessExecution.ResumeStreamingAsync(
                 workflowForRun, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);

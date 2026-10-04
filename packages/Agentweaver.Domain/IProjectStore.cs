@@ -25,6 +25,14 @@ public interface IProjectStore
     /// </summary>
     Task UpdateOriginAsync(ProjectId id, ProjectOrigin origin, DateTimeOffset updatedAt, CancellationToken ct = default);
 
+    Task UpdateCreationStateAsync(
+        ProjectId id,
+        ProjectState state,
+        string defaultBranch,
+        DateTimeOffset updatedAt,
+        CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
     /// <summary>
     /// Updates per-project model overrides for server-authored generation flows. Null values clear the
     /// project override so the global Generation fallback is used.
@@ -38,8 +46,8 @@ public interface IProjectStore
         CancellationToken ct = default);
 
     /// <summary>
-    /// Atomically transitions state Active -> Deleting.
-    /// Returns true if the CAS succeeded (the project was Active and is now Deleting).
+    /// Atomically transitions state Creating/Active/Failed -> Deleting.
+    /// Returns true if the CAS succeeded (the project was deletable and is now Deleting).
     /// Returns false if the project was already Deleting or does not exist.
     /// </summary>
     Task<bool> TryBeginDeleteAsync(ProjectId id, CancellationToken ct = default);

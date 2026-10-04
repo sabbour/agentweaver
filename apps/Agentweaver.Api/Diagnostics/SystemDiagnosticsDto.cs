@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Diagnostics;
 
@@ -108,6 +109,7 @@ public sealed record ClusterDiagnosticsDto
     [JsonPropertyName("generated_utc")]     public required DateTimeOffset                        GeneratedUtc        { get; init; }
     [JsonPropertyName("total_duration_ms")] public required double                                TotalDurationMs     { get; init; }
     [JsonPropertyName("checks")]            public required IReadOnlyList<DetailedHealthCheckDto>  Checks              { get; init; }
+    [JsonPropertyName("inventory_sources")] public IReadOnlyList<InventoryCollectionStatusDto> InventorySources { get; init; } = [];
 
     /// <summary>Running <c>agent-*</c> pods that belong to a currently active run.</summary>
     [JsonPropertyName("active_agent_pods")]    public required IReadOnlyList<AgentPodInfoDto>      ActiveAgentPods    { get; init; }
@@ -118,6 +120,10 @@ public sealed record ClusterDiagnosticsDto
     /// <summary>Subtasks parked in PendingCapacity waiting for an agent pod slot to free up.</summary>
     [JsonPropertyName("pending_capacity_runs")] public required IReadOnlyList<PendingCapacityRunDto> PendingCapacityRuns { get; init; }
 
+    /// <summary>Bounded durable static workflow fan-out/fan-in plans, newest first.</summary>
+    [JsonPropertyName("workflow_child_work")]
+    public IReadOnlyList<WorkflowChildWorkDiagnosticDto> WorkflowChildWork { get; init; } = [];
+
     /// <summary>All SandboxWarmPool objects in the namespace.</summary>
     [JsonPropertyName("warm_pools")]         public required IReadOnlyList<WarmPoolStatusDto>     WarmPools          { get; init; }
 
@@ -127,6 +133,45 @@ public sealed record ClusterDiagnosticsDto
     /// <summary>Concise, expandable-card metadata for the cluster root resource.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     [JsonPropertyName("details")]            public TopologyResourceDetailsDto? Details           { get; init; }
+}
+
+public sealed record InventoryCollectionStatusDto
+{
+    [JsonPropertyName("name")] public required string Name { get; init; }
+    [JsonPropertyName("outcome")] public required string Outcome { get; init; }
+    [JsonPropertyName("complete")] public required bool Complete { get; init; }
+    [JsonPropertyName("observed_at")] public required DateTimeOffset ObservedAt { get; init; }
+    [JsonPropertyName("detail")] public required string Detail { get; init; }
+}
+
+public sealed record ClusterDiagnosticsProjectScope(
+    bool IncludeAllProjects,
+    IReadOnlySet<string> ProjectIds)
+{
+    public static ClusterDiagnosticsProjectScope AllProjects { get; } =
+        new(true, new HashSet<string>(StringComparer.Ordinal));
+
+    public static ClusterDiagnosticsProjectScope ForProjects(IEnumerable<ProjectId> projectIds) =>
+        new(
+            false,
+            projectIds
+                .Select(projectId => projectId.ToString())
+                .ToHashSet(StringComparer.Ordinal));
+}
+
+public sealed record WorkflowChildWorkDiagnosticDto
+{
+    [JsonPropertyName("work_plan_id")] public required int WorkPlanId { get; init; }
+    [JsonPropertyName("parent_run_id")] public required string ParentRunId { get; init; }
+    [JsonPropertyName("child_coordinator_run_id")] public required string ChildCoordinatorRunId { get; init; }
+    [JsonPropertyName("workflow_id")] public required string WorkflowId { get; init; }
+    [JsonPropertyName("fan_out_node_id")] public required string FanOutNodeId { get; init; }
+    [JsonPropertyName("fan_in_node_id")] public string? FanInNodeId { get; init; }
+    [JsonPropertyName("plan_status")] public required string PlanStatus { get; init; }
+    [JsonPropertyName("resume_state")] public required string ResumeState { get; init; }
+    [JsonPropertyName("branch_count")] public required int BranchCount { get; init; }
+    [JsonPropertyName("terminal_branch_count")] public required int TerminalBranchCount { get; init; }
+    [JsonPropertyName("updated_utc")] public required DateTimeOffset UpdatedUtc { get; init; }
 }
 
 /// <summary>

@@ -176,6 +176,34 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
             "approved decisions are mandatory and must not be silently omitted to fit the combined decomposition prompt");
     }
 
+    [Fact]
+    public async Task ComposedDesiredOutcome_OrderedFanResultsReachActualDecompositionTurn()
+    {
+        var agentFactory = new CapturingWorkflowAgentFactory();
+        var executor = CreateExecutor(agentFactory);
+        var input = new CoordinatorDraftInput(
+            "composed-run", "project", "Write summary", "owner", ".", null);
+        var spec = new OutcomeSpec
+        {
+            ProjectId = input.ProjectId,
+            CoordinatorRunId = input.RunId,
+            Goal = input.Goal,
+            DesiredOutcome = "Write summary\n\n[Parent workflow context]\n" +
+                "[1. incident-brief-writer]\nSynthetic incident details\n\n" +
+                "[2. response-checklist-writer]\nRecovery checklist",
+            Scope = "Pinned composed child",
+            Assumptions = "Use parent inputs",
+            Status = "confirmed",
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+
+        (await executor.DecomposeWithModelAsync(input, spec, null, CancellationToken.None))
+            .Should().NotBeNull();
+        agentFactory.Agent.TaskPrompt.Should().Contain(spec.DesiredOutcome);
+        agentFactory.Agent.TaskPrompt.Should().Contain("<<<SPEC>>>");
+    }
+
     private async Task DecomposeAsync(
         CoordinatorOrchestratorExecutor executor,
         string projectId,
@@ -272,6 +300,7 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
     private sealed class CapturingWorkflowTurnAgent : IWorkflowTurnAgent
     {
         public string? SystemPrompt { get; private set; }
+        public string? TaskPrompt { get; private set; }
 
         public Task SetupAsync(
             string workingDirectory,
@@ -291,9 +320,12 @@ public sealed class CoordinatorDecisionContextTests : IAsyncDisposable
             return Task.CompletedTask;
         }
 
-        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct) =>
-            Task.FromResult(
+        public Task<string> RunTurnAsync(string task, bool isRevision, CancellationToken ct)
+        {
+            TaskPrompt = task;
+            return Task.FromResult(
                 """[{"story_key":"prompt-capture","title":"Capture prompt","scope":"Capture the final prompt.","role":"lead-architect","complexity":"low","phase":"planning","isolation":"shared","depends_on":[]}]""");
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }

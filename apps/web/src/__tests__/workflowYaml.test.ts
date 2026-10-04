@@ -27,6 +27,24 @@ edges: []
 `;
 
 describe('workflowYaml', () => {
+  it('keeps composed nodes parseable and authorable', () => {
+    expect(WORKFLOW_NODE_TYPES).toContain('coordinator_composed');
+    expect(AUTHORABLE_WORKFLOW_NODE_TYPES).toContain('coordinator_composed');
+
+    const parsed = parseWorkflowYaml(`
+id: reserved
+name: Reserved
+start: compose
+nodes:
+  - id: compose
+    type: coordinator_composed
+    prompt: Derive subtasks
+edges: []
+`);
+    expect(parsed.error).toBeNull();
+    expect(parsed.model?.nodes[0]?.type).toBe('coordinator_composed');
+  });
+
   it('keeps merge and scribe parseable but out of the authorable palette', () => {
     expect(AUTHORABLE_WORKFLOW_NODE_TYPES).toContain('build_test');
     expect(AUTHORABLE_WORKFLOW_NODE_TYPES).not.toContain('merge');

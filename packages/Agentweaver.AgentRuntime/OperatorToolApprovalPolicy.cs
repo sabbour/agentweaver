@@ -1,3 +1,5 @@
+using Agentweaver.Domain;
+
 namespace Agentweaver.AgentRuntime;
 
 /// <summary>
@@ -26,6 +28,68 @@ namespace Agentweaver.AgentRuntime;
 /// </summary>
 public static class OperatorToolApprovalPolicy
 {
+    private static readonly HashSet<string> ReadOnlyTools = new(StringComparer.Ordinal)
+    {
+        "backlog_get_board",
+        "backlog_get_dependency_revision",
+        "backlog_get_settings",
+        "backlog_get_task",
+        "backlog_get_workflow_stages",
+        "blueprint_generation_result",
+        "blueprint_generation_status",
+        "catalog_list_roles",
+        "catalog_list_scenarios",
+        "coordinator_children_get",
+        "coordinator_outcome_spec_get",
+        "coordinator_work_plan_get",
+        "decision_inbox_list",
+        "agent_message_list",
+        "agent_message_get",
+        "decision_list",
+        "diagnostics_get",
+        "get_project_workspace_file",
+        "github_repo_app_authorization_status",
+        "github_repository_selections_list",
+        "heartbeat_status",
+        "list_blueprints",
+        "list_project_workspace",
+        "list_project_workspace_refs",
+        "memory_get",
+        "memory_list",
+        "memory_search",
+        "orchestration_topology",
+        "project_copilot_app_authorization_status",
+        "project_get",
+        "project_github_capability_status",
+        "project_list",
+        "project_list_runs",
+        "run_execution_identity",
+        "run_failure_diagnostic",
+        "run_get_file",
+        "run_output_compare",
+        "run_output_file",
+        "run_output_history",
+        "run_output_revision",
+        "run_show_artifacts",
+        "run_status",
+        "run_watch",
+        "sandbox_policy_get",
+        "session_current",
+        "skill_assignments_list",
+        "skill_defaults_preview",
+        "skill_get",
+        "skill_import_preview",
+        "skill_list",
+        "skill_marketplace_browse",
+        "skill_marketplace_sources_list",
+        "skill_marketplaces_list",
+        "team_get",
+        "team_member_get_charter",
+        "validate_blueprint",
+        "workflow_get",
+        "workflows_list",
+    };
+
     /// <summary>
     /// Consequential tools that ALWAYS require an operator approval before they run: they start
     /// budget-consuming work, delete/archive, stop/steer live work, confirm an outcome, approve or
@@ -47,6 +111,10 @@ public static class OperatorToolApprovalPolicy
 
         // Steer / stop live work.
         "coordinator_steer",
+        "agent_message_send",
+        "agent_message_claim",
+        "agent_message_deliver",
+        "agent_message_acknowledge",
 
         // Confirm an outcome.
         "coordinator_outcome_spec_confirm",
@@ -61,6 +129,7 @@ public static class OperatorToolApprovalPolicy
         "project_delete",
         "backlog_delete_task",
         "backlog_archive_task",
+        "backlog_edit_dependencies",
         "send_all_backlog_to_ready",
         "run_archive",
         "skill_delete",
@@ -100,6 +169,7 @@ public static class OperatorToolApprovalPolicy
         "backlog_decompose_spec",
         "backlog_edit_task",
         "backlog_get_board",
+        "backlog_get_dependency_revision",
         "backlog_get_settings",
         "backlog_get_task",
         "backlog_get_workflow_stages",
@@ -126,8 +196,13 @@ public static class OperatorToolApprovalPolicy
         // Decisions: reads + submit/create/update (draft-level, not merge/reject).
         "decision_create",
         "decision_inbox_list",
+        "agent_message_list",
+        "agent_message_get",
         "decision_inbox_submit",
+        "decision_compare",
+        "decision_history",
         "decision_list",
+        "decision_restore",
         "decision_update",
 
         // Diagnostics / health.
@@ -148,10 +223,14 @@ public static class OperatorToolApprovalPolicy
 
         // Memory: reads + record/export (import is gated).
         "memory_export",
+        "memory_compare",
         "memory_get",
+        "memory_history",
         "memory_list",
         "memory_record",
+        "memory_restore",
         "memory_search",
+        "memory_update",
 
         // Projects: reads + create/rename/configure (delete is gated).
         "project_configure",
@@ -159,10 +238,15 @@ public static class OperatorToolApprovalPolicy
         "project_get",
         "project_list",
         "project_list_runs",
+        "run_execution_identity",
         "project_rename",
 
         // Runs: reads (submit/task/retry/review/archive are gated).
         "run_get_file",
+        "run_output_compare",
+        "run_output_file",
+        "run_output_history",
+        "run_output_revision",
         "run_show_artifacts",
         "run_status",
         "run_watch",
@@ -230,4 +314,15 @@ public static class OperatorToolApprovalPolicy
     public static bool IsClassified(string? toolName) =>
         !string.IsNullOrEmpty(toolName)
         && (GatedTools.Contains(toolName) || UngatedTools.Contains(toolName));
+
+    public static string? ClassifyEffectivePermission(string? toolName)
+    {
+        if (!IsClassified(toolName))
+            return null;
+        if (toolName == "start_preview")
+            return EffectivePermissionOperations.PreviewManage;
+        return ReadOnlyTools.Contains(toolName!)
+            ? EffectivePermissionOperations.AgentweaverRead
+            : EffectivePermissionOperations.AgentweaverWrite;
+    }
 }

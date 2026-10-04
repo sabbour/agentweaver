@@ -152,6 +152,73 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ReservedChildFailure_AfterSuccessorReclaims_DoesNotProjectOrCompleteStream()
+    {
+        var child = NewChildRun() with { Status = RunStatus.Pending };
+        await _runStore.InsertAsync(child);
+        var leases = new SqliteRunLeaseStore(_runDb.Db);
+        var (claimed, staleToken) = await leases.TryClaimAsync(
+            child.Id.ToString(), "old", TimeSpan.FromMinutes(1));
+        claimed.Should().BeTrue();
+        await leases.ReleaseAsync(child.Id.ToString(), "old", staleToken);
+        var (reclaimed, _) = await leases.TryClaimAsync(
+            child.Id.ToString(), "new", TimeSpan.FromMinutes(1));
+        reclaimed.Should().BeTrue();
+
+        await _orchestrator.MarkChildRunFailedAsync(child,
+            new InvalidOperationException("workflow binding failed"), CancellationToken.None,
+            new RunLeaseClaim("old", staleToken));
+
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(RunStatus.Pending);
+        (await _runStore.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+        _streamStore.Get(child.Id.ToString()).Should().BeNull();
+        await using var scope = _provider.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await db.RunEvents.AnyAsync(e => e.RunId == child.Id.ToString())).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ReservedChildStartFailure_AfterSuccessorReclaims_DoesNotFailOrCleanUp()
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = new RunOrchestrator(
+            _runStore, _streamStore, manager,
+            workflowFactory: null!, registry: null!, watchLoop: null!,
+            _scopeFactory, configuration: _provider.GetRequiredService<IConfiguration>(),
+            NullLogger<RunOrchestrator>.Instance);
+        var child = NewChildRun() with
+        {
+            RepositoryPath = repoPath, OriginatingBranch = "main", Status = RunStatus.Pending,
+        };
+        await _runStore.InsertAsync(child);
+        var leases = new SqliteRunLeaseStore(_runDb.Db);
+        var (claimed, token) = await leases.TryClaimAsync(child.Id.ToString(), "old", TimeSpan.FromMinutes(1));
+        claimed.Should().BeTrue();
+        var intercepted = false;
+        orchestrator.BeforeLaunchFailureWriteOverride = async (id, ct) =>
+        {
+            intercepted = true;
+            await leases.ReleaseAsync(id.ToString(), "old", token, ct);
+            var (reclaimed, _) = await leases.TryClaimAsync(id.ToString(), "successor", TimeSpan.FromMinutes(1), ct);
+            reclaimed.Should().BeTrue();
+        };
+
+        var failure = await Record.ExceptionAsync(() => orchestrator.StartChildRunAsync(
+            child, CancellationToken.None, existingLease: new RunLeaseClaim("old", token)));
+
+        failure.Should().NotBeNull();
+        intercepted.Should().BeTrue($"the workflow start failure must reach the terminal write boundary; got {failure}");
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(RunStatus.InProgress);
+        (await _runStore.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+        var entry = _streamStore.Get(child.Id.ToString());
+        entry.Should().NotBeNull();
+        entry!.IsCompleted.Should().BeFalse();
+        entry.GetSnapshotSince(0).Events.Should().NotContain(e => e.Type == EventTypes.RunFailed);
+        Directory.Exists(Path.Combine(worktreesBase, child.Id.ToString())).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task StartChildRunAsync_WhenLaunchFailsAfterWorktreeCreation_CleansUpChildWorktree()
     {
         var (repoPath, worktreesBase) = CreateRepository();
@@ -176,10 +243,165 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
             "failed child launch must remove the per-child worktree it just created");
     }
 
+    [Fact]
+    public async Task StartChildRunAsync_ReservedChildLosesAuthorizationBeforeProvisioning_RemainsPending()
+    {
+        var child = NewChildRun() with { Status = RunStatus.Pending };
+        await _runStore.InsertAsync(child);
+        var checks = 0;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            _orchestrator.StartChildRunAsync(
+                child, CancellationToken.None,
+                existingLease: new RunLeaseClaim("owner", 42),
+                isAuthorizedAsync: _ =>
+                {
+                    checks++;
+                    return Task.FromResult(false);
+                }));
+
+        checks.Should().Be(1);
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(RunStatus.Pending);
+        _streamStore.Get(child.Id.ToString()).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(5, RunStatus.Pending)]
+    [InlineData(6, RunStatus.InProgress)]
+    public async Task StartChildRunAsync_ReservedChildLosesAuthorizationAfterProvisioning_DoesNotLaunch(
+        int stopAtCheck, RunStatus expectedStatus)
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = new RunOrchestrator(
+            _runStore, _streamStore, manager,
+            workflowFactory: null!, registry: null!, watchLoop: null!,
+            _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
+        var child = NewChildRun() with
+        {
+            RepositoryPath = repoPath,
+            OriginatingBranch = "main",
+            Status = RunStatus.Pending,
+        };
+        await _runStore.InsertAsync(child);
+        var checks = 0;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            orchestrator.StartChildRunAsync(
+                child, CancellationToken.None,
+                existingLease: new RunLeaseClaim("owner", 42),
+                isAuthorizedAsync: _ => Task.FromResult(++checks < stopAtCheck)));
+
+        checks.Should().Be(stopAtCheck, "authorization is rechecked after provisioning and persistence");
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(expectedStatus);
+        Directory.Exists(Path.Combine(worktreesBase, child.Id.ToString())).Should().BeTrue(
+            "a fenced launcher must not remove a worktree that a successor could already own");
+        _streamStore.Get(child.Id.ToString()).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task StartChildRunAsync_ReclaimedPendingChild_ReusesExistingWorktree()
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = new RunOrchestrator(
+            _runStore, _streamStore, manager,
+            workflowFactory: null!, registry: null!, watchLoop: null!,
+            _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
+        var child = NewChildRun() with
+        {
+            RepositoryPath = repoPath, OriginatingBranch = "main", Status = RunStatus.Pending,
+        };
+        await _runStore.InsertAsync(child);
+        var existing = manager.AddWorktree(repoPath, "main", child.Id);
+        var checks = 0;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            orchestrator.StartChildRunAsync(child, CancellationToken.None,
+                existingLease: new RunLeaseClaim("new-owner", 43),
+                isAuthorizedAsync: _ => Task.FromResult(++checks < 5)));
+
+        checks.Should().Be(5, "the reclaimed child must pass worktree provisioning without a duplicate-create error");
+        Directory.Exists(existing.WorktreePath).Should().BeTrue();
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(RunStatus.Pending);
+    }
+
+    [Fact]
+    public async Task StartChildRunAsync_ExistingReservedChildWithoutLease_ReusesExistingWorktree()
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var manager = BuildWorktreeManager(worktreesBase);
+        var orchestrator = new RunOrchestrator(
+            _runStore, _streamStore, manager,
+            workflowFactory: null!, registry: null!, watchLoop: null!,
+            _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
+        var child = NewChildRun() with
+        {
+            RepositoryPath = repoPath, OriginatingBranch = "main", Status = RunStatus.Pending,
+        };
+        await _runStore.InsertAsync(child);
+        var existing = manager.AddWorktree(repoPath, "main", child.Id);
+        var checks = 0;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            orchestrator.StartChildRunAsync(
+                child,
+                CancellationToken.None,
+                isAuthorizedAsync: _ => Task.FromResult(++checks < 5),
+                existingReservedChild: true));
+
+        checks.Should().Be(5, "recovery must pass existing-worktree provisioning without duplicate creation");
+        Directory.Exists(existing.WorktreePath).Should().BeTrue(
+            "a cancelled recovery launch must preserve the canonical child's existing worktree");
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(RunStatus.Pending);
+    }
+
+    [Fact]
+    public async Task RestartInterruptedChildRunAsync_PlanCancelledAfterWorktreeCheck_DoesNotLaunch()
+    {
+        var (repoPath, worktreesBase) = CreateRepository();
+        var orchestrator = new RunOrchestrator(
+            _runStore, _streamStore, BuildWorktreeManager(worktreesBase),
+            workflowFactory: null!, registry: new RunWorkflowRegistry(), watchLoop: null!,
+            _scopeFactory, configuration: null!, NullLogger<RunOrchestrator>.Instance);
+        var child = NewChildRun() with
+        {
+            RepositoryPath = repoPath, OriginatingBranch = "main", Status = RunStatus.InProgress,
+        };
+        await _runStore.InsertAsync(child);
+        var checks = 0;
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            orchestrator.RestartInterruptedChildRunAsync(child,
+                new RunLeaseClaim("owner", 42), CancellationToken.None,
+                _ => Task.FromResult(++checks == 1)));
+
+        checks.Should().Be(2, "ownership must be checked again after restoring the child worktree");
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(RunStatus.InProgress);
+        _streamStore.Get(child.Id.ToString()).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task StartChildRunAsync_ReservedChildCancelledBeforeLaunch_RemainsPending()
+    {
+        var child = NewChildRun() with { Status = RunStatus.Pending };
+        await _runStore.InsertAsync(child);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _orchestrator.StartChildRunAsync(child, cts.Token,
+                existingLease: new RunLeaseClaim("owner", 42)));
+
+        (await _runStore.GetAsync(child.Id))!.Status.Should().Be(RunStatus.Pending);
+        _streamStore.Get(child.Id.ToString()).Should().BeNull();
+    }
+
     [Theory]
     [InlineData("normal")]
     [InlineData("child")]
     [InlineData("reserved")]
+    [InlineData("reclaimed")]
     public async Task MandatoryContextBudgetFailureBeforeWorkflowStart_TerminalizesRunAndCompletesStream(
         string launchKind)
     {
@@ -201,8 +423,8 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
             RepositoryPath = repoPath,
             OriginatingBranch = "main",
             ProjectId = projectId,
-            ParentRunId = launchKind == "child" ? RunId.New().ToString() : null,
-            Status = launchKind == "reserved" ? RunStatus.Pending : RunStatus.InProgress,
+            ParentRunId = launchKind is "child" or "reclaimed" ? RunId.New().ToString() : null,
+            Status = launchKind is "reserved" or "reclaimed" ? RunStatus.Pending : RunStatus.InProgress,
         };
 
         await using (var scope = _provider.CreateAsyncScope())
@@ -227,8 +449,33 @@ public sealed class CoordinatorChildFailureTests : IAsyncDisposable
             await db.SaveChangesAsync();
         }
 
-        if (launchKind == "reserved")
+        if (launchKind is "reserved" or "reclaimed")
             await _runStore.InsertAsync(run);
+
+        if (launchKind == "reclaimed")
+        {
+            var leases = new SqliteRunLeaseStore(_runDb.Db);
+            var (claimed, token) = await leases.TryClaimAsync(run.Id.ToString(), "old", TimeSpan.FromMinutes(1));
+            claimed.Should().BeTrue();
+            orchestrator.BeforeLaunchFailureWriteOverride = async (runId, ct) =>
+            {
+                await leases.ReleaseAsync(runId.ToString(), "old", token, ct);
+                var (successor, _) = await leases.TryClaimAsync(
+                    runId.ToString(), "successor", TimeSpan.FromMinutes(1), ct);
+                successor.Should().BeTrue();
+            };
+            await Assert.ThrowsAsync<MandatoryContextBudgetExceededException>(() =>
+                orchestrator.StartChildRunAsync(run, CancellationToken.None,
+                    existingLease: new RunLeaseClaim("old", token)));
+            (await _runStore.GetAsync(run.Id))!.Status.Should().Be(RunStatus.InProgress);
+            (await _runStore.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+            var staleEntry = _streamStore.Get(run.Id.ToString());
+            staleEntry.Should().NotBeNull();
+            staleEntry!.IsCompleted.Should().BeFalse();
+            staleEntry.GetSnapshotSince(0).Events.Should().NotContain(e => e.Type == EventTypes.RunFailed);
+            Directory.Exists(Path.Combine(worktreesBase, run.Id.ToString())).Should().BeTrue();
+            return;
+        }
 
         Func<Task> start = launchKind switch
         {

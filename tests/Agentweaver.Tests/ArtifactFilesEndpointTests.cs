@@ -57,7 +57,8 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
         string? worktreePath = null,
         string? worktreeBranch = null,
         string? agentName = null,
-        string? repositoryPath = null)
+        string? repositoryPath = null,
+        string? mergedCommitHash = null)
     {
         var store = _factory.Services.GetRequiredService<SqliteRunStore>();
         var run = new Run
@@ -68,7 +69,7 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             ModelSource       = ModelSource.GitHubCopilot,
             Task              = "artifact files test",
             SubmittingUser    = ReviewWebApplicationFactory.OwnerUser,
-            Status            = status,
+            Status            = mergedCommitHash is not null ? RunStatus.AwaitingReview : status,
             StartedAt         = DateTimeOffset.UtcNow,
             Diff              = diff,
             WorktreePath      = worktreePath,
@@ -76,6 +77,12 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
             AgentName         = agentName,
         };
         await store.InsertAsync(run);
+        if (mergedCommitHash is not null)
+        {
+            (await store.TryStartMergingAsync(run.Id)).Should().BeTrue();
+            (await store.CompleteMergingAsync(run.Id, RunStatus.Merged, DateTimeOffset.UtcNow,
+                null, mergedCommitHash: mergedCommitHash)).Should().BeTrue();
+        }
         if (diff is not null)
         {
             await store.SetAssembleReadyAsync(run.Id, "tree-for-test", "agentweaver-run-test", diff, 1, DateTimeOffset.UtcNow);
@@ -244,6 +251,97 @@ public sealed class ArtifactFilesEndpointTests : IClassFixture<ReviewWebApplicat
         }
     }
 
+    [Fact]
+    public async Task MergedRun_UsesPinnedCommitAfterBranchMovesAndWorktreeDisappears()
+    {
+        const string branch = "agentweaver/artifact-pinned";
+        var repositoryPath = CreateRepositoryWithCommittedArtifact(branch);
+        try
+        {
+            string pinnedCommit;
+            using (var repository = new Repository(repositoryPath))
+                pinnedCommit = repository.Branches[branch]!.Tip!.Sha;
+            var missingWorktree = Path.Combine(repositoryPath, $"removed-worktree-{Guid.NewGuid():N}");
+            var runId = await InsertOwnerRunAsync(
+                RunStatus.Merged, worktreePath: missingWorktree, worktreeBranch: branch,
+                repositoryPath: repositoryPath, mergedCommitHash: pinnedCommit);
+
+            using (var repository = new Repository(repositoryPath))
+            {
+                File.WriteAllText(Path.Combine(repositoryPath, "artifact.txt"), "replacement artifact\n");
+                File.WriteAllText(Path.Combine(repositoryPath, "later.txt"), "new output\n");
+                Commands.Stage(repository, "artifact.txt");
+                Commands.Stage(repository, "later.txt");
+                var signature = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+                repository.Commit("Move source branch", signature, signature);
+            }
+
+            var response = await _ownerClient.GetAsync($"/api/runs/{runId}/files/artifact.txt/content");
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            var content = await response.Content.ReadFromJsonAsync<JsonElement>();
+            content.GetProperty("content").GetString().Should().Be("committed artifact\n");
+            var workspace = await _ownerClient.GetFromJsonAsync<JsonElement>($"/api/runs/{runId}/workspace");
+            workspace.ToString().Should().Contain("artifact.txt").And.NotContain("later.txt");
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryPath);
+        }
+    }
+
+    [Fact]
+    public async Task MergedRun_MissingPinnedCommitNeverFallsBackToBranchOrWorktree()
+    {
+        const string branch = "agentweaver/artifact-pin-missing";
+        var repositoryPath = CreateRepositoryWithCommittedArtifact(branch);
+        try
+        {
+            var runId = await InsertOwnerRunAsync(
+                RunStatus.Merged, worktreePath: repositoryPath, worktreeBranch: branch,
+                repositoryPath: repositoryPath, mergedCommitHash: new string('a', 40));
+            var path = $"/api/runs/{runId}/files/artifact.txt/content";
+
+            var response = await _ownerClient.GetAsync(path);
+            response.StatusCode.Should().Be(HttpStatusCode.Gone);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("error").GetString().Should().Be("pinned_commit_unavailable");
+            (await _otherClient.GetAsync(path)).StatusCode.Should().Be(HttpStatusCode.NotFound);
+            var workspace = await _ownerClient.GetAsync($"/api/runs/{runId}/workspace");
+            workspace.StatusCode.Should().Be(HttpStatusCode.Gone);
+            var workspaceError = await workspace.Content.ReadFromJsonAsync<JsonElement>();
+            workspaceError.GetProperty("error").GetString().Should().Be("pinned_commit_unavailable");
+            (await _otherClient.GetAsync($"/api/runs/{runId}/workspace"))
+                .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryPath);
+        }
+    }
+
+    [Fact]
+    public async Task MergedRun_FileAbsentFromPinnedCommitNeverFallsBackToWorktree()
+    {
+        const string branch = "agentweaver/artifact-pin-file";
+        var repositoryPath = CreateRepositoryWithCommittedArtifact(branch);
+        try
+        {
+            string pinnedCommit;
+            using (var repository = new Repository(repositoryPath))
+                pinnedCommit = repository.Branches[branch]!.Tip!.Sha;
+            File.WriteAllText(Path.Combine(repositoryPath, "new-file.txt"), "not part of reviewed output\n");
+            var runId = await InsertOwnerRunAsync(
+                RunStatus.Merged, worktreePath: repositoryPath, worktreeBranch: branch,
+                repositoryPath: repositoryPath, mergedCommitHash: pinnedCommit);
+
+            (await _ownerClient.GetAsync($"/api/runs/{runId}/files/new-file.txt/content"))
+                .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        }
+        finally
+        {
+            TryDeleteDirectory(repositoryPath);
+        }
+    }
     [Fact]
     public async Task InProgressRun_WithLiveWorktree_ReturnsCurrentChangesAndWorkspace()
     {

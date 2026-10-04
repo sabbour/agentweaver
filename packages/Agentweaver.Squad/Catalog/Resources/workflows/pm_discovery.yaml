@@ -1,5 +1,5 @@
 # Product Management Discovery Workflow (Feature 015 US3)
-# PM discovery pipeline: research → synthesis → stakeholder review → scribe.
+# PM discovery pipeline: parallel customer/technical research → synthesis → stakeholder review.
 # No merge stage — outputs are documents (specs, requirements, prototypes), not code.
 
 id: pm-discovery
@@ -7,25 +7,53 @@ name: Product Management Discovery
 description: Product discovery pipeline for user research, synthesis, and stakeholder review. Use for product discovery, requirements gathering, and feature definition. Outputs are documents and specs, not deployable code.
 version: "1.0"
 
-start: research
+start: discovery-fan-out
 
 nodes:
-  - id: research
+  - id: discovery-fan-out
+    type: fan_out
+    label: Parallel Discovery Research
+    role: assembly
+    kind: fan-out
+
+  - id: customer-signal-research
     type: prompt
-    label: Research
-    role: agent
+    label: Customer Signal Research
+    role: customer-researcher
     kind: live
+    prompt: Research and summarize customer signals, pain points, user evidence, and market evidence. Write only customer-signals.md.
+    independent: true
+    declared_output_paths:
+      - customer-signals.md
+
+  - id: technical-feasibility-research
+    type: prompt
+    label: Technical Feasibility Research
+    role: prototype-designer
+    kind: live
+    prompt: Assess technical feasibility, constraints, risks, and implementation dependencies. Write only technical-feasibility.md.
+    independent: true
+    declared_output_paths:
+      - technical-feasibility.md
+
+  - id: discovery-fan-in
+    type: fan_in
+    label: Discovery Research Join
+    role: assembly
+    kind: fan-in
+    target: discovery-fan-out
 
   - id: synthesis
     type: prompt
     label: Synthesis
-    role: agent
+    role: lead-pm
     kind: live
+    prompt: Synthesize the ordered customer-signal and technical-feasibility research into the discovery recommendation.
 
   - id: review
     type: prompt
     label: Stakeholder Review
-    role: review
+    role: product-marketing-manager
     kind: live
     prompt: Review the discovery synthesis from a stakeholder perspective and prepare it for approval.
 
@@ -53,7 +81,19 @@ nodes:
     kind: terminal
 
 edges:
-  - from: research
+  - from: discovery-fan-out
+    to: customer-signal-research
+
+  - from: discovery-fan-out
+    to: technical-feasibility-research
+
+  - from: customer-signal-research
+    to: discovery-fan-in
+
+  - from: technical-feasibility-research
+    to: discovery-fan-in
+
+  - from: discovery-fan-in
     to: synthesis
 
   - from: synthesis

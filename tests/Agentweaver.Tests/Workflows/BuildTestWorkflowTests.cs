@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -99,8 +100,37 @@ public sealed class BuildTestWorkflowTests
             AIFunctionFactory.Create(() => "ok", "report_intent"),
         };
 
-        ScribeAIAgent.FilterAllowedTools(candidates).Select(tool => tool.Name)
+        EphemeralCopilotAIAgent.FilterScribeAllowedTools(candidates).Select(tool => tool.Name)
             .Should().BeEquivalentTo(["list_inbox", "report_intent"]);
+    }
+
+    [Fact]
+    public void EphemeralCopilotAgents_KeepDistinctAuditRoles_AndSerializeNoSessionState()
+    {
+        var factory = new GitHubCopilotClientFactory(
+            new ConfigurationBuilder().Build(),
+            new FixedGitHubCopilotCapabilityCredentialProvider());
+
+        var rai = EphemeralCopilotAIAgent.CreateRai(
+            factory,
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLogger<CopilotAIAgent>.Instance);
+        var scribe = EphemeralCopilotAIAgent.CreateScribe(
+            factory,
+            new PassthroughExecutor("test"),
+            new StubPolicyStore(),
+            new InMemoryShellApprovalStore(),
+            new InMemoryToolApprovalGate(),
+            NullLogger<CopilotAIAgent>.Instance);
+
+        rai.AuditRoleName.Should().Be("Rai");
+        scribe.AuditRoleName.Should().Be("Scribe");
+
+        SerializeEphemeralSession(rai).GetRawText().Should().Be("{}");
+        SerializeEphemeralSession(scribe).GetRawText().Should().Be("{}");
     }
 
     [Fact]
@@ -145,6 +175,17 @@ public sealed class BuildTestWorkflowTests
         node.Type.Should().Be(WorkflowNodeType.BuildTest);
         node.Prompt.Should().BeNull();
         RunWorkflowGraphBinder.GetBindabilityErrors(result.Definition).Should().BeEmpty();
+    }
+
+    private static JsonElement SerializeEphemeralSession(EphemeralCopilotAIAgent agent)
+    {
+        var method = typeof(EphemeralCopilotAIAgent).GetMethod(
+            "SerializeSessionCoreAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        method.Should().NotBeNull();
+        var result = method!.Invoke(agent, [null, null, CancellationToken.None])
+            .Should().BeOfType<ValueTask<JsonElement>>().Subject;
+        return result.GetAwaiter().GetResult();
     }
 
     [Fact]

@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Agentweaver.Api.Contracts;
+using Agentweaver.Api.Backlog;
 using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Infrastructure;
@@ -15,6 +17,23 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
 {
     private const int SqliteConstraint = 19;   // SQLITE_CONSTRAINT
     private const int MaxOrderKeyRetries = 5;
+    private const string CollectiveRevisionExistsSql =
+        """
+        EXISTS (SELECT 1 FROM run_output_revisions v
+                WHERE v.revision_id = r.current_output_revision_id
+                  AND v.run_id = r.run_id AND v.lifecycle_generation = r.lifecycle_generation
+                  AND (r.result != 'confirmed' OR (v.schema_version = 3 AND v.output_kind = 'no_change'))
+                  AND ((v.schema_version = 2 AND v.merged_commit_hash = r.merged_commit_hash)
+                       OR (v.schema_version = 4 AND v.merged_commit_hash IS NULL
+                           AND r.approved_output_revision_id = v.revision_id)
+                       OR (v.schema_version = 3 AND r.result = 'confirmed'
+                           AND v.accepted_no_change = 1
+                           AND v.merged_commit_hash = r.merged_commit_hash))
+                  AND v.output_kind IN ('collective', 'no_change')
+                  AND v.manifest_incomplete = 0 AND v.diff_bytes IS NOT NULL
+                  AND v.tree_content IS NOT NULL AND v.tree_content_sha256 IS NOT NULL
+                  AND v.tree_hash = r.tree_hash)
+        """;
 
     private readonly SqliteDb _db;
 
@@ -27,15 +46,17 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.CommandText =
             """
             INSERT INTO backlog_tasks (task_id, project_id, title, description, state, order_key,
-                                       captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
-                                       workflow_override_id, archived_at, source_file_path,
+                                       captured_by, captured_by_user_id, ready_by_user_id, created_at, committed_at, claimed_at, run_id,
+                                       workflow_override_id, workflow_definition_snapshot_yaml, archived_at, source_file_path,
                                        parent_prd_run_id, promotion_key, promotion_reason,
-                                       automation_invocation_pending, ai_execution_provider_key)
+                                       automation_invocation_pending, ai_execution_provider_key,
+                                       claimed_graph_revision, claimed_prerequisites_json)
             VALUES ($taskId, $projectId, $title, $description, $state, $orderKey,
-                    $capturedBy, $capturedByUserId, $createdAt, $committedAt, $claimedAt, $runId,
-                    $workflowOverrideId, $archivedAt, $sourceFilePath,
+                    $capturedBy, $capturedByUserId, $readyByUserId, $createdAt, $committedAt, $claimedAt, $runId,
+                    $workflowOverrideId, $workflowDefinitionSnapshotYaml, $archivedAt, $sourceFilePath,
                     $parentPrdRunId, $promotionKey, $promotionReason,
-                    $automationInvocationPending, $aiExecutionProviderKey);
+                    $automationInvocationPending, $aiExecutionProviderKey,
+                    $claimedGraphRevision, $claimedPrerequisitesJson);
             """;
         BindFullRow(command, task);
         await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -127,16 +148,33 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                    prerequisite.title,
                    prerequisite.run_id,
                    r.status,
-                   CASE
-                       WHEN prerequisite.archived_at IS NULL
-                        AND prerequisite.run_id IS NOT NULL
-                        AND r.run_id IS NOT NULL
-                        AND r.status = 'merged'
-                       THEN 1 ELSE 0
-                   END AS is_satisfied
+                   r.result,
+                   prerequisite.archived_at,
+                   r.merged_commit_hash,
+                   r.tree_hash,
+                   v.revision_id,
+                   CASE WHEN v.schema_version = 3 AND v.output_kind = 'no_change'
+                             AND v.accepted_no_change = 1
+                        THEN 1 ELSE 0 END AS accepted_no_change,
+                   v.diff_sha256,
+                   v.diff_bytes,
+                   v.tree_content_sha256,
+                   v.tree_content
               FROM backlog_task_dependencies d
               JOIN backlog_tasks prerequisite ON prerequisite.task_id = d.depends_on_task_id
               LEFT JOIN runs r ON r.run_id = prerequisite.run_id
+              LEFT JOIN run_output_revisions v ON v.revision_id = r.current_output_revision_id
+                   AND v.run_id = r.run_id AND v.lifecycle_generation = r.lifecycle_generation
+                   AND ((v.schema_version = 2 AND v.merged_commit_hash = r.merged_commit_hash)
+                        OR (v.schema_version = 4 AND v.merged_commit_hash IS NULL
+                            AND r.approved_output_revision_id = v.revision_id)
+                        OR (v.schema_version = 3 AND r.result = 'confirmed'
+                            AND v.accepted_no_change = 1
+                            AND v.merged_commit_hash = r.merged_commit_hash))
+                   AND v.output_kind IN ('collective', 'no_change')
+                   AND v.manifest_incomplete = 0 AND v.diff_bytes IS NOT NULL
+                   AND v.tree_content IS NOT NULL AND v.tree_content_sha256 IS NOT NULL
+                   AND v.tree_hash = r.tree_hash
              WHERE d.project_id = $projectId
                AND d.task_id IN ({taskPlaceholders})
              ORDER BY d.task_id, d.depends_on_task_id;
@@ -147,16 +185,128 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         await using var reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
+            var revisionAvailable = !reader.IsDBNull(9)
+                && RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(12)) == reader.GetString(11)
+                && !reader.IsDBNull(13) && !reader.IsDBNull(14)
+                && RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(14)) == reader.GetString(13);
             results.Add(new BacklogDependencyStatus(
                 BacklogTaskId.Parse(reader.GetString(0)),
                 BacklogTaskId.Parse(reader.GetString(1)),
                 reader.GetString(2),
                 reader.IsDBNull(3) ? null : RunId.Parse(reader.GetString(3)),
                 reader.IsDBNull(4) ? null : RunStatusExtensions.ParseStatus(reader.GetString(4)),
-                reader.GetInt64(5) == 1));
+                reader.IsDBNull(6) && BacklogPrerequisiteOutcome.IsSatisfied(
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8), revisionAvailable,
+                    revisionAvailable && reader.GetInt32(10) != 0),
+                BacklogPrerequisiteOutcome.Reason(
+                    !reader.IsDBNull(6),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8), revisionAvailable,
+                    revisionAvailable && reader.GetInt32(10) != 0)));
         }
 
         return results;
+    }
+
+    public async Task<long> GetDependencyRevisionAsync(ProjectId projectId, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT backlog_graph_revision FROM projects WHERE project_id = $projectId;";
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        return await command.ExecuteScalarAsync(ct).ConfigureAwait(false) is long revision
+            ? revision : throw new BacklogDependencyEditException("project_not_found");
+    }
+
+    public async Task<BacklogDependencyEditResult> EditDependenciesAsync(
+        ProjectId projectId, long expectedRevision, BacklogDependencyEdit edit,
+        bool preview = false, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = connection.BeginTransaction();
+        var pid = projectId.ToString();
+        await using var query = connection.CreateCommand();
+        query.Transaction = tx;
+        query.Parameters.AddWithValue("$projectId", pid);
+        query.CommandText = "SELECT backlog_graph_revision FROM projects WHERE project_id = $projectId;";
+        if (await query.ExecuteScalarAsync(ct).ConfigureAwait(false) is not long revision)
+            throw new BacklogDependencyEditException("project_not_found");
+        if (revision != expectedRevision)
+            throw new BacklogDependencyEditException("stale_graph_revision");
+
+        var tasks = new Dictionary<BacklogTaskId, bool>();
+        query.CommandText =
+            """
+            SELECT task_id, state, run_id, archived_at, automation_invocation_pending
+              FROM backlog_tasks WHERE project_id = $projectId;
+            """;
+        await using (var reader = await query.ExecuteReaderAsync(ct).ConfigureAwait(false))
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                tasks[BacklogTaskId.Parse(reader.GetString(0))] =
+                    reader.GetString(1) is "backlog" or "ready"
+                    && reader.IsDBNull(2) && reader.IsDBNull(3) && reader.GetInt64(4) == 0;
+
+        var edges = new List<BacklogTaskDependency>();
+        query.CommandText =
+            """
+            SELECT task_id, depends_on_task_id, created_at
+              FROM backlog_task_dependencies WHERE project_id = $projectId;
+            """;
+        await using (var reader = await query.ExecuteReaderAsync(ct).ConfigureAwait(false))
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+                edges.Add(new BacklogTaskDependency
+                {
+                    ProjectId = projectId,
+                    TaskId = BacklogTaskId.Parse(reader.GetString(0)),
+                    DependsOnTaskId = BacklogTaskId.Parse(reader.GetString(1)),
+                    CreatedAt = DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture),
+                });
+
+        var (result, before, after) = BacklogDependencyGraph.Project(revision, edit, tasks, edges);
+        if (preview || !result.Changed)
+            return result;
+
+        await using var mutation = connection.CreateCommand();
+        mutation.Transaction = tx;
+        mutation.Parameters.AddWithValue("$projectId", pid);
+        mutation.Parameters.AddWithValue("$taskId", edit.TaskId.ToString());
+        mutation.Parameters.AddWithValue("$prerequisite", "");
+        foreach (var removed in before.Except(after))
+        {
+            mutation.Parameters["$prerequisite"].Value = removed.ToString();
+            mutation.CommandText =
+                """
+                DELETE FROM backlog_task_dependencies
+                 WHERE project_id = $projectId AND task_id = $taskId AND depends_on_task_id = $prerequisite;
+                """;
+            await mutation.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        mutation.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
+        foreach (var added in after.Except(before))
+        {
+            mutation.Parameters["$prerequisite"].Value = added.ToString();
+            mutation.CommandText =
+                """
+                INSERT INTO backlog_task_dependencies (project_id, task_id, depends_on_task_id, created_at)
+                VALUES ($projectId, $taskId, $prerequisite, $createdAt);
+                """;
+            await mutation.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+        }
+        mutation.CommandText =
+            """
+            UPDATE projects SET backlog_graph_revision = backlog_graph_revision + 1
+             WHERE project_id = $projectId AND backlog_graph_revision = $expected;
+            """;
+        mutation.Parameters.AddWithValue("$expected", expectedRevision);
+        if (await mutation.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+            throw new BacklogDependencyEditException("stale_graph_revision");
+        await tx.CommitAsync(ct).ConfigureAwait(false);
+        return result;
     }
 
     public async Task<IReadOnlyList<BacklogTask>> ListReadyForClaimAsync(
@@ -165,7 +315,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = SelectSql +
-            """
+            $"""
              WHERE project_id = $projectId AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
                AND NOT EXISTS (
                     SELECT 1
@@ -177,7 +327,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                            prerequisite.archived_at IS NOT NULL
                            OR prerequisite.run_id IS NULL
                            OR r.run_id IS NULL
-                           OR r.status <> 'merged'
+                           OR COALESCE(((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed')))
+                                AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
+                                AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL
+                                AND (r.status != 'completed' OR {CollectiveRevisionExistsSql})), 0) = 0
                        )
                )
              ORDER BY order_key ASC, committed_at ASC, task_id ASC
@@ -193,7 +346,7 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText =
-            """
+            $"""
             SELECT COUNT(*)
               FROM backlog_tasks bt
               JOIN projects p ON p.project_id = bt.project_id
@@ -209,7 +362,10 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                            prerequisite.archived_at IS NOT NULL
                            OR prerequisite.run_id IS NULL
                            OR r.run_id IS NULL
-                           OR r.status <> 'merged'
+                           OR COALESCE(((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed')))
+                                AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
+                                AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL
+                                AND (r.status != 'completed' OR {CollectiveRevisionExistsSql})), 0) = 0
                        )
                );
             """;
@@ -269,7 +425,14 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
     public async Task<bool> TryDeleteAsync(ProjectId projectId, BacklogTaskId id, CancellationToken ct = default)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
+        await using var tx = connection.BeginTransaction();
         await using var command = connection.CreateCommand();
+        command.Transaction = tx;
+        command.CommandText =
+            "SELECT COUNT(*) FROM backlog_task_dependencies WHERE project_id = $projectId AND task_id = $taskId;";
+        command.Parameters.AddWithValue("$taskId", id.ToString());
+        command.Parameters.AddWithValue("$projectId", projectId.ToString());
+        var hadOutgoingLinks = (long)(await command.ExecuteScalarAsync(ct).ConfigureAwait(false))! > 0;
         command.CommandText =
             """
             DELETE FROM backlog_tasks
@@ -277,11 +440,17 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                AND state IN ('backlog','ready') AND run_id IS NULL AND archived_at IS NULL
                AND automation_invocation_pending = 0;
             """;
-        command.Parameters.AddWithValue("$taskId", id.ToString());
-        command.Parameters.AddWithValue("$projectId", projectId.ToString());
         try
         {
-            return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
+            var deleted = await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) > 0;
+            if (deleted && hadOutgoingLinks)
+            {
+                command.CommandText =
+                    "UPDATE projects SET backlog_graph_revision = backlog_graph_revision + 1 WHERE project_id = $projectId;";
+                await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+            }
+            await tx.CommitAsync(ct).ConfigureAwait(false);
+            return deleted;
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == SqliteConstraint)
         {
@@ -374,20 +543,25 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
     }
 
     public Task<bool> TryMoveToReadyAsync(
-        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt, CancellationToken ct = default) =>
+        ProjectId projectId, BacklogTaskId id, string newOrderKey, DateTimeOffset committedAt,
+        CancellationToken ct = default, string? providerKey = null, string? readyByUserId = null) =>
         RunWithOrderKeyRetryAsync(projectId, id, "ready", newOrderKey, async (conn, key, c) =>
         {
             await using var command = conn.CreateCommand();
             command.CommandText =
                 """
                 UPDATE backlog_tasks
-                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt
+                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt,
+                       ai_execution_provider_key = COALESCE($providerKey, ai_execution_provider_key),
+                       ready_by_user_id = $readyByUserId
                  WHERE task_id = $taskId AND project_id = $projectId
                    AND state = 'backlog' AND archived_at IS NULL
                    AND automation_invocation_pending = 0;
                 """;
             command.Parameters.AddWithValue("$orderKey", key);
             command.Parameters.AddWithValue("$committedAt", Ts(committedAt));
+            command.Parameters.AddWithValue("$providerKey", (object?)providerKey ?? DBNull.Value);
+            command.Parameters.AddWithValue("$readyByUserId", (object?)readyByUserId ?? DBNull.Value);
             command.Parameters.AddWithValue("$taskId", id.ToString());
             command.Parameters.AddWithValue("$projectId", projectId.ToString());
             return await command.ExecuteNonQueryAsync(c).ConfigureAwait(false);
@@ -422,7 +596,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             command.CommandText =
                 """
                 UPDATE backlog_tasks
-                   SET state = 'backlog', order_key = $orderKey, committed_at = NULL
+                   SET state = 'backlog', order_key = $orderKey, committed_at = NULL,
+                       ai_execution_provider_key = NULL, ready_by_user_id = NULL
                  WHERE task_id = $taskId AND project_id = $projectId
                    AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
                    AND automation_invocation_pending = 0;
@@ -457,7 +632,8 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
     }
 
     public async Task<int> MoveAllBacklogToReadyAsync(
-        ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default)
+        ProjectId projectId, DateTimeOffset committedAt, CancellationToken ct = default,
+        string? providerKey = null, string? readyByUserId = null)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var tx = connection.BeginTransaction();
@@ -518,13 +694,16 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             update.CommandText =
                 """
                 UPDATE backlog_tasks
-                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt
+                   SET state = 'ready', order_key = $orderKey, committed_at = $committedAt,
+                       ai_execution_provider_key = $providerKey, ready_by_user_id = $readyByUserId
                  WHERE task_id = $taskId AND project_id = $projectId
                    AND state = 'backlog' AND archived_at IS NULL
                    AND automation_invocation_pending = 0;
                 """;
             update.Parameters.AddWithValue("$orderKey", newKey);
             update.Parameters.AddWithValue("$committedAt", Ts(committedAt));
+            update.Parameters.AddWithValue("$providerKey", (object?)providerKey ?? DBNull.Value);
+            update.Parameters.AddWithValue("$readyByUserId", (object?)readyByUserId ?? DBNull.Value);
             update.Parameters.AddWithValue("$taskId", taskId);
             update.Parameters.AddWithValue("$projectId", projectId.ToString());
             moved += await update.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
@@ -549,21 +728,99 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         BacklogTaskId id,
         Run coordinatorRun,
         DateTimeOffset claimedAt,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? expectedProviderKey = null,
+        string? expectedReadyByUserId = null)
     {
         await using var connection = await _db.OpenConnectionAsync(ct).ConfigureAwait(false);
         await using var tx = connection.BeginTransaction();
+
+        var graphRevision = 0L;
+        await using (var revision = connection.CreateCommand())
+        {
+            revision.Transaction = tx;
+            revision.CommandText = "SELECT backlog_graph_revision FROM projects WHERE project_id = $projectId AND state = 'active';";
+            revision.Parameters.AddWithValue("$projectId", projectId.ToString());
+            if (await revision.ExecuteScalarAsync(ct).ConfigureAwait(false) is not long value)
+                return new ClaimReserveOutcome(ClaimReserveResult.ProjectUnavailable);
+            graphRevision = value;
+        }
+        var claimedInputs = new List<BacklogClaimedPrerequisite>();
+        await using (var inputs = connection.CreateCommand())
+        {
+            inputs.Transaction = tx;
+            inputs.CommandText =
+                """
+                SELECT d.depends_on_task_id, p.run_id, p.archived_at,
+                       r.status, r.result, r.merged_commit_hash, r.tree_hash,
+                       r.lifecycle_generation, r.executable_workflow_content_digest,
+                       v.revision_id, v.diff_sha256, v.diff_bytes, v.accepted_no_change,
+                       v.tree_content_sha256, v.tree_content
+                  FROM backlog_task_dependencies d
+                  JOIN backlog_tasks p ON p.task_id = d.depends_on_task_id
+                  LEFT JOIN runs r ON r.run_id = p.run_id
+                  LEFT JOIN run_output_revisions v ON v.revision_id = r.current_output_revision_id
+                       AND v.run_id = r.run_id AND v.lifecycle_generation = r.lifecycle_generation
+                       AND ((v.schema_version = 2 AND v.merged_commit_hash = r.merged_commit_hash)
+                            OR (v.schema_version = 4 AND v.merged_commit_hash IS NULL
+                                AND r.approved_output_revision_id = v.revision_id)
+                            OR (v.schema_version = 3 AND r.result = 'confirmed'
+                                AND v.accepted_no_change = 1
+                                AND v.merged_commit_hash = r.merged_commit_hash))
+                       AND v.output_kind IN ('collective', 'no_change')
+                       AND v.manifest_incomplete = 0 AND v.diff_bytes IS NOT NULL
+                       AND v.tree_hash = r.tree_hash
+                 WHERE d.project_id = $projectId AND d.task_id = $taskId
+                 ORDER BY d.depends_on_task_id;
+                """;
+            inputs.Parameters.AddWithValue("$projectId", projectId.ToString());
+            inputs.Parameters.AddWithValue("$taskId", id.ToString());
+            await using var reader = await inputs.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
+            {
+                var status = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var result = reader.IsDBNull(4) ? null : reader.GetString(4);
+                if (!reader.IsDBNull(2) || !BacklogPrerequisiteOutcome.IsSatisfied(
+                        status, result,
+                        reader.IsDBNull(5) ? null : reader.GetString(5),
+                        reader.IsDBNull(6) ? null : reader.GetString(6),
+                        !reader.IsDBNull(9),
+                        !reader.IsDBNull(9) && reader.GetInt32(12) != 0))
+                    return new ClaimReserveOutcome(ClaimReserveResult.Lost);
+                if (!reader.IsDBNull(9)
+                    && (RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(11)) != reader.GetString(10)
+                        || RunOutputRevision.Sha256(reader.GetFieldValue<byte[]>(14)) != reader.GetString(13)))
+                    throw new RunOutputRevisionUnavailableException("corrupt_content");
+                if (!reader.IsDBNull(9))
+                    RunOutputTree.Decode(reader.GetFieldValue<byte[]>(14));
+                claimedInputs.Add(new BacklogClaimedPrerequisite(
+                    reader.GetString(0), reader.GetString(1),
+                    BacklogPrerequisiteOutcome.Reason(false, status, result,
+                        reader.IsDBNull(5) ? null : reader.GetString(5),
+                        reader.IsDBNull(6) ? null : reader.GetString(6),
+                        !reader.IsDBNull(9), !reader.IsDBNull(9) && reader.GetInt32(12) != 0),
+                    reader.GetInt32(7),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.IsDBNull(9) ? null : reader.GetString(9)));
+            }
+        }
 
         // (a) exactly-once, project-scoped claim gate.
         await using (var claim = connection.CreateCommand())
         {
             claim.Transaction = tx;
             claim.CommandText =
-                """
+                $"""
                 UPDATE backlog_tasks
-                   SET state = 'claimed', run_id = $runId, claimed_at = $claimedAt
+                   SET state = 'claimed', run_id = $runId, claimed_at = $claimedAt,
+                       claimed_graph_revision = $graphRevision,
+                       claimed_prerequisites_json = $claimedInputs
                  WHERE task_id = $taskId AND project_id = $projectId
                    AND state = 'ready' AND run_id IS NULL AND archived_at IS NULL
+                   AND ai_execution_provider_key IS $expectedProviderKey
+                   AND ready_by_user_id IS $expectedReadyByUserId
                    AND NOT EXISTS (
                         SELECT 1
                           FROM backlog_task_dependencies d
@@ -574,14 +831,21 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                                prerequisite.archived_at IS NOT NULL
                                OR prerequisite.run_id IS NULL
                                OR r.run_id IS NULL
-                               OR r.status <> 'merged'
+                               OR COALESCE(((r.status = 'merged' OR (r.status = 'completed' AND r.result IN ('assembly_complete', 'complete', 'confirmed')))
+                                    AND NULLIF(TRIM(r.merged_commit_hash), '') IS NOT NULL
+                                    AND NULLIF(TRIM(r.tree_hash), '') IS NOT NULL
+                                    AND (r.status != 'completed' OR {CollectiveRevisionExistsSql})), 0) = 0
                            )
                    );
                 """;
             claim.Parameters.AddWithValue("$runId", coordinatorRun.Id.ToString());
             claim.Parameters.AddWithValue("$claimedAt", Ts(claimedAt));
+            claim.Parameters.AddWithValue("$graphRevision", graphRevision);
+            claim.Parameters.AddWithValue("$claimedInputs", JsonSerializer.Serialize(claimedInputs));
             claim.Parameters.AddWithValue("$taskId", id.ToString());
             claim.Parameters.AddWithValue("$projectId", projectId.ToString());
+            claim.Parameters.AddWithValue("$expectedProviderKey", (object?)expectedProviderKey ?? DBNull.Value);
+            claim.Parameters.AddWithValue("$expectedReadyByUserId", (object?)expectedReadyByUserId ?? DBNull.Value);
             var claimedRows = await claim.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (claimedRows != 1)
             {
@@ -635,14 +899,24 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
                                   agent_name, agent_charter, workflow_run_id, parent_run_id, subtask_id, origin,
                                   launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
                                   approval_policy_source,
-                                  approval_policy_captured_at, approval_policy_settings_updated_at)
+                                  approval_policy_captured_at, approval_policy_settings_updated_at,
+                                  executable_workflow_pin_required, executable_workflow_manifest_schema_version,
+                                  executable_workflow_definition_id, executable_workflow_definition_version,
+                                  executable_workflow_source, executable_workflow_content_digest,
+                                  executable_workflow_definition_yaml, executable_workflow_pinned_at,
+                                  execution_input_required)
                 SELECT $runId, $repo, $branch, $modelSource, $task,
                        $user, $status, $startedAt, $endedAt, $result,
                        NULL, NULL, $projectId, $modelId,
                        $agentName, $agentCharter, $workflowRunId, $parentRunId, $subtaskId, 'backlog_pickup',
                        $launchAutoApproveTools, $launchAutopilot, $approvalPolicySnapshotId,
                        $approvalPolicySource,
-                       $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt
+                       $approvalPolicyCapturedAt, $approvalPolicySettingsUpdatedAt,
+                       $executableWorkflowPinRequired, $executableWorkflowManifestSchemaVersion,
+                       $executableWorkflowDefinitionId, $executableWorkflowDefinitionVersion,
+                       $executableWorkflowSource, $executableWorkflowContentDigest,
+                       $executableWorkflowDefinitionYaml, $executableWorkflowPinnedAt,
+                       $executionInputRequired
                 WHERE EXISTS (
                     SELECT 1 FROM projects WHERE project_id = $projectId AND state = 'active'
                 );
@@ -670,6 +944,15 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             insertRun.Parameters.AddWithValue("$approvalPolicySource", approvalSnapshot.Source);
             insertRun.Parameters.AddWithValue("$approvalPolicyCapturedAt", Ts(approvalSnapshot.CapturedAt));
             insertRun.Parameters.AddWithValue("$approvalPolicySettingsUpdatedAt", Ts(approvalSnapshot.SettingsUpdatedAt!.Value));
+            insertRun.Parameters.AddWithValue("$executableWorkflowPinRequired", coordinatorRun.ExecutableWorkflowPinRequired ? 1 : 0);
+            insertRun.Parameters.AddWithValue("$executableWorkflowManifestSchemaVersion", (object?)coordinatorRun.ExecutableWorkflowManifestSchemaVersion ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowDefinitionId", (object?)coordinatorRun.ExecutableWorkflowDefinitionId ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowDefinitionVersion", (object?)coordinatorRun.ExecutableWorkflowDefinitionVersion ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowSource", (object?)coordinatorRun.ExecutableWorkflowSource ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowContentDigest", (object?)coordinatorRun.ExecutableWorkflowContentDigest ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowDefinitionYaml", (object?)coordinatorRun.ExecutableWorkflowDefinitionYaml ?? DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executableWorkflowPinnedAt", coordinatorRun.ExecutableWorkflowPinnedAt is { } pinnedAt ? Ts(pinnedAt) : DBNull.Value);
+            insertRun.Parameters.AddWithValue("$executionInputRequired", claimedInputs.Count > 0 ? 1 : 0);
             var runRows = await insertRun.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
             if (runRows != 1)
             {
@@ -678,6 +961,21 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
             }
         }
 
+        var persistedRun = coordinatorRun with
+        {
+            Origin = RunOrigin.BacklogPickup,
+            LaunchAutoApproveTools = approvalSnapshot.Policy.AutoApproveTools,
+            LaunchAutopilot = approvalSnapshot.Policy.Autopilot,
+            ApprovalPolicySnapshotId = approvalSnapshot.SnapshotId,
+            ApprovalPolicySource = approvalSnapshot.Source,
+            ApprovalPolicyCapturedAt = approvalSnapshot.CapturedAt,
+            ApprovalPolicySettingsUpdatedAt = approvalSnapshot.SettingsUpdatedAt,
+        };
+        await SqliteRunStore.CreateExecutionIdentityAsync(
+            connection,
+            (SqliteTransaction)tx,
+            persistedRun,
+            ct).ConfigureAwait(false);
         await tx.CommitAsync(ct).ConfigureAwait(false);
         return new ClaimReserveOutcome(ClaimReserveResult.Won, approvalSnapshot);
     }
@@ -779,11 +1077,13 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$orderKey", task.OrderKey);
         command.Parameters.AddWithValue("$capturedBy", task.CapturedBy);
         command.Parameters.AddWithValue("$capturedByUserId", (object?)task.CapturedByUserId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$readyByUserId", (object?)task.ReadyByUserId ?? DBNull.Value);
         command.Parameters.AddWithValue("$createdAt", Ts(task.CreatedAt));
         command.Parameters.AddWithValue("$committedAt", NullableTs(task.CommittedAt));
         command.Parameters.AddWithValue("$claimedAt", NullableTs(task.ClaimedAt));
         command.Parameters.AddWithValue("$runId", (object?)task.RunId?.ToString() ?? DBNull.Value);
         command.Parameters.AddWithValue("$workflowOverrideId", (object?)task.WorkflowOverrideId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$workflowDefinitionSnapshotYaml", (object?)task.WorkflowDefinitionSnapshotYaml ?? DBNull.Value);
         command.Parameters.AddWithValue("$archivedAt", NullableTs(task.ArchivedAt));
         command.Parameters.AddWithValue("$sourceFilePath", (object?)task.SourceFilePath ?? DBNull.Value);
         command.Parameters.AddWithValue("$parentPrdRunId", (object?)task.ParentPrdRunId?.ToString() ?? DBNull.Value);
@@ -791,20 +1091,22 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         command.Parameters.AddWithValue("$promotionReason", (object?)task.PromotionReason ?? DBNull.Value);
         command.Parameters.AddWithValue("$automationInvocationPending", task.IsAutomationInvocationPending ? 1 : 0);
         command.Parameters.AddWithValue("$aiExecutionProviderKey", (object?)task.AiExecutionProviderKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$claimedGraphRevision", (object?)task.ClaimedGraphRevision ?? DBNull.Value);
+        command.Parameters.AddWithValue("$claimedPrerequisitesJson", (object?)task.ClaimedPrerequisitesJson ?? DBNull.Value);
     }
 
     // Ordinals: 0=task_id 1=project_id 2=title 3=description 4=state 5=order_key
     //           6=captured_by 7=captured_by_user_id 8=created_at 9=committed_at 10=claimed_at
-    //           11=run_id 12=workflow_override_id 13=archived_at 14=source_file_path
-    //           15=parent_prd_run_id 16=promotion_key 17=promotion_reason 18=automation_invocation_pending
-    //           19=ai_execution_provider_key
+    //           11=run_id 12=workflow_override_id 13=workflow_definition_snapshot_yaml
+    //           14=archived_at 15=source_file_path 16=parent_prd_run_id 17=promotion_key
+    //           18=promotion_reason 19=automation_invocation_pending 20=ai_execution_provider_key
     private const string SelectSql =
         """
         SELECT task_id, project_id, title, description, state, order_key,
               captured_by, captured_by_user_id, created_at, committed_at, claimed_at, run_id,
-              workflow_override_id, archived_at, source_file_path,
+              workflow_override_id, workflow_definition_snapshot_yaml, archived_at, source_file_path,
               parent_prd_run_id, promotion_key, promotion_reason, automation_invocation_pending,
-              ai_execution_provider_key
+              ai_execution_provider_key, claimed_graph_revision, claimed_prerequisites_json, ready_by_user_id
           FROM backlog_tasks
         """;
 
@@ -818,18 +1120,22 @@ public sealed class SqliteBacklogTaskStore : IBacklogTaskStore
         OrderKey    = r.GetString(5),
         CapturedBy  = r.GetString(6),
         CapturedByUserId = r.IsDBNull(7) ? null : r.GetString(7),
+        ReadyByUserId = r.IsDBNull(23) ? null : r.GetString(23),
         CreatedAt   = DateTimeOffset.Parse(r.GetString(8), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         CommittedAt = r.IsDBNull(9)  ? null : DateTimeOffset.Parse(r.GetString(9),  CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         ClaimedAt   = r.IsDBNull(10) ? null : DateTimeOffset.Parse(r.GetString(10), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         RunId       = r.IsDBNull(11) ? null : RunId.Parse(r.GetString(11)),
         WorkflowOverrideId = r.IsDBNull(12) ? null : r.GetString(12),
-        ArchivedAt  = r.IsDBNull(13) ? null : DateTimeOffset.Parse(r.GetString(13), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        SourceFilePath = r.IsDBNull(14) ? null : r.GetString(14),
-        ParentPrdRunId = r.IsDBNull(15) ? null : RunId.Parse(r.GetString(15)),
-        PromotionKey = r.IsDBNull(16) ? null : r.GetString(16),
-        PromotionReason = r.IsDBNull(17) ? null : r.GetString(17),
-        IsAutomationInvocationPending = r.GetInt64(18) != 0,
-        AiExecutionProviderKey = r.IsDBNull(19) ? null : r.GetString(19),
+        WorkflowDefinitionSnapshotYaml = r.IsDBNull(13) ? null : r.GetString(13),
+        ArchivedAt  = r.IsDBNull(14) ? null : DateTimeOffset.Parse(r.GetString(14), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        SourceFilePath = r.IsDBNull(15) ? null : r.GetString(15),
+        ParentPrdRunId = r.IsDBNull(16) ? null : RunId.Parse(r.GetString(16)),
+        PromotionKey = r.IsDBNull(17) ? null : r.GetString(17),
+        PromotionReason = r.IsDBNull(18) ? null : r.GetString(18),
+        IsAutomationInvocationPending = r.GetInt64(19) != 0,
+        AiExecutionProviderKey = r.IsDBNull(20) ? null : r.GetString(20),
+        ClaimedGraphRevision = r.IsDBNull(21) ? null : r.GetInt64(21),
+        ClaimedPrerequisitesJson = r.IsDBNull(22) ? null : r.GetString(22),
     };
 
     private static string AddTaskIdParameters(SqliteCommand command, IReadOnlyCollection<BacklogTaskId> taskIds)

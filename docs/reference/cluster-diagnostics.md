@@ -2,7 +2,7 @@
 
 ## Overview
 
-`GET /api/diagnostics/cluster` returns a real-time Kubernetes snapshot. It includes dependency checks, agent-host pod inventory, SandboxWarmPool objects, and SandboxClaim objects.
+`GET /api/diagnostics/cluster` returns a real-time Kubernetes snapshot. It includes dependency checks, agent-host pod inventory, SandboxWarmPool objects, and SandboxClaim objects. Project-owned workflow-child evidence is filtered to projects where the caller has an explicit Viewer-or-higher role; platform administrators can inspect all projects, while callers without project scope receive no workflow-child identifiers.
 
 This endpoint requires bearer authentication. Without a Kubernetes client the endpoint remains available: Kubernetes checks report unknown/unavailable conditions and inventories can be empty. Topology returns unavailable graph/layer results.
 
@@ -22,6 +22,15 @@ The response is a `ClusterDiagnosticsDto`:
       "latencyMs": 12
     }
   ],
+  "inventory_sources": [
+    {
+      "name": "sandbox_claims",
+      "outcome": "no_resources",
+      "complete": true,
+      "observed_at": "2026-09-03T12:00:00Z",
+      "detail": "Collection completed and found no resources."
+    }
+  ],
   "active_agent_pods": [],
   "orphaned_agent_pods": [],
   "pending_capacity_runs": [],
@@ -35,6 +44,7 @@ The response is a `ClusterDiagnosticsDto`:
 | `generated_utc` | string | ISO 8601 timestamp for the snapshot. |
 | `total_duration_ms` | number | Total time for the snapshot. |
 | `checks` | `DetailedHealthCheckDto[]` | Results of five concurrent dependency checks. |
+| `inventory_sources` | `InventoryCollectionStatusDto[]` | Per-source collection outcome and completeness. |
 | `active_agent_pods` | `AgentPodInfoDto[]` | Bound pods for active runs. |
 | `orphaned_agent_pods` | `AgentPodInfoDto[]` | Pods without a matching active run. |
 | `pending_capacity_runs` | `PendingCapacityRunDto[]` | Capacity-waiting subtasks. New runs usually leave this legacy surface empty. |
@@ -67,6 +77,13 @@ Each check has `name`, `status`, `message`, and `latencyMs`. Status values are `
 Warm-pool instances also have optional `details`. The response root can include `details`
 for the cluster itself. These additions are optional so older clients can continue to
 consume the existing polling shape.
+
+Every exposed inventory has a collection status. Outcomes are `available`,
+`no_resources`, `forbidden`, `timeout`, `unsupported`, `malformed`, and
+`collection_error`. Only `no_resources` is a complete successful empty result. All other
+empty unavailable outcomes are incomplete, make the cluster summary non-healthy, and are
+shown as a warning in the UI. Caller cancellation still cancels the request; `timeout`
+means the server-owned bounded collection deadline expired.
 
 ### Expandable resource details
 

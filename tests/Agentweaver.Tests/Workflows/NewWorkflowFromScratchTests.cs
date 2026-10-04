@@ -412,12 +412,14 @@ public sealed class NewWorkflowFromScratchTests : IClassFixture<ProjectsWebAppli
 
         var yaml = await _client.GetFromJsonAsync<JsonElement>(
             $"/api/projects/{projectId}/workflows/my-workflow/yaml");
-        yaml.GetProperty("yaml").GetString().Should().Contain(
+        var yamlText = yaml.GetProperty("yaml").GetString();
+        yamlText.Should().NotBeNull();
+        yamlText.ReplaceLineEndings("\n").Should().Contain(
             """
               if:
                 - not:
                     has_label: { label: blocked }
-            """.Replace("\n", Environment.NewLine));
+            """);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────────────────────

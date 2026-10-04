@@ -26,6 +26,7 @@ public sealed class GitHubRepositorySelectionClientTests
         var repositories = await client.ListAsync("user-oauth-token", CancellationToken.None);
 
         repositories.Should().ContainSingle().Which.Should().BeEquivalentTo(new GitHubRepositorySelectionCandidate(
+            72,
             42,
             "octo/secure-repo",
             "octo",
@@ -120,6 +121,21 @@ public sealed class GitHubRepositorySelectionClientTests
         result.Should().NotBeNull();
         result!.Repositories.Should().BeEmpty();
         result.Installations.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task Browse_ExposesProviderStatusWithoutResponseBody(HttpStatusCode status)
+    {
+        var client = Client(new StatusHandler(status));
+
+        var browse = () => client.BrowseAsync("private-token", CancellationToken.None);
+
+        var error = await browse.Should().ThrowAsync<HttpRequestException>();
+        error.Which.StatusCode.Should().Be(status);
+        error.Which.Message.Should().NotContain("private-token").And.NotContain("provider-private-body");
     }
 
     [Theory]
@@ -282,6 +298,17 @@ public sealed class GitHubRepositorySelectionClientTests
     private sealed class StubHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+    }
+
+    private sealed class StatusHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent("provider-private-body", Encoding.UTF8, "application/json"),
+            });
     }
 
     private sealed class RecordingRouteHandler(IReadOnlyDictionary<string, string> routes) : HttpMessageHandler

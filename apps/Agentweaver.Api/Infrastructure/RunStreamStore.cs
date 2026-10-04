@@ -158,7 +158,9 @@ public sealed class RunStreamEntry
         previous.TrySetResult();
     }
 
-    internal async Task<bool> TryRecordPreviewReadyAsync(object payload, IRunStore runStore, CancellationToken ct)
+    internal async Task<bool> TryRecordPreviewReadyAsync(
+        object payload, IRunStore runStore, CancellationToken ct,
+        string? publicationOwner = null, int? publicationGeneration = null)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct, CompletionToken);
         ct = lifetime.Token;
@@ -166,8 +168,12 @@ public sealed class RunStreamEntry
         TaskCompletionSource? previous = null;
         if (HasDurableSequenceAuthority)
         {
-            var recorded = await _eventStream!.AppendWhileRunActiveAsync(_runId, events, runStore, ct)
-                .ConfigureAwait(false);
+            var recorded = publicationOwner is null
+                ? await _eventStream!.AppendWhileRunActiveAsync(_runId, events, runStore, ct).ConfigureAwait(false)
+                : await _eventStream!.AppendWhilePreviewPublicationOwnedAsync(
+                    _runId, events, runStore, publicationOwner,
+                    publicationGeneration ?? throw new ArgumentException("Publication generation is required."),
+                    ct).ConfigureAwait(false);
             if (recorded.Count == 0)
                 return false;
             lock (_lock)
@@ -182,8 +188,18 @@ public sealed class RunStreamEntry
         {
             if (RunStoreChain.Find<RunActiveClaimGuardedRunStore>(runStore) is not { } guarded)
                 throw new InvalidOperationException("In-memory conditional events require the guarded run store.");
-            if (!await guarded.TryWhileRunActiveAsync(RunId.Parse(_runId), () =>
+            var owned = true;
+            if (!await guarded.TryWhileRunActiveAsync(RunId.Parse(_runId), async () =>
             {
+                if (publicationOwner is not null
+                    && (publicationGeneration != (await runStore.GetAsync(RunId.Parse(_runId), ct)
+                        .ConfigureAwait(false))?.LifecycleGeneration
+                        || !await runStore.IsPreviewPublicationOwnerAsync(
+                            RunId.Parse(_runId), publicationOwner, ct).ConfigureAwait(false)))
+                {
+                    owned = false;
+                    return;
+                }
                 lock (_lock)
                 {
                     ct.ThrowIfCancellationRequested();
@@ -194,8 +210,9 @@ public sealed class RunStreamEntry
                     previous = Interlocked.Exchange(ref _eventSignal,
                         new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
                 }
-                return Task.CompletedTask;
             }, ct).ConfigureAwait(false))
+                return false;
+            if (!owned)
                 return false;
         }
         previous!.TrySetResult();
@@ -268,6 +285,37 @@ public sealed class RunStreamEntry
         if (added)
             previous!.TrySetResult();
 
+        return recorded.Sequence;
+    }
+
+    internal int RecordNextIfLeaseOwned(
+        string type,
+        object payload,
+        IRunStore runStore,
+        RunLeaseFence lease,
+        CancellationToken ct)
+    {
+        if (!HasDurableSequenceAuthority)
+            throw new InvalidOperationException("Lease-fenced events require a durable event stream.");
+
+        var candidate = StructuredRunFailureTerminal.NormalizeFailure(
+            new RunEvent(0, type, payload, DateTimeOffset.UtcNow));
+        var recorded = _eventStream!
+            .AppendWhileRunLeaseOwnedAsync(_runId, [candidate], runStore, lease, ct)
+            .GetAwaiter().GetResult()
+            .SingleOrDefault();
+        if (recorded is null)
+            return 0;
+
+        TaskCompletionSource? previous = null;
+        lock (_lock)
+        {
+            if (TryInsertOrValidateLocked(recorded))
+                previous = Interlocked.Exchange(
+                    ref _eventSignal,
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+        }
+        previous?.TrySetResult();
         return recorded.Sequence;
     }
 
@@ -482,6 +530,12 @@ public sealed class RunStreamStore
     public RunStreamEntry? Get(string runId) =>
         _entries.TryGetValue(runId, out var pair) ? pair.Entry : null;
 
+    internal Task<IReadOnlyList<RunEvent>> GetPersistedPreviewEventsAsync(
+        string runId, CancellationToken ct) =>
+        _eventStream is not null
+            ? _eventStream.GetPersistedEventsAsync(runId, ct: ct)
+            : Task.FromResult<IReadOnlyList<RunEvent>>(Get(runId)?.GetSnapshotSince(0).Events ?? []);
+
     internal bool TryRecordDurableTerminalAndComplete(
         string runId,
         int lifecycleGeneration,
@@ -489,18 +543,25 @@ public sealed class RunStreamStore
         Get(runId)?.TryRecordDurableTerminalAndComplete(evt, lifecycleGeneration) ?? true;
 
     internal async Task<bool> TryRecordPreviewReadyAsync(
-        string runId, object payload, IRunStore runStore, CancellationToken ct)
+        string runId, object payload, IRunStore runStore, CancellationToken ct,
+        string? publicationOwner = null, int? publicationGeneration = null)
     {
         var entry = Get(runId);
         if (entry is not null)
-            return await entry.TryRecordPreviewReadyAsync(payload, runStore, ct).ConfigureAwait(false);
+            return await entry.TryRecordPreviewReadyAsync(
+                payload, runStore, ct, publicationOwner, publicationGeneration).ConfigureAwait(false);
         if (_eventStream is null)
             return false;
 
         // Another replica may own the live entry. Persist without creating a partial local history;
         // durable subscribers replay the committed batch through the existing event stream.
-        var recorded = await _eventStream.AppendWhileRunActiveAsync(
-            runId, RunStreamEntry.CreatePreviewReadyEvents(payload), runStore, ct).ConfigureAwait(false);
+        var events = RunStreamEntry.CreatePreviewReadyEvents(payload);
+        var recorded = publicationOwner is null
+            ? await _eventStream.AppendWhileRunActiveAsync(runId, events, runStore, ct).ConfigureAwait(false)
+            : await _eventStream.AppendWhilePreviewPublicationOwnedAsync(
+                runId, events, runStore, publicationOwner,
+                publicationGeneration ?? throw new ArgumentException("Publication generation is required."),
+                ct).ConfigureAwait(false);
         return recorded.Count > 0;
     }
 

@@ -4,6 +4,8 @@ using System.Text.Json;
 using Agentweaver.Api.Security;
 using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
+using Agentweaver.Api.Webhooks;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Api.Auth;
@@ -24,6 +26,7 @@ internal enum GitHubRepositorySelectionOutcome
 }
 
 internal sealed record GitHubRepositorySelectionCandidate(
+    long InstallationId,
     long RepositoryId,
     string FullName,
     string OwnerLogin,
@@ -52,6 +55,12 @@ internal sealed record GitHubRepositoryCredentialUseResult<T>(
 /// cross an HTTP or MCP response boundary.
 /// </summary>
 internal sealed record ResolvedGitHubRepositorySelection(
+    ProjectId ProjectId,
+    bool IsRetry,
+    string EntraObjectId,
+    string RepoAppAuthorizationId,
+    long InstallationId,
+    long RepositoryId,
     string FullName,
     string SourceRepository,
     string CloneUrl,
@@ -66,6 +75,9 @@ internal sealed class GitHubRepositorySelectionBroker(
     GitHubConnectionsPersistenceStore persistence,
     IGitHubConnectionsCredentialVault vault,
     GitHubRepositorySelectionClient repositories,
+    RepoAppInstallationTokenService installationTokens,
+    MemoryDbContext db,
+    RepoAppUserAuthorizationService authorization,
     ILogger<GitHubRepositorySelectionBroker>? logger = null)
 {
     internal static readonly TimeSpan SelectionCodeLifetime = TimeSpan.FromMinutes(5);
@@ -113,6 +125,7 @@ internal sealed class GitHubRepositorySelectionBroker(
                 CodeHash = HashCode(code),
                 EntraObjectId = GetCallerSubject(caller),
                 RepoAppAuthorizationId = result.Credential.Id,
+                InstallationId = repository.InstallationId,
                 RepositoryId = repository.RepositoryId,
                 CreatedAt = now,
                 ExpiresAtUnixMilliseconds = expiresAt.ToUnixTimeMilliseconds(),
@@ -136,63 +149,12 @@ internal sealed class GitHubRepositorySelectionBroker(
     /// <summary>Uses the caller's live Repo App credential only inside a server-side operation.</summary>
     internal async Task<GitHubRepositoryCredentialUseResult<T>> TryUseCredentialAsync<T>(
         CallerContext caller,
-        Func<string, Task<T>> operation,
+        Func<string, Task<T?>> operation,
         CancellationToken ct)
+        where T : class
     {
-        var subject = GetCallerSubject(caller);
-        var credential = await persistence.GetLiveRepoAppCredentialAsync(subject, ct).ConfigureAwait(false);
-        if (credential is null)
-            return new(GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, default);
-
-        SecretGetResult secret;
-        try
-        {
-            secret = await vault.ReadCurrentAsync(
-                GitHubConnectionsCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
-        }
-        catch (ArgumentException)
-        {
-            logger?.LogWarning(
-                "Repo App credential reference {CredentialReference} for subject {EntraObjectId} is invalid.",
-                credential.CredentialReference,
-                subject);
-            return new(GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, default);
-        }
-
-        if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out var token))
-        {
-            logger?.LogWarning(
-                "Repo App credential secret for subject {EntraObjectId} was missing, revoked, or unusable.",
-                subject);
-            return new(GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, default);
-        }
-
-        T result;
-        try
-        {
-            result = await operation(token!).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (!ct.IsCancellationRequested &&
-                                   ex is HttpRequestException or JsonException or TaskCanceledException)
-        {
-            logger?.LogWarning(
-                ex,
-                "Repo App capability operation failed for subject {EntraObjectId}.",
-                subject);
-            return new(GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError, default);
-        }
-
-        if (result is null)
-        {
-            logger?.LogWarning(
-                "Repo App capability operation returned no result for subject {EntraObjectId}.",
-                subject);
-            return new(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, default);
-        }
-
-        return await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false)
-            ? new(GitHubRepositorySelectionOutcome.Issued, result)
-            : new(GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, default);
+        var result = await WithCredentialAsync<T>(GetCallerSubject(caller), operation, ct).ConfigureAwait(false);
+        return new(result.Outcome, result.Value);
     }
 
     /// <summary>
@@ -222,11 +184,57 @@ internal sealed class GitHubRepositorySelectionBroker(
         CancellationToken ct)
     {
         var callerSubject = GetCallerSubject(caller);
-        var consumed = !IsCodeWellFormed(code)
+        var codeHash = IsCodeWellFormed(code) ? HashCode(code) : null;
+        var consumed = codeHash is null
             ? null
             : await persistence.TryConsumeRepositorySelectionCodeAsync(
-                HashCode(code), callerSubject, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+                codeHash, callerSubject, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
+        return await ResolveAsync(codeHash, callerSubject, consumed, isRetry: false, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Claims a selection code for project creation. Replays of that same unexpired, caller-bound
+    /// code resolve to the same deterministic project id and cannot authorize another workspace.
+    /// </summary>
+    internal async Task<ResolvedGitHubRepositorySelection?> TryClaimForProjectCreationAndResolveAsync(
+        string code,
+        CallerContext caller,
+        CancellationToken ct)
+    {
+        var callerSubject = GetCallerSubject(caller);
+        var codeHash = IsCodeWellFormed(code) ? HashCode(code) : null;
+        var consumed = codeHash is null
+            ? null
+            : await persistence.TryClaimRepositorySelectionCodeAsync(
+                codeHash, callerSubject, DateTimeOffset.UtcNow, ct).ConfigureAwait(false);
         if (consumed is null)
+            return null;
+
+        return await ResolveAsync(
+            codeHash!,
+            callerSubject,
+            new ConsumedGitHubRepositorySelection(
+                consumed.EntraObjectId,
+                consumed.InstallationId,
+                consumed.RepositoryId,
+                consumed.RepoAppAuthorizationId),
+            consumed.AlreadyConsumed,
+            ct).ConfigureAwait(false);
+    }
+
+    private async Task<ResolvedGitHubRepositorySelection?> ResolveAsync(
+        string? codeHash,
+        string callerSubject,
+        ConsumedGitHubRepositorySelection? consumed,
+        bool isRetry,
+        CancellationToken ct)
+    {
+        if (consumed is null || codeHash is null)
+            return null;
+
+        if (await authorization.RefreshForRepositoryAsync(
+                callerSubject, force: false, ct, consumed.RepoAppAuthorizationId).ConfigureAwait(false)
+            != RepoAppAuthorizationOutcome.Success)
             return null;
 
         var credential = await persistence.GetLiveRepoAppCredentialAsync(
@@ -243,6 +251,11 @@ internal sealed class GitHubRepositorySelectionBroker(
         {
             return null;
         }
+        catch (Exception ex) when (RepoAppUserAuthorizationService.IsTransientCredentialStoreFailure(ex, ct))
+        {
+            logger?.LogWarning("Repo App selection code credential read failed; error type {ErrorType}.", ex.GetType().Name);
+            return null;
+        }
         if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out var accessToken))
             return null;
         if (string.IsNullOrWhiteSpace(accessToken))
@@ -253,21 +266,160 @@ internal sealed class GitHubRepositorySelectionBroker(
         {
             candidates = await repositories.ListAsync(accessToken!, ct).ConfigureAwait(false);
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized && !ct.IsCancellationRequested)
+        {
+            if (await authorization.RefreshForRepositoryAsync(
+                    callerSubject, force: true, ct, consumed.RepoAppAuthorizationId).ConfigureAwait(false)
+                != RepoAppAuthorizationOutcome.Success)
+                return null;
+            SecretGetResult renewed;
+            try
+            {
+                renewed = await vault.ReadCurrentAsync(
+                    GitHubConnectionsCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
+            }
+            catch (Exception readError) when (RepoAppUserAuthorizationService.IsTransientCredentialStoreFailure(readError, ct))
+            {
+                logger?.LogWarning("Repo App selection code credential retry read failed; error type {ErrorType}.", readError.GetType().Name);
+                return null;
+            }
+            if (!renewed.Found || !TryGetUsableAccessToken(renewed.Value, out accessToken))
+                return null;
+            try
+            {
+                candidates = await repositories.ListAsync(accessToken!, ct).ConfigureAwait(false);
+            }
+            catch (Exception retryError) when (!ct.IsCancellationRequested &&
+                retryError is HttpRequestException or JsonException or TaskCanceledException)
+            {
+                logger?.LogWarning("Repo App selection code lookup failed after one renewal; error type {ErrorType}.",
+                    retryError.GetType().Name);
+                return null;
+            }
+        }
         catch (Exception ex) when (!ct.IsCancellationRequested &&
                                    (ex is HttpRequestException || ex is JsonException || ex is TaskCanceledException))
         {
             return null;
         }
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return null;
 
         var repository = candidates?.SingleOrDefault(candidate => candidate.RepositoryId == consumed.RepositoryId);
-        if (repository is null || !await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false))
+        if (repository is null ||
+            repository.InstallationId != consumed.InstallationId ||
+            !await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false))
             return null;
 
         return new ResolvedGitHubRepositorySelection(
+            ProjectIdFromCodeHash(codeHash),
+            isRetry,
+            consumed.EntraObjectId,
+            consumed.RepoAppAuthorizationId,
+            consumed.InstallationId,
+            consumed.RepositoryId,
             repository.FullName,
             repository.SourceUrl,
             repository.CloneUrl,
             accessToken);
+    }
+
+    internal async Task<bool> BindProjectAuthorizationAsync(
+        Project project,
+        ResolvedGitHubRepositorySelection selection,
+        CancellationToken ct)
+    {
+        var authority = await installationTokens.GetRepositoryAuthorityAsync(
+            selection.InstallationId, selection.RepositoryId, ct).ConfigureAwait(false);
+        if (authority is null ||
+            !string.Equals(authority.FullNameDisplay, selection.FullName, StringComparison.OrdinalIgnoreCase))
+        {
+            logger?.LogWarning(
+                "Repo App project binding verification failed for project {ProjectId}.",
+                selection.ProjectId);
+            return false;
+        }
+
+        if (!await db.Projects.AnyAsync(
+                record => record.ProjectId == project.Id.ToString(),
+                ct).ConfigureAwait(false))
+        {
+            db.Projects.Add(new ProjectRecord
+            {
+                ProjectId = project.Id.ToString(),
+                Name = project.Name,
+                OriginKind = "github",
+                SourceRepository = project.Origin.SourceRepository,
+                WorkingDirectory = project.WorkingDirectory,
+                DefaultBranch = project.DefaultBranch,
+                Owner = project.Owner,
+                DefaultProvider = project.ProviderSettings.DefaultProvider.ToApiString(),
+                DefaultModelCopilot = project.ProviderSettings.GitHubCopilotModel,
+                DefaultModelFoundry = project.ProviderSettings.MicrosoftFoundryModel,
+                State = "creating",
+                CreatedAt = project.CreatedAt,
+                UpdatedAt = project.UpdatedAt,
+            });
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        }
+
+        var outcome = await new RepoAppInstallationLifecycleService(db)
+            .BindSelectedRepositoryAsync(
+                selection.ProjectId.ToString(),
+                selection.EntraObjectId,
+                selection.RepoAppAuthorizationId,
+                authority,
+                ct)
+            .ConfigureAwait(false);
+        if (outcome != RepoAppInstallationBindingOutcome.Bound)
+        {
+            logger?.LogWarning(
+                "Repo App project binding failed for project {ProjectId} with outcome {Outcome}.",
+                selection.ProjectId,
+                outcome);
+            return false;
+        }
+
+        logger?.LogInformation(
+            "Repo App project binding completed for project {ProjectId}.",
+            selection.ProjectId);
+        return true;
+    }
+
+    internal Task RevokeProjectAuthorizationAsync(
+        ResolvedGitHubRepositorySelection selection,
+        CancellationToken ct) =>
+        new RepoAppInstallationLifecycleService(db).RevokeProjectBindingAsync(
+            selection.ProjectId.ToString(),
+            selection.InstallationId,
+            selection.RepositoryId,
+            ct);
+
+    internal async Task<bool> RevalidateExistingProjectAuthorizationAsync(
+        Project project,
+        ResolvedGitHubRepositorySelection selection,
+        CancellationToken ct)
+    {
+        var projectId = project.Id.ToString();
+        var hasExactLiveBinding = await db.GitHubRepositoryGrants
+            .AsNoTracking()
+            .AnyAsync(
+                grant =>
+                    grant.ProjectId == projectId &&
+                    grant.InstallationId == selection.InstallationId &&
+                    grant.RepositoryId == selection.RepositoryId &&
+                    grant.RevokedAt == null &&
+                    grant.FullNameDisplay == selection.FullName &&
+                    db.GitHubInstallations.Any(
+                        installation =>
+                            installation.InstallationId == grant.InstallationId &&
+                            installation.AppKind == GitHubAppKind.Repo &&
+                            installation.RevokedAt == null),
+                ct)
+            .ConfigureAwait(false);
+
+        return hasExactLiveBinding &&
+               await BindProjectAuthorizationAsync(project, selection, ct).ConfigureAwait(false);
     }
 
     private async Task<(
@@ -293,6 +445,13 @@ internal sealed class GitHubRepositorySelectionBroker(
             CancellationToken ct)
         where T : class
     {
+        var refresh = await authorization.RefreshForRepositoryAsync(entraObjectId, force: false, ct)
+            .ConfigureAwait(false);
+        if (refresh != RepoAppAuthorizationOutcome.Success)
+            return (refresh == RepoAppAuthorizationOutcome.GitHubProviderUnavailable
+                ? GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError
+                : GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, null, null);
+
         var credential = await persistence.GetLiveRepoAppCredentialAsync(entraObjectId, ct).ConfigureAwait(false);
         if (credential is null)
             return (GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, null, null);
@@ -307,6 +466,12 @@ internal sealed class GitHubRepositorySelectionBroker(
         {
             return (GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, null, null);
         }
+        catch (Exception ex) when (RepoAppUserAuthorizationService.IsTransientCredentialStoreFailure(ex, ct))
+        {
+            logger?.LogWarning("Repo App credential vault read failed for subject {EntraObjectId}; error type {ErrorType}.",
+                entraObjectId, ex.GetType().Name);
+            return (GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError, null, null);
+        }
 
         if (!secret.Found || !TryGetUsableAccessToken(secret.Value, out var accessToken))
             return (GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, null, null);
@@ -315,6 +480,53 @@ internal sealed class GitHubRepositorySelectionBroker(
         try
         {
             value = await operation(accessToken!).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized && !ct.IsCancellationRequested)
+        {
+            logger?.LogWarning("Repo App repository request was rejected with HTTP 401 for subject {EntraObjectId}; renewing the credential once.", entraObjectId);
+            var renewed = await authorization.RefreshForRepositoryAsync(entraObjectId, force: true, ct)
+                .ConfigureAwait(false);
+            if (renewed != RepoAppAuthorizationOutcome.Success)
+                return (renewed == RepoAppAuthorizationOutcome.GitHubProviderUnavailable
+                    ? GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError
+                    : GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, null, null);
+
+            SecretGetResult current;
+            try
+            {
+                current = await vault.ReadCurrentAsync(
+                    GitHubConnectionsCredentialLocator.ForRepoAppUser(credential.CredentialReference), ct).ConfigureAwait(false);
+            }
+            catch (Exception readError) when (RepoAppUserAuthorizationService.IsTransientCredentialStoreFailure(readError, ct))
+            {
+                logger?.LogWarning("Repo App credential vault retry read failed for subject {EntraObjectId}; error type {ErrorType}.",
+                    entraObjectId, readError.GetType().Name);
+                return (GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError, null, null);
+            }
+            if (!current.Found || !TryGetUsableAccessToken(current.Value, out var renewedToken))
+                return (GitHubRepositorySelectionOutcome.GitHubBindingUnavailable, null, null);
+            try
+            {
+                value = await operation(renewedToken!).ConfigureAwait(false);
+            }
+            catch (HttpRequestException retryError) when (retryError.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+            {
+                logger?.LogWarning("Repo App repository request still rejected after renewal for subject {EntraObjectId}; provider status {ProviderStatus}.",
+                    entraObjectId, retryError.StatusCode);
+                return (GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, null, null);
+            }
+            catch (Exception retryError) when (!ct.IsCancellationRequested &&
+                retryError is HttpRequestException or JsonException or TaskCanceledException)
+            {
+                logger?.LogWarning(retryError, "Repo App repository retry failed for subject {EntraObjectId}.", entraObjectId);
+                return (GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError, null, null);
+            }
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            logger?.LogWarning("Repo App repository request was denied for subject {EntraObjectId}; provider status {ProviderStatus}.",
+                entraObjectId, ex.StatusCode);
+            return (GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, null, null);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested &&
                                    (ex is HttpRequestException || ex is JsonException || ex is TaskCanceledException))
@@ -326,6 +538,8 @@ internal sealed class GitHubRepositorySelectionBroker(
             return (GitHubRepositorySelectionOutcome.GitHubCapabilityTransientError, null, null);
         }
 
+        if (value is null)
+            logger?.LogWarning("Repo App repository response was unavailable or malformed for subject {EntraObjectId}.", entraObjectId);
         if (value is null ||
             !await persistence.IsLiveRepoAppCredentialAsync(credential, ct).ConfigureAwait(false))
             return (GitHubRepositorySelectionOutcome.GitHubCapabilityUnavailable, null, null);
@@ -345,7 +559,8 @@ internal sealed class GitHubRepositorySelectionBroker(
         {
             var credential = JsonSerializer.Deserialize<Credential>(value, CredentialJsonOptions);
             if (!string.Equals(credential?.Status, "signed-in", StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(credential?.AccessToken))
+                string.IsNullOrWhiteSpace(credential?.AccessToken) ||
+                credential?.ExpiresAt is { } expiresAt && expiresAt <= DateTimeOffset.UtcNow)
                 return false;
             accessToken = credential!.AccessToken;
             return true;
@@ -356,7 +571,7 @@ internal sealed class GitHubRepositorySelectionBroker(
         }
     }
 
-    private sealed record Credential(string? Status, string? AccessToken);
+    private sealed record Credential(string? Status, string? AccessToken, DateTimeOffset? ExpiresAt);
 
     private static string CreateCode() =>
         Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
@@ -368,4 +583,10 @@ internal sealed class GitHubRepositorySelectionBroker(
 
     private static string HashCode(string code) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code))).ToLowerInvariant();
+
+    private static ProjectId ProjectIdFromCodeHash(string codeHash)
+    {
+        var hashBytes = Convert.FromHexString(codeHash);
+        return new ProjectId(new Guid(hashBytes.AsSpan(0, 16)));
+    }
 }

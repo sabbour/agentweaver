@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Infrastructure.Ef;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Memory;
 using FluentAssertions;
 using Microsoft.Agents.AI.Workflows;
@@ -53,6 +54,135 @@ public sealed class PostgresCheckpointStoreTests(PostgresFixture pg)
 
         var payloadFromB = await replicaB.RetrieveCheckpointAsync(session, infoA);
         payloadFromB.GetProperty("by").GetString().Should().Be("A");
+    }
+
+    [PostgresFact]
+    public async Task CoordinatorGateCheckpoint_IsVisibleToAnotherReplicaWithoutReplayingDraft()
+    {
+        var replicaA = new PostgresCheckpointStoreFactory(pg.Factory);
+        var replicaB = new PostgresCheckpointStoreFactory(pg.Factory);
+        var runId = Guid.NewGuid().ToString();
+        var writer = replicaA.Create("coordinator", "", logger: null!);
+        var checkpoint = await writer.CreateCheckpointAsync(
+            runId, Json("""{"gate":"awaiting_confirmation","generation":1}"""));
+
+        var recovered = await replicaB.GetLatestCheckpointAsync("coordinator", runId);
+        recovered.Should().NotBeNull();
+        recovered!.CheckpointId.Should().Be(checkpoint.CheckpointId);
+        var reader = replicaB.Create("coordinator", "", logger: null!);
+        (await reader.RetrieveCheckpointAsync(runId, recovered))
+            .GetProperty("gate").GetString().Should().Be("awaiting_confirmation");
+    }
+
+    [PostgresFact]
+    public async Task CoordinatorGateCheckpoint_RestoresAfterJsonbReordersNestedEdgeMetadata()
+    {
+        var session = $"run-{Guid.NewGuid():n}";
+        var writer = new PostgresJsonCheckpointStore(pg.Factory, "coordinator");
+        var reader = new PostgresJsonCheckpointStore(pg.Factory, "coordinator");
+        ExecutorBinding draft = new FunctionExecutor<string, string>(
+            "coordinator-draft", async (input, _, _) =>
+            {
+                await Task.Yield();
+                return input;
+            });
+        ExecutorBinding gate = RequestPort.Create<string, string>("coordinator-confirmation-gate");
+        var workflow = new WorkflowBuilder(draft)
+            .AddEdge(draft, gate)
+            .Build()!;
+
+        CheckpointInfo checkpoint;
+        {
+            await using var run = await InProcessExecution.RunStreamingAsync(
+                workflow, "drafted spec", CheckpointManager.CreateJson(writer), session, CancellationToken.None);
+            await foreach (var evt in run.WatchStreamAsync(CancellationToken.None))
+                if (evt is RequestInfoEvent)
+                    break;
+            run.LastCheckpoint.Should().NotBeNull();
+            checkpoint = run.LastCheckpoint!;
+        }
+
+        await using var db = await pg.CreateDbContextAsync();
+        var stored = await db.WorkflowCheckpoints.AsNoTracking()
+            .SingleAsync(c => c.StoreName == "coordinator"
+                && c.SessionId == session && c.CheckpointId == checkpoint.CheckpointId);
+        using var persisted = JsonDocument.Parse(stored.Payload);
+        var edge = persisted.RootElement.GetProperty("workflow").GetProperty("edges")
+            .GetProperty("coordinator-draft")[0];
+        edge.EnumerateObject().First().Name.Should().NotBe("$type",
+            "PostgreSQL jsonb sorts object keys rather than retaining MAF's metadata-first order");
+        edge.GetProperty("$type").ValueKind.Should().Be(JsonValueKind.Number);
+
+        var recovered = await new PostgresCheckpointStoreFactory(pg.Factory)
+            .GetLatestCheckpointAsync("coordinator", session);
+        recovered.Should().NotBeNull();
+        var recoveredRecord = await db.WorkflowCheckpoints.AsNoTracking()
+            .SingleAsync(c => c.StoreName == "coordinator"
+                && c.SessionId == session && c.CheckpointId == recovered!.CheckpointId);
+        recoveredRecord.CreatedAt.Should().BeOnOrAfter(stored.CreatedAt,
+            "the latest checkpoint may be a successor written as the streaming run suspends or disposes");
+        using var recoveredJson = JsonDocument.Parse(recoveredRecord.Payload);
+        var recoveredEdge = recoveredJson.RootElement.GetProperty("workflow").GetProperty("edges")
+            .GetProperty("coordinator-draft")[0];
+        recoveredEdge.EnumerateObject().First().Name.Should().NotBe("$type",
+            "the checkpoint actually selected for resume must exercise jsonb's reordered metadata");
+        var restoredPayload = await reader.RetrieveCheckpointAsync(session, recovered!);
+        restoredPayload.GetProperty("workflow").GetProperty("edges")
+            .GetProperty("coordinator-draft")[0].EnumerateObject().First().Name.Should().Be("$type");
+        JsonElement.DeepEquals(recoveredJson.RootElement, restoredPayload).Should().BeTrue();
+
+        ExecutorBinding resumedDraft = new FunctionExecutor<string, string>(
+            "coordinator-draft", async (input, _, _) =>
+            {
+                await Task.Yield();
+                return input;
+            });
+        ExecutorBinding resumedGate = RequestPort.Create<string, string>("coordinator-confirmation-gate");
+        var resumeWorkflow = new WorkflowBuilder(resumedDraft)
+            .AddEdge(resumedDraft, resumedGate)
+            .Build()!;
+        await using var restored = await InProcessExecution.ResumeStreamingAsync(
+            resumeWorkflow, recovered, CheckpointManager.CreateJson(reader), CancellationToken.None);
+        restored.Should().NotBeNull();
+    }
+
+    [PostgresFact]
+    public async Task RecoveredCoordinatorWrite_RejectsLeaseTakeoverAndGenerationChange()
+    {
+        var runId = Guid.NewGuid().ToString();
+        await using var db = await pg.CreateDbContextAsync();
+        db.Runs.Add(new RunRecord
+        {
+            RunId = runId,
+            RepositoryPath = "test",
+            OriginatingBranch = "dev",
+            ModelSource = "github-copilot",
+            Task = "recover gate",
+            SubmittingUser = "owner",
+            Status = "in_progress",
+            StartedAt = DateTimeOffset.UtcNow,
+            OwnerId = "replica-a",
+            FencingToken = 3,
+            LeaseExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+        });
+        await db.SaveChangesAsync();
+        var previous = new RunLeaseFence("replica-a", 3, 1);
+        await using (var valid = await CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, runId, previous, CancellationToken.None, null))
+            await valid!.CommitAsync(CancellationToken.None);
+
+        await db.Runs.Where(r => r.RunId == runId).ExecuteUpdateAsync(s => s
+            .SetProperty(r => r.OwnerId, "replica-b")
+            .SetProperty(r => r.FencingToken, 4L));
+        var stolen = () => CoordinatorWorkflowFactory.BeginFencedWriteAsync(
+            db, runId, previous, CancellationToken.None, null);
+        await stolen.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
+
+        await db.Runs.Where(r => r.RunId == runId).ExecuteUpdateAsync(s => s
+            .SetProperty(r => r.OwnerId, "replica-a")
+            .SetProperty(r => r.FencingToken, 3L)
+            .SetProperty(r => r.LifecycleGeneration, 2));
+        await stolen.Should().ThrowAsync<CoordinatorExecutionFenceLostException>();
     }
 
     [PostgresFact]

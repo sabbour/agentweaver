@@ -39,7 +39,7 @@ internal interface IRunWorkflowWiringSupport
 
     /// <summary><c>AgentTurnOutput → AgentTurnInput</c>: feed one agent turn's result forward as the
     /// next agent turn's task (continuing the same worktree). For sequential <c>Agent → Agent</c>.</summary>
-    ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge);
+    ExecutorBinding SequentialAgentAdapter(WorkflowEdge edge, bool publishComposedTree = false);
 
     /// <summary><c>WorkflowReviewDecision → AgentTurnInput</c>: continue forward into the next agent turn
     /// after a gate verdict (e.g. approved → postmortem, or a pass-through review → next step).</summary>
@@ -89,6 +89,22 @@ internal interface IRunWorkflowWiringSupport
 
     /// <summary><c>MergeOutput → AgentTurnInput</c>: re-enter a producer agent after a blocked merge.</summary>
     ExecutorBinding MergeToAgentReviseAdapter(WorkflowEdge edge);
+
+    /// <summary><c>WorkflowFanInOutput → AgentTurnInput</c>: append the ordered joined branch result
+    /// to the parent task before the next supported prompt node executes.</summary>
+    ExecutorBinding FanInToAgentAdapter(WorkflowEdge edge);
+
+    /// <summary><c>WorkflowFanInOutput → NoChangesOutput</c>: complete a fan workflow whose joined
+    /// result is the authored terminal output.</summary>
+    ExecutorBinding FanInToTerminalAdapter(WorkflowEdge edge);
+
+    /// <summary><c>WorkflowChildWorkResult → AgentTurnInput</c>: append the composed coordinator's
+    /// typed assembly identity before the next parent prompt continues in the transferred worktree.</summary>
+    ExecutorBinding ComposedToAgentAdapter(WorkflowEdge edge);
+
+    /// <summary><c>WorkflowChildWorkResult → WorkflowComposedCompletedOutput</c>: complete a workflow
+    /// whose composed assembly is the authored terminal output.</summary>
+    ExecutorBinding ComposedToTerminalAdapter(WorkflowEdge edge);
 
     /// <summary>A direct <c>Agent → Scribe</c> completion sub-path: an input adapter
     /// (<c>AgentTurnOutput → ScribeTurnInput</c>), a dedicated scribe executor, and the scribe-output

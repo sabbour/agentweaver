@@ -65,9 +65,13 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         // First pass.
         var rawFirst = await RunModelAsync(
             basePrompt, ct, request.UserId, request.ProjectId, request.GenerationModel).ConfigureAwait(false);
-        var (yamlFirst, defFirst, errorFirst) = ParseCandidate(rawFirst, request);
+        var (yamlFirst, defFirst, errorFirst, normalizedFirst) = ParseCandidate(rawFirst, request);
         if (defFirst is not null)
-            return new WorkflowGenerationResult(defFirst, yamlFirst, WasCorrected: false);
+        {
+            if (normalizedFirst is not null)
+                _logger.LogInformation("Generated workflow fan was normalized to sequential execution: {Reason}", normalizedFirst);
+            return new WorkflowGenerationResult(defFirst, yamlFirst, WasCorrected: normalizedFirst is not null);
+        }
 
         _logger.LogInformation(
             "Generated workflow failed validation on first pass; attempting one correction pass. Error: {Error}",
@@ -77,9 +81,13 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
         var correctionPrompt = BuildCorrectionPrompt(basePrompt, yamlFirst, errorFirst!);
         var rawSecond = await RunModelAsync(
             correctionPrompt, ct, request.UserId, request.ProjectId, request.GenerationModel).ConfigureAwait(false);
-        var (yamlSecond, defSecond, errorSecond) = ParseCandidate(rawSecond, request);
+        var (yamlSecond, defSecond, errorSecond, normalizedSecond) = ParseCandidate(rawSecond, request);
         if (defSecond is not null)
+        {
+            if (normalizedSecond is not null)
+                _logger.LogInformation("Corrected workflow fan was normalized to sequential execution: {Reason}", normalizedSecond);
             return new WorkflowGenerationResult(defSecond, yamlSecond, WasCorrected: true);
+        }
 
         var transitionIssues = GetTransitionIssues(yamlSecond);
         throw new WorkflowGenerationException(
@@ -94,9 +102,9 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
     /// parsed definition (null when invalid), and a validation error (null when valid). Validation is
     /// two-stage: the schema/structural <see cref="WorkflowDefinitionLoader"/> AND a
     /// <see cref="RunWorkflowGraphBinder.ValidateBindable"/> dry-run, so a draft that loads but would fail
-    /// to bind at runtime (e.g. uses fan_out/fan_in/serial/coordinator_composed) is rejected here and
-    /// triggers the correction pass rather than producing an unrunnable workflow.</summary>
-    private static (string Yaml, WorkflowDefinition? Definition, string? Error) ParseCandidate(
+    /// to bind at runtime (for example malformed fan topology or coordinator_composed) is rejected
+    /// here and triggers the correction pass rather than producing an unrunnable workflow.</summary>
+    private static (string Yaml, WorkflowDefinition? Definition, string? Error, string? NormalizationReason) ParseCandidate(
         string raw, WorkflowGenerationRequest request)
     {
         var yaml = EnsureWorkflowId(StripFences(raw), request.Description);
@@ -105,7 +113,7 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             "generated",
             validationMode: WorkflowDefinitionValidationMode.Authoring);
         if (!result.IsValid || result.Definition is null)
-            return (yaml, null, result.Error ?? "The generated YAML did not validate.");
+            return (yaml, null, result.Error ?? "The generated YAML did not validate.", null);
 
         if (request.IsEdit &&
             request.BaseWorkflowIsBuiltIn &&
@@ -113,23 +121,80 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             string.Equals(result.Definition.Id, request.BaseWorkflowId, StringComparison.OrdinalIgnoreCase))
         {
             return (yaml, null,
-                $"Editing built-in/library workflow '{request.BaseWorkflowId}' must produce a project-owned customized copy with a new id.");
+                $"Editing built-in/library workflow '{request.BaseWorkflowId}' must produce a project-owned customized copy with a new id.",
+                null);
         }
 
-        try
+        if (!ConservativeWorkflowFanPolicy.TryApply(
+                result.Definition,
+                out var fanResult,
+                out var fanError))
+            return (yaml, null, fanError, null);
+
+        if (ConservativeWorkflowFanPolicy.TryGetRequiredFanOutputPaths(
+                request.Description,
+                out var requiredFanOutputPaths))
         {
-            RunWorkflowGraphBinder.ValidateBindable(result.Definition);
-        }
-        catch (WorkflowBindException ex)
-        {
-            return (yaml, null, ex.Message);
+            if (!HasExactRequiredFanOutputs(fanResult.Workflow, requiredFanOutputPaths))
+            {
+                if (ConservativeWorkflowFanPolicy.TryPromoteSequentialRequiredFan(
+                        fanResult.Workflow,
+                        requiredFanOutputPaths,
+                        out var promoted) &&
+                    ConservativeWorkflowFanPolicy.TryApply(
+                        promoted,
+                        out var promotedResult,
+                        out _) &&
+                    HasExactRequiredFanOutputs(promotedResult.Workflow, requiredFanOutputPaths))
+                {
+                    fanResult = promotedResult with
+                    {
+                        WasNormalized = true,
+                        NormalizationReason =
+                            "Promoted a mechanically proven independent prompt chain to a static fan region.",
+                    };
+                }
+                else
+                {
+                    return (
+                        yaml,
+                        null,
+                        "The request explicitly declares independent work with exact, disjoint content outputs. " +
+                        $"Generate one policy-valid fan_out/fan_in region whose branches write only: " +
+                        $"{string.Join(", ", requiredFanOutputPaths)}.",
+                        null);
+                }
+            }
         }
 
-        var softwareReviewError = ValidateSoftwareReviewGate(result.Definition, request.ContentOnly);
+        var softwareReviewError = ValidateSoftwareReviewGate(fanResult.Workflow, request.ContentOnly);
         if (softwareReviewError is not null)
-            return (yaml, null, softwareReviewError);
+            return (yaml, null, softwareReviewError, null);
 
-        return (yaml, result.Definition, null);
+        var safeYaml = fanResult.WasNormalized
+            ? WorkflowDefinitionYamlSerializer.Serialize(fanResult.Workflow)
+            : yaml;
+        return (safeYaml, fanResult.Workflow, null, fanResult.NormalizationReason);
+    }
+
+    private static bool HasExactRequiredFanOutputs(
+        WorkflowDefinition workflow,
+        IReadOnlyList<string> requiredOutputPaths)
+    {
+        var fanOut = workflow.Nodes.SingleOrDefault(node => node.Type == WorkflowNodeType.FanOut);
+        if (fanOut is null)
+            return false;
+
+        var branchIds = workflow.Edges
+            .Where(edge => string.Equals(edge.From, fanOut.Id, StringComparison.Ordinal))
+            .Select(edge => edge.To)
+            .ToHashSet(StringComparer.Ordinal);
+        var fanOutputPaths = workflow.Nodes
+            .Where(node => branchIds.Contains(node.Id))
+            .SelectMany(node => node.DeclaredOutputPaths)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return fanOutputPaths.Count == requiredOutputPaths.Count &&
+               requiredOutputPaths.All(fanOutputPaths.Contains);
     }
 
     private static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(string yaml)
@@ -307,12 +372,12 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
                   - not: { ...predicate... }
             - start: string (required). The id of the entry node where execution begins.
             - nodes: list (required, >= 1). Each node: { id, type, label, role?, kind?, agent?, prompt?,
-              charter?, target?, steps?, branches? }.
+              independent?, declared_output_paths?, charter?, target?, steps?, branches? }.
             - edges: list. Each edge: { from, to, when? }. `from`/`to` MUST reference existing node ids.
               `when` guards the edge on a verdict (e.g. approved, request-changes, declined, pass, revise).
 
-            NODE TYPES — use only the following supported types. Do NOT use fan_out, fan_in, serial, or
-            coordinator_composed: the schema loader accepts them, but they have no runtime executor.
+            NODE TYPES — use only the following supported types. Do NOT use serial; ordinary edges between
+            nodes express sequential execution.
 
             - prompt: an agent turn. The unit of work. Required: `role` (from the roles list below),
               `prompt` (the task instruction for the agent).
@@ -326,6 +391,17 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               `gate_kind`, and exactly one outgoing edge per declared branch. Allowed gate kinds:
               `rai` (responsible-AI safety gate), `rubberduck` (AI critique gate; verdicts
               pass | revise), `human-review` (human HITL review gate).
+            - fan_out / fan_in: one optional static wait-all region for independently executable prompt
+              tasks. The fan_out has at least two unconditional edges, each to exactly one prompt node;
+              every branch has one unconditional edge to the same fan_in; the fan_in has `target` set
+              to the fan_out id and one unconditional continuation. Each branch prompt MUST declare
+              `independent: true` and one or more exact repository-relative files in
+              `declared_output_paths`.
+            - coordinator_composed: one optional dynamic coordinator stage for a runtime-derived dependent
+              DAG whose task count, dependencies, roles, and outputs cannot be known while authoring.
+              Required: `prompt`. It cannot declare target, steps, branches, or conditions, and it has
+              exactly one unconditional incoming edge from a prompt node and one unconditional continuation.
+              Do not use it for static or independently known work.
             - merge / scribe: platform-owned final actions. DO NOT author these nodes; the coordinator
               appends its merge-and-scribe tail after authored gates.
             - terminal: a no-op sink. Use for final states (done, declined, failed, etc.).
@@ -341,6 +417,31 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
             - Declare at most one schedule trigger and at most one event trigger.
             - Use `triggers` when automation is requested. Legacy input may contain one `trigger` object,
               which remains valid and should be preserved unless the requested change adds another trigger.
+            - Use fan_out/fan_in only when every branch is independently executable without another
+              branch's result and every write is named as an exact file. Each branch prompt must use
+              an explicit content-output contract such as `Write only reports/topic.md`, and every
+              path named in the prompt must appear in `declared_output_paths`.
+            - When the request explicitly says tasks run independently and names at least two exact,
+              pairwise-disjoint supported content files, you MUST emit one policy-valid fan_out/fan_in
+              region. Do not silently return a sequential graph for that explicit safe fan request.
+            - Treat dependency language (`after`, `once`, `based on`, `depends on`, `consume`, `use`,
+              `incorporate`, `findings`, `results`, `from branch`, `requires the output`) plus any
+              sibling branch id, label, full output path, or output basename as a dependency. Do not
+              guess or reorder dependency-bearing fans; emit ordinary prerequisite edges instead.
+            - Never guess a write scope. Missing, dynamic, broad (`repo`, `src`, `docs`), shared, or
+              overlapping paths are sequential. File-vs-directory prefixes and path comparisons are
+              case-insensitive. Package/dependency manifests, migrations, and generated shared artifacts
+              are never fan outputs.
+            - Use coordinator_composed only when the request explicitly requires runtime decomposition
+              into dependent tasks whose shape is unknown until execution. Declare at most one, never put
+              it inside a fan region, require a preceding prompt node, and never emit another
+              coordinator_composed stage in its prompt.
+            - Do not use fan topology for generic implementation/refactoring. Generated fan branches
+              are limited to research, analysis, documentation, and other
+              content-only outputs (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`, `.csv`, `.tsv`).
+              Do not use fan topology for implementation, refactoring, source/code files, hidden paths,
+              manifests, migrations, or generated artifacts, even when paths appear disjoint.
+              Example safe branch outputs: `customer-signals.md` and `technical-feasibility.md`.
 
             Available roles for the `agent`/`role` fields. PREFER these catalog ids — they have pre-built
             charters and are immediately runnable. Use a catalog id whenever one fits adequately:
@@ -426,8 +527,27 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
               safe change and reflect the conflict in the `description`; do NOT silently rewrite the
               workflow into a different process.
             - {{builtInRule}}
-            - Keep the output valid and runnable. Do NOT use fan_out, fan_in, serial, or
-              coordinator_composed because those node types are not currently bindable at runtime.
+            - Keep the output valid and runnable. Do NOT use serial; ordinary edges between nodes express
+              sequential execution.
+            - You MAY preserve or add one static fan_out/fan_in wait-all region only when it has at
+              least two one-node prompt branches that are independently executable. Every branch MUST
+              declare `independent: true` and exact repository-relative files in
+              `declared_output_paths`; every prompt must say `Write only <declared path>`, every named
+              path must be declared, and every branch must join the same fan_in before continuation.
+            - Treat dependency/consumption language (`after`, `once`, `based on`, `depends on`,
+              `consume`, `use`, `incorporate`, `findings`, `results`, `from branch`,
+              `requires the output`) plus a sibling id, label, full path, or basename as a dependency.
+              Emit ordinary prerequisite edges instead; never reorder dependency-bearing branches.
+            - Missing/dynamic/broad/shared paths, case-insensitive overlap, file/directory prefix
+              overlap, package manifests, migrations, generated artifacts, hidden paths, source/code
+              outputs, and implementation/refactoring prompts are sequential. Generated fan outputs
+              are limited to `.md`, `.markdown`, `.txt`, `.rst`, `.adoc`, `.csv`, and `.tsv`.
+              Never guess independence.
+            - You MAY preserve or add at most one coordinator_composed node only when the requested edit
+              explicitly needs a runtime-derived dependent DAG whose task count, dependencies, roles, and
+              outputs are unknown while authoring. It requires a prompt, cannot declare target/steps/branches,
+              cannot be inside a fan region, and must have exactly one unconditional incoming edge from a
+              prompt node and one unconditional continuation.
             - Do NOT add merge or scribe nodes to generated/custom workflows; the coordinator appends
               its hardcoded tail after authored gates.
             - publish is unsupported. Never replace a requested publication with a prompt or another node.
@@ -522,8 +642,8 @@ public sealed class CopilotWorkflowGenerator : IWorkflowGenerator
 
     /// <summary>Builds the few-shot section from the library workflows. Prefers the canonical
     /// software-delivery / bug-fix patterns (FR-057); otherwise takes the first few.
-    /// agent-evaluation is deliberately excluded — it uses fan_out/fan_in, which have no runtime executor,
-    /// so it must not be shown as a model to imitate.</summary>
+    /// agent-evaluation is deliberately excluded because it predates the conservative generated-fan
+    /// metadata contract and must not be shown as a model to imitate.</summary>
     private string BuildFewShotExamples()
     {
         var all = _catalogSnapshot.Workflows

@@ -1,6 +1,8 @@
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -48,6 +50,7 @@ public sealed class CoordinatorWorkflowFactory
     private readonly ICheckpointStoreFactory _checkpointStoreFactory;
     private readonly CoordinatorOrchestratorExecutor _orchestrator;
     private readonly TimeSpan _outcomeSpecDraftTimeout;
+    internal Func<Task>? BeforeFinalizeWriteAsync { get; set; }
 
     public CoordinatorWorkflowFactory(
         IWorkflowAgentFactory agentFactory,
@@ -106,7 +109,7 @@ public sealed class CoordinatorWorkflowFactory
         return TimeSpan.FromSeconds(seconds);
     }
 
-    private Workflow BuildWorkflow()
+    private Workflow BuildWorkflow(RunLeaseFence? recoveredFence = null)
     {
         // draft: read context, draft + persist the spec, emit the event, hand the spec to the gate.
         ExecutorBinding draft = new FunctionExecutor<CoordinatorDraftInput, CoordinatorOutcomeSpecRequest>(
@@ -114,7 +117,7 @@ public sealed class CoordinatorWorkflowFactory
             async (input, ctx, ct) =>
             {
                 await ctx.QueueStateUpdateAsync(InputStateKey, input, InputStateScope, ct).ConfigureAwait(false);
-                return await DraftAndPersistAsync(input, ct).ConfigureAwait(false);
+                return await DraftAndPersistAsync(input, ct, recoveredFence).ConfigureAwait(false);
             });
 
         // await-confirmation gate: suspends the run until the human confirms or revises.
@@ -129,7 +132,7 @@ public sealed class CoordinatorWorkflowFactory
             {
                 var input = await ctx.ReadStateAsync<CoordinatorDraftInput>(InputStateKey, InputStateScope, ct)
                     .ConfigureAwait(false);
-                return await FinalizeAsync(input!, decision, ct).ConfigureAwait(false);
+                return await FinalizeAsync(input!, decision, ct, recoveredFence).ConfigureAwait(false);
             });
 
         // revise: stash the human's feedback and loop back to the drafting executor.
@@ -157,7 +160,7 @@ public sealed class CoordinatorWorkflowFactory
 
                 var input = await ctx.ReadStateAsync<CoordinatorDraftInput>(InputStateKey, InputStateScope, ct)
                     .ConfigureAwait(false);
-                await _orchestrator.OrchestrateAsync(input!, ct).ConfigureAwait(false);
+                await _orchestrator.OrchestrateAsync(input!, ct, recoveredFence).ConfigureAwait(false);
                 return outcome;
             });
 
@@ -218,9 +221,10 @@ public sealed class CoordinatorWorkflowFactory
     /// <see cref="ConfirmationGateId"/> request port) at process death. The graph shape is fixed, so
     /// (unlike <c>RunWorkflowFactory</c>) there is no child/full variant to reselect.
     /// </summary>
-    public async Task<StreamingRun> ResumeAsync(CheckpointInfo checkpointInfo, CancellationToken ct)
+    public async Task<StreamingRun> ResumeAsync(
+        CheckpointInfo checkpointInfo, CancellationToken ct, RunLeaseFence? recoveredFence = null)
     {
-        var workflow = BuildWorkflow();
+        var workflow = BuildWorkflow(recoveredFence);
         return await InProcessExecution.ResumeStreamingAsync(
             workflow, checkpointInfo, _checkpointManager, ct).ConfigureAwait(false);
     }
@@ -259,6 +263,10 @@ public sealed class CoordinatorWorkflowFactory
         await _orchestrator.OrchestrateAsync(input, ct).ConfigureAwait(false);
         return new CoordinatorOutcome(input.RunId, specId, "confirmed");
     }
+
+    internal Task<CoordinatorOrchestratorExecutor.CoordinatorOrchestrationResult> OrchestrateComposedAsync(
+        CoordinatorDraftInput input, CancellationToken ct) =>
+        _orchestrator.OrchestrateAsync(input, ct);
 
     private async Task<int> PersistDirectSpecAsync(CoordinatorDraftInput input, CancellationToken ct)
     {
@@ -336,7 +344,7 @@ public sealed class CoordinatorWorkflowFactory
     }
 
     internal async Task<CoordinatorOutcomeSpecRequest> DraftAndPersistAsync(
-        CoordinatorDraftInput input, CancellationToken ct)
+        CoordinatorDraftInput input, CancellationToken ct, RunLeaseFence? fence = null)
     {
         // On a revision, carry the already-reviewed previous draft forward so the drafter preserves
         // its established requirements as invariants instead of silently regressing unrelated
@@ -349,7 +357,7 @@ public sealed class CoordinatorWorkflowFactory
                 input = input with { PriorDraft = priorDraft };
         }
 
-        await MarkDraftingAsync(input, ct).ConfigureAwait(false);
+        await MarkDraftingAsync(input, ct, fence).ConfigureAwait(false);
 
         var compilation = await CompileMemoryContextAsync(input.ProjectId, ct).ConfigureAwait(false);
         EmitMemoryContextComposition(input.RunId, compilation);
@@ -357,7 +365,7 @@ public sealed class CoordinatorWorkflowFactory
 
         var draft = await DraftWithTimeoutAsync(input, charter, compilation?.Text, ct).ConfigureAwait(false);
 
-        var (specId, status) = await PersistDraftAsync(input, draft, ct).ConfigureAwait(false);
+        var (specId, status) = await PersistDraftAsync(input, draft, ct, fence).ConfigureAwait(false);
 
         // Emit coordinator.outcome_spec on the run stream (same envelope + sequence as every event)
         // and mark the entry awaiting-review so it is not evicted while the run is suspended.
@@ -406,6 +414,7 @@ public sealed class CoordinatorWorkflowFactory
                 input.RunId);
             throw new CoordinatorOutcomeSpecDraftTimeoutException(
                 input.RunId,
+                ModelSourceExtensions.FromApiString(input.ModelSource),
                 _outcomeSpecDraftTimeout);
         }
         finally
@@ -496,11 +505,13 @@ public sealed class CoordinatorWorkflowFactory
             spec.ClarifyingQuestions);
     }
 
-    private async Task MarkDraftingAsync(CoordinatorDraftInput input, CancellationToken ct)
+    private async Task MarkDraftingAsync(CoordinatorDraftInput input, CancellationToken ct, RunLeaseFence? fence)
     {
         const string status = "drafting";
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        await using var tx = await BeginFencedWriteAsync(
+            db, input.RunId, fence, ct, scope.ServiceProvider.GetService<SqliteDb>()).ConfigureAwait(false);
 
         var now = DateTimeOffset.UtcNow;
         var spec = await db.OutcomeSpecs
@@ -533,6 +544,8 @@ public sealed class CoordinatorWorkflowFactory
         }
 
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        if (tx is not null)
+            await tx.CommitAsync(ct).ConfigureAwait(false);
 
         _streamStore.Get(input.RunId)?.RecordNext(EventTypes.CoordinatorOutcomeSpecDrafting, new
         {
@@ -571,15 +584,18 @@ public sealed class CoordinatorWorkflowFactory
             omittedMemoryCount = compilation?.OmittedMemoryCount ?? 0,
             omittedSessionCount = compilation?.OmittedSessionCount ?? 0,
             omissionCauses = compilation?.OmissionCauses ?? [],
+            revisionReferences = compilation?.RevisionReferences ?? [],
         });
     }
 
     private async Task<(int SpecId, string Status)> PersistDraftAsync(
-        CoordinatorDraftInput input, OutcomeSpecDraft draft, CancellationToken ct)
+        CoordinatorDraftInput input, OutcomeSpecDraft draft, CancellationToken ct, RunLeaseFence? fence)
     {
         const string status = "awaiting_confirmation";
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        await using var tx = await BeginFencedWriteAsync(
+            db, input.RunId, fence, ct, scope.ServiceProvider.GetService<SqliteDb>()).ConfigureAwait(false);
 
         var now = DateTimeOffset.UtcNow;
         var spec = await db.OutcomeSpecs
@@ -618,14 +634,20 @@ public sealed class CoordinatorWorkflowFactory
         }
 
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
+        if (tx is not null)
+            await tx.CommitAsync(ct).ConfigureAwait(false);
         return (spec.Id, status);
     }
 
     private async Task<CoordinatorOutcome> FinalizeAsync(
-        CoordinatorDraftInput input, CoordinatorOutcomeSpecDecision decision, CancellationToken ct)
+        CoordinatorDraftInput input, CoordinatorOutcomeSpecDecision decision, CancellationToken ct, RunLeaseFence? fence)
     {
+        if (BeforeFinalizeWriteAsync is { } beforeWrite)
+            await beforeWrite().ConfigureAwait(false);
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        await using var tx = await BeginFencedWriteAsync(
+            db, input.RunId, fence, ct, scope.ServiceProvider.GetService<SqliteDb>()).ConfigureAwait(false);
 
         var spec = await db.OutcomeSpecs
             .FirstOrDefaultAsync(s => s.CoordinatorRunId == input.RunId, ct)
@@ -641,6 +663,8 @@ public sealed class CoordinatorWorkflowFactory
             spec.UpdatedAt = DateTimeOffset.UtcNow;
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
         }
+        if (tx is not null)
+            await tx.CommitAsync(ct).ConfigureAwait(false);
 
         var specId = spec?.Id ?? 0;
 
@@ -657,4 +681,125 @@ public sealed class CoordinatorWorkflowFactory
 
         return new CoordinatorOutcome(input.RunId, specId, status);
     }
+
+    internal static async Task<CoordinatorFencedWrite?> BeginFencedWriteAsync(
+        MemoryDbContext db, string runId, RunLeaseFence? fence, CancellationToken ct, SqliteDb? sqliteDb,
+        bool lockUnfenced = false)
+    {
+        if (fence is null && !lockUnfenced)
+            return null;
+
+        if (db.Database.IsSqlite())
+        {
+            var connection = await (sqliteDb
+                ?? throw new InvalidOperationException("SQLite run store is required for coordinator write fencing."))
+                .OpenConnectionAsync(ct).ConfigureAwait(false);
+            try
+            {
+                // SQLite keeps runs in agentweaver.db and specs in the EF memory database.
+                // Hold its single-writer lock across the EF save so lifecycle changes cannot pass
+                // the guard between checking the run and committing the spec/plan.
+                var runTx = connection.BeginTransaction();
+                try
+                {
+                    await using var command = connection.CreateCommand();
+                    command.Transaction = runTx;
+                    command.CommandText = fence is null ? """
+                        UPDATE runs SET status = status
+                        WHERE run_id = $runId AND status = 'in_progress'
+                        """ : """
+                        UPDATE runs SET status = status
+                        WHERE run_id = $runId AND status = 'in_progress'
+                          AND lifecycle_generation = $generation
+                          AND EXISTS (
+                              SELECT 1 FROM run_execution_leases lease
+                              WHERE lease.run_id = runs.run_id
+                                AND lease.owner_id = $ownerId
+                                AND lease.fencing_token = $fencingToken
+                                AND lease.lease_expires_at > $now)
+                        """;
+                    command.Parameters.AddWithValue("$runId", runId);
+                    if (fence is not null)
+                    {
+                        command.Parameters.AddWithValue("$generation", fence.LifecycleGeneration);
+                        command.Parameters.AddWithValue("$ownerId", fence.OwnerId);
+                        command.Parameters.AddWithValue("$fencingToken", fence.FencingToken);
+                        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+                    }
+                    if (await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) != 1)
+                        throw new CoordinatorExecutionFenceLostException(runId);
+                    return new CoordinatorFencedWrite(null, connection, runTx);
+                }
+                catch
+                {
+                    await runTx.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+            }
+            catch
+            {
+                await connection.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        var tx = await db.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var active = db.Runs.Where(r => r.RunId == runId && r.Status == "in_progress");
+            if (fence is not null)
+            {
+                var now = DateTimeOffset.UtcNow;
+                active = active.Where(r => r.LifecycleGeneration == fence.LifecycleGeneration
+                    && r.OwnerId == fence.OwnerId
+                    && r.FencingToken == fence.FencingToken
+                    && r.LeaseExpiresAt > now);
+            }
+
+            // A conditional write locks the run row until commit. Cancellation, generation changes,
+            // and lease takeover serialize against the spec/plan write rather than racing a read.
+            var rows = await active.ExecuteUpdateAsync(
+                s => s.SetProperty(r => r.HeartbeatAt, r => r.HeartbeatAt), ct).ConfigureAwait(false);
+            if (rows != 1)
+                throw new CoordinatorExecutionFenceLostException(runId);
+            return new CoordinatorFencedWrite(tx, null, null);
+        }
+        catch
+        {
+            await tx.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+}
+
+internal sealed class CoordinatorFencedWrite(
+    IDbContextTransaction? dbTransaction,
+    SqliteConnection? runConnection,
+    SqliteTransaction? runTransaction) : IAsyncDisposable
+{
+    public SqliteConnection? RunConnection => runConnection;
+    public SqliteTransaction? RunTransaction => runTransaction;
+    public async Task CommitAsync(CancellationToken ct)
+    {
+        if (dbTransaction is not null)
+            await dbTransaction.CommitAsync(ct).ConfigureAwait(false);
+        if (runTransaction is not null)
+            await runTransaction.CommitAsync(ct).ConfigureAwait(false);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (dbTransaction is not null)
+            await dbTransaction.DisposeAsync().ConfigureAwait(false);
+        if (runTransaction is not null)
+            await runTransaction.DisposeAsync().ConfigureAwait(false);
+        if (runConnection is not null)
+            await runConnection.DisposeAsync().ConfigureAwait(false);
+    }
+}
+
+internal sealed class CoordinatorExecutionFenceLostException(string runId)
+    : OperationCanceledException($"Coordinator run {runId} lost its recovered workflow generation or lease before persistence.")
+{
+    public string Code => "coordinator_gate_generation_changed";
 }

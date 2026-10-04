@@ -9,8 +9,9 @@ namespace Agentweaver.Mcp.Tools;
 
 internal sealed record RetryRunResponse(
     [property: JsonPropertyName("run_id")]      string RunId,
-    [property: JsonPropertyName("retried_from")] string RetriedFrom,
-    [property: JsonPropertyName("status")]      string Status);
+    [property: JsonPropertyName("retried_from")] string? RetriedFrom,
+    [property: JsonPropertyName("status")]      string Status,
+    [property: JsonPropertyName("resumed")]     bool Resumed = false);
 
 internal sealed record StartCoordinatorRunResponse(
     [property: JsonPropertyName("runId")] string RunId);
@@ -29,6 +30,15 @@ public sealed record RunStatusResult
 {
     [JsonPropertyName("status")]
     public string? Status { get; init; }
+
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Additional { get; init; }
+}
+
+public sealed record RunExecutionIdentityResult
+{
+    [JsonPropertyName("evidence_state")]
+    public string? EvidenceState { get; init; }
 
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? Additional { get; init; }
@@ -53,6 +63,12 @@ public sealed record RunEmbedded
 
     [JsonPropertyName("coordinator_status")]
     public string? CoordinatorStatus { get; init; }
+
+    [JsonPropertyName("is_coordinator_plan")]
+    public bool IsCoordinatorPlan { get; init; }
+
+    [JsonPropertyName("pending_request_kind")]
+    public string? PendingRequestKind { get; init; }
 
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? Extra { get; init; }
@@ -146,7 +162,7 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "run_task", UseStructuredContent = true), Description("Run the common coordinator workflow in one call: start the run, poll status until it completes or hits a gate, and return the artifacts or next action.")]
+    [McpServerTool(Name = "run_task", UseStructuredContent = true), Description("Start a coordinator run once, poll the same run until completion, a proven human review or confirmation gate, or timeout. For automated child waits and timeouts, continue with run_status or run_watch; never rerun run_task to resume.")]
     public async Task<RunTaskResult> RunTaskAsync(
         [Description("Project ID")] string project_id,
         [Description("Task or goal for the coordinator")] string task,
@@ -170,12 +186,14 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
                 auto_approve_tools, autopilot, ct);
             var deadline = DateTimeOffset.UtcNow.AddSeconds(effectiveTimeout);
             JsonElement latestRun;
+            var waitingForChildren = false;
 
             while (true)
             {
                 latestRun = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(runId)}", ct);
+                waitingForChildren = await IsWaitingForWorkflowChildrenAsync(latestRun, runId, ct);
 
-                if (TryBuildGateResponse(latestRun, runId, out var gatedResponse))
+                if (!waitingForChildren && TryBuildGateResponse(latestRun, runId, out var gatedResponse))
                     return gatedResponse!;
 
                 var status = GetString(latestRun, "status");
@@ -212,7 +230,9 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
                         // The required-capabilities contract expects artifacts as an array on every
                         // one-call-run response; emit an empty array rather than omitting it on timeout.
                         Artifacts = Array.Empty<JsonElement>(),
-                        Hint = "Call run_status for a quick snapshot or run_watch if you want to follow the live stream.",
+                        Hint = waitingForChildren
+                            ? $"Run {runId} is waiting for automated workflow children or parent continuation. Inspect coordinator_work_plan_get and coordinator_children_get for this existing run; call run_status to poll it, or run_watch to follow its stream. Do not start another run."
+                            : $"Run {runId} is still active. Call run_status for a quick snapshot or run_watch to follow its live stream; do not call run_task again to continue.",
                         Run = latestRun.Deserialize<RunEmbedded>()
                     };
                 }
@@ -233,6 +253,22 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         try
         {
             return await api.GetAsync<RunStatusResult>($"/api/runs/{Uri.EscapeDataString(run_id)}", ct);
+        }
+        catch (McpApiException) { throw; }
+        catch (Exception ex) { throw new McpApiException(0, ex.Message); }
+    }
+
+    [McpServerTool(Name = "run_execution_identity", UseStructuredContent = true),
+     Description("Get the authorization-filtered execution identity, delegation, retry, backend, permission-binding, and tool-decision record for a run.")]
+    public async Task<RunExecutionIdentityResult> RunExecutionIdentityAsync(
+        [Description("Run ID")] string run_id,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            return await api.GetAsync<RunExecutionIdentityResult>(
+                $"/api/runs/{Uri.EscapeDataString(run_id)}/execution-identity",
+                ct);
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
@@ -403,7 +439,49 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
     }
 
-    [McpServerTool(Name = "run_retry"), Description("Retry a failed run by creating a fresh run from its original inputs.")]
+    [McpServerTool(Name = "run_output_history"), Description("List immutable output revisions for a run, including collective output identities.")]
+    public async Task<string> RunOutputHistoryAsync(
+        [Description("Run ID")] string run_id, CancellationToken ct = default)
+    {
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(run_id)}/output-revisions", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
+    [McpServerTool(Name = "run_output_revision"), Description("Read the exact immutable output revision and retained file inventory.")]
+    public async Task<string> RunOutputRevisionAsync(
+        [Description("Run ID")] string run_id,
+        [Description("Exact output revision ID")] string revision_id, CancellationToken ct = default)
+    {
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(run_id)}/output-revisions/{Uri.EscapeDataString(revision_id)}", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
+    [McpServerTool(Name = "run_output_file"), Description("Read retained exact file bytes (base64), independent of the current branch or worktree.")]
+    public async Task<string> RunOutputFileAsync(
+        [Description("Run ID")] string run_id,
+        [Description("Exact output revision ID")] string revision_id,
+        [Description("File path in the retained output tree")] string path, CancellationToken ct = default)
+    {
+        var encodedPath = string.Join("/", path.TrimStart('/').Split('/', '\\').Select(Uri.EscapeDataString));
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(run_id)}/output-revisions/{Uri.EscapeDataString(revision_id)}/files/{encodedPath}", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
+    [McpServerTool(Name = "run_output_compare"), Description("Compare exact retained file identities between two output revisions of one run.")]
+    public async Task<string> RunOutputCompareAsync(
+        [Description("Run ID")] string run_id,
+        [Description("Earlier output revision ID")] string before_revision_id,
+        [Description("Later output revision ID")] string after_revision_id, CancellationToken ct = default)
+    {
+        var result = await api.GetAsync<JsonElement>(
+            $"/api/runs/{Uri.EscapeDataString(run_id)}/output-revisions/{Uri.EscapeDataString(before_revision_id)}/compare/{Uri.EscapeDataString(after_revision_id)}", ct);
+        return JsonSerializer.Serialize(result, JsonOpts);
+    }
+
+    [McpServerTool(Name = "run_retry"), Description("Retry a failed run, or only an exact unlaunched in-progress composed recovery. Eligible coordinators, pre-dispatch composed failures, and that narrow in-progress recovery resume the same run ID; other failed-run retries create a fresh run. Arbitrary active runs cannot be retried.")]
     public async Task<string> RunRetryAsync(
         [Description("Run ID")] string run_id,
         CancellationToken ct)
@@ -416,7 +494,9 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
                 operation: "retry",
                 runId: run_id,
                 ct: ct);
-            return $"Retried run {Uri.EscapeDataString(run_id)} -> new run {result.RunId}.";
+            return result.Resumed
+                ? $"Resumed run {result.RunId} in place from its failure point; no new run was created."
+                : $"Retried run {Uri.EscapeDataString(run_id)} -> new run {result.RunId}.";
         }
         catch (McpApiException) { throw; }
         catch (Exception ex) { throw new McpApiException(0, ex.Message); }
@@ -475,14 +555,16 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
     {
         var status = GetString(run, "status");
         var coordinatorStatus = GetString(run, "coordinator_status");
+        var pendingRequestKind = GetString(run, "pending_request_kind");
 
-        if (string.Equals(status, "awaiting_review", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(status, "awaiting_review", StringComparison.OrdinalIgnoreCase)
+            && pendingRequestKind == "workflow_review")
         {
             response = new RunTaskResult
             {
                 RunId = runId,
                 Status = "awaiting_review",
-                ReviewPrompt = "Run is awaiting human review. Call run_review, then rerun run_task or poll with run_status.",
+                ReviewPrompt = $"Run {runId} has a current human review request. Inspect its artifacts, manually call run_review for this run if appropriate, then poll the same run with run_status. Never start a second execution to continue.",
                 Run = run.Deserialize<RunEmbedded>()
             };
             return true;
@@ -502,6 +584,37 @@ public sealed class RunTools(AgentweaverApiClient api, TimeSpan? previewRegistra
 
         response = null;
         return false;
+    }
+
+    private async Task<bool> IsWaitingForWorkflowChildrenAsync(JsonElement run, string runId, CancellationToken ct)
+    {
+        if (GetString(run, "status") != "awaiting_review")
+            return false;
+
+        var pendingKind = GetString(run, "pending_request_kind");
+        if (pendingKind == "workflow_child_work")
+            return true;
+        if (pendingKind is not null)
+            return false;
+
+        JsonElement plan;
+        try
+        {
+            plan = await api.GetAsync<JsonElement>($"/api/runs/{Uri.EscapeDataString(runId)}/work-plan", ct);
+        }
+        catch (McpApiException ex) when (ex.StatusCode == 404 && ex.ApiErrorCode == "work_plan_not_ready")
+        {
+            return true;
+        }
+        catch (McpApiException ex) when (ex.StatusCode == 404 && ex.ApiErrorCode == "work_plan_not_found")
+        {
+            return false;
+        }
+
+        return plan.ValueKind == JsonValueKind.Object
+            && GetString(plan, "parentRunId") == runId
+            && !string.IsNullOrWhiteSpace(GetString(plan, "parentWorkflowNodeId"))
+            && GetString(plan, "parentResumeState") is "waiting" or "ready" or "delivering";
     }
 
     private static string? GetString(JsonElement element, string propertyName) =>

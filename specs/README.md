@@ -22,6 +22,7 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 ## Work intake & board
 
 - [Capture and rank backlog work](./work-intake-board/capture-and-rank-backlog.md) — [#9](https://github.com/sabbour/agentweaver/issues/9)
+- [Link executable backlog tasks safely](./work-intake-board/link-executable-backlog-tasks.md) — [#1398](https://github.com/sabbour/agentweaver/issues/1398)
 - [Monitor work on the project board](./work-intake-board/monitor-board-workflow-state.md) — [#10](https://github.com/sabbour/agentweaver/issues/10)
 - [Sync connected repository issues with the backlog](./work-intake-board/sync-github-issues-to-backlog.md) — [#48](https://github.com/sabbour/agentweaver/issues/48)
 
@@ -36,23 +37,29 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Run, schedule, and visually author workflows](./workflows-automation/run-schedule-and-visually-author-workflows.md) — [#442](https://github.com/sabbour/agentweaver/issues/442)
 - [Support multiple workflow triggers](./workflows-automation/support-multiple-workflow-triggers.md) — [#713](https://github.com/sabbour/agentweaver/issues/713)
 - [Select workflow event actions](./workflows-automation/select-workflow-event-actions.md) — [#716](https://github.com/sabbour/agentweaver/issues/716)
+- [Execute static workflow branches durably](./workflows-automation/execute-static-workflow-branches-durably.md) — [#1418](https://github.com/sabbour/agentweaver/issues/1418)
+- [Embed a dynamic coordinator work plan in a workflow (not yet executable)](./workflows-automation/embed-dynamic-coordinator-work-plan.md) — [#1544](https://github.com/sabbour/agentweaver/issues/1544)
+- [Pin reviewed output by immutable revision](./workflows-automation/pin-reviewed-output-by-revision.md) — [#1396](https://github.com/sabbour/agentweaver/issues/1396)
 
 ## Orchestration & runs
 
 - [Run a single-agent task](./orchestration-runs/run-a-single-agent-task.md) — [#14](https://github.com/sabbour/agentweaver/issues/14)
 - [Coordinate a multi-agent goal](./orchestration-runs/coordinate-a-multi-agent-goal.md) — [#15](https://github.com/sabbour/agentweaver/issues/15)
 - [Steer and recover active orchestrations](./orchestration-runs/steer-and-recover-orchestrations.md) — [#16](https://github.com/sabbour/agentweaver/issues/16)
+- [Send addressed messages to teammates](./orchestration-runs/send-addressed-agent-messages.md) — [#1406](https://github.com/sabbour/agentweaver/issues/1406)
 - [Push a pull request as a coordinator execution step](./orchestration-runs/push-pr-as-execution-step.md) — [#394](https://github.com/sabbour/agentweaver/issues/394)
 
 ## Review & merge
 
 - [Review agent output before merge](./review-merge/review-agent-output.md) — [#17](https://github.com/sabbour/agentweaver/issues/17)
 - [Approve, request changes, or decline a run](./review-merge/approve-request-changes-or-decline.md) — [#18](https://github.com/sabbour/agentweaver/issues/18)
+- [Integrate required child output without hiding parallel conflicts](./review-merge/integrate-required-child-output.md) — [#1401](https://github.com/sabbour/agentweaver/issues/1401)
 
 ## Agent execution & sandbox
 
 - [Govern agent tool use and questions](./agent-execution-sandbox/govern-agent-tools-and-questions.md) — [#19](https://github.com/sabbour/agentweaver/issues/19)
 - [Isolate agent execution and workspaces](./agent-execution-sandbox/isolate-agent-workspaces.md) — [#20](https://github.com/sabbour/agentweaver/issues/20)
+- [Enforce effective agent permissions in every backend](./agent-execution-sandbox/enforce-effective-agent-permissions.md) — [#1397](https://github.com/sabbour/agentweaver/issues/1397)
 - [Preview apps running inside a sandbox](./agent-execution-sandbox/preview-sandbox-apps.md) — [#21](https://github.com/sabbour/agentweaver/issues/21)
 - [Durable project-owned Preview deployments (implementation-ready design)](./agent-execution-sandbox/project-owned-preview-deployments.md) — [#1455](https://github.com/sabbour/agentweaver/issues/1455)
 - [Build Docker/OCI images from AgentHost via rootless BuildKit on Kubernetes (implementation-ready design)](./agent-execution-sandbox/build-images-with-rootless-buildkit.md) — [#582](https://github.com/sabbour/agentweaver/issues/582)
@@ -68,10 +75,12 @@ This spec set describes the Agentweaver product as it exists today. Specs are gr
 - [Curate the decision inbox](./memory-decisions/curate-decision-inbox.md) — [#22](https://github.com/sabbour/agentweaver/issues/22)
 - [Manage agent memory and session context](./memory-decisions/manage-agent-memory-and-sessions.md) — [#23](https://github.com/sabbour/agentweaver/issues/23)
 - [Sync memory and team ledgers with the repository](./memory-decisions/sync-memory-ledgers.md) — [#25](https://github.com/sabbour/agentweaver/issues/25)
+- [Search, version, and restore team knowledge](./memory-decisions/search-version-and-restore-team-knowledge.md) — [#1400](https://github.com/sabbour/agentweaver/issues/1400)
 
 ## Observability & operations
 
 - [Watch run events live and replay history](./observability-operations/watch-run-events-live.md) — [#27](https://github.com/sabbour/agentweaver/issues/27)
+- [Inspect execution identity and decision lineage](./observability-operations/inspect-execution-identity.md) — [#1404](https://github.com/sabbour/agentweaver/issues/1404)
 - [Track token and AI credit usage](./observability-operations/track-token-and-cost-usage.md) — [#29](https://github.com/sabbour/agentweaver/issues/29)
 - [Operate health, heartbeat, and cluster status](./observability-operations/operate-health-heartbeat-and-cluster.md) — [#31](https://github.com/sabbour/agentweaver/issues/31)
 

@@ -1,6 +1,7 @@
 using Microsoft.Agents.AI.Workflows;
 using Agentweaver.AgentRuntime.Workflow;
 using Agentweaver.Api.Runs.Graph;
+using Agentweaver.Domain;
 
 namespace Agentweaver.Api.Workflows;
 
@@ -41,6 +42,13 @@ internal sealed record RunWorkflowBindings(
     ExecutorBinding BlockedAdapter,
     ExecutorBinding ReviewChangesAdapter,
     ExecutorBinding TerminalDeclined,
+    ExecutorBinding? FanOutBinding,
+    ExecutorBinding? FanPauseBinding,
+    ExecutorBinding? FanInBinding,
+    ExecutorBinding? FanFailureBinding,
+    ExecutorBinding? ComposedBinding,
+    ExecutorBinding? ComposedPauseBinding,
+    ExecutorBinding? ComposedFailureBinding,
     int MaxIterations,
     IRunWorkflowWiringSupport Wiring);
 
@@ -52,11 +60,21 @@ public sealed record WorkflowTransitionIssue(
     string ToKind,
     IReadOnlyList<string> Alternatives);
 
+internal sealed record StaticFanRegionValidation(
+    IReadOnlyList<string> Errors,
+    string? FanOutNodeId,
+    string? FanInNodeId,
+    IReadOnlySet<string> BranchNodeIds,
+    IReadOnlySet<(string From, string To)> DeclaredEdges)
+{
+    public bool IsValid => Errors.Count == 0 && BranchNodeIds.Count > 0;
+}
+
 /// <summary>
 /// Binds a <see cref="WorkflowDefinition"/> onto the live MAF graph (Feature 010 wf-maf-binding,
 /// generalized in Feature 015 US1). The full run pipeline is assembled by ITERATING the definition's
 /// nodes/edges and resolving each node's executor from its <c>type</c> (via
-/// <see cref="INodeExecutorFactory"/>) and each <c>(from, to, when)</c> transition from the node TYPES
+/// <see cref="NodeExecutorRegistry"/>) and each <c>(from, to, when)</c> transition from the node TYPES
 /// (via <see cref="NodeClassifier"/>) — NOT from hardcoded node ids or literal edge keys. Any authored
 /// workflow whose node ids differ from the original five (agent/rai/review/merge/scribe) wires
 /// identically when the node TYPES match.
@@ -74,7 +92,22 @@ public sealed record WorkflowTransitionIssue(
 /// </summary>
 internal static class RunWorkflowGraphBinder
 {
-    private static readonly INodeExecutorFactory Factory = new NodeExecutorRegistry();
+    internal static bool ContainsStaticFanRegion(WorkflowDefinition definition) =>
+        definition.Nodes.Any(node => node.Type == WorkflowNodeType.FanOut)
+        && definition.Nodes.Any(node => node.Type == WorkflowNodeType.FanIn);
+
+    internal static bool ContainsStaticFanRegion(ExecutableWorkflowPin pin)
+    {
+        var loaded = WorkflowDefinitionLoader.Load(
+            pin.DefinitionYaml,
+            pin.Source,
+            validationMode: WorkflowDefinitionValidationMode.LegacyCompatible);
+        return loaded.IsValid
+            && loaded.Definition is not null
+            && ContainsStaticFanRegion(loaded.Definition);
+    }
+
+    private static readonly NodeExecutorRegistry Factory = new();
 
     /// <summary>
     /// Mutable per-build wiring state threaded through the edge expansion. Accumulates the scribe-output
@@ -101,25 +134,44 @@ internal static class RunWorkflowGraphBinder
     /// <paramref name="builder"/> using the real executors in <paramref name="bindings"/>.
     /// </summary>
     public static void WireFull(
-        GraphDescriptorBuilder builder, WorkflowDefinition definition, RunWorkflowBindings bindings)
+        GraphDescriptorBuilder builder, WorkflowDefinition definition, RunWorkflowBindings bindings,
+        string? recoveryComposedNodeId = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(bindings);
 
         var ctx = new WireContext { G = builder, Definition = definition, B = bindings };
+        var fanRegion = ValidateSingleFanRegion(definition);
 
         // Entry plumbing: the hidden input storer feeds the start node's executor (unconditional). The
         // start node is resolved by its declared id and its TYPE — not a hardcoded "agent". A start that
         // is a producing turn enters its per-node agent executor.
-        var startNode = GetNode(definition, definition.Start);
-        if (GetStartTopologyError(startNode) is { } startTopologyError)
-            throw new WorkflowBindException(startTopologyError, startNode.Id);
-        builder.AddEdge(bindings.AgentInputStorer, ResolveEntry(ctx, startNode));
+        if (recoveryComposedNodeId is null)
+        {
+            var startNode = GetNode(definition, definition.Start);
+            if (GetStartTopologyError(startNode) is { } startTopologyError)
+                throw new WorkflowBindException(startTopologyError, startNode.Id);
+            builder.AddEdge(bindings.AgentInputStorer, ResolveEntry(ctx, startNode));
+        }
+        else
+        {
+            var composed = definition.Nodes.SingleOrDefault(node =>
+                node.Type == WorkflowNodeType.CoordinatorComposed);
+            if (composed?.Id != recoveryComposedNodeId || bindings.ComposedBinding is null)
+                throw new WorkflowBindException(
+                    "The recovery entry must match the pinned workflow's composed node.",
+                    recoveryComposedNodeId);
+            builder.AddEdge(bindings.AgentInputStorer, bindings.ComposedBinding);
+        }
 
         // Every root/full-pipeline AgentTurnExecutor can return a structured terminal failure.
         // Route it directly to one typed graph output before any normal successor consumes it.
-        foreach (var node in definition.Nodes.Where(n => EffectiveKind(definition, n) == NodeKind.Agent))
+        var executableAgentNodes = definition.Nodes.Where(n =>
+                EffectiveKind(definition, n) == NodeKind.Agent
+                && !fanRegion.BranchNodeIds.Contains(n.Id))
+            .ToList();
+        foreach (var node in executableAgentNodes)
         {
             builder.AddEdge<AgentTurnOutput>(
                 bindings.Wiring.ResolveAgentNode(node),
@@ -128,8 +180,17 @@ internal static class RunWorkflowGraphBinder
         }
 
         // Each logical edge expands to its raw executor wiring + predicate.
+        if (fanRegion.IsValid)
+            WireStaticFanRegion(ctx, fanRegion);
+        if (definition.Nodes.Any(node => node.Type == WorkflowNodeType.CoordinatorComposed))
+            WireCoordinatorComposed(ctx);
+
         foreach (var edge in definition.Edges)
+        {
+            if (fanRegion.IsValid && fanRegion.DeclaredEdges.Contains((edge.From, edge.To)))
+                continue;
             WireEdge(ctx, edge);
+        }
 
         // Terminal nodes declare which executors are graph outputs (WithOutputFrom).
         foreach (var node in definition.Nodes)
@@ -137,18 +198,19 @@ internal static class RunWorkflowGraphBinder
             if (node.Type == WorkflowNodeType.Terminal)
                 WireOutputs(ctx, node);
         }
-        builder.WithOutputFrom(bindings.TerminalTurnFailed);
+        if (executableAgentNodes.Count > 0)
+            builder.WithOutputFrom(bindings.TerminalTurnFailed);
     }
 
     /// <summary>
     /// Binder DRY-RUN (no executors required): validates that every node in <paramref name="definition"/>
     /// maps to a node kind the binder can wire to a runtime executor, and that every edge references a
-    /// declared node. Throws <see cref="WorkflowBindException"/> for the first node/edge that would fail
-    /// closed at BUILD time (e.g. fan_out / fan_in / serial / coordinator_composed, which the loader accepts
-    /// but have no runtime executor; or a dangling edge reference). <c>peer_review</c> is accepted when
-    /// reached from a producer, but cannot be the entry node because its runtime executor consumes
-    /// <c>AgentTurnOutput</c>. Lets callers (save, set-default, generator) reject loader-valid-but-bind-
-    /// invalid workflows up front without standing up the full executor graph (which needs DI bindings).
+    /// declared node. Throws <see cref="WorkflowBindException"/> for the first node or edge that would
+    /// fail closed at build time, such as malformed fan/composed topology or a dangling edge reference.
+    /// <c>peer_review</c> is accepted when reached from a producer, but cannot be the entry node because
+    /// its runtime executor consumes <c>AgentTurnOutput</c>. Lets callers (save, set-default, generator)
+    /// reject loader-valid-but-bind-invalid workflows up front without standing up the full executor
+    /// graph, which needs DI bindings.
     /// </summary>
     public static void ValidateBindable(WorkflowDefinition definition)
     {
@@ -166,6 +228,9 @@ internal static class RunWorkflowGraphBinder
         ArgumentNullException.ThrowIfNull(definition);
 
         var errors = new List<string>();
+        var fanRegion = ValidateSingleFanRegion(definition);
+        errors.AddRange(fanRegion.Errors);
+        errors.AddRange(ValidateCoordinatorComposed(definition));
         var outgoingByNode = definition.Edges
             .GroupBy(e => e.From, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
@@ -203,6 +268,7 @@ internal static class RunWorkflowGraphBinder
             }
 
             if ((node.Type == WorkflowNodeType.PeerReview || node.Type == WorkflowNodeType.BuildTest)
+                && !(fanRegion.IsValid && fanRegion.BranchNodeIds.Contains(node.Id))
                 && !HasVerdictRouting(definition, node))
             {
                 errors.Add(
@@ -226,7 +292,8 @@ internal static class RunWorkflowGraphBinder
                 continue;
             }
 
-            if (!CanBindTransition(definition, edge, fromNode, toNode))
+            if (!CanBindTransition(definition, edge, fromNode, toNode)
+                && !(fanRegion.IsValid && fanRegion.DeclaredEdges.Contains((edge.From, edge.To))))
             {
                 var fromKind = EffectiveKind(definition, fromNode);
                 var toKind = EffectiveKind(definition, toNode);
@@ -238,11 +305,283 @@ internal static class RunWorkflowGraphBinder
         return errors;
     }
 
+    public static IReadOnlyList<string> GetTopologyErrors(WorkflowDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        return [.. ValidateSingleFanRegion(definition).Errors, .. ValidateCoordinatorComposed(definition)];
+    }
+
+    private static IReadOnlyList<string> ValidateCoordinatorComposed(WorkflowDefinition definition)
+    {
+        var composed = definition.Nodes
+            .Where(node => node.Type == WorkflowNodeType.CoordinatorComposed)
+            .ToArray();
+        if (composed.Length == 0)
+            return [];
+
+        var errors = new List<string>();
+        if (composed.Length > 1)
+            errors.Add("A workflow may declare at most one coordinator_composed node.");
+
+        var fan = ValidateSingleFanRegion(definition);
+        foreach (var node in composed)
+        {
+            if (string.IsNullOrWhiteSpace(node.Prompt))
+                errors.Add($"coordinator_composed node '{node.Id}' requires a non-empty prompt.");
+            if (node.Steps.Count > 0 || node.Branches.Count > 0 || node.Target is not null)
+                errors.Add($"coordinator_composed node '{node.Id}' cannot declare nested steps, verdict branches, or a target.");
+            if (fan.BranchNodeIds.Contains(node.Id))
+                errors.Add($"coordinator_composed node '{node.Id}' cannot be a static fan branch.");
+
+            var incoming = definition.Edges.Where(edge =>
+                string.Equals(edge.To, node.Id, StringComparison.Ordinal)).ToArray();
+            if (incoming.Length != 1
+                || incoming[0].When is not null
+                || definition.Nodes.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Id, incoming[0].From, StringComparison.Ordinal))?.Type
+                    != WorkflowNodeType.Prompt)
+            {
+                errors.Add(
+                    $"coordinator_composed node '{node.Id}' requires exactly one unconditional incoming edge from a prompt node.");
+            }
+
+            var outgoing = definition.Edges.Where(edge =>
+                string.Equals(edge.From, node.Id, StringComparison.Ordinal)).ToArray();
+            if (outgoing.Length != 1 || outgoing[0].When is not null)
+                errors.Add($"coordinator_composed node '{node.Id}' requires exactly one unconditional continuation.");
+
+            var visited = new HashSet<string>(StringComparer.Ordinal);
+            var queue = new Queue<string>(outgoing.Select(edge => edge.To));
+            while (queue.TryDequeue(out var current))
+            {
+                if (string.Equals(current, node.Id, StringComparison.Ordinal))
+                {
+                    errors.Add($"coordinator_composed node '{node.Id}' cannot recursively reach itself.");
+                    break;
+                }
+                if (!visited.Add(current))
+                    continue;
+                foreach (var edge in definition.Edges.Where(edge =>
+                    string.Equals(edge.From, current, StringComparison.Ordinal)))
+                    queue.Enqueue(edge.To);
+            }
+        }
+
+        return errors;
+    }
+
+    private static StaticFanRegionValidation ValidateSingleFanRegion(WorkflowDefinition definition)
+    {
+        var fanOutNodes = definition.Nodes
+            .Where(node => node.Type == WorkflowNodeType.FanOut)
+            .ToList();
+        var fanInNodes = definition.Nodes
+            .Where(node => node.Type == WorkflowNodeType.FanIn)
+            .ToList();
+        if (fanOutNodes.Count == 0 && fanInNodes.Count == 0)
+            return new StaticFanRegionValidation(
+                [], null, null, new HashSet<string>(), new HashSet<(string, string)>());
+
+        var errors = new List<string>();
+        if (fanOutNodes.Count != 1 || fanInNodes.Count != 1)
+        {
+            errors.Add(
+                "Static fan topology requires exactly one fan_out node and exactly one fan_in node when either is present.");
+            return new StaticFanRegionValidation(
+                errors, null, null, new HashSet<string>(), new HashSet<(string, string)>());
+        }
+
+        var fanOut = fanOutNodes[0];
+        var fanIn = fanInNodes[0];
+        var outgoing = definition.Edges
+            .Where(edge => string.Equals(edge.From, fanOut.Id, StringComparison.Ordinal))
+            .ToList();
+        var incomingToJoin = definition.Edges
+            .Where(edge => string.Equals(edge.To, fanIn.Id, StringComparison.Ordinal))
+            .ToList();
+        var joinOutgoing = definition.Edges
+            .Where(edge => string.Equals(edge.From, fanIn.Id, StringComparison.Ordinal))
+            .ToList();
+
+        if (outgoing.Count < 2)
+            errors.Add($"fan_out node '{fanOut.Id}' must declare at least two outgoing branches.");
+        if (outgoing.Any(edge => !string.IsNullOrWhiteSpace(edge.When)))
+            errors.Add($"fan_out node '{fanOut.Id}' branches must all be unconditional; dynamic or verdict routes are not supported.");
+        if (outgoing.Select(edge => edge.To).Distinct(StringComparer.Ordinal).Count() != outgoing.Count)
+            errors.Add($"fan_out node '{fanOut.Id}' must target a distinct node for every declared branch.");
+        if (fanOut.Steps.Count > 0 || fanOut.Branches.Count > 0)
+            errors.Add($"fan_out node '{fanOut.Id}' cannot declare dynamic steps, verdict branches, or partial policies.");
+
+        if (fanIn.Target is not null
+            && !string.Equals(fanIn.Target, fanOut.Id, StringComparison.Ordinal))
+        {
+            errors.Add(
+                $"fan_in node '{fanIn.Id}' target must be null or match paired fan_out node '{fanOut.Id}'; got '{fanIn.Target}'.");
+        }
+        if (fanIn.Steps.Count > 0 || fanIn.Branches.Count > 0)
+            errors.Add($"fan_in node '{fanIn.Id}' cannot declare dynamic, quorum, or partial join policies.");
+        if (joinOutgoing.Count != 1 || joinOutgoing.Any(edge => !string.IsNullOrWhiteSpace(edge.When)))
+            errors.Add($"fan_in node '{fanIn.Id}' must have exactly one unconditional outgoing edge.");
+
+        var incomingToFanOut = definition.Edges
+            .Where(edge => string.Equals(edge.To, fanOut.Id, StringComparison.Ordinal))
+            .ToList();
+        if (!string.Equals(definition.Start, fanOut.Id, StringComparison.Ordinal))
+        {
+            if (incomingToFanOut.Count != 1
+                || !string.IsNullOrWhiteSpace(incomingToFanOut[0].When)
+                || !definition.Nodes.Any(node =>
+                    string.Equals(node.Id, incomingToFanOut[0].From, StringComparison.Ordinal)
+                    && node.Type == WorkflowNodeType.Prompt))
+            {
+                errors.Add(
+                    $"fan_out node '{fanOut.Id}' must be the workflow start or have exactly one unconditional inbound edge from a prompt node.");
+            }
+        }
+        else if (incomingToFanOut.Count > 0)
+        {
+            errors.Add($"fan_out start node '{fanOut.Id}' cannot also have inbound edges.");
+        }
+
+        if (joinOutgoing.Count == 1
+            && definition.Nodes.FirstOrDefault(node =>
+                string.Equals(node.Id, joinOutgoing[0].To, StringComparison.Ordinal)) is { } successor
+            && successor.Type is not (WorkflowNodeType.Prompt or WorkflowNodeType.Terminal))
+        {
+            errors.Add(
+                $"fan_in node '{fanIn.Id}' must continue to a prompt or terminal node in the first release; got '{successor.Type}'.");
+        }
+
+        var branchIds = outgoing
+            .Select(edge => edge.To)
+            .ToHashSet(StringComparer.Ordinal);
+        var nodeById = definition.Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
+        foreach (var branchId in branchIds)
+        {
+            if (!nodeById.TryGetValue(branchId, out var branch))
+            {
+                errors.Add($"fan_out node '{fanOut.Id}' references missing branch node '{branchId}'.");
+                continue;
+            }
+
+            if (branch.Type != WorkflowNodeType.Prompt)
+            {
+                errors.Add(
+                    $"Static fan branch '{branchId}' must be a prompt node before fan_in " +
+                    $"'{fanIn.Id}'; specialized peer_review and build_test branch semantics are not supported; " +
+                    $"got '{branch.Type}'.");
+            }
+
+            var branchIncoming = definition.Edges
+                .Where(edge => string.Equals(edge.To, branchId, StringComparison.Ordinal))
+                .ToList();
+            if (branchIncoming.Count != 1
+                || !string.Equals(branchIncoming[0].From, fanOut.Id, StringComparison.Ordinal)
+                || !string.IsNullOrWhiteSpace(branchIncoming[0].When))
+            {
+                errors.Add(
+                    $"Static fan branch node '{branchId}' must have exactly one unconditional inbound edge from fan_out '{fanOut.Id}'.");
+            }
+
+            var branchOutgoing = definition.Edges
+                .Where(edge => string.Equals(edge.From, branchId, StringComparison.Ordinal))
+                .ToList();
+            if (branchOutgoing.Count != 1
+                || !string.Equals(branchOutgoing[0].To, fanIn.Id, StringComparison.Ordinal)
+                || !string.IsNullOrWhiteSpace(branchOutgoing[0].When))
+            {
+                errors.Add(
+                    $"Static fan branch node '{branchId}' must have exactly one unconditional outbound edge to common fan_in '{fanIn.Id}'.");
+            }
+        }
+
+        var expectedIncoming = branchIds.OrderBy(id => id, StringComparer.Ordinal).ToArray();
+        var actualIncoming = incomingToJoin
+            .Where(edge => string.IsNullOrWhiteSpace(edge.When))
+            .Select(edge => edge.From)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        if (incomingToJoin.Any(edge => !string.IsNullOrWhiteSpace(edge.When))
+            || !actualIncoming.SequenceEqual(expectedIncoming, StringComparer.Ordinal))
+        {
+            errors.Add(
+                $"fan_in node '{fanIn.Id}' must receive exactly one unconditional edge from every declared branch and no other node.");
+        }
+
+        if (joinOutgoing.Count == 1
+            && (branchIds.Contains(joinOutgoing[0].To)
+                || string.Equals(joinOutgoing[0].To, fanOut.Id, StringComparison.Ordinal)
+                || string.Equals(joinOutgoing[0].To, fanIn.Id, StringComparison.Ordinal)))
+        {
+            errors.Add(
+                $"fan_in node '{fanIn.Id}' must continue outside the fan region; cycles and nested fan topology are not supported.");
+        }
+
+        var declaredEdges = definition.Edges
+            .Where(edge =>
+                (string.Equals(edge.From, fanOut.Id, StringComparison.Ordinal)
+                    && branchIds.Contains(edge.To))
+                || (branchIds.Contains(edge.From)
+                    && string.Equals(edge.To, fanIn.Id, StringComparison.Ordinal)))
+            .Select(edge => (edge.From, edge.To))
+            .ToHashSet();
+
+        return new StaticFanRegionValidation(errors, fanOut.Id, fanIn.Id, branchIds, declaredEdges);
+    }
+
+    private static void WireStaticFanRegion(
+        WireContext ctx,
+        StaticFanRegionValidation fanRegion)
+    {
+        var b = ctx.B;
+        if (b.FanOutBinding is null
+            || b.FanPauseBinding is null
+            || b.FanInBinding is null
+            || b.FanFailureBinding is null)
+        {
+            throw new WorkflowBindException(
+                $"Cannot bind fan region '{fanRegion.FanOutNodeId}' -> '{fanRegion.FanInNodeId}': " +
+                "the runtime fan executors were not built.",
+                fanRegion.FanOutNodeId);
+        }
+
+        ctx.G.AddEdge(b.FanOutBinding, b.FanPauseBinding)
+            .AddEdge(b.FanPauseBinding, b.FanInBinding)
+            .AddEdge<WorkflowFanInOutput>(
+                b.FanInBinding,
+                b.FanFailureBinding,
+                output => output is not null && !output.Succeeded);
+        ctx.G.WithOutputFrom(b.FanFailureBinding);
+    }
+
+    private static void WireCoordinatorComposed(WireContext ctx)
+    {
+        var b = ctx.B;
+        var node = ctx.Definition.Nodes.Single(candidate =>
+            candidate.Type == WorkflowNodeType.CoordinatorComposed);
+        if (b.ComposedBinding is null
+            || b.ComposedPauseBinding is null
+            || b.ComposedFailureBinding is null)
+        {
+            throw new WorkflowBindException(
+                $"Cannot bind coordinator_composed node '{node.Id}': the runtime composed executors were not built.",
+                node.Id);
+        }
+
+        ctx.G.AddEdge(b.ComposedBinding, b.ComposedPauseBinding)
+            .AddEdge<WorkflowChildWorkResult>(
+                b.ComposedPauseBinding,
+                b.ComposedFailureBinding,
+                output => output is null || !output.Succeeded || output.Assembly is null);
+        ctx.G.WithOutputFrom(b.ComposedFailureBinding);
+    }
+
     public static IReadOnlyList<WorkflowTransitionIssue> GetTransitionIssues(WorkflowDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
         var issues = new List<WorkflowTransitionIssue>();
+        var fanRegion = ValidateSingleFanRegion(definition);
         foreach (var edge in definition.Edges)
         {
             var fromNode = definition.Nodes.FirstOrDefault(
@@ -254,7 +593,8 @@ internal static class RunWorkflowGraphBinder
 
             var fromKind = EffectiveKind(definition, fromNode);
             var toKind = EffectiveKind(definition, toNode);
-            if (WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
+            if ((fanRegion.IsValid && fanRegion.DeclaredEdges.Contains((edge.From, edge.To)))
+                || CanBindTransition(definition, edge, fromNode, toNode))
                 continue;
 
             issues.Add(new WorkflowTransitionIssue(
@@ -270,16 +610,21 @@ internal static class RunWorkflowGraphBinder
     }
 
     /// <summary>
-    /// The graph entry plumbing supplies <see cref="AgentTurnInput"/>. Verdict-style peer-review and
-    /// build-test nodes instead consume a produced <see cref="AgentTurnOutput"/>; they can only be reached
-    /// through a producer edge and its output adapter, never directly from <c>start</c>.
+    /// The graph entry plumbing supplies <see cref="AgentTurnInput"/>, but verdict-style gates require a
+    /// produced <see cref="AgentTurnOutput"/> and composed stages require a preceding prompt by contract.
     /// </summary>
     private static string? GetStartTopologyError(WorkflowNode startNode) =>
-        NodeClassifier.Classify(startNode) == NodeKind.PeerReview
-            ? $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): peer_review and build_test " +
-              "verdict gates require an AgentTurnOutput from a preceding producer, but workflow entry supplies " +
-              "AgentTurnInput. Choose a prompt node as start and route its successful output to this gate."
-            : null;
+        NodeClassifier.Classify(startNode) switch
+        {
+            NodeKind.PeerReview =>
+                $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): peer_review and build_test " +
+                "verdict gates require an AgentTurnOutput from a preceding producer, but workflow entry supplies " +
+                "AgentTurnInput. Choose a prompt node as start and route its successful output to this gate.",
+            NodeKind.CoordinatorComposed =>
+                $"Cannot bind start node '{startNode.Id}' (type='{startNode.Type}'): coordinator_composed " +
+                "requires one unconditional incoming edge from a preceding prompt node.",
+            _ => null,
+        };
 
     /// <summary>Resolves the executor a definition's START node is entered at.</summary>
     private static ExecutorBinding ResolveEntry(WireContext ctx, WorkflowNode startNode) =>
@@ -363,13 +708,22 @@ internal static class RunWorkflowGraphBinder
         WireContext ctx, WorkflowEdge edge, WorkflowNode fromNode, WorkflowNode toNode,
         NodeKind fromKind, NodeKind toKind)
     {
-        if (!WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
+        var isFanRuntimeTransition = string.IsNullOrWhiteSpace(edge.When)
+            && ((fromKind == NodeKind.Agent && toKind == NodeKind.FanOut)
+                || (fromKind == NodeKind.FanIn
+                    && toKind is NodeKind.Agent or NodeKind.Terminal));
+        var isComposedRuntimeTransition = string.IsNullOrWhiteSpace(edge.When)
+            && ((fromKind == NodeKind.Agent && toKind == NodeKind.CoordinatorComposed)
+                || (fromKind == NodeKind.CoordinatorComposed
+                    && toKind is NodeKind.Agent or NodeKind.Terminal));
+        if (!isFanRuntimeTransition && !isComposedRuntimeTransition
+            && !WorkflowGrammarContract.SupportsTransition(fromKind, toKind, edge.When))
             return false;
 
         var g = ctx.G;
         var b = ctx.B;
         var s = ctx.S;
-        var when = edge.When;
+        var when = string.IsNullOrWhiteSpace(edge.When) ? null : edge.When;
 
         switch (fromKind, toKind, when)
         {
@@ -461,6 +815,89 @@ internal static class RunWorkflowGraphBinder
                 g.AddEdge<MergeOutput>(b.MergeBinding, adapter,
                     output => output is not null && output.Status != "blocked")
                  .AddEdge(adapter, s.ResolveOpenPullRequestNode(toNode));
+                return true;
+            }
+
+            // A prompt can hand its produced context to a static fan region. The branch workers use
+            // the same parent run input plus their authored branch prompt.
+            case (NodeKind.Agent, NodeKind.FanOut, null):
+            {
+                if (b.FanOutBinding is null)
+                    return false;
+                var adapter = s.SequentialAgentAdapter(edge);
+                g.AddEdge<AgentTurnOutput>(
+                        s.ResolveAgentNode(fromNode),
+                        adapter,
+                        IsSuccessfulAgentTurn)
+                    .AddEdge(adapter, b.FanOutBinding);
+                return true;
+            }
+
+            // Successful fan-in -> next prompt with the deterministic ordered join appended.
+            case (NodeKind.FanIn, NodeKind.Agent, null):
+            {
+                if (b.FanInBinding is null)
+                    return false;
+                var adapter = s.FanInToAgentAdapter(edge);
+                g.AddEdge<WorkflowFanInOutput>(
+                        b.FanInBinding,
+                        adapter,
+                        output => output is not null && output.Succeeded)
+                    .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
+            // A workflow may end at the joined result without invoking review, merge, publication,
+            // or Scribe.
+            case (NodeKind.FanIn, NodeKind.Terminal, null):
+            {
+                if (b.FanInBinding is null)
+                    return false;
+                var terminal = s.FanInToTerminalAdapter(edge);
+                g.AddEdge<WorkflowFanInOutput>(
+                    b.FanInBinding,
+                    terminal,
+                    output => output is not null && output.Succeeded);
+                ctx.DirectTerminalOutputs.Add(terminal);
+                return true;
+            }
+
+            case (NodeKind.Agent, NodeKind.CoordinatorComposed, null):
+            {
+                if (b.ComposedBinding is null)
+                    return false;
+                var adapter = s.SequentialAgentAdapter(edge, publishComposedTree: true);
+                g.AddEdge<AgentTurnOutput>(
+                        s.ResolveAgentNode(fromNode),
+                        adapter,
+                        IsSuccessfulAgentTurn)
+                    .AddEdge(adapter, b.ComposedBinding);
+                return true;
+            }
+
+            case (NodeKind.CoordinatorComposed, NodeKind.Agent, null):
+            {
+                if (b.ComposedPauseBinding is null)
+                    return false;
+                var adapter = s.ComposedToAgentAdapter(edge);
+                g.AddEdge<WorkflowChildWorkResult>(
+                        b.ComposedPauseBinding,
+                        adapter,
+                        output => output is { Succeeded: true, Assembly: not null })
+                    .AddEdge(adapter, s.ResolveAgentNode(toNode));
+                return true;
+            }
+
+            case (NodeKind.CoordinatorComposed, NodeKind.Terminal, null):
+            {
+                if (b.ComposedPauseBinding is null)
+                    return false;
+                var terminal = s.ComposedToTerminalAdapter(edge);
+                g.AddEdge<WorkflowChildWorkResult>(
+                    b.ComposedPauseBinding,
+                    terminal,
+                    output => output is { Succeeded: true, Assembly: not null });
+                ctx.DirectTerminalOutputs.Add(terminal);
                 return true;
             }
 
@@ -801,18 +1238,6 @@ internal static class RunWorkflowGraphBinder
     /// <summary>Fails closed for node types accepted by the loader but not yet wired to a runtime executor.</summary>
     private static void RejectUnwiredKind(WorkflowNode node, NodeKind kind)
     {
-        switch (kind)
-        {
-            case NodeKind.FanOut:
-            case NodeKind.FanIn:
-            case NodeKind.Serial:
-            case NodeKind.CoordinatorComposed:
-                throw new WorkflowBindException(
-                    $"Cannot bind node '{node.Id}' (type='{node.Type}'): node type '{node.Type}' is accepted by " +
-                    "the loader but not yet wired to a runtime executor. fan_out/fan_in map onto the coordinator " +
-                    "SubtaskFrontier/AssemblyPlanning seams; serial onto the sequential seam — runtime support is " +
-                    "pending.", node.Id);
-        }
     }
 
     /// <summary>
@@ -840,6 +1265,15 @@ internal static class RunWorkflowGraphBinder
         var fromKind = EffectiveKind(definition, fromNode);
         var toKind = EffectiveKind(definition, toNode);
         var when = edge.When;
+
+        if (when is null
+            && ((fromKind == NodeKind.Agent && toKind == NodeKind.FanOut)
+                || (fromKind == NodeKind.FanIn
+                    && toKind is NodeKind.Agent or NodeKind.Terminal)
+                || (fromKind == NodeKind.Agent && toKind == NodeKind.CoordinatorComposed)
+                || (fromKind == NodeKind.CoordinatorComposed
+                    && toKind is NodeKind.Agent or NodeKind.Terminal)))
+            return true;
 
         return WorkflowGrammarContract.SupportsTransition(fromKind, toKind, when);
     }

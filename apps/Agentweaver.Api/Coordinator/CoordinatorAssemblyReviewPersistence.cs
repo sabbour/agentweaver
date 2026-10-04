@@ -14,6 +14,7 @@ internal static class CoordinatorAssemblyReviewPersistence
         string ownerUser,
         string integrationBranch,
         string aggregateTreeHash,
+        string revisionId,
         CancellationToken ct)
     {
         using var scope = scopeFactory.CreateScope();
@@ -31,15 +32,19 @@ internal static class CoordinatorAssemblyReviewPersistence
                 OwnerUser = ownerUser,
                 IntegrationBranch = integrationBranch,
                 AggregateTreeHash = aggregateTreeHash,
+                OutputRevisionId = revisionId,
                 CreatedAt = now,
                 UpdatedAt = now,
             });
         }
         else
         {
+            if (existing.OutputRevisionId == revisionId && existing.AggregateTreeHash == aggregateTreeHash)
+                return;
             existing.OwnerUser = ownerUser;
             existing.IntegrationBranch = integrationBranch;
             existing.AggregateTreeHash = aggregateTreeHash;
+            existing.OutputRevisionId = revisionId;
             existing.DecisionJson = null;
             existing.Reviewer = null;
             existing.DecisionSubmittedAt = null;
@@ -61,49 +66,18 @@ internal static class CoordinatorAssemblyReviewPersistence
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
         var now = DateTimeOffset.UtcNow;
         var json = JsonSerializer.Serialize(decision, JsonDefaults.Options);
-        var existing = await db.AssemblyReviews
-            .FirstOrDefaultAsync(r => r.CoordinatorRunId == coordinatorRunId, ct)
-            .ConfigureAwait(false);
-
-        if (existing is null)
-        {
-            db.AssemblyReviews.Add(new CoordinatorAssemblyReviewRecord
-            {
-                CoordinatorRunId = coordinatorRunId,
-                DecisionJson = json,
-                Reviewer = decision.Reviewer,
-                DecisionSubmittedAt = now,
-                CreatedAt = now,
-                UpdatedAt = now,
-            });
-        }
-        else
-        {
-            existing.DecisionJson = json;
-            existing.Reviewer = decision.Reviewer;
-            existing.DecisionSubmittedAt = now;
-            existing.CoordinatorFailedAt = null;
-            existing.CoordinatorFailureReason = null;
-            existing.UpdatedAt = now;
-        }
-
-        try
-        {
-            await db.SaveChangesAsync(ct).ConfigureAwait(false);
-        }
-        catch (DbUpdateConcurrencyException) when (existing is not null)
-        {
-            // A locally accepted decision wakes the assembly loop immediately. It may consume the
-            // decision and clear the durable gate before this best-effort mirror update commits.
-            // Once cleared, the decision has already been processed and must not be reinserted.
-            var gateStillExists = await db.AssemblyReviews
-                .AsNoTracking()
-                .AnyAsync(r => r.CoordinatorRunId == coordinatorRunId, CancellationToken.None)
-                .ConfigureAwait(false);
-            if (gateStillExists)
-                throw;
-        }
-        return true;
+        if (string.IsNullOrWhiteSpace(decision.OutputRevisionId))
+            return false;
+        var updated = await db.AssemblyReviews
+            .Where(r => r.CoordinatorRunId == coordinatorRunId
+                && r.OutputRevisionId == decision.OutputRevisionId
+                && r.DecisionSubmittedAt == null && r.CoordinatorFailedAt == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.DecisionJson, json)
+                .SetProperty(r => r.Reviewer, decision.Reviewer)
+                .SetProperty(r => r.DecisionSubmittedAt, now)
+                .SetProperty(r => r.UpdatedAt, now), ct).ConfigureAwait(false);
+        return updated == 1;
     }
 
     /// <summary>
@@ -113,12 +87,12 @@ internal static class CoordinatorAssemblyReviewPersistence
     /// ownership checks stay identical by construction. Sequence (mirrors the original endpoint block):
     /// <list type="number">
     /// <item>Validate a review is genuinely pending for this owner (<see cref="ValidatePendingRequestAsync"/>).</item>
-    /// <item>Attempt in-memory delivery to the armed gate (<see cref="AssemblyReviewGate.TrySubmit"/>). On
-    /// <c>Accepted</c> also durably persist the decision so the poller / crash-recovery agrees.</item>
-    /// <item>On <c>NotArmed</c> (the gate is armed on a DIFFERENT replica, or not yet) fall back to the
-    /// durable deferred persist (<see cref="PersistDecisionForPendingRequestAsync"/>); the owning pod's
-    /// deferred poller drains it. This cross-replica fallback is what a <c>TrySubmit</c>-only path would
-    /// silently miss (the drain-into-void bug across pods).</item>
+    /// <item>Durably claim the pending decision before waking the in-memory gate, so the assembly loop
+    /// cannot clear the review row before persistence finishes. The conditional update also ensures
+    /// concurrent submissions have one winner.</item>
+    /// <item>Attempt in-memory delivery to the armed gate (<see cref="AssemblyReviewGate.TrySubmit"/>).
+    /// On <c>NotArmed</c> (another replica, or not yet armed), the durable decision is already available
+    /// for the owning pod's deferred poller.</item>
     /// </list>
     /// </summary>
     public static async Task<AssemblyReviewDeliveryResult> DeliverDecisionAsync(
@@ -134,34 +108,36 @@ internal static class CoordinatorAssemblyReviewPersistence
             scopeFactory, coordinatorRunId, callerUser, callerGitHubLogin, ct).ConfigureAwait(false);
         if (pending == AssemblyReviewPendingDecisionResult.Forbidden)
             return AssemblyReviewDeliveryResult.Forbidden;
+        if (pending == AssemblyReviewPendingDecisionResult.StaleRevision)
+            return AssemblyReviewDeliveryResult.StaleRevision;
         if (pending != AssemblyReviewPendingDecisionResult.Pending)
             return AssemblyReviewDeliveryResult.NotPending;
 
-        var submit = reviewGate.TrySubmit(coordinatorRunId, callerUser, decision, callerGitHubLogin);
-        if (submit == AssemblyReviewSubmitResult.Accepted)
-        {
-            // The in-memory gate consumed it on THIS pod; durably record it too so the deferred poller /
-            // crash-recovery reconciler observes the same decision (never CancellationToken ct here — the
-            // persist must complete even if the request is aborted after the gate accepted the decision).
-            await PersistDecisionAsync(scopeFactory, coordinatorRunId, decision, CancellationToken.None)
-                .ConfigureAwait(false);
-            return AssemblyReviewDeliveryResult.Accepted;
-        }
-        if (submit == AssemblyReviewSubmitResult.Forbidden)
-            return AssemblyReviewDeliveryResult.Forbidden;
-
-        // NotArmed: the gate is armed on a different replica (or not yet). Persist durably for the owning
-        // pod's poller to drain (cross-replica safety — #226 B2).
-        var deferred = await PersistDecisionForPendingRequestAsync(
+        // Once the conditional write succeeds, finish delivery even if the HTTP request is cancelled.
+        // Signalling the gate first lets the assembly loop clear the review row before this write,
+        // incorrectly reporting a delivered steer as superseded.
+        var persisted = await PersistDecisionForPendingRequestAsync(
             scopeFactory, coordinatorRunId, decision, callerUser, callerGitHubLogin, CancellationToken.None)
             .ConfigureAwait(false);
-        return deferred switch
-        {
-            AssemblyReviewPendingDecisionResult.Persisted => AssemblyReviewDeliveryResult.Deferred,
-            AssemblyReviewPendingDecisionResult.Forbidden => AssemblyReviewDeliveryResult.Forbidden,
-            AssemblyReviewPendingDecisionResult.AlreadySubmitted => AssemblyReviewDeliveryResult.AlreadySubmitted,
-            _ => AssemblyReviewDeliveryResult.NotPending,
-        };
+        if (persisted != AssemblyReviewPendingDecisionResult.Persisted)
+            return persisted switch
+            {
+                AssemblyReviewPendingDecisionResult.Forbidden => AssemblyReviewDeliveryResult.Forbidden,
+                AssemblyReviewPendingDecisionResult.StaleRevision => AssemblyReviewDeliveryResult.StaleRevision,
+                AssemblyReviewPendingDecisionResult.AlreadySubmitted => AssemblyReviewDeliveryResult.AlreadySubmitted,
+                _ => AssemblyReviewDeliveryResult.NotPending,
+            };
+
+        var submit = reviewGate.TrySubmit(coordinatorRunId, callerUser, decision, callerGitHubLogin);
+        if (submit == AssemblyReviewSubmitResult.Accepted)
+            return AssemblyReviewDeliveryResult.Accepted;
+        if (submit == AssemblyReviewSubmitResult.Forbidden)
+            return AssemblyReviewDeliveryResult.Forbidden;
+        if (submit == AssemblyReviewSubmitResult.StaleRevision)
+            return AssemblyReviewDeliveryResult.StaleRevision;
+
+        // NotArmed: another replica's poller (or the pending arm) consumes the persisted decision.
+        return AssemblyReviewDeliveryResult.Deferred;
     }
 
     public static async Task<AssemblyReviewPendingDecisionResult> ValidatePendingRequestAsync(
@@ -178,7 +154,11 @@ internal static class CoordinatorAssemblyReviewPersistence
             .FirstOrDefaultAsync(r => r.CoordinatorRunId == coordinatorRunId, ct)
             .ConfigureAwait(false);
         var workPlanInReview = await IsWorkPlanAwaitingReviewAsync(db, coordinatorRunId, ct).ConfigureAwait(false);
-        return ValidatePendingRequest(existing, workPlanInReview, callerUser, callerGitHubLogin);
+        var validation = ValidatePendingRequest(existing, workPlanInReview, callerUser, callerGitHubLogin);
+        return validation == AssemblyReviewPendingDecisionResult.Pending
+            && !await IsCurrentRevisionAsync(scope.ServiceProvider, coordinatorRunId, existing!.OutputRevisionId, ct)
+                .ConfigureAwait(false)
+            ? AssemblyReviewPendingDecisionResult.StaleRevision : validation;
     }
 
     public static async Task<AssemblyReviewPendingDecisionResult> PersistDecisionForPendingRequestAsync(
@@ -198,14 +178,39 @@ internal static class CoordinatorAssemblyReviewPersistence
         var validation = ValidatePendingRequest(existing, workPlanInReview, callerUser, callerGitHubLogin);
         if (validation != AssemblyReviewPendingDecisionResult.Pending)
             return validation;
+        if (string.IsNullOrWhiteSpace(decision.OutputRevisionId)
+            || decision.OutputRevisionId != existing!.OutputRevisionId
+            || !await IsCurrentRevisionAsync(scope.ServiceProvider, coordinatorRunId, decision.OutputRevisionId, ct)
+                .ConfigureAwait(false))
+            return AssemblyReviewPendingDecisionResult.StaleRevision;
 
         var now = DateTimeOffset.UtcNow;
-        existing!.DecisionJson = JsonSerializer.Serialize(decision, JsonDefaults.Options);
-        existing.Reviewer = decision.Reviewer;
-        existing.DecisionSubmittedAt = now;
-        existing.UpdatedAt = now;
-        await db.SaveChangesAsync(ct).ConfigureAwait(false);
-        return AssemblyReviewPendingDecisionResult.Persisted;
+        var updated = await db.AssemblyReviews
+            .Where(r => r.CoordinatorRunId == coordinatorRunId
+                && r.OutputRevisionId == decision.OutputRevisionId
+                && r.DecisionSubmittedAt == null && r.CoordinatorFailedAt == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.DecisionJson, JsonSerializer.Serialize(decision, JsonDefaults.Options))
+                .SetProperty(r => r.Reviewer, decision.Reviewer)
+                .SetProperty(r => r.DecisionSubmittedAt, now)
+                .SetProperty(r => r.UpdatedAt, now), ct).ConfigureAwait(false);
+        if (updated == 1)
+            return AssemblyReviewPendingDecisionResult.Persisted;
+
+        // A competing same-revision request can claim the row after the validation above.
+        // Re-read it so that loser is reported as an already-submitted decision, not a stale revision.
+        db.ChangeTracker.Clear();
+        existing = await db.AssemblyReviews
+            .FirstOrDefaultAsync(r => r.CoordinatorRunId == coordinatorRunId, ct)
+            .ConfigureAwait(false);
+        workPlanInReview = await IsWorkPlanAwaitingReviewAsync(db, coordinatorRunId, ct).ConfigureAwait(false);
+        validation = ValidatePendingRequest(existing, workPlanInReview, callerUser, callerGitHubLogin);
+        if (validation != AssemblyReviewPendingDecisionResult.Pending)
+            return validation;
+
+        // The row is still pending but no longer eligible for this conditional update, which means
+        // its revision or ownership fence changed concurrently.
+        return AssemblyReviewPendingDecisionResult.StaleRevision;
     }
 
     public static async Task<CoordinatorAssemblyReviewRecord?> GetAsync(
@@ -277,6 +282,16 @@ internal static class CoordinatorAssemblyReviewPersistence
                 && w.AssemblyStage == AssemblyStage.Review, ct)
             .ConfigureAwait(false);
 
+    private static async Task<bool> IsCurrentRevisionAsync(
+        IServiceProvider services, string runId, string? revisionId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(revisionId) || !Agentweaver.Domain.RunId.TryParse(runId, out var parsed))
+            return false;
+        var run = await services.GetRequiredService<Agentweaver.Api.Infrastructure.IRunStore>()
+            .GetAsync(parsed, ct).ConfigureAwait(false);
+        return run is not null && run.CurrentOutputRevisionId == revisionId;
+    }
+
     private static AssemblyReviewPendingDecisionResult ValidatePendingRequest(
         CoordinatorAssemblyReviewRecord? existing,
         bool workPlanInReview,
@@ -312,6 +327,7 @@ public enum AssemblyReviewPendingDecisionResult
     NotPending,
     Forbidden,
     AlreadySubmitted,
+    StaleRevision,
 }
 
 /// <summary>
@@ -328,4 +344,5 @@ public enum AssemblyReviewDeliveryResult
     NotPending,
     Forbidden,
     AlreadySubmitted,
+    StaleRevision,
 }

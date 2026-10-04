@@ -32,6 +32,12 @@ rules:
       - get
       - list
   - apiGroups:
+      - agents.x-k8s.io
+    resources:
+      - sandboxes
+    verbs:
+      - get
+  - apiGroups:
       - ""
     resources:
       - pods
@@ -226,6 +232,12 @@ rules:
       - delete
       - patch
       - update
+  - apiGroups:
+      - agents.x-k8s.io
+    resources:
+      - sandboxes
+    verbs:
+      - get
   # #578: patch lets the reaper's defer branch re-pin the backing pod's
   # cluster-autoscaler.kubernetes.io/safe-to-evict annotation to "false" (#574) so a
   # kata-node scale-down does not evict a still-previewed pod.

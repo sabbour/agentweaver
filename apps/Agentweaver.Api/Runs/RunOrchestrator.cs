@@ -179,7 +179,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         WorktreeInfo worktreeInfo;
         try
         {
-            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, ExecutionBase(run), run.Id);
         }
         catch (Exception ex)
         {
@@ -251,7 +251,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token).ConfigureAwait(false);
                 var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
-                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt,
+                    run.LifecycleGeneration);
                 launchCompleted = true;
             }
             catch
@@ -278,24 +279,43 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// The supplied <paramref name="run"/> MUST carry <see cref="Run.ParentRunId"/> (the coordinator
     /// run id) and <see cref="Run.SubtaskId"/>.
     /// </summary>
-    public async Task StartChildRunAsync(Run run, CancellationToken ct)
+    public async Task StartChildRunAsync(
+        Run run,
+        CancellationToken ct,
+        RunLeaseClaim? existingLease = null,
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
+        int? expectedParentGeneration = null,
+        bool existingReservedChild = false)
     {
         if (string.IsNullOrEmpty(run.ParentRunId))
             throw new InvalidOperationException($"Child run {run.Id} must carry a ParentRunId.");
 
+        async Task EnsureAuthorizedAsync()
+        {
+            ct.ThrowIfCancellationRequested();
+            if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+                throw new OperationCanceledException($"Child run {run.Id} dispatch ownership was lost.");
+            ct.ThrowIfCancellationRequested();
+        }
+
         // Reserve the canonical child row before resolving providers or creating a worktree. Every
         // fallible launch path can now terminalize this generation instead of manufacturing a
-        // placeholder failed row after the fact.
-        var reserved = run with
+        // placeholder failed row after the fact. An existing lease identifies an already-reserved row.
+        if (existingLease is null && !existingReservedChild)
         {
-            Status = RunStatus.Pending,
-            StartedAt = run.StartedAt == default ? DateTimeOffset.UtcNow : run.StartedAt,
-            EndedAt = null,
-            Result = null,
-        };
-        await _runStore.InsertAsync(reserved, ct).ConfigureAwait(false);
+            var reserved = run with
+            {
+                Status = RunStatus.Pending,
+                StartedAt = run.StartedAt == default ? DateTimeOffset.UtcNow : run.StartedAt,
+                EndedAt = null,
+                Result = null,
+            };
+            await _runStore.InsertAsync(reserved, ct).ConfigureAwait(false);
+        }
 
+        await EnsureAuthorizedAsync().ConfigureAwait(false);
         var childProvider = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        await EnsureAuthorizedAsync().ConfigureAwait(false);
         await PrepareGitHubCapabilitySnapshotsAsync(
             run,
             ct,
@@ -303,6 +323,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 or EffectiveModelProviderResult.PlatformGitHubCopilot
                 ? childProvider.Provider
                 : null).ConfigureAwait(false);
+        await EnsureAuthorizedAsync().ConfigureAwait(false);
 
         // Provision a per-child worktree. For dependent subtasks the dispatch loop sets
         // OriginatingBranch to the coordinator integration branch, which already contains completed
@@ -310,7 +331,14 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         WorktreeInfo worktreeInfo;
         try
         {
-            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
+            worktreeInfo = existingLease is null && !existingReservedChild
+                ? _worktreeManager.AddWorktree(run.RepositoryPath, ExecutionBase(run), run.Id)
+                : _worktreeManager.EnsureWorktree(run.RepositoryPath, ExecutionBase(run), run.Id);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -330,10 +358,13 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         };
 
         var launchCompleted = false;
+        var ownershipLost = false;
         try
         {
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             await _runStore.UpdateToInProgressAsync(
                 started.Id, started.WorktreePath!, started.WorktreeBranch!, started.StartedAt, ct).ConfigureAwait(false);
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             EmitRunStartedMetrics(started);
             var entry = _streamStore.Create(run.Id.ToString(), run.SubmittingUser);
             entry.RecordNext(
@@ -350,10 +381,13 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             }
             catch (MandatoryContextBudgetExceededException ex)
             {
-                await FailPreWorkflowLaunchAsync(started.Id, entry, ex).ConfigureAwait(false);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
+                await FailPreWorkflowLaunchAsync(started.Id, entry, ex, existingLease, started.LifecycleGeneration,
+                    expectedParentGeneration).ConfigureAwait(false);
                 throw;
             }
 
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             var input = new AgentTurnInput(
                 run.Id.ToString(),
                 context.TaskWithHarvest,
@@ -370,14 +404,24 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 started.StartedAt,
                 ByokProviderFingerprint: childProvider.ByokProviderFingerprint);
 
-            var runCts = new CancellationTokenSource();
+            var runCts = existingLease is null
+                ? new CancellationTokenSource()
+                : CancellationTokenSource.CreateLinkedTokenSource(ct);
             var ctsRegistered = false;
             try
             {
-                var streamingRun = await StartWorkflowOrFailAsync(input, started.Id, entry, runCts.Token, isChild: true).ConfigureAwait(false);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
+                var streamingRun = await StartWorkflowOrFailAsync(
+                    input, started.Id, entry, runCts.Token, isChild: true,
+                    isAuthorizedAsync: isAuthorizedAsync, existingLease: existingLease,
+                    expectedGeneration: started.LifecycleGeneration, expectedParentGeneration: expectedParentGeneration)
+                    .ConfigureAwait(false);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
                 var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
-                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt,
+                    run.LifecycleGeneration, existingLease: existingLease);
                 launchCompleted = true;
             }
             catch
@@ -386,10 +430,86 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 throw;
             }
         }
+        catch (OperationCanceledException) when (existingLease is not null || existingReservedChild)
+        {
+            ownershipLost = true;
+            _logger.LogInformation(
+                "Child run {RunId} launch stopped after losing dispatch authorization; retaining worktree for the current owner",
+                run.Id);
+            throw;
+        }
         finally
         {
-            if (!launchCompleted)
+            // A successor may already be using this run's worktree after a fence loss.
+            if (!launchCompleted && !ownershipLost && existingLease is null && !existingReservedChild)
                 CleanupWorktreeSafe(run.RepositoryPath, worktreeInfo, run.Id);
+        }
+    }
+
+    internal async Task CancelChildRunAsync(
+        Run run,
+        string reason,
+        string requestedByRunId,
+        IRunEventStream? durableEventStream,
+        CancellationToken ct)
+    {
+        var runId = run.Id.ToString();
+        var entry = _streamStore.Get(runId);
+        var eventStream = _eventStream ?? durableEventStream;
+        var payload = new
+        {
+            reason,
+            requestedByRunId,
+            requested = true,
+            timestamp_utc = DateTimeOffset.UtcNow.ToString("O"),
+        };
+
+        _registry.Abandon(runId);
+
+        if (run.WorktreePath is not null)
+        {
+            try
+            {
+                _worktreeManager.RemoveWorktree(
+                    run.RepositoryPath,
+                    run.WorktreePath,
+                    run.WorktreeBranch ?? string.Empty);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to clean up cancelled child worktree for run {RunId}", runId);
+            }
+        }
+
+        var terminalized = await _runStore.TrySetTerminalOutcomeAsync(
+            run.Id,
+            TerminalRunOutcome.Create(
+                RunStatus.Failed,
+                EventTypes.RunCancelled,
+                payload,
+                DateTimeOffset.UtcNow,
+                run.LifecycleGeneration),
+            reason,
+            CancellationToken.None).ConfigureAwait(false);
+        if (terminalized && _terminalOutcomeProjector is not null)
+        {
+            await ProjectTerminalOutcomeAsync(true, CancellationToken.None).ConfigureAwait(false);
+        }
+        else if (terminalized)
+        {
+            var cancellationEvent = new RunEvent(0, EventTypes.RunCancelled, payload);
+            if (eventStream is not null)
+            {
+                var sequence = await eventStream.AppendAsync(
+                    runId, cancellationEvent, CancellationToken.None).ConfigureAwait(false);
+                entry?.RecordDurable(cancellationEvent with { Sequence = sequence });
+                await eventStream.CompleteAsync(runId, CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                entry?.RecordNext(EventTypes.RunCancelled, payload);
+            }
+            _streamStore.Complete(runId);
         }
     }
 
@@ -411,7 +531,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         WorktreeInfo worktreeInfo;
         try
         {
-            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, run.OriginatingBranch, run.Id);
+            worktreeInfo = _worktreeManager.AddWorktree(run.RepositoryPath, ExecutionBase(run), run.Id);
         }
         catch (Exception ex)
         {
@@ -493,7 +613,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token).ConfigureAwait(false);
                 var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
-                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+                _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt,
+                    run.LifecycleGeneration);
                 launchCompleted = true;
             }
             catch
@@ -522,8 +643,22 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// the steered instruction at the child's next turn boundary.
     /// </summary>
     public async Task StartRevisionAsync(Run run, string revisedTask, CancellationToken ct, bool isChild = false,
-        int? steeringDirectiveId = null, int? steeringAttempt = null)
+        int? steeringDirectiveId = null, int? steeringAttempt = null, RunLeaseClaim? existingLease = null,
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
+        int? expectedParentGeneration = null,
+        AgentTurnInput? composedRecoveryInput = null, string? recoveryComposedNodeId = null)
     {
+        if ((composedRecoveryInput is null) != (recoveryComposedNodeId is null))
+            throw new InvalidOperationException("Composed recovery requires both its saved input and node.");
+        async Task EnsureAuthorizedAsync()
+        {
+            ct.ThrowIfCancellationRequested();
+            if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+                throw new OperationCanceledException($"Run {run.Id} revision ownership was lost.");
+            ct.ThrowIfCancellationRequested();
+        }
+
+        await EnsureAuthorizedAsync().ConfigureAwait(false);
         if (string.IsNullOrEmpty(run.WorktreePath))
             throw new InvalidOperationException($"Run {run.Id} has no worktree path; cannot start revision.");
         if (string.IsNullOrEmpty(run.WorktreeBranch))
@@ -552,16 +687,19 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         string? systemPromptContext;
         try
         {
-            (taskWithHarvest, systemPromptContext) = await BuildContextAsync(
-                run with { Task = revisedTask }, ct);
+            (taskWithHarvest, systemPromptContext) = composedRecoveryInput is null
+                ? await BuildContextAsync(run with { Task = revisedTask }, ct)
+                : (composedRecoveryInput.Task, composedRecoveryInput.SystemPromptContext);
         }
         catch (MandatoryContextBudgetExceededException ex)
         {
-            await FailPreWorkflowLaunchAsync(run.Id, entry, ex).ConfigureAwait(false);
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
+            await FailPreWorkflowLaunchAsync(run.Id, entry, ex, existingLease, run.LifecycleGeneration,
+                expectedParentGeneration).ConfigureAwait(false);
             throw;
         }
 
-        var input = new AgentTurnInput(
+        var input = composedRecoveryInput ?? new AgentTurnInput(
             run.Id.ToString(),
             taskWithHarvest,
             run.WorktreePath,
@@ -577,6 +715,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             run.StartedAt,
             IsRevision: true,
             ByokProviderFingerprint: revisionProvider.ByokProviderFingerprint);
+        if (composedRecoveryInput is not null)
+            input = input with { ByokProviderFingerprint = revisionProvider.ByokProviderFingerprint };
 
         // Create the per-run CTS before starting the workflow so the same token reaches both
         // the agent execution and the registry's Abandon path.
@@ -584,16 +724,109 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         var ctsRegistered = false;
         try
         {
-            var streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
+            Microsoft.Agents.AI.Workflows.StreamingRun streamingRun;
+            using (ct.Register(static state => ((CancellationTokenSource)state!).Cancel(), runCts))
+            {
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
+                streamingRun = await StartWorkflowOrFailAsync(input, run.Id, entry, runCts.Token,
+                    isChild, steeringDirectiveId, steeringAttempt, isAuthorizedAsync, existingLease,
+                    run.LifecycleGeneration, expectedParentGeneration, recoveryComposedNodeId).ConfigureAwait(false);
+                await EnsureAuthorizedAsync().ConfigureAwait(false);
+            }
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
             var runCt = _registry.Register(run.Id.ToString(), streamingRun, runCts);
             ctsRegistered = true;
-            _watchLoop.StartWatching(run.Id.ToString(), streamingRun, entry, run.SubmittingUser, runCt);
+            await EnsureAuthorizedAsync().ConfigureAwait(false);
+            _watchLoop.StartWatching(
+                run.Id.ToString(),
+                streamingRun,
+                entry,
+                run.SubmittingUser,
+                runCt,
+                run.LifecycleGeneration,
+                existingLease);
         }
         catch
         {
             CleanupFailedLaunchCts(run.Id.ToString(), ctsRegistered, runCts);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Restarts an interrupted coordinator child turn under its existing durable run identity.
+    /// The original child worktree/branch and persisted task are reused; no replacement Run row is
+    /// created. This is the recovery path for active static fan branches after process loss.
+    /// </summary>
+    public async Task RestartInterruptedChildRunAsync(
+        Run run, RunLeaseClaim recoveryLease, CancellationToken ct,
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
+        int? expectedParentGeneration = null)
+    {
+        if (string.IsNullOrEmpty(run.ParentRunId))
+            throw new InvalidOperationException($"Run {run.Id} is not a coordinator child.");
+        if (_registry.Get(run.Id.ToString()) is not null)
+            return;
+        ct.ThrowIfCancellationRequested();
+        if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+            throw new OperationCanceledException($"Child run {run.Id} restart ownership was lost.");
+
+        var worktree = _worktreeManager.EnsureWorktree(
+            run.RepositoryPath,
+            run.OriginatingBranch,
+            run.Id);
+        if (!string.Equals(run.WorktreePath, worktree.WorktreePath, StringComparison.Ordinal)
+            || !string.Equals(run.WorktreeBranch, worktree.BranchName, StringComparison.Ordinal))
+        {
+            await _runStore.UpdateWorktreeAsync(
+                run.Id,
+                worktree.WorktreePath,
+                worktree.BranchName,
+                ct).ConfigureAwait(false);
+            run = run with
+            {
+                WorktreePath = worktree.WorktreePath,
+                WorktreeBranch = worktree.BranchName,
+            };
+        }
+
+        await StartRevisionAsync(run, run.Task, ct, isChild: true, existingLease: recoveryLease,
+                isAuthorizedAsync: isAuthorizedAsync, expectedParentGeneration: expectedParentGeneration)
+            .ConfigureAwait(false);
+    }
+
+    public async Task RestartInterruptedPinnedWorkflowRunAsync(
+        Run run,
+        RunLeaseClaim recoveryLease,
+        CancellationToken ct)
+    {
+        if (run.ParentRunId is not null)
+            throw new InvalidOperationException($"Run {run.Id} is not a root workflow run.");
+        if (run.GetExecutableWorkflowPin() is null)
+            throw new InvalidOperationException($"Run {run.Id} has no executable workflow pin.");
+        if (_registry.Get(run.Id.ToString()) is not null)
+            return;
+
+        var worktree = _worktreeManager.EnsureWorktree(
+            run.RepositoryPath,
+            run.OriginatingBranch,
+            run.Id);
+        if (!string.Equals(run.WorktreePath, worktree.WorktreePath, StringComparison.Ordinal)
+            || !string.Equals(run.WorktreeBranch, worktree.BranchName, StringComparison.Ordinal))
+        {
+            await _runStore.UpdateWorktreeAsync(
+                run.Id,
+                worktree.WorktreePath,
+                worktree.BranchName,
+                ct).ConfigureAwait(false);
+            run = run with
+            {
+                WorktreePath = worktree.WorktreePath,
+                WorktreeBranch = worktree.BranchName,
+            };
+        }
+
+        await StartRevisionAsync(run, run.Task, ct, existingLease: recoveryLease).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -647,7 +880,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             ["prior_worktree_branch"] = feedback.PriorWorktreeBranch,
         };
 
-        var priorWorktreeUsable = !string.IsNullOrEmpty(priorChild.WorktreePath)
+        var priorWorktreeUsable = !newAgentRun.ExecutionInputRequired
+            && !string.IsNullOrEmpty(priorChild.WorktreePath)
             && Directory.Exists(priorChild.WorktreePath);
         if (priorWorktreeUsable)
         {
@@ -685,7 +919,10 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             try
             {
                 provisioned = _worktreeManager.AddWorktree(
-                    newAgentRun.RepositoryPath, feedback.PriorWorktreeBranch, newAgentRun.Id);
+                    newAgentRun.RepositoryPath,
+                    newAgentRun.ExecutionInputRequired
+                        ? ExecutionBase(newAgentRun) : feedback.PriorWorktreeBranch,
+                    newAgentRun.Id);
             }
             catch (Exception ex)
             {
@@ -774,7 +1011,8 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 var runCt = _registry.Register(newAgentRun.Id.ToString(), streamingRun, runCts);
                 ctsRegistered = true;
                 _watchLoop.StartWatching(
-                    newAgentRun.Id.ToString(), streamingRun, entry, newAgentRun.SubmittingUser, runCt);
+                    newAgentRun.Id.ToString(), streamingRun, entry, newAgentRun.SubmittingUser, runCt,
+                    newAgentRun.LifecycleGeneration);
                 launchCompleted = true;
             }
             catch
@@ -837,6 +1075,15 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
     }
 
+    internal async Task ValidateComposedRecoveryLaunchAsync(Run run, CancellationToken ct)
+    {
+        var boundary = await ResolveDurableProviderBoundaryAsync(run, ct).ConfigureAwait(false);
+        await PrepareGitHubCapabilitySnapshotsAsync(
+            run, ct, boundary.Provider is EffectiveModelProviderResult.ProjectGitHubCopilot
+                or EffectiveModelProviderResult.PlatformGitHubCopilot ? boundary.Provider : null)
+            .ConfigureAwait(false);
+    }
+
     public async Task<ResolvedRunModelProviderBoundary>
         ResolveDurableProviderBoundaryAsync(Run run, CancellationToken ct)
     {
@@ -866,8 +1113,12 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         }
         var platformScoped = string.Equals(run.AgentName, "Operator", StringComparison.Ordinal);
         var resolutionProjectId = platformScoped ? null : run.ProjectId;
+        var isPinnedStaticFanRun = run.ParentRunId is null
+            && run.GetExecutableWorkflowPin() is { } executablePin
+            && RunWorkflowGraphBinder.ContainsStaticFanRegion(executablePin);
         var expectedOperation = platformScoped ? "assistant_turn" : run.ParentRunId is null
-            && string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+            && (string.Equals(run.AgentName, "Coordinator", StringComparison.Ordinal)
+                || isPinnedStaticFanRun)
                 ? "orchestration"
                 : "agent_turn";
         var accepted = _executionPlanAccessor?.Current is { } candidate
@@ -998,69 +1249,77 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         CancellationToken ct,
         bool isChild = false,
         int? steeringDirectiveId = null,
-        int? steeringAttempt = null)
+        int? steeringAttempt = null,
+        Func<CancellationToken, Task<bool>>? isAuthorizedAsync = null,
+        RunLeaseClaim? existingLease = null,
+        int? expectedGeneration = null,
+        int? expectedParentGeneration = null,
+        string? recoveryComposedNodeId = null)
     {
         try
         {
-            return await _workflowFactory.StartAsync(input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt).ConfigureAwait(false);
+            return await _workflowFactory.StartAsync(
+                input, runId.ToString(), ct, isChild, steeringDirectiveId, steeringAttempt,
+                recoveryComposedNodeId, existingLease).ConfigureAwait(false);
         }
 
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            ct.ThrowIfCancellationRequested();
+            throw;
+        }
         catch (WorkflowBindException ex)
         {
+            if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+                throw new OperationCanceledException($"Run {runId} launch ownership was lost.");
+            ct.ThrowIfCancellationRequested();
             _logger.LogError(ex, "Workflow binding failed for run {RunId}; transitioning to failed", runId);
             var result = $"workflow_bind_failed: {ex.Message}";
-            try
+            var payload = new { reason = "workflow_bind_failed", detail = ex.Message };
+            var changed = await TryFailLaunchAsync(
+                runId, RunStatus.Failed, EventTypes.RunFailed, payload, DateTimeOffset.UtcNow, result,
+                existingLease, expectedGeneration, expectedParentGeneration).ConfigureAwait(false);
+            if (changed)
             {
-                var payload = new { reason = "workflow_bind_failed", detail = ex.Message };
-                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                    runId,
-                    RunStatus.Failed,
-                    EventTypes.RunFailed,
-                    payload,
-                    DateTimeOffset.UtcNow,
-                    result,
-                    CancellationToken.None).ConfigureAwait(false);
-                if (changed)
-                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
-                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
-                if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_bind_failed");
+                await ProjectTerminalOutcomeAsync(true).ConfigureAwait(false);
+                if (!entry.HasEventType(EventTypes.RunFailed))
                     entry.RecordNext(EventTypes.RunFailed, payload);
-                _ = FirePostRunScribeAsync(runId.ToString());
             }
-            finally
+            if (changed || existingLease is null)
             {
+                _ = FirePostRunScribeAsync(runId.ToString());
                 _streamStore.Complete(runId.ToString());
             }
-
             throw new RunSubmissionValidationException($"Policy hook failed: {ex.Message}", ex);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
+            if (isAuthorizedAsync is not null && !await isAuthorizedAsync(ct).ConfigureAwait(false))
+                throw new OperationCanceledException($"Run {runId} launch ownership was lost.");
+            ct.ThrowIfCancellationRequested();
             _logger.LogError(ex, "Workflow start failed for run {RunId}; transitioning to failed", runId);
             var detail = RedactFailureReason(ex);
-            try
+            var payload = new { reason = "workflow_start_failed", detail };
+            var changed = await TryFailLaunchAsync(
+                runId, RunStatus.Failed, EventTypes.RunFailed, payload, DateTimeOffset.UtcNow, detail,
+                existingLease, expectedGeneration, expectedParentGeneration).ConfigureAwait(false);
+            if (changed)
             {
-                var payload = new { reason = "workflow_start_failed", detail };
-                var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                    runId,
-                    RunStatus.Failed,
-                    EventTypes.RunFailed,
-                    payload,
-                    DateTimeOffset.UtcNow,
-                    detail,
-                    CancellationToken.None).ConfigureAwait(false);
-                if (changed)
-                    EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
-                await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
-                if (changed && !entry.HasEventType(EventTypes.RunFailed))
+                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false), "workflow_start_failed");
+                await ProjectTerminalOutcomeAsync(true).ConfigureAwait(false);
+                if (!entry.HasEventType(EventTypes.RunFailed))
                     entry.RecordNext(EventTypes.RunFailed, payload);
-                _ = FirePostRunScribeAsync(runId.ToString());
             }
-            finally
+            if (changed || existingLease is null)
             {
+                _ = FirePostRunScribeAsync(runId.ToString());
                 _streamStore.Complete(runId.ToString());
             }
-
             throw;
         }
     }
@@ -1068,38 +1327,57 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     private async Task FailPreWorkflowLaunchAsync(
         RunId runId,
         RunStreamEntry entry,
-        MandatoryContextBudgetExceededException exception)
+        MandatoryContextBudgetExceededException exception,
+        RunLeaseClaim? existingLease = null,
+        int? expectedGeneration = null,
+        int? expectedParentGeneration = null)
     {
         var detail = RedactFailureReason(exception);
-        try
+        var payload = new
         {
-            var payload = new
-            {
-                errorCode = "mandatory_context_budget_exceeded",
-                retryable = false,
-                detail,
-            };
-            var changed = await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
-                runId,
-                RunStatus.Failed,
-                EventTypes.RunFailed,
-                payload,
-                DateTimeOffset.UtcNow,
-                detail,
-                CancellationToken.None)
-                .ConfigureAwait(false);
-            if (changed)
-                EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false),
-                    "mandatory_context_budget_exceeded");
-            await ProjectTerminalOutcomeAsync(changed).ConfigureAwait(false);
-            if (changed && !entry.HasEventType(EventTypes.RunFailed))
-                entry.RecordNext(EventTypes.RunFailed, payload);
-            _ = FirePostRunScribeAsync(runId.ToString());
-        }
-        finally
+        errorCode = "mandatory_context_budget_exceeded",
+        retryable = false,
+        detail,
+        };
+        var changed = await TryFailLaunchAsync(
+        runId, RunStatus.Failed, EventTypes.RunFailed, payload, DateTimeOffset.UtcNow, detail,
+        existingLease, expectedGeneration, expectedParentGeneration).ConfigureAwait(false);
+        if (changed)
         {
-            _streamStore.Complete(runId.ToString());
+        EmitLaunchFailureMetrics(await _runStore.GetAsync(runId, CancellationToken.None).ConfigureAwait(false),
+            "mandatory_context_budget_exceeded");
+        await ProjectTerminalOutcomeAsync(true).ConfigureAwait(false);
+        if (!entry.HasEventType(EventTypes.RunFailed))
+            entry.RecordNext(EventTypes.RunFailed, payload);
         }
+        if (changed || existingLease is null)
+        {
+        _ = FirePostRunScribeAsync(runId.ToString());
+        _streamStore.Complete(runId.ToString());
+        }
+    }
+
+    internal Func<RunId, CancellationToken, Task>? BeforeLaunchFailureWriteOverride { get; set; }
+
+    private async Task<bool> TryFailLaunchAsync(
+        RunId runId, RunStatus status, string eventType, object payload, DateTimeOffset occurredAt,
+        string? result, RunLeaseClaim? lease, int? generation, int? parentGeneration)
+    {
+        if (lease is null)
+            return await _runStore.TrySetTerminalOutcomeForCurrentGenerationAsync(
+                runId, status, eventType, payload, occurredAt, result, CancellationToken.None).ConfigureAwait(false);
+        if (generation is null)
+            throw new InvalidOperationException("A recovery launch requires its expected lifecycle generation.");
+        if (BeforeLaunchFailureWriteOverride is { } beforeWrite)
+            await beforeWrite(runId, CancellationToken.None).ConfigureAwait(false);
+        return await _runStore.TryMutateTerminalOutcomeAsync(
+            runId,
+            new TerminalRunMutation(
+                TerminalRunOutcome.Create(status, eventType, payload, occurredAt, generation.Value),
+                result,
+                RequiredLease: new RunLeaseFence(lease.OwnerId, lease.FencingToken, generation.Value),
+                ExpectedParentLifecycleGeneration: parentGeneration),
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1240,6 +1518,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
             omittedMemoryCount = compilation?.OmittedMemoryCount ?? 0,
             omittedSessionCount = compilation?.OmittedSessionCount ?? 0,
             omissionCauses = compilation?.OmissionCauses ?? [],
+            revisionReferences = compilation?.RevisionReferences ?? [],
         });
     }
 
@@ -1417,7 +1696,9 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     /// Mirrors how <see cref="RunWatchLoopService"/> terminalizes a failed run. Fully defensive: any
     /// persistence error is swallowed (logged) so it can never throw back into the dispatch loop.
     /// </summary>
-    public async Task MarkChildRunFailedAsync(Run run, Exception error, CancellationToken ct)
+    public async Task MarkChildRunFailedAsync(
+        Run run, Exception error, CancellationToken ct, RunLeaseClaim? lease = null,
+        int? expectedParentGeneration = null)
     {
         var runId = run.Id.ToString();
         var reason = RedactFailureReason(error);
@@ -1434,25 +1715,27 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 return;
             }
 
-            _ = _streamStore.Get(runId) ?? _streamStore.Create(runId, reserved.SubmittingUser);
-
             var outcome = TerminalRunOutcome.Create(
                 RunStatus.Failed,
                 EventTypes.RunFailed,
                 new { reason },
                 now,
                 reserved.LifecycleGeneration);
-            var changed = await _runStore.TrySetTerminalOutcomeAsync(run.Id, outcome, reason, ct)
+            var changed = await _runStore.TryMutateTerminalOutcomeAsync(
+                run.Id, new TerminalRunMutation(outcome, reason,
+                    RequiredLease: lease is null ? null : new RunLeaseFence(
+                        lease.OwnerId, lease.FencingToken, run.LifecycleGeneration),
+                    ExpectedParentLifecycleGeneration: expectedParentGeneration), ct)
                 .ConfigureAwait(false);
             if (changed)
             {
+                _ = _streamStore.Get(runId) ?? _streamStore.Create(runId, reserved.SubmittingUser);
                 var stored = await _runStore.GetAsync(run.Id, ct).ConfigureAwait(false);
                 EmitCompletedMetric(stored ?? reserved, "failed");
                 EmitErrorMetric(stored ?? reserved, "child_launch_failed");
+                await ProjectTerminalOutcomeAsync(true, ct).ConfigureAwait(false);
+                _ = FirePostRunScribeAsync(runId);
             }
-
-            await ProjectTerminalOutcomeAsync(changed, ct).ConfigureAwait(false);
-            _ = FirePostRunScribeAsync(runId);
         }
 
         catch (Exception ex)
@@ -1507,10 +1790,14 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
     {
         try
         {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            if (await scope.ServiceProvider.GetRequiredService<WorkflowChildWorkService>()
+                .IsCorrelatedRunAsync(runId, CancellationToken.None).ConfigureAwait(false))
+                return;
+
             var run = await _runStore.GetAsync(RunId.Parse(runId), CancellationToken.None).ConfigureAwait(false);
             if (run is null) return;
 
-            await using var scope = _scopeFactory.CreateAsyncScope();
             var service = scope.ServiceProvider.GetRequiredService<PostRunScribeService>();
             await service.RunAsync(run).ConfigureAwait(false);
         }
@@ -1575,7 +1862,7 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 // (ephemeral storage wiped) even though the path is stored in the DB.
                 // EnsureWorktree is a no-op when the directory already exists; if missing it
                 // prunes the stale git admin entry and recreates the worktree from the persisted branch.
-                return _worktreeManager.EnsureWorktree(repositoryPath, originatingBranch, coordId);
+                return _worktreeManager.EnsureWorktree(repositoryPath, ExecutionBase(coordinator), coordId);
             }
         }
 
@@ -1590,14 +1877,17 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
                 if (!string.IsNullOrEmpty(coordinator?.WorktreePath) && !string.IsNullOrEmpty(coordinator.WorktreeBranch))
                 {
                     // Same idempotent ensure as the fast path above.
-                    return _worktreeManager.EnsureWorktree(repositoryPath, originatingBranch, coordId2);
+                    return _worktreeManager.EnsureWorktree(repositoryPath, ExecutionBase(coordinator), coordId2);
                 }
 
                 // Create the shared orchestration worktree keyed to the coordinator run id.
                 _logger.LogInformation(
                     "Provisioning shared orchestration worktree for coordinator run {CoordinatorRunId}",
                     coordinatorRunId);
-                var worktreeInfo = _worktreeManager.AddWorktree(repositoryPath, originatingBranch, coordId2);
+                var worktreeInfo = _worktreeManager.AddWorktree(
+                    repositoryPath,
+                    coordinator is null ? originatingBranch : ExecutionBase(coordinator),
+                    coordId2);
 
                 // Persist on the coordinator run so all subsequent children reuse the same path.
                 await _runStore.UpdateWorktreeAsync(
@@ -1630,5 +1920,18 @@ public sealed class RunOrchestrator : IRunModelProviderBoundaryResolver
         {
             _logger.LogWarning(ex, "Failed to clean up worktree for aborted run {RunId}", runId);
         }
+    }
+
+    private static string ExecutionBase(Run run)
+    {
+        if (!run.ExecutionInputRequired)
+            return run.OriginatingBranch;
+        if (string.IsNullOrWhiteSpace(run.ExecutionInputSourceCommitHash)
+            || string.IsNullOrWhiteSpace(run.ExecutionInputCommitHash)
+            || string.IsNullOrWhiteSpace(run.ExecutionInputCompositeId))
+        {
+            throw new RunOutputRevisionUnavailableException("execution_input_unbound");
+        }
+        return run.ExecutionInputCommitHash;
     }
 }

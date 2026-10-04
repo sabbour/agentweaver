@@ -8,16 +8,18 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Agentweaver.AgentRuntime.Workflow;
+using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
 using Agentweaver.Api.Memory;
 using Agentweaver.Api.Runs;
+using Agentweaver.Api.Workflows;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
 using WorkflowMergeResult = Agentweaver.AgentRuntime.Workflow.MergeResult;
 
-namespace Agentweaver.Tests.Api;
+namespace Agentweaver.Tests;
 
 /// <summary>
 /// Unit tests for WorkflowRestartService.RecoverAsync, focusing on the no-checkpoint
@@ -25,6 +27,31 @@ namespace Agentweaver.Tests.Api;
 /// </summary>
 public sealed class WorkflowRestartServiceTests : IAsyncDisposable
 {
+    [Fact]
+    public async Task RecoverAsync_CancelledSweep_DoesNotTerminalizeRun()
+    {
+        var store = new SqliteRunStore(_db.Db);
+        var id = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = id,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "canceled recovery",
+            SubmittingUser = "test-user",
+            Status = RunStatus.Committing,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        var service = BuildService(store, new RunStreamStore(),
+            new TestWorktreeOps(worktreeExists: false, worktreePath: _worktreePath, treeHash: null));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await FluentActions.Invoking(() => service.RecoverAsync(cancelled.Token))
+            .Should().ThrowAsync<OperationCanceledException>();
+        (await store.GetAsync(id))!.Status.Should().Be(RunStatus.Committing);
+    }
+
     private readonly TestSqliteDb _db;
     private readonly string _checkpointsPath;
     private readonly string _worktreePath;
@@ -478,10 +505,80 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task RecoverAsync_ExpiredCoordinatorChild_RestartsOriginalIdentity()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: true);
+        var parentId = RunId.New();
+        var childId = RunId.New();
+        var now = DateTimeOffset.UtcNow;
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId, RepositoryPath = _worktreePath, OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot, Task = "parent", SubmittingUser = "test-user",
+            Status = RunStatus.InProgress, StartedAt = now, AgentName = "Coordinator",
+        });
+        var service = BuildService(runStore, streamStore,
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+            leaseStore: leaseStore);
+        using (var scope = _memoryServiceProvider!.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project", CoordinatorRunId = parentId.ToString(),
+                Goal = "g", DesiredOutcome = "o", Scope = "s", Assumptions = "a",
+                Status = "confirmed", CreatedAt = now, UpdatedAt = now,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id, ProjectId = "project",
+                CoordinatorRunId = parentId.ToString(), Status = WorkPlanStatus.Dispatching,
+                CreatedAt = now, UpdatedAt = now,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            var subtask = new Subtask
+            {
+                WorkPlanId = plan.Id, Title = "child", Scope = "child",
+                AssignedAgent = "agent", SelectedModelId = "model", Phase = "execution",
+                IsolationStrategy = "worktree", Status = SubtaskStatus.Running,
+                ChildRunId = childId.ToString(), CreatedAt = now, UpdatedAt = now,
+            };
+            db.Subtasks.Add(subtask);
+            await db.SaveChangesAsync();
+            await runStore.InsertAsync(new Run
+            {
+                Id = childId, RepositoryPath = _worktreePath, OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot, Task = "child", SubmittingUser = "test-user",
+                Status = RunStatus.InProgress, StartedAt = now,
+                ParentRunId = parentId.ToString(), SubtaskId = subtask.Id.ToString(),
+            });
+        }
+
+        var restarted = new List<RunId>();
+        service.RestartChildRunOverride = (child, _) =>
+        {
+            restarted.Add(child.Id);
+            return Task.CompletedTask;
+        };
+        await service.RecoverAsync(CancellationToken.None);
+
+        restarted.Should().ContainSingle().Which.Should().Be(childId);
+        (await runStore.GetAsync(childId))!.Status.Should().Be(RunStatus.InProgress);
+        leaseStore.ClaimedRunIds.Should().Contain(childId.ToString());
+        leaseStore.ReleasedRunIds.Should().Contain(childId.ToString());
+    }
+
+    [Fact]
     public async Task RecoverAsync_StrandedChildRun_EmitsRetryableTransportFailure()
     {
         var runStore = new SqliteRunStore(_db.Db);
         var streamStore = new RunStreamStore();
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: true);
         var runId = RunId.New();
         await runStore.InsertAsync(new Run
         {
@@ -500,7 +597,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         await BuildService(
                 runStore,
                 streamStore,
-                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null))
+                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+                leaseStore: leaseStore)
             .RecoverAsync(CancellationToken.None);
 
         (await runStore.GetAsync(runId))!.Status.Should().Be(RunStatus.Failed);
@@ -509,6 +607,488 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         var payload = System.Text.Json.JsonSerializer.SerializeToElement(failure.Payload);
         payload.GetProperty("reason").GetString().Should().Be("a2a_transport_interrupted");
         payload.GetProperty("retryable").GetBoolean().Should().BeTrue();
+        leaseStore.ClaimedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
+        leaseStore.ReleasedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
+    }
+
+    [Fact]
+    public async Task RecoverAsync_LeaseReclaimedBeforeFailureWrite_PreservesSuccessorsRunAndWorktree()
+    {
+        var store = new SqliteRunStore(_db.Db);
+        var streams = new RunStreamStore();
+        var worktrees = new TestWorktreeOps(true, _worktreePath, null);
+        var leases = new SqliteRunLeaseStore(_db.Db);
+        var id = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = id, RepositoryPath = _worktreePath, OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot, Task = "reclaim",
+            SubmittingUser = "test-user", Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow, ParentRunId = RunId.New().ToString(),
+            SubtaskId = "42", WorktreePath = _worktreePath,
+        });
+        var service = BuildService(store, streams, worktrees, leaseStore: leases);
+        service.BeforeRecoveredTerminalWriteOverride = async (run, ct) =>
+        {
+            await using var connection = await _db.Db.OpenConnectionAsync(ct);
+            await using var expire = connection.CreateCommand();
+            expire.CommandText = "UPDATE run_execution_leases SET lease_expires_at=$expired WHERE run_id=$runId;";
+            expire.Parameters.AddWithValue("$expired", DateTimeOffset.UtcNow.AddMinutes(-1).ToString("O"));
+            expire.Parameters.AddWithValue("$runId", run.Id.ToString());
+            (await expire.ExecuteNonQueryAsync(ct)).Should().Be(1);
+            var (claimed, _) = await leases.TryClaimAsync(run.Id.ToString(), "successor", TimeSpan.FromMinutes(1), ct);
+            claimed.Should().BeTrue();
+        };
+
+        await service.RecoverAsync(CancellationToken.None);
+
+        (await store.GetAsync(id))!.Status.Should().Be(RunStatus.InProgress);
+        (await store.GetUnprojectedTerminalOutcomesAsync()).Should().BeEmpty();
+        streams.Get(id.ToString()).Should().BeNull();
+        worktrees.RemoveCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RecoverAsync_EmbeddedChildCoordinator_IsDeferredToChildWorkRecovery()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var parentId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "parent workflow",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.New(),
+        });
+        (await runStore.TerminalizeForTestAsync(parentId, RunStatus.Failed)).Should().BeTrue();
+
+        var childId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = childId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "embedded coordinator",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            ProjectId = ProjectId.New(),
+            AgentName = "Coordinator",
+            ParentRunId = parentId.ToString(),
+            SubtaskId = WorkflowChildWorkService.ChildCoordinatorSubtaskKey("fan"),
+        });
+
+        var service = BuildService(
+            runStore,
+            streamStore,
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null));
+        using (var scope = _memoryServiceProvider!.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project",
+                CoordinatorRunId = childId.ToString(),
+                Goal = "g",
+                DesiredOutcome = "o",
+                Scope = "s",
+                Assumptions = "a",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            db.WorkPlans.Add(new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "project",
+                CoordinatorRunId = childId.ToString(),
+                ParentRunId = parentId.ToString(),
+                ParentWorkflowId = "workflow-v1",
+                ParentWorkflowNodeId = "fan",
+                ParentResumeState = WorkflowChildWorkResumeStates.Waiting,
+                Status = WorkPlanStatus.Dispatching,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await service.RecoverAsync(CancellationToken.None);
+
+        (await runStore.GetAsync(childId))!.Status.Should().Be(RunStatus.InProgress);
+        streamStore.Get(childId.ToString()).Should().BeNull(
+            "generic restart recovery must not fail an embedded child coordinator as an abandoned child");
+    }
+
+    [Fact]
+    public async Task RecoverAsync_TwoActiveWorkflowBranches_RestartsBothOriginalRunIds()
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var parentId = RunId.New();
+        var coordinatorId = RunId.New();
+        var firstBranchId = RunId.New();
+        var secondBranchId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "parent workflow",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        (await runStore.TerminalizeForTestAsync(parentId, RunStatus.Failed)).Should().BeTrue();
+        await runStore.InsertAsync(new Run
+        {
+            Id = coordinatorId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "embedded coordinator",
+            SubmittingUser = "test-user",
+            Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            AgentName = "Coordinator",
+            ParentRunId = parentId.ToString(),
+            SubtaskId = WorkflowChildWorkService.ChildCoordinatorSubtaskKey("fan"),
+        });
+
+        var service = BuildService(
+            runStore,
+            streamStore,
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null));
+        int firstSubtaskId;
+        int secondSubtaskId;
+        using (var scope = _memoryServiceProvider!.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project",
+                CoordinatorRunId = coordinatorId.ToString(),
+                Goal = "g",
+                DesiredOutcome = "o",
+                Scope = "s",
+                Assumptions = "a",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            var plan = new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "project",
+                CoordinatorRunId = coordinatorId.ToString(),
+                ParentRunId = parentId.ToString(),
+                ParentWorkflowId = "workflow-v1",
+                ParentWorkflowNodeId = "fan",
+                ParentJoinNodeId = "join",
+                ParentResumeState = WorkflowChildWorkResumeStates.Waiting,
+                Status = WorkPlanStatus.Dispatching,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.WorkPlans.Add(plan);
+            await db.SaveChangesAsync();
+            var first = new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = "first",
+                Scope = "first",
+                AssignedAgent = "morpheus",
+                SelectedModelId = "gpt",
+                Phase = "execution",
+                IsolationStrategy = "shared",
+                Status = SubtaskStatus.Running,
+                ChildRunId = firstBranchId.ToString(),
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            var second = new Subtask
+            {
+                WorkPlanId = plan.Id,
+                Title = "second",
+                Scope = "second",
+                AssignedAgent = "morpheus",
+                SelectedModelId = "gpt",
+                Phase = "execution",
+                IsolationStrategy = "shared",
+                Status = SubtaskStatus.Running,
+                ChildRunId = null,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.Subtasks.AddRange(first, second);
+            await db.SaveChangesAsync();
+            firstSubtaskId = first.Id;
+            secondSubtaskId = second.Id;
+        }
+
+        foreach (var (id, subtaskId) in new[]
+                 {
+                     (firstBranchId, firstSubtaskId),
+                     (secondBranchId, secondSubtaskId),
+                 })
+        {
+            await runStore.InsertAsync(new Run
+            {
+                Id = id,
+                RepositoryPath = _worktreePath,
+                OriginatingBranch = "main",
+                ModelSource = ModelSource.GitHubCopilot,
+                Task = $"branch {subtaskId}",
+                SubmittingUser = "test-user",
+                Status = RunStatus.InProgress,
+                StartedAt = DateTimeOffset.UtcNow,
+                AgentName = "morpheus",
+                ParentRunId = coordinatorId.ToString(),
+                SubtaskId = subtaskId.ToString(),
+            });
+        }
+
+        var restarted = new List<RunId>();
+        service.RestartChildRunOverride = (run, _) =>
+        {
+            restarted.Add(run.Id);
+            return Task.CompletedTask;
+        };
+
+        await service.RecoverAsync(CancellationToken.None);
+
+        restarted.Should().BeEquivalentTo([firstBranchId, secondBranchId]);
+        (await runStore.GetAsync(firstBranchId))!.Status.Should().Be(RunStatus.InProgress);
+        (await runStore.GetAsync(secondBranchId))!.Status.Should().Be(RunStatus.InProgress);
+        (await runStore.GetRunsByParentAsync(coordinatorId.ToString()))
+            .Select(run => run.Id).Should().BeEquivalentTo([firstBranchId, secondBranchId]);
+        streamStore.Get(firstBranchId.ToString()).Should().BeNull();
+        streamStore.Get(secondBranchId.ToString()).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    public async Task RecoverAsync_CheckpointlessPinnedFanParent_RestartsOriginalRunWithoutDuplicatingPlan(
+        bool existingPlan, bool deliveredAndParked, bool peerOwnsActiveResume)
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: !peerOwnsActiveResume);
+        var service = BuildService(
+            runStore,
+            streamStore,
+            new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+            leaseStore: leaseStore);
+        var parentId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = parentId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "resume the pinned fan",
+            SubmittingUser = "test-user",
+            Status = deliveredAndParked ? RunStatus.AwaitingReview : RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+            WorktreePath = _worktreePath,
+            WorktreeBranch = "agentweaver/test",
+            ExecutableWorkflowPinRequired = true,
+            ExecutableWorkflowManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+            ExecutableWorkflowDefinitionId = "pinned-fan",
+            ExecutableWorkflowDefinitionVersion = "1",
+            ExecutableWorkflowSource = "test",
+            ExecutableWorkflowContentDigest = "sha256:test",
+            ExecutableWorkflowDefinitionYaml = """
+                id: pinned-fan
+                name: Pinned fan
+                version: "1"
+                start: fan
+                nodes:
+                  - id: fan
+                    type: fan_out
+                    label: Parallel work
+                  - id: branch-one
+                    type: prompt
+                    label: Branch one
+                    agent: alpha
+                    prompt: Produce branch one.
+                  - id: branch-two
+                    type: prompt
+                    label: Branch two
+                    agent: alpha
+                    prompt: Produce branch two.
+                  - id: join
+                    type: fan_in
+                    label: Join
+                    target: fan
+                  - id: done
+                    type: terminal
+                    label: Done
+                edges:
+                  - from: fan
+                    to: branch-one
+                  - from: fan
+                    to: branch-two
+                  - from: branch-one
+                    to: join
+                  - from: branch-two
+                    to: join
+                  - from: join
+                    to: done
+                """,
+            ExecutableWorkflowPinnedAt = DateTimeOffset.UtcNow,
+        });
+
+        if (existingPlan)
+        {
+            await using var scope = _memoryServiceProvider!.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var spec = new OutcomeSpec
+            {
+                ProjectId = "project",
+                CoordinatorRunId = RunId.New().ToString(),
+                Goal = "g",
+                DesiredOutcome = "o",
+                Scope = "s",
+                Assumptions = "a",
+                Status = "confirmed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            db.OutcomeSpecs.Add(spec);
+            await db.SaveChangesAsync();
+            db.WorkPlans.Add(new WorkPlan
+            {
+                OutcomeSpecId = spec.Id,
+                ProjectId = "project",
+                CoordinatorRunId = spec.CoordinatorRunId,
+                ParentRunId = parentId.ToString(),
+                ParentWorkflowId = "pinned-fan",
+                ParentWorkflowNodeId = "fan",
+                ParentJoinNodeId = "join",
+                ParentResumeRequestId = deliveredAndParked || peerOwnsActiveResume ? "fan-request" : null,
+                ParentResumeState = deliveredAndParked || peerOwnsActiveResume
+                    ? WorkflowChildWorkResumeStates.Delivered
+                    : WorkflowChildWorkResumeStates.Committed,
+                Status = WorkPlanStatus.Planned,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.SaveChangesAsync();
+            if (deliveredAndParked || peerOwnsActiveResume)
+            {
+                db.PendingRequests.Add(new PendingRequestRecord
+                {
+                    RunId = parentId.ToString(),
+                    RequestId = "fan-request",
+                    RequestJson = "{}",
+                    OwnerUser = "test-user",
+                    DeliveryKind = PendingRequestDeliveryKinds.WorkflowChildWork,
+                    DeliveryState = PendingRequestDeliveryStates.Delivered,
+                    DecisionIdentity = "fan-result",
+                    CreatedAt = DateTimeOffset.UtcNow,
+                });
+                await db.SaveChangesAsync();
+            }
+        }
+
+        var restarted = new List<RunId>();
+        RunLeaseClaim? transferredLease = null;
+        service.RestartPinnedWorkflowRunOverride = (run, lease, _) =>
+        {
+            restarted.Add(run.Id);
+            transferredLease = lease;
+            return Task.CompletedTask;
+        };
+
+        await service.RecoverAsync(CancellationToken.None);
+
+        restarted.Should().Equal(deliveredAndParked || peerOwnsActiveResume ? [] : [parentId]);
+        var recovered = await runStore.GetAsync(parentId);
+        if (peerOwnsActiveResume)
+        {
+            transferredLease.Should().BeNull();
+            leaseStore.ClaimedRunIds.Should().Contain(parentId.ToString());
+            leaseStore.ReleasedRunIds.Should().BeEmpty();
+            recovered!.Status.Should().Be(RunStatus.InProgress,
+                "a second API startup cannot park a peer-owned synthesis before review dispatch");
+            streamStore.Get(parentId.ToString()).Should().BeNull();
+        }
+        else if (deliveredAndParked)
+        {
+            transferredLease.Should().BeNull();
+            leaseStore.ReleasedRunIds.Should().Contain(parentId.ToString());
+            recovered!.Status.Should().Be(RunStatus.Failed);
+            recovered.Result.Should().Be("workflow_parent_parked_after_resume");
+        }
+        else
+        {
+            transferredLease.Should().NotBeNull();
+            transferredLease!.OwnerId.Should().Contain("/startup-recovery/");
+            transferredLease.FencingToken.Should().Be(1);
+            leaseStore.ReleasedRunIds.Should().NotContain(parentId.ToString());
+            recovered!.Status.Should().Be(RunStatus.InProgress);
+        }
+        await using var verificationScope = _memoryServiceProvider!.CreateAsyncScope();
+        var verificationDb = verificationScope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        (await verificationDb.WorkPlans.CountAsync(plan => plan.ParentRunId == parentId.ToString()))
+            .Should().Be(existingPlan ? 1 : 0);
+    }
+
+    [Theory]
+    [InlineData(RunStatus.InProgress)]
+    [InlineData(RunStatus.Committing)]
+    [InlineData(RunStatus.Merging)]
+    [InlineData(RunStatus.AwaitingReview)]
+    public async Task RecoverAsync_LivePeerOwnedRun_IsLeftUntouched(RunStatus status)
+    {
+        var runStore = new SqliteRunStore(_db.Db);
+        var streamStore = new RunStreamStore();
+        var leaseStore = new RecordingRunLeaseStore(_db.Db, claimed: false);
+        var runId = RunId.New();
+        await runStore.InsertAsync(new Run
+        {
+            Id = runId,
+            RepositoryPath = _worktreePath,
+            OriginatingBranch = "main",
+            ModelSource = ModelSource.GitHubCopilot,
+            Task = "peer-owned implementation",
+            SubmittingUser = "test-user",
+            Status = status,
+            StartedAt = DateTimeOffset.UtcNow,
+            ParentRunId = status == RunStatus.InProgress ? RunId.New().ToString() : null,
+            SubtaskId = "peer-owned",
+        });
+
+        await BuildService(
+                runStore,
+                streamStore,
+                new TestWorktreeOps(worktreeExists: true, worktreePath: _worktreePath, treeHash: null),
+                leaseStore: leaseStore)
+            .RecoverAsync(CancellationToken.None);
+
+        (await runStore.GetAsync(runId))!.Status.Should().Be(status,
+            "startup recovery must not classify a live peer-owned execution as abandoned");
+        streamStore.Get(runId.ToString()).Should().BeNull(
+            "a losing startup replica must not publish failure events for the peer-owned run");
+        leaseStore.ClaimedRunIds.Should().ContainSingle().Which.Should().Be(runId.ToString());
+        leaseStore.ReleasedRunIds.Should().BeEmpty(
+            "a replica that never owned the lease must not release the peer's lease");
     }
 
     [Fact]
@@ -567,7 +1147,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         SqliteRunStore runStore,
         RunStreamStore streamStore,
         IWorktreeOperations worktreeOps,
-        RecordingEventStream? eventStream = null)
+        RecordingEventStream? eventStream = null,
+        IRunLeaseStore? leaseStore = null)
     {
         var loggerFactory = NullLoggerFactory.Instance;
         var config = new ConfigurationBuilder()
@@ -619,6 +1200,8 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             agentFactory,
             config);
 
+        leaseStore ??= new SqliteRunLeaseStore(_db.Db);
+        eventStream ??= new RecordingEventStream();
         var watchLoop = new RunWatchLoopService(
             runStore,
             streamStore,
@@ -629,10 +1212,10 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             new TestHostApplicationLifetime(),
             config,
             scopeFactory,
-            new NoOpRunLeaseStore(),
+            leaseStore,
+            eventStream,
             loggerFactory.CreateLogger<RunWatchLoopService>());
 
-        eventStream ??= new RecordingEventStream();
         var projector = new TerminalOutcomeProjector(
             runStore, eventStream, NullLogger<TerminalOutcomeProjector>.Instance, streamStore);
         return new WorkflowRestartService(
@@ -644,9 +1227,54 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
             worktreeOps,
             watchLoop,
             scopeFactory,
+            leaseStore,
             loggerFactory.CreateLogger<WorkflowRestartService>(),
             eventStream,
             projector);
+    }
+
+    private sealed class RecordingRunLeaseStore(SqliteDb db, bool claimed) : IRunLeaseStore
+    {
+        private readonly SqliteRunLeaseStore _inner = new(db);
+        public List<string> ClaimedRunIds { get; } = [];
+        public List<string> ReleasedRunIds { get; } = [];
+
+        public async Task<(bool Claimed, long FencingToken)> TryClaimAsync(
+            string runId,
+            string ownerId,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default)
+        {
+            ClaimedRunIds.Add(runId);
+            return claimed
+                ? await _inner.TryClaimAsync(runId, ownerId, leaseTtl, ct)
+                : (false, 0);
+        }
+
+        public Task<bool> TryRenewAsync(
+            string runId,
+            string ownerId,
+            long token,
+            TimeSpan leaseTtl,
+            CancellationToken ct = default) =>
+            _inner.TryRenewAsync(runId, ownerId, token, leaseTtl, ct);
+
+        public async Task ReleaseAsync(
+            string runId,
+            string ownerId,
+            long token,
+            CancellationToken ct = default)
+        {
+            ReleasedRunIds.Add(runId);
+            await _inner.ReleaseAsync(runId, ownerId, token, ct);
+        }
+
+        public Task<bool> IsLeaseOwnerAsync(
+            string runId,
+            string ownerId,
+            long token,
+            CancellationToken ct = default) =>
+            _inner.IsLeaseOwnerAsync(runId, ownerId, token, ct);
     }
 
     private sealed class RecordingEventStream : IRunEventStream
@@ -765,6 +1393,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         /// that a missing-worktree recovery attempt actually went through the reattach path (#246
         /// P0-A) rather than failing immediately without trying.</summary>
         public bool ReattachAttempted { get; private set; }
+        public int RemoveCount { get; private set; }
 
         public TestWorktreeOps(
             bool worktreeExists,
@@ -807,7 +1436,7 @@ public sealed class WorkflowRestartServiceTests : IAsyncDisposable
         public string GetDiff(string repositoryPath, string originatingBranch, string worktreeBranch) => throw new NotImplementedException("Not called in restart tests");
         public int GetStepCount(string runId) => throw new NotImplementedException("Not called in restart tests");
         public WorkflowMergeResult MergeWorktree(string repositoryPath, string originatingBranch, string worktreeBranch, string expectedTreeHash) => throw new NotImplementedException("Not called in restart tests");
-        public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) => throw new NotImplementedException("Not called in restart tests");
+        public void RemoveWorktree(string repositoryPath, string worktreePath, string worktreeBranch) => RemoveCount++;
     }
 
     // -------------------------------------------------------------------------

@@ -16,6 +16,33 @@ namespace Agentweaver.Tests.Backlog;
 /// </summary>
 public sealed class BacklogClaimReserveTests
 {
+    [Fact]
+    public async Task ReReadyBetweenValidationAndClaim_LosesWithoutReservingRun()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var project = MakeProject();
+        await new SqliteProjectStore(testDb.Db).InsertAsync(project);
+        var store = new SqliteBacklogTaskStore(testDb.Db);
+        var task = MakeReadyTask(project.Id, "n") with
+        {
+            AiExecutionProviderKey = "old-signed-key",
+            ReadyByUserId = "old-human",
+        };
+        await store.InsertAsync(task);
+        (await store.TryMoveToBacklogAsync(project.Id, task.Id, "n")).Should().BeTrue();
+        (await store.TryMoveToReadyAsync(project.Id, task.Id, "n", DateTimeOffset.UtcNow,
+            providerKey: "new-signed-key", readyByUserId: "new-human")).Should().BeTrue();
+
+        var staleRun = MakeCoordinatorRun(project.Id, RunId.New());
+        var stale = await store.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            project.Id, task.Id, staleRun, DateTimeOffset.UtcNow,
+            expectedProviderKey: task.AiExecutionProviderKey,
+            expectedReadyByUserId: task.ReadyByUserId);
+        stale.Result.Should().Be(ClaimReserveResult.Lost);
+        (await new SqliteRunStore(testDb.Db).GetAsync(staleRun.Id)).Should().BeNull();
+        (await store.GetAsync(project.Id, task.Id))!.State.Should().Be(BacklogTaskState.Ready);
+    }
+
     private static async Task<long> ScalarAsync(SqliteDb db, string sql, params (string, object)[] args)
     {
         await using var conn = await db.OpenConnectionAsync();
@@ -85,6 +112,8 @@ public sealed class BacklogClaimReserveTests
         runs.Should().ContainSingle().Which.Id.Should().Be(winnerRunId);
         (await ScalarAsync(testDb.Db, "SELECT COUNT(*) FROM workflow_runs WHERE project_id = $p;",
             ("$p", project.Id.ToString()))).Should().Be(0);
+        (await ScalarAsync(testDb.Db, "SELECT COUNT(*) FROM execution_identities WHERE run_id = $r;",
+            ("$r", winnerRunId.ToString()))).Should().Be(1);
 
         // Every loser persisted NOTHING (no orphan run).
         for (var i = 0; i < contenders; i++)
@@ -132,6 +161,43 @@ public sealed class BacklogClaimReserveTests
 
         (await runStore.GetAsync(firstRunId))!.GetApprovalPolicySnapshot().Should().Be(first.ApprovalPolicySnapshot);
         (await runStore.GetAsync(secondRunId))!.GetApprovalPolicySnapshot().Should().Be(second.ApprovalPolicySnapshot);
+    }
+
+    [Fact]
+    public async Task Claim_PersistsExecutableWorkflowPinAtomicallyWithReservedRun()
+    {
+        await using var testDb = await TestSqliteDb.CreateAsync();
+        var projects = new SqliteProjectStore(testDb.Db);
+        var backlog = new SqliteBacklogTaskStore(testDb.Db);
+        var runs = new SqliteRunStore(testDb.Db);
+        var project = MakeProject();
+        await projects.InsertAsync(project);
+        var task = MakeReadyTask(project.Id, "pin");
+        await backlog.InsertAsync(task);
+        var runId = RunId.New();
+        const string yaml = "id: pinned\nname: Pinned\nversion: \"1\"\nstart: done\nnodes:\n  - id: done\n    type: terminal\n";
+        var run = MakeCoordinatorRun(project.Id, runId) with
+        {
+            Status = RunStatus.Pending,
+            AgentName = null,
+            ExecutableWorkflowPinRequired = true,
+            ExecutableWorkflowManifestSchemaVersion = ExecutableWorkflowPin.CurrentSchemaVersion,
+            ExecutableWorkflowDefinitionId = "pinned",
+            ExecutableWorkflowDefinitionVersion = "1",
+            ExecutableWorkflowSource = "backlog_snapshot",
+            ExecutableWorkflowContentDigest = "sha256:test",
+            ExecutableWorkflowDefinitionYaml = yaml,
+            ExecutableWorkflowPinnedAt = DateTimeOffset.UtcNow,
+        };
+
+        var claim = await backlog.TryClaimAndReserveCoordinatorRunWithPolicyAsync(
+            project.Id, task.Id, run, DateTimeOffset.UtcNow);
+
+        claim.Result.Should().Be(ClaimReserveResult.Won);
+        var persisted = await runs.GetAsync(runId);
+        persisted.Should().NotBeNull();
+        persisted!.Status.Should().Be(RunStatus.Pending);
+        persisted.GetExecutableWorkflowPin().Should().BeEquivalentTo(run.GetExecutableWorkflowPin());
     }
 
     // =========================================================================

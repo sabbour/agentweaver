@@ -14,8 +14,98 @@ namespace Agentweaver.Tests.Api;
 /// </summary>
 public sealed class SqliteRunStoreCasTests
 {
+    [Fact]
+    public async Task ComposedPublication_CurrentClaim_PublishesOnlyOriginalRoot()
+    {
+        await using var db = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(db.Db);
+        var leases = new SqliteRunLeaseStore(db.Db);
+        var runId = await InsertComposedRootAsync(store);
+        var expected = (await store.GetAsync(runId))!;
+        var claim = await leases.TryClaimAsync(runId.ToString(), "producer", TimeSpan.FromMinutes(5));
+        claim.Claimed.Should().BeTrue();
+        var fence = new RunLeaseClaim("producer", claim.FencingToken, expected.LifecycleGeneration);
+
+        (await store.TryPublishComposedAgentTreeAsync(expected, "published", fence)).Should().BeTrue();
+        (await store.GetAsync(runId))!.TreeHash.Should().Be("published");
+        (await store.TryPublishComposedAgentTreeAsync(expected, "again", fence)).Should().BeFalse();
+        (await store.GetAsync(runId))!.TreeHash.Should().Be("published");
+    }
+
+    [Theory]
+    [InlineData("missing_lease")]
+    [InlineData("expired_lease")]
+    [InlineData("foreign_owner")]
+    [InlineData("stale_token")]
+    [InlineData("stale_generation")]
+    [InlineData("changed_tree")]
+    [InlineData("changed_worktree")]
+    [InlineData("changed_branch")]
+    [InlineData("changed_project")]
+    [InlineData("child_root")]
+    [InlineData("terminal")]
+    [InlineData("current_revision")]
+    [InlineData("approved_revision")]
+    public async Task ComposedPublication_RefusesStaleOrReviewedRoot(string change)
+    {
+        await using var db = await TestSqliteDb.CreateAsync();
+        var store = new SqliteRunStore(db.Db);
+        var leases = new SqliteRunLeaseStore(db.Db);
+        var runId = await InsertComposedRootAsync(store);
+        var expected = (await store.GetAsync(runId))!;
+        var claim = change == "missing_lease"
+            ? (Claimed: false, FencingToken: 0L)
+            : await leases.TryClaimAsync(runId.ToString(), "producer", TimeSpan.FromMinutes(5));
+        var fence = new RunLeaseClaim(
+            change == "foreign_owner" ? "other" : "producer",
+            claim.FencingToken + (change == "stale_token" ? 1 : 0),
+            expected.LifecycleGeneration);
+        if (change == "expired_lease")
+            await leases.ReleaseAsync(runId.ToString(), "producer", claim.FencingToken);
+        var updates = new Dictionary<string, string>
+        {
+            ["changed_tree"] = "tree_hash='external'",
+            ["stale_generation"] = "lifecycle_generation=lifecycle_generation+1",
+            ["changed_worktree"] = "worktree_path='other'",
+            ["changed_branch"] = "worktree_branch='other'",
+            ["changed_project"] = $"project_id='{ProjectId.New()}'",
+            ["child_root"] = "parent_run_id='other'",
+            ["terminal"] = "status='failed'",
+            ["current_revision"] = "current_output_revision_id='reviewed'",
+            ["approved_revision"] = "approved_output_revision_id='reviewed'",
+        };
+        if (updates.TryGetValue(change, out var update))
+        {
+            await using var connection = await db.Db.OpenConnectionAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"UPDATE runs SET {update} WHERE run_id=$id;";
+            command.Parameters.AddWithValue("$id", runId.ToString());
+            (await command.ExecuteNonQueryAsync()).Should().Be(1);
+        }
+        (await store.TryPublishComposedAgentTreeAsync(expected, "published", fence)).Should().BeFalse(change);
+        (await store.GetAsync(runId))!.TreeHash.Should().NotBe("published");
+    }
+
+    private static async Task<RunId> InsertComposedRootAsync(SqliteRunStore store)
+    {
+        var runId = RunId.New();
+        await store.InsertAsync(new Run
+        {
+            Id = runId, RepositoryPath = "source", OriginatingBranch = "main",
+            WorktreePath = "root-worktree", WorktreeBranch = $"agentweaver/{runId}",
+            ProjectId = ProjectId.New(), ModelSource = ModelSource.GitHubCopilot,
+            Task = "composed", SubmittingUser = "producer", Status = RunStatus.InProgress,
+            StartedAt = DateTimeOffset.UtcNow,
+        });
+        await store.UpdateStatusAsync(runId, RunStatus.AwaitingReview, null);
+        (await store.TryRecordFanInputProjectionAsync(
+            runId, 1, "base", "base", $"agentweaver/{runId}")).Should().BeTrue();
+        await store.UpdateStatusAsync(runId, RunStatus.InProgress, null);
+        return runId;
+    }
+
     // =========================================================================
-    // HM-10a: TryStartMergingAsync returns true on the first call and false on
+    // HM-10a: revision-bound TryStartMerging returns true on the first call and false on
     // a second call, because the second call finds the run in Merging (not
     // AwaitingReview) and the conditional UPDATE matches zero rows.
     // =========================================================================
@@ -25,16 +115,20 @@ public sealed class SqliteRunStoreCasTests
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
-        var first = await store.TryStartMergingAsync(runId);
+        (await store.TryStartMergingAsync(runId)).Should().BeFalse(
+            "a published revision cannot be approved through the legacy CAS");
+        var first = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         first.Should().BeTrue(
             "first CAS must succeed when the run is in awaiting_review");
 
         var runAfterFirst = await store.GetAsync(runId);
         runAfterFirst!.Status.Should().Be(RunStatus.Merging,
             "TryStartMerging must atomically advance awaiting_review to merging");
+        runAfterFirst.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
 
-        var second = await store.TryStartMergingAsync(runId);
+        var second = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         second.Should().BeFalse(
             "second CAS must fail because the run is already in merging, not awaiting_review");
 
@@ -53,14 +147,18 @@ public sealed class SqliteRunStoreCasTests
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
-        await store.TryStartMergingAsync(runId);
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         await store.RevertMergingAsync(runId);
 
         var run = await store.GetAsync(runId);
         run!.Status.Should().Be(RunStatus.AwaitingReview,
             "RevertMerging must return the run to awaiting_review so it can be re-approved");
+        run.ApprovedOutputRevisionId.Should().BeNull();
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue(
+            "the same immutable revision remains available for re-approval");
     }
 
     // =========================================================================
@@ -73,8 +171,9 @@ public sealed class SqliteRunStoreCasTests
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
-        await store.TryStartMergingAsync(runId);
+        (await store.TryStartMergingRevisionAsync(runId, revision.RevisionId)).Should().BeTrue();
 
         var endedAt     = DateTimeOffset.UtcNow;
         var mergeResult = "merged:abc1234deadbeef0123456789abcdef01234567";
@@ -85,12 +184,13 @@ public sealed class SqliteRunStoreCasTests
             "CompleteMerging must advance merging to merged");
         run.Result.Should().Be(mergeResult,
             "CompleteMerging must persist the merge result string");
+        run.ApprovedOutputRevisionId.Should().Be(revision.RevisionId);
         run.EndedAt.Should().NotBeNull(
             "CompleteMerging must set the ended_at timestamp");
     }
 
     // =========================================================================
-    // Fix 3 regression: when SendResponseAsync throws after TryStartMergingAsync
+    // Fix 3 regression: when SendResponseAsync throws after revision-bound TryStartMerging
     // succeeds, the recovery path must be able to transition Merging -> Failed via
     // TrySetTerminalStatusAsync so the run is never permanently stranded.
     // =========================================================================
@@ -101,9 +201,10 @@ public sealed class SqliteRunStoreCasTests
         await using var testDb = await TestSqliteDb.CreateAsync();
         var store = new SqliteRunStore(testDb.Db);
         var runId = await InsertAwaitingReviewRunAsync(store);
+        var revision = (await store.GetLatestOutputRevisionAsync(runId))!;
 
         // Act step 1: CAS succeeds — run enters Merging, as the approve endpoint does.
-        var casWon = await store.TryStartMergingAsync(runId);
+        var casWon = await store.TryStartMergingRevisionAsync(runId, revision.RevisionId);
         casWon.Should().BeTrue("CAS must succeed on an awaiting_review run");
 
         // Act step 2: SendResponseAsync (simulated) throws. The catch block persists a typed

@@ -73,7 +73,9 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
         _worktree.BranchTipMatchesTree(repo, branch, treeSha).Should().BeTrue();
         _worktree.BranchTipMatchesTree(repo, branch, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef").Should().BeFalse(
             "a recorded tree hash that does not match the branch tip means the branch is stale/diverged");
-        _worktree.BranchTipMatchesTree(repo, branch, null).Should().BeTrue("empty contract passes on existence alone");
+        DependencyBranchInclusion.Evaluate(_worktree, repo, branch, null)
+            .Should().Be(BranchInclusionOutcome.ExcludeTreeMismatch,
+                "a missing recorded tree is not a verified output");
         _worktree.BranchTipMatchesTree(repo, "agentweaver/missing", treeSha).Should().BeFalse();
     }
 
@@ -201,7 +203,7 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Rebuild_ExcludesStaleMismatchedDependencyBranch()
+    public async Task Rebuild_BlocksStaleMismatchedDependencyBranch()
     {
         var repo = CreateTempGitRepo();
         var coordRunId = "coord-rebuild-stale";
@@ -224,8 +226,10 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
         await InvokeRebuildAsync(sut, Context(coordRunId, repo), planId, statusById, edges);
 
         using var r = new Repository(repo);
-        var tip = r.Branches[CoordinatorAssemblyService.IntegrationBranchName(coordRunId)]!.Tip;
-        tip["impl.cs"].Should().BeNull("a branch whose tip tree != recorded handoff hash must not be propagated");
+        r.Branches[CoordinatorAssemblyService.IntegrationBranchName(coordRunId)].Should().BeNull(
+            "a mismatched producer must not publish a partial base");
+        (await InvokeResolveAsync(sut, Context(coordRunId, repo), planId, subtaskIds[1], statusById, edges))
+            .Should().BeNull("a dependent cannot dispatch from an unverified upstream tree");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -298,6 +302,76 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Resolve_MissingRequiredProducer_DoesNotFallBackToOrigin()
+    {
+        var repo = CreateTempGitRepo();
+        var (planId, ids) = await SeedPlanAsync("coord-missing-output", 2);
+        var edges = new List<(int, int)> { (ids[1], ids[0]) };
+        var status = new Dictionary<int, string> { [ids[0]] = SubtaskStatus.Completed, [ids[1]] = SubtaskStatus.Pending };
+        var sut = BuildDispatch(repo);
+
+        (await InvokeResolveAsync(sut, Context("coord-missing-output", repo), planId, ids[1], status, edges))
+            .Should().BeNull("a missing required producer cannot launch its dependent from the origin");
+        using var git = new Repository(repo);
+        git.Branches[CoordinatorAssemblyService.IntegrationBranchName("coord-missing-output")]
+            .Should().BeNull("a partial dependency base must not be published");
+    }
+
+    [Fact]
+    public async Task Resolve_DeclaredNoOutputPredecessor_DoesNotRequireChildBranch()
+    {
+        var repo = CreateTempGitRepo();
+        var (planId, ids) = await SeedPlanAsync("coord-no-output", 2);
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var noOutput = await db.Subtasks.SingleAsync(s => s.Id == ids[0]);
+            noOutput.DeclaredOutputPathsJson = "[]";
+            await db.SaveChangesAsync();
+        }
+        var edges = new List<(int, int)> { (ids[1], ids[0]) };
+        var status = new Dictionary<int, string> { [ids[0]] = SubtaskStatus.Completed, [ids[1]] = SubtaskStatus.Pending };
+        var sut = BuildDispatch(repo);
+        var resolved = await InvokeResolveAsync(sut, Context("coord-no-output", repo), planId, ids[1], status, edges);
+
+        resolved.Should().Be(CoordinatorAssemblyService.IntegrationBranchName("coord-no-output"));
+    }
+
+    [Fact]
+    public async Task Resolve_RejectsLegacyAutoResolvedRef_AlthoughItContainsBothHeads()
+    {
+        var path = CreateTempGitRepo();
+        const string coordinator = "coord-legacy-overwrite";
+        var (planId, ids) = await SeedPlanAsync(coordinator, 3);
+        var (a, aTree) = CommitChildBranch(path, "agentweaver/a", "shared.txt", "A");
+        var (b, bTree) = CommitChildBranch(path, "agentweaver/b", "shared.txt", "B");
+        await SetChildRunIdAsync(ids[0], await SeedAssembleReadyChildAsync(coordinator, ids[0], a, aTree, ""));
+        await SetChildRunIdAsync(ids[1], await SeedAssembleReadyChildAsync(coordinator, ids[1], b, bTree, ""));
+        var integration = CoordinatorAssemblyService.IntegrationBranchName(coordinator);
+        using (var repo = new Repository(path))
+        {
+            var tipA = repo.Branches[a].Tip;
+            var tipB = repo.Branches[b].Tip;
+            var sig = new Signature("Test", "test@localhost", DateTimeOffset.UtcNow);
+            var overwritten = repo.ObjectDatabase.CreateCommit(sig, sig, "legacy accept later child",
+                tipB.Tree, new[] { tipA, tipB }, prettifyMessage: true);
+            repo.CreateBranch(integration, overwritten);
+        }
+        var edges = new List<(int, int)> { (ids[2], ids[0]), (ids[2], ids[1]) };
+        var status = new Dictionary<int, string> {
+            [ids[0]] = SubtaskStatus.AssembleReady,
+            [ids[1]] = SubtaskStatus.AssembleReady,
+            [ids[2]] = SubtaskStatus.Pending,
+        };
+        var sut = BuildDispatch(path);
+
+        (await InvokeResolveAsync(sut, Context(coordinator, path), planId, ids[2], status, edges))
+            .Should().BeNull("containment of both parents does not prove conflicting file contents survived");
+        _worktree.GetBranchTipTreeSha(path, integration).Should().Be(bTree,
+            "validation must not mutate the previously published integration revision");
+    }
+
+    [Fact]
     public async Task Resolve_UsesNewTip_AfterInPlaceSteerRecommit()
     {
         var repo = CreateTempGitRepo();
@@ -359,12 +433,31 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
         var edges = new List<(int, int)>();
 
         var sut = BuildAssembly(repo);
-        var (branchesInOrder, includedIds) = await InvokeBuildAssemblyInputsAsync(
+        var (branchesInOrder, includedIds, missing) = await InvokeBuildAssemblyInputsAsync(
             sut, Context(coordRunId, repo), subtasks, edges);
 
+        missing.Should().BeEmpty();
         includedIds.Should().Contain(subtaskIds[0],
             "the final collective assembly must include a committed child even when its display diff was swallowed (#197)");
-        branchesInOrder.Should().Contain(branch);
+        branchesInOrder.Should().ContainSingle()
+            .Which.Should().Be(new IntegrationChildInput(branch, _worktree.GetBranchTipCommitSha(repo, branch)!));
+    }
+
+    [Fact]
+    public async Task FinalAssembly_ReportsMissingRequiredOutput_WithoutDroppingOtherChildren()
+    {
+        var repo = CreateTempGitRepo();
+        var (planId, ids) = await SeedPlanAsync("coord-assembly-incomplete", 2);
+        var (branch, tree) = CommitChildBranch(repo, "agentweaver/healthy", "impl.cs", "healthy");
+        await SetChildRunIdAsync(ids[0], await SeedAssembleReadyChildAsync(
+            "coord-assembly-incomplete", ids[0], branch, tree, diff: ""));
+        var sut = BuildAssembly(repo);
+
+        var inputs = await InvokeBuildAssemblyInputsAsync(
+            sut, Context("coord-assembly-incomplete", repo), await LoadSubtasksAsync(planId), []);
+        inputs.Branches.Should().ContainSingle()
+            .Which.Should().Be(new IntegrationChildInput(branch, _worktree.GetBranchTipCommitSha(repo, branch)!));
+        inputs.Missing.Should().ContainSingle().Which.Should().Contain("child_run_missing");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -429,7 +522,7 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
         return await task;
     }
 
-    private static async Task<(List<string> Branches, List<int> Included)> InvokeBuildAssemblyInputsAsync(
+    private static async Task<(List<IntegrationChildInput> Branches, List<int> Included, List<string> Missing)> InvokeBuildAssemblyInputsAsync(
         CoordinatorAssemblyService sut,
         CoordinatorDispatchContext context,
         IReadOnlyCollection<Subtask> subtasks,
@@ -440,9 +533,13 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
         var task = (Task)m.Invoke(sut, new object[] { context, subtasks, edges, CancellationToken.None })!;
         await task;
         var result = task.GetType().GetProperty("Result")!.GetValue(task)!;
-        var branches = (List<string>)result.GetType().GetProperty("BranchesInOrder")!.GetValue(result)!;
+        var branches = (List<IntegrationChildInput>)result.GetType().GetProperty("InputsInOrder")!.GetValue(result)!;
         var included = (List<int>)result.GetType().GetProperty("IncludedSubtaskIds")!.GetValue(result)!;
-        return (branches, included);
+        var missing = ((System.Collections.IEnumerable)result.GetType().GetProperty("MissingOutputs")!.GetValue(result)!)
+            .Cast<object>()
+            .Select(item => item.GetType().GetProperty("Reason")!.GetValue(item)!.ToString()!)
+            .ToList();
+        return (branches, included, missing);
     }
 
     private static CoordinatorDispatchContext Context(string coordRunId, string repoPath) =>
@@ -492,6 +589,7 @@ public sealed class DependencyBasePropagationTests : IAsyncDisposable
                 SelectedModelId = "gpt",
                 Phase = "execution",
                 IsolationStrategy = "worktree",
+                DeclaredOutputPathsJson = "[\"impl.cs\"]",
                 Status = SubtaskStatus.Pending,
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow,

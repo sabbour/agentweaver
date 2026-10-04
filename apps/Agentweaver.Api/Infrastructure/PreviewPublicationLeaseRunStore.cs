@@ -44,6 +44,19 @@ public sealed class PreviewPublicationLeaseRunStore(
 
     public IRunStore Inner { get; } = inner;
 
+    public Task<bool> TryRecordFanInputProjectionAsync(
+        RunId runId, int generation, string expectedBaseTree, string projectedTree,
+        string worktreeBranch, string? recoveredWorktreePath = null, CancellationToken ct = default) =>
+        Inner.TryRecordFanInputProjectionAsync(
+            runId, generation, expectedBaseTree, projectedTree, worktreeBranch, recoveredWorktreePath, ct);
+
+    public Task<bool> TryBindExecutionInputAsync(
+        RunId runId, int expectedLifecycleGeneration, string sourceCommitHash,
+        string executionCommitHash, string compositeId, CancellationToken ct = default) =>
+        Inner.TryBindExecutionInputAsync(
+            runId, expectedLifecycleGeneration, sourceCommitHash,
+            executionCommitHash, compositeId, ct);
+
     /// <summary>Test constructor: shrinks the wait so a deferral test does not take minutes.</summary>
     internal PreviewPublicationLeaseRunStore(
         IRunStore inner,
@@ -194,12 +207,24 @@ public sealed class PreviewPublicationLeaseRunStore(
         Inner.TryBeginPreviewPublicationAsync(runId, leaseUntil, ct);
 
     public Task<bool> TryAcquirePreviewPublicationAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
-        Inner.TryAcquirePreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.TryAcquirePreviewPublicationAsync(runId, ownerId, leaseUntil, expectedLifecycleGeneration, ct);
 
     public Task<bool> TryRenewPreviewPublicationAsync(
-        RunId runId, string ownerId, DateTimeOffset leaseUntil, CancellationToken ct = default) =>
-        Inner.TryRenewPreviewPublicationAsync(runId, ownerId, leaseUntil, ct);
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.TryRenewPreviewPublicationAsync(runId, ownerId, leaseUntil, expectedLifecycleGeneration, ct);
+
+    public Task<bool> TryReserveTerminalPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.TryReserveTerminalPreviewCleanupAsync(runId, ownerId, leaseUntil, expectedLifecycleGeneration, ct);
+
+    public Task<bool> TryReserveUnclaimedPreviewCleanupAsync(
+        RunId runId, string ownerId, DateTimeOffset leaseUntil, int expectedLifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.TryReserveUnclaimedPreviewCleanupAsync(runId, ownerId, leaseUntil, expectedLifecycleGeneration, ct);
 
     public Task EndPreviewPublicationAsync(RunId runId, CancellationToken ct = default) =>
         Inner.EndPreviewPublicationAsync(runId, ct);
@@ -222,19 +247,79 @@ public sealed class PreviewPublicationLeaseRunStore(
 
     public Task<IReadOnlyList<Run>> GetByStatusAsync(RunStatus status, CancellationToken ct = default) =>
         Inner.GetByStatusAsync(status, ct);
+    public Task<IReadOnlyList<string>> GetChildRunIdsAsync(string parentRunId, CancellationToken ct = default) =>
+        Inner.GetChildRunIdsAsync(parentRunId, ct);
+    public Task<IReadOnlyList<string>> GetTerminalCoordinatorRunIdsAsync(
+        int offset, int limit, CancellationToken ct = default) =>
+        Inner.GetTerminalCoordinatorRunIdsAsync(offset, limit, ct);
 
     public Task UpdateAssemblyArtifactsAsync(
         RunId runId, string treeHash, string diff, CancellationToken ct = default) =>
         Inner.UpdateAssemblyArtifactsAsync(runId, treeHash, diff, ct);
+    public Task<bool> TryUpdateAssemblyArtifactsAsync(
+        RunId runId, string treeHash, string diff, RunLeaseClaim requiredLease,
+        CancellationToken ct = default) =>
+        Inner.TryUpdateAssemblyArtifactsAsync(runId, treeHash, diff, requiredLease, ct);
+    public Task<bool> TryUpdateStatusAsync(
+        RunId runId, RunStatus status, DateTimeOffset? endedAt, RunLeaseClaim requiredLease,
+        CancellationToken ct = default) =>
+        Inner.TryUpdateStatusAsync(runId, status, endedAt, requiredLease, ct);
+
+    public Task UpdateReviewReadyAsync(RunId runId, string treeHash, string diff, int stepCount,
+        CancellationToken ct = default, DateTimeOffset? now = null) =>
+        Inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now);
 
     public Task UpdateReviewReadyAsync(
-        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct = default,
-        DateTimeOffset? now = null) =>
-        Inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now);
+        RunId runId, string treeHash, string diff, int stepCount, CancellationToken ct,
+        DateTimeOffset? now, byte[]? treeContent) =>
+        Inner.UpdateReviewReadyAsync(runId, treeHash, diff, stepCount, ct, now, treeContent);
+
+    public Task<RunOutputRevision?> GetOutputRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        Inner.GetOutputRevisionAsync(runId, revisionId, ct);
+    public Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
+         int stepCount, CancellationToken ct = default, DateTimeOffset? now = null) =>
+         Inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now);
+
+    public Task PublishReviewReadyAsync(RunId runId, int expectedLifecycleGeneration, string treeHash, string diff,
+        int stepCount, CancellationToken ct, DateTimeOffset? now, byte[]? treeContent) =>
+        Inner.PublishReviewReadyAsync(runId, expectedLifecycleGeneration, treeHash, diff, stepCount, ct, now, treeContent);
+    public Task<RunOutputRevision?> GetLatestOutputRevisionAsync(RunId runId, CancellationToken ct = default) =>
+        Inner.GetLatestOutputRevisionAsync(runId, ct);
+    public Task<IReadOnlyList<RunOutputRevision>> ListOutputRevisionsAsync(RunId runId, CancellationToken ct = default) =>
+        Inner.ListOutputRevisionsAsync(runId, ct);
+    public Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct = default) =>
+        Inner.PublishCollectiveCandidateAsync(
+            runId, generation, workPlanId, treeHash, diff, treeContent, ct);
+    public Task<RunOutputRevision> PublishCollectiveCandidateAsync(
+        RunId runId, int generation, string workPlanId, string treeHash, string diff,
+        byte[] treeContent, CancellationToken ct, RunLeaseClaim requiredLease) =>
+        Inner.PublishCollectiveCandidateAsync(
+            runId, generation, workPlanId, treeHash, diff, treeContent, ct, requiredLease);
+    public Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct = default) =>
+        Inner.ApproveCollectiveCandidateAsync(runId, generation, revisionId, ct);
+    public Task<bool> ApproveCollectiveCandidateAsync(
+        RunId runId, int generation, string revisionId, CancellationToken ct,
+        RunLeaseClaim requiredLease) =>
+        Inner.ApproveCollectiveCandidateAsync(runId, generation, revisionId, ct, requiredLease);
 
     public Task<bool> TryTransitionReviewToInProgressAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryTransitionReviewToInProgressAsync(runId, ct, now);
+
+    public Task<bool> TryParkForChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.TryParkForChildWorkAsync(runId, lifecycleGeneration, ct);
+
+    public Task<bool> TryResumeFromChildWorkAsync(
+        RunId runId,
+        int lifecycleGeneration,
+        CancellationToken ct = default) =>
+        Inner.TryResumeFromChildWorkAsync(runId, lifecycleGeneration, ct);
 
     public Task<bool> TryReopenTerminalToInProgressAsync(RunId runId, CancellationToken ct = default) =>
         Inner.TryReopenTerminalToInProgressAsync(runId, ct);
@@ -242,6 +327,8 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task<bool> TryTransitionToCommittingAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryTransitionToCommittingAsync(runId, ct, now);
+    public Task<bool> TryTransitionToCommittingRevisionAsync(RunId runId, string revisionId, CancellationToken ct = default) =>
+        Inner.TryTransitionToCommittingRevisionAsync(runId, revisionId, ct);
 
     public Task<bool> TryRevertCommittingAsync(
         RunId runId, string? treeHash = null, CancellationToken ct = default, DateTimeOffset? now = null) =>
@@ -250,6 +337,8 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task<bool> TryStartMergingAsync(
         RunId runId, string? reviewer = null, CancellationToken ct = default, DateTimeOffset? now = null) =>
         Inner.TryStartMergingAsync(runId, reviewer, ct, now);
+    public Task<bool> TryStartMergingRevisionAsync(RunId runId, string revisionId, string? reviewer = null, CancellationToken ct = default) =>
+        Inner.TryStartMergingRevisionAsync(runId, revisionId, reviewer, ct);
 
     public Task<bool> RevertMergingAsync(
         RunId runId, CancellationToken ct = default, DateTimeOffset? now = null) =>
@@ -257,6 +346,10 @@ public sealed class PreviewPublicationLeaseRunStore(
 
     public Task UpdateTreeHashAfterCommitAsync(RunId runId, string newTreeHash, CancellationToken ct = default) =>
         Inner.UpdateTreeHashAfterCommitAsync(runId, newTreeHash, ct);
+
+    public Task<bool> TryPublishComposedAgentTreeAsync(
+        Run expected, string treeHash, RunLeaseClaim requiredLease, CancellationToken ct = default) =>
+        Inner.TryPublishComposedAgentTreeAsync(expected, treeHash, requiredLease, ct);
 
     public Task<bool> TryTransitionToIdleAsync(RunId runId, CancellationToken ct = default) =>
         Inner.TryTransitionToIdleAsync(runId, ct);
@@ -286,6 +379,9 @@ public sealed class PreviewPublicationLeaseRunStore(
     public Task<Run?> FindActiveChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) =>
         Inner.FindActiveChildAsync(parentRunId, subtaskId, ct);
 
+    public Task<Run?> FindChildAsync(string parentRunId, string subtaskId, CancellationToken ct = default) =>
+        Inner.FindChildAsync(parentRunId, subtaskId, ct);
+
     public Task<IReadOnlyList<Run>> GetRunsByParentAsync(string parentRunId, CancellationToken ct = default) =>
         Inner.GetRunsByParentAsync(parentRunId, ct);
 
@@ -305,6 +401,12 @@ public sealed class PreviewPublicationLeaseRunStore(
 
     public Task UpdateWorkflowSelectionReasonAsync(RunId runId, string? reason, CancellationToken ct = default) =>
         Inner.UpdateWorkflowSelectionReasonAsync(runId, reason, ct);
+
+    public Task UpdateExecutableWorkflowPinAsync(
+        RunId runId,
+        ExecutableWorkflowPin pin,
+        CancellationToken ct = default) =>
+        Inner.UpdateExecutableWorkflowPinAsync(runId, pin, ct);
 
     public Task UpdateModelSourceAsync(RunId runId, ModelSource modelSource, CancellationToken ct = default) =>
         Inner.UpdateModelSourceAsync(runId, modelSource, ct);

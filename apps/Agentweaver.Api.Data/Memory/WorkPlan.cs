@@ -8,6 +8,21 @@ public sealed class WorkPlan
     public int OutcomeSpecId { get; set; }
     public required string ProjectId { get; set; }
     public required string CoordinatorRunId { get; set; }
+    public string? ParentRunId { get; set; }
+    public string? ParentWorkflowId { get; set; }
+    public string? ParentWorkflowNodeId { get; set; }
+    public string? ParentJoinNodeId { get; set; }
+    public string? ParentResumeRequestId { get; set; }
+    public string? ParentResumeState { get; set; }
+    public string? ParentResumeClaimOwner { get; set; }
+    public DateTimeOffset? ParentResumeClaimedAt { get; set; }
+    public DateTimeOffset? ParentResumeDeliveredAt { get; set; }
+    public string? ParentResumeResultJson { get; set; }
+    public DateTimeOffset? CoordinatorCancellationRequestedAt { get; set; }
+    public string? CoordinatorCancellationRequestedByRunId { get; set; }
+    public string? ParentTurnInputJson { get; set; }
+    public int? ParentRecoveryGeneration { get; set; }
+    public string? ExecutionBaseTreeHash { get; set; }
     public string? IsolationSummary { get; set; }
     public string? IntegrationBranch { get; set; }
 
@@ -42,6 +57,34 @@ public sealed class WorkPlan
     /// <summary>Timestamp the work plan transitioned awaiting_assembly -&gt; assembling (the
     /// exactly-once CAS claim). Null until assembly is claimed.</summary>
     public DateTimeOffset? AssemblyStartedAt { get; set; }
+
+    /// <summary>
+    /// Monotonic durable run-lease fencing token for the assembly attempt that owns this plan.
+    /// A takeover may mutate assembly state only with a strictly newer token.
+    /// </summary>
+    public long AssemblyFencingToken { get; set; }
+
+    /// <summary>Stable identity for the coordinator's one authorized Git merge effect.</summary>
+    public string? MergeEffectId { get; set; }
+
+    /// <summary>Run lifecycle generation that authorized <see cref="MergeEffectId"/>.</summary>
+    public int? MergeLifecycleGeneration { get; set; }
+
+    /// <summary>Immutable serialized prepared merge intent, persisted before any ref mutation.</summary>
+    public string? MergeIntentJson { get; set; }
+
+    /// <summary>prepared | not_applied | applied | unknown.</summary>
+    public string? MergeEffectState { get; set; }
+
+    /// <summary>Serialized observation used to justify the current merge-effect state.</summary>
+    public string? MergeEvidenceJson { get; set; }
+
+    /// <summary>Operator-facing recovery action taken for the latest observation.</summary>
+    public string? MergeRecoveryAction { get; set; }
+
+    public DateTimeOffset? MergePreparedAt { get; set; }
+    public DateTimeOffset? MergeObservedAt { get; set; }
+    public DateTimeOffset? MergeAppliedAt { get; set; }
 
     /// <summary>
     /// The Kubernetes pod (hostname) that currently owns the coordinator dispatch loop for this plan.

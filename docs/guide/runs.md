@@ -55,6 +55,19 @@ Missing or expired keys require new context.
 Coordinator outcome drafting, tool-less classification, and Preview analysis use the effective
 model provider, including a configured BYOK provider.
 Queued work retains its accepted provider fingerprint and stops if the provider changes before pickup.
+For backlog work, a human Contributor accepts that provider when moving the task to
+Ready. The server stores a signed, non-expiring queued plan bound to the project,
+orchestration operation, accepting Entra subject, and provider configuration; the key
+is never included in task responses. Pickup revalidates it and freezes the chosen
+provider and model for the run. Copilot-selected work still requires its Copilot
+capability; selecting BYOK does not grant optional GitHub repository authority.
+
+Older human Ready tasks with no signed acceptance fail before drafting with
+`queued_model_provider_confirmation_required`, even if a provider is now configured.
+To retry, capture a replacement task, or move an unclaimed Ready task back to Backlog
+and then Ready again. If the provider changed, reconnect or reconfigure it and
+re-Ready the unclaimed task; a malformed or mismatched signed plan fails closed
+with `invalid_ai_execution_plan` rather than choosing a different provider.
 
 Custom API clients prepare context through `POST /api/ai/execution-context`.
 The request contains `operation` and the applicable `project_id` or `run_id`.
@@ -105,11 +118,43 @@ preview. After eligible Build & Test outcomes, the coordinator invokes a determi
 platform **PreviewStep** before applying the gate decision. Preview unavailability is
 reported separately and does not itself block human review.
 
+`GET /api/runs/{id}` returns `sandbox.current_binding` alongside the existing
+historical `sandbox.backend`, `claim_name`, `pod_name`, and `namespace`. Only
+`current_binding.state: "verified"` attests the currently configured claim, Sandbox,
+Pod UID, lifecycle generation, assembly attempt, and source tree. `unavailable` means
+the proof is absent (including older claims with no post-configuration attestation);
+`conflict` means live identity differs from the attested binding. Check `reason`
+before trusting a preview. The executor backend can remain `kata-exec-sidecar` even
+when the provisioner is a Kubernetes SandboxClaim; a historical pod name is not
+evidence of the current preview pod. A child run can retain its own live preview
+after its execution ends; that child's claim and session are separate from the
+coordinator's claim and automatic preview. Never substitute a child binding for
+the coordinator's exact run and preview identity.
+Build/Test launch requires a durable post-configuration attestation; if the event cannot be
+recorded, the launch fails rather than reporting a successful unverified binding. The
+attested detached source worktree remains registered, clean, and unchanged through review.
+Removing, replacing, or modifying it makes the current binding unavailable or conflicting;
+recreating a checkout at the same path and commit does not restore the old proof.
+
 For a custom workflow without that gate, ask the coordinator to have an agent build and start
 the app in its sandbox. The agent can call `start_preview(port=PORT)` and optionally include
 the observed session ID. If registration times out, check `run_status` and retry only after
 confirming that the sandbox is still running. On non-Kubernetes backends, it provides local
 run instructions instead.
+
+If an API restart interrupts publication, retry with the same healthy preview session and
+port. A live publication attempt still returns a conflict; once its short renewable lease
+expires, a retry returns the already-published healthy route when its ready outcome was
+committed, or takes ownership without restarting the preview process otherwise. A superseded
+attempt cannot publish its ready events or release the retry's lease. A terminal run or
+unhealthy preview session remains an explicit error.
+
+If startup recovery advances a run to a new lifecycle generation during Gateway
+publication, the earlier API attempt loses its lease at the next renewal (normally
+within a minute), aborts, and releases it without stopping the replacement process.
+Retry from the recovered run with its new healthy preview session and port; a conflict
+while the old attempt is winding down is temporary, not a reason to wait for the full
+Gateway-convergence timeout. Ready events are emitted only by the current generation.
 
 The supervised preview process accepts either a worktree-relative working directory or the canonical absolute path of the worktree (or one of its subdirectories). Paths outside the run worktree, traversal escapes, and symlink or junction escapes remain blocked by the sandbox policy.
 
@@ -128,6 +173,29 @@ For define-outcome mode with autopilot off, the coordinator:
 5. Waits for your confirmation
 
 You review the OutcomeSpec in the conversation panel. If it looks right, confirm. If you need to adjust scope or correct an assumption, say so in the chat — the coordinator revises and re-presents.
+
+A gate shown as **awaiting confirmation** stays usable after an API restart or when your
+request reaches a different replica. The coordinator resumes its persisted checkpoint
+under the run's lease rather than drafting the original spec again. The PostgreSQL store
+restores polymorphic metadata order in saved checkpoints before the workflow reads them,
+including checkpoints written before a replica was replaced. A decision sent to the
+replica holding that lease may return `202` with `status: "queued"`; this means the
+decision is durably recorded, **not** that a revision or work plan has completed. Watch
+the outcome spec and run events for the next state. Conflicting decisions cannot replace
+a queued decision at the same gate.
+Chat replies at this gate use the same decision queue: a queued reply is not also sent
+as ordinary steering. Recovered drafts, confirmations, and plans may write only while
+the same run generation and lease remain active; cancellation or takeover wins even
+when it happens after the reply was accepted.
+
+If the checkpoint or durable gate cannot be reconciled, confirm/revise returns a typed
+`409 coordinator_gate_*` error with a run ID, correlation ID, and run-events path instead
+of claiming that an active run is inactive. Do not keep resubmitting a decision against
+a missing or corrupt gate; inspect the run events and retry the run only after addressing
+the reported recovery problem. Provider revocation still returns
+`409 model_provider_changed` before a decision is queued.
+If a revision's model call was interrupted without a provable outcome, recovery fails
+closed with a stalled-draft diagnostic rather than invoking the model a second time.
 
 ::: warning Check the launch mode
 Define-outcome with autopilot off waits for your confirmation. Direct mode skips outcome
@@ -163,6 +231,36 @@ The compact run header keeps the operator-facing identity first: status, run ID,
 start time, progress, elapsed time, provider state, and actions. The submitted
 prompt is not displayed on the run-detail page.
 
+Use **Execution identity** in the run header to inspect the immutable attempt
+descriptor, agent assignment, delegation or retry lineage, backend evidence, current
+effective permission binding, and safe tool/gate outcomes. The panel never displays
+the submitted prompt, raw tool arguments, credentials, repository roots, or Kubernetes
+resource names. Missing legacy records and incomplete backend or tool-call evidence are
+labeled explicitly.
+
+API and MCP clients can read the same projection through
+`GET /api/runs/{id}/execution-identity` and
+`run_execution_identity(run_id)`. Access follows the run's normal viewer authorization;
+unauthorized project runs are returned as not found to prevent enumeration. The
+permission binding shown at read time is current evidence, not authority restored from
+the immutable launch descriptor.
+
+The same response includes an `execution_manifest` inventory (`schema_version: 1`).
+Each input names its binding: `bound` refers to an existing persisted run pin,
+snapshot, output revision, immutable prerequisite composition, or Git commit;
+`current_state` means the runtime has not retained the consumed revision;
+`unavailable` means required evidence is missing or incompatible. Backlog runs
+bind `source_revision` and `prerequisite_outputs` to the exact source and
+materialized commits used for launch and recovery. The pinned workflow YAML also supplies the executable
+graph, while the stored run charter, launch approval snapshot, execution descriptor,
+and observed launch permission binding are separately identified. Blueprint, team,
+skills, resources, current capability policy, consumed source
+base, and knowledge are explicitly current-state inputs, not replay guarantees.
+Current access and revocation checks always apply. Output entries identify the
+retained review diff separately from full-file tree content; a diff alone does not
+prove historical file bytes. `compatibility: unavailable` on legacy, corrupt, or
+unsupported pinned inputs is not a successful fallback to live configuration.
+
 Use **Enter focus mode** to hide the global navigation and Start task row while
 keeping the run tree, selected task, messages, changes, and files available.
 Use **Exit focus mode** to restore the shell. Focus mode is temporary: it resets
@@ -180,6 +278,15 @@ if older coordinator context mentions `assembly_blocked` or `ineligible_subtasks
 the coordinator is waiting for subtasks that are not ready to assemble yet. A child whose run status
 is **InProgress** stays running in the topology and run tree, not failed. Failure diagnostics and
 retry guidance appear only after the run reaches a failed terminal status.
+During an API rollout, a watch connection may close while a workflow is waiting for its
+fan branches. This does not cancel the run: recovery reattaches to the persisted parent,
+work plan, and healthy child runs. Only an explicit stop or a persisted terminal outcome
+can end the run and cancel its active branches. A genuine stream completion without a
+terminal event remains recoverable for two closures; if it occurs a third time in the same run lifecycle,
+the run fails explicitly with `watch_stream_completed_without_terminal_event` and
+closure-count diagnostics instead of retrying indefinitely. The retry count resets for
+each run lifecycle. Shutdown, lease handoff, and a superseded watcher from a prior
+lifecycle do not count as malformed completions or terminalize the resumed run.
 
 ### Topology layout
 
@@ -234,7 +341,8 @@ RAI, Build & Test, Human Review, Merge, and Scribe run once on the **combined** 
 Scribe uses a read-only model tool profile. Durable memory housekeeping is performed by a
 server-side finalizer with bounded recovery and deterministic operation identities, so a timeout
 or restart can resume without duplicating decisions, session history, or exports. A Scribe child
-failure is visible and retryable but does not reverse an otherwise completed coordinator run.
+failure remains visible and does not reverse an otherwise completed coordinator run.
+Retryable failures receive bounded recovery attempts; non-retryable failures do not repeat.
 
 Collective feedback goes through coordinator steering, which can redirect existing
 children or dispatch fresh work. It is not a per-child RAI loop.
@@ -317,6 +425,9 @@ Agentweaver does not replace more specific outcomes with this fallback:
   the transport failure;
 - a clean A2A stream end without `agent.turn.end` becomes the retryable
   `agent_host_turn_incomplete`.
+- a coordinator outcome-spec stream that stops before a complete draft becomes
+  `coordinator_outcome_spec_draft_stalled`. Agentweaver retains any partial timeline evidence and
+  does not replay a draft after model output or tool activity has become observable.
 
 Before a remote A2A failure reaches the durable event stream, Agentweaver keeps only a
 bounded allowlisted error code and retryability. It derives the one-line diagnostic
@@ -336,6 +447,27 @@ traces. Use **Show failed only** to focus investigation. Correlation IDs are lin
 to that trace's focused view; they are navigation handles, not raw telemetry payloads.
 The Coordinator diagnostic includes a **View trace** action and tells you whether retry is
 available without repeating the provider or error code in separate status fragments.
+
+The response separates `observed_facts`, `supported_interpretations`, and `unknowns`.
+Facts are durable observations such as the terminal event or a tool error. An
+interpretation is emitted only when the terminal event directly references the matching
+tool call or policy decision; sequence proximity and repeated errors are not treated as
+proof of root cause. A recovered tool error remains a fact and is labeled as recovered.
+
+`attempt`, `observed_at`, `evidence_sources`, `evidence_references`, and `completeness`
+show which execution attempt was examined and whether each source was available. Durable
+terminal evidence remains usable when telemetry or execution-identity collection is
+missing. `partial` never means healthy; inspect the accompanying `unknowns`.
+
+When a terminal event directly identifies a denied tool call, `denial_gate` reports the
+recorded gate, effective capability, and permission-binding references. A run merely
+waiting for human approval is not reported as denied. `next_actions` are structured,
+non-mutating guidance: a safe fresh retry, authorization/configuration repair, or
+investigation of an unknown result. Diagnostics never change policy or retry a run.
+
+All evidence references obey the run's existing project-viewer authorization and contain
+only bounded identifiers. They exclude principals, prompts, arguments, repository paths,
+Kubernetes identities, credentials, and raw exception text.
 
 ### Execution bottleneck evidence
 
@@ -368,12 +500,11 @@ Those breadcrumbs may include exception type names plus server-authored `step:*`
 `phase:*`, `reason:*`, and `tool:*` labels; they never include prompts, tool payloads,
 headers, credentials, raw paths, or stack traces. AgentHost-generated internal failures
 and pre-launch provider failures include a server-generated correlation ID, the active
-trace ID when available, and a bounded exception-type chain. When a terminal failure
-has no direct exception chain, the diagnostic reader inspects recent persisted step and
-tool-error events so repeated tool failures are surfaced instead of misattributing the
-failure to the component that timed out last. If an earlier
-best-effort agent operation failed but the Coordinator later terminalized for another
-reason, the projection uses the latest terminal failure instead of the earlier recovered
+trace ID when available, and a bounded exception-type chain. When a terminal failure has no direct attribution, nearby step and tool errors are shown
+only as observations with unknown causality. If an earlier best-effort agent operation
+failed but later recovered, or the Coordinator terminalized for another reason, the
+projection uses the latest terminal failure and does not promote the earlier error into a
+root-cause claim.
 failure.
 It does not expose raw pod logs, stack traces, prompts, tool payloads, HTTP headers,
 credentials, tokens, or keys. Project Viewers can read diagnostics for their project.
@@ -401,6 +532,21 @@ From the runs list you can also **Abandon** an in-flight run (discards pending c
 Each agent runs inside a **dedicated git worktree** branched from the project's working directory. Agents cannot reach outside their worktree unless the sandbox policy explicitly allows it. The originating branch is never modified during a run — only after you approve and the merge step completes.
 
 While a child is running, its **Changes** and **Files** views refresh automatically. If its worktree is still provisioning, the views show that state instead of an empty result and continue polling until current artifacts are available.
+
+For a merged run with a recorded merge commit, the **Files** view and file-content
+preview read that exact commit, not the current agent branch or a leftover worktree.
+Moving the branch does not change previously merged content. If Git no longer has
+the recorded commit, the REST workspace and file-content endpoints return
+`410 pinned_commit_unavailable` instead of showing newer content; a file absent from
+that commit returns `404`. The web artifact browser uses these same endpoints.
+MCP `run_get_file` currently returns the stored per-file **diff**, not the
+file-content endpoint; it does not yet provide exact committed file bytes.
+Legacy merged runs with no recorded
+commit retain branch-based fallback, which does **not** guarantee exact historical
+bytes. Git commit reachability is not a fixed retention policy: rewriting refs and
+garbage-collecting unreachable objects can make old content unavailable.
+This is a committed-output retrieval safeguard, not yet a revision-history or
+review-approval contract for uncommitted files and coordinator assembly.
 
 
 <!-- flagship-diagrams:start -->

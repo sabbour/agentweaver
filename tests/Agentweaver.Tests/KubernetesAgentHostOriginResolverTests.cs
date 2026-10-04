@@ -14,6 +14,24 @@ public sealed class KubernetesAgentHostOriginResolverTests
     private const string PodName = "agent-pod-1";
 
     [Fact]
+    public async Task ClaimVerifiedReplacementPod_DoesNotUseReplicaLocalOldPodName()
+    {
+        string? requestedPod = null;
+        var handler = new SequencedPodHandler((request, _) =>
+        {
+            requestedPod = request.RequestUri?.AbsolutePath;
+            return Task.FromResult(PodResponse());
+        });
+        var resolver = CreateResolver(handler);
+
+        var origin = await resolver.TryResolvePodOriginAsync(
+            "agent-pod-replacement", RunId, CancellationToken.None);
+
+        origin.Should().Be("http://10.0.0.7:8088");
+        requestedPod.Should().EndWith("/pods/agent-pod-replacement");
+    }
+
+    [Fact]
     public async Task RetriesTwoTransientFaults_AndSucceedsOnThirdAttempt()
     {
         var handler = new SequencedPodHandler(

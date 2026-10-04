@@ -74,6 +74,25 @@ export interface RunSandboxInfo {
   isRealIsolation: boolean;
   /** Live SandboxClaim phase: "Pending" | "Bound" | "Lost". Null in non-k8s environments. */
   phase?: string | null;
+  /** Live, post-configuration ownership proof; historical backend and pod fields are not current proof. */
+  current_binding?: {
+    state: 'verified' | 'unavailable' | 'conflict';
+    reason?: string | null;
+    run_id?: string | null;
+    provisioner?: string | null;
+    claim_name?: string | null;
+    claim_uid?: string | null;
+    pod_name?: string | null;
+    pod_uid?: string | null;
+    namespace?: string | null;
+    lifecycle_generation?: number | null;
+    assembly_attempt?: string | null;
+    source_repository?: string | null;
+    source_ref?: string | null;
+    source_base_commit?: string | null;
+    source_tree?: string | null;
+    source_worktree?: string | null;
+  } | null;
 }
 
 export interface SandboxPolicy {
@@ -83,6 +102,118 @@ export interface SandboxPolicy {
   network_enabled: boolean;
   allowed_repository_roots: string[];
   destructive_command_patterns: string[];
+}
+
+export interface EffectivePermissionInspection {
+  run_id: string;
+  binding: {
+    schema_version: number;
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+    scope: string;
+    parent_binding_id: string | null;
+    parent_version: string | null;
+    launch_binding_id: string | null;
+    launch_version: string | null;
+  };
+  configured_policy: EffectivePermissionPolicySummary;
+  effective_policy: EffectivePermissionPolicySummary;
+  overrides: {
+    is_narrowed: boolean;
+    removed_operations: string[];
+    tightened_controls: string[];
+    launch_ceiling_active: boolean;
+    parent_restriction_active: boolean;
+  };
+  current_revocation: {
+    active: boolean;
+    removed_since_launch: string[];
+    tightened_controls: string[];
+    shell_revoked: boolean;
+    network_revoked: boolean;
+    direct_execution_revoked: boolean;
+  };
+  coverage: Array<{
+    operation: string;
+    allowed: boolean;
+    tool_family: string;
+    enforcement_gate: string;
+  }>;
+  latest_denial: {
+    reason_code: string;
+    reason: string;
+    operation: string | null;
+    tool_name: string | null;
+    binding_id: string | null;
+    binding_version: string | null;
+    binding_source: string | null;
+    sequence: number;
+    timestamp_utc: string | null;
+  } | null;
+}
+
+export interface ExecutionIdentityProjection {
+  evidence_state: 'complete' | 'partial' | 'missing_legacy_descriptor';
+  descriptor: {
+    descriptor_id: string;
+    schema_version: number;
+    run_id: string;
+    attempt: number;
+    principal_ref: string;
+    executing_service: string;
+    agent_assignment_id: string;
+    agent_role: string | null;
+    agent_display_name: string | null;
+    parent_descriptor_id: string | null;
+    retry_of_descriptor_id: string | null;
+    workflow_run_id: string | null;
+    subtask_id: string | null;
+    approval_policy_snapshot_id: string | null;
+    executable_workflow_digest: string | null;
+    created_at: string;
+  } | null;
+  backend: {
+    kind: string;
+    sandbox_ref: string | null;
+    evidence_state: string;
+  } | null;
+  launch_permission_binding: {
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+  } | null;
+  permission_binding: {
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+  } | null;
+  decisions: Array<{
+    sequence: number;
+    tool_call_id: string | null;
+    tool_name: string | null;
+    gate: string;
+    outcome: string;
+    reason_code: string | null;
+    correlation_state: string;
+    timestamp_utc: string | null;
+  }>;
+}
+
+export interface EffectivePermissionPolicySummary {
+  version: string;
+  shell_enabled: boolean;
+  direct_execution: boolean;
+  network_enabled: boolean;
+  require_approval_for_all_shell: boolean;
+  redact_pii: boolean;
+  max_output_bytes: number;
+  allowed_repository_root_count: number;
+  destructive_command_pattern_count: number;
+  allowed_operations: string[];
 }
 
 export interface SubmitRunResponse {
@@ -111,12 +242,15 @@ export interface RunDetail {
   diff: string | null;
   step_count: number;
   tree_hash: string | null;
+  lifecycle_generation?: number;
   sandbox?: RunSandboxInfo | null;
   worktree_branch?: string | null;
   // Feature 008 — coordinator child runs. Non-null parent_run_id ⇒ this run is a
   // dispatched CHILD of a coordinator (trimmed agent → RAI → assemble-ready pipeline).
   parent_run_id?: string | null;
   subtask_id?: string | null;
+  is_coordinator_plan?: boolean;
+  pending_request_kind?: string | null;
   // GET /api/runs/{id} also carries the cast agent name for a child run (the list
   // endpoint omits child runs entirely). Optional — absent on plain runs.
   agent_name?: string | null;
@@ -151,6 +285,64 @@ export interface RunTerminalDiagnostic {
   retryable: boolean | null;
   correlation_ids: Record<string, string>;
   cause_chain: string[];
+  schema_version?: number;
+  attempt?: number | null;
+  observed_at?: string | null;
+  completeness?: 'complete' | 'partial' | 'unavailable';
+  evidence_sources?: DiagnosticEvidenceSource[];
+  evidence_references?: DiagnosticEvidenceReference[];
+  observed_facts?: DiagnosticStatement[];
+  supported_interpretations?: DiagnosticStatement[];
+  unknowns?: DiagnosticStatement[];
+  denial_gate?: DiagnosticDenialGate | null;
+  next_actions?: DiagnosticNextAction[];
+  execution_descriptor_id?: string | null;
+  execution_identity_evidence_state?: string | null;
+}
+
+export interface DiagnosticEvidenceSource {
+  name: string;
+  availability: string;
+  completeness: string;
+  observed_at: string;
+  detail?: string | null;
+}
+
+export interface DiagnosticEvidenceReference {
+  id: string;
+  source: string;
+  kind: string;
+  sequence?: number | null;
+  observed_at?: string | null;
+  tool_call_id?: string | null;
+  synthetic: boolean;
+}
+
+export interface DiagnosticStatement {
+  code: string;
+  summary: string;
+  evidence_reference_ids: string[];
+}
+
+export interface DiagnosticDenialGate {
+  gate: string;
+  outcome: string;
+  reason_code?: string | null;
+  tool_call_id?: string | null;
+  tool_name?: string | null;
+  capability?: string | null;
+  permission_binding_id?: string | null;
+  permission_binding_version?: string | null;
+  permission_binding_source?: string | null;
+  evidence_reference_id: string;
+}
+
+export interface DiagnosticNextAction {
+  kind: 'safe_retry' | 'authorization_or_configuration_repair' | 'investigate_unknown';
+  label: string;
+  preconditions: string[];
+  expected_effect: string;
+  mutating: false;
 }
 
 const TERMINAL_FAILURE_CODES = new Set([
@@ -252,6 +444,38 @@ export interface RetriableReviewErrorBody {
   status: string;
 }
 
+export interface OutputRevision {
+  revision_id: string;
+  schema_version: number;
+  lifecycle_generation: number;
+  workflow_digest: string | null;
+  manifest_incomplete: boolean;
+  tree_hash: string;
+  diff_sha256: string;
+  tree_content_sha256: string | null;
+  predecessor_revision_id: string | null;
+  output_kind: string | null;
+  merged_commit_hash: string | null;
+  accepted_no_change: boolean;
+  created_at: string;
+  diff?: string;
+  files?: Array<{ path: string; mode: number; size: number; sha256: string }> | null;
+}
+
+export interface OutputRevisionFile {
+  revision_id: string;
+  path: string;
+  mode: number;
+  sha256: string;
+  content_base64: string;
+}
+
+export interface OutputRevisionComparison {
+  before_revision_id: string;
+  after_revision_id: string;
+  changes: Array<{ path: string; before_sha256: string | null; after_sha256: string | null }>;
+}
+
 export interface WorkspaceFileEntry {
   path: string;
   status: 'added' | 'modified' | 'deleted';
@@ -310,7 +534,7 @@ export interface RequestChangesResponse {
 
 // Projects
 export type ProjectOrigin = 'blank' | 'github';
-export type ProjectState = 'active' | 'deleting';
+export type ProjectState = 'creating' | 'active' | 'failed' | 'deleting';
 
 export interface Project {
   project_id: string;
@@ -533,6 +757,10 @@ export interface DecisionDto {
   content: string;
   rationale?: string;
   tags?: string;
+  revision: number;
+  current_revision_id: string;
+  superseded_by_id?: number | null;
+  trust_state?: string;
   created_at: string;
   updated_at: string;
 }
@@ -550,6 +778,27 @@ export interface DecisionInboxEntryDto {
   updated_at: string;
 }
 
+export interface AddressedMessageDto {
+  id: string;
+  projectId: string;
+  sender: string;
+  recipient: string;
+  sourceRunId: string | null;
+  targetRunId: string;
+  threadId: string;
+  replyToId: string | null;
+  referenceKind: string | null;
+  referenceId: string | null;
+  idempotencyKey: string;
+  content: string;
+  status: 'accepted' | 'claimed' | 'delivered' | 'acknowledged' | 'expired' | 'undeliverable';
+  createdAt: string;
+  expiresAt: string;
+  deliveredAt: string | null;
+  acknowledgedAt: string | null;
+  failureReason: string | null;
+}
+
 export interface AgentMemoryDto {
   id: string;
   agent_name: string;
@@ -557,8 +806,54 @@ export interface AgentMemoryDto {
   importance: string;
   content: string;
   tags?: string;
+  status: 'active' | 'superseded' | 'archived';
+  replaced_by_id?: number | null;
+  revision: number;
+  current_revision_id: string;
+  trust_state?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentMemoryRevisionDto {
+  revision_id: string;
+  memory_id: number;
+  revision: number;
+  previous_revision_id?: string | null;
+  actor: string;
+  source_run_id?: string | null;
+  reason: string;
+  agent_name: string;
+  type: string;
+  importance: string;
+  content: string;
+  tags?: string | null;
+  status: 'active' | 'superseded' | 'archived';
+  replaced_by_id?: number | null;
+  trust_state: string;
+  approved_at?: string | null;
+  created_at: string;
+}
+
+export interface DecisionRevisionDto {
+  revision_id: string;
+  decision_id: number;
+  revision: number;
+  previous_revision_id?: string | null;
+  actor: string;
+  source_run_id?: string | null;
+  reason: string;
+  agent_name: string;
+  type: string;
+  status: 'active' | 'superseded' | 'archived';
+  title: string;
+  content: string;
+  rationale?: string | null;
+  tags?: string | null;
+  superseded_by_id?: number | null;
+  trust_state: string;
+  approved_at?: string | null;
+  created_at: string;
 }
 
 export interface SessionHistoryDto {
@@ -1021,6 +1316,8 @@ export type SubtaskStatus =
   | 'rai_flagged'
   | 'completed'
   | 'failed'
+  | 'blocked'
+  | 'cancelled'
   | 'pending_capacity';
 
 // coordinator.work_plan event payload.
@@ -1052,6 +1349,8 @@ export interface TopologyNode {
   assignedAgent?: string;
   selectedModelId?: string;
   childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
   /** Pod name for the execution environment of this specific node (spec-018). Null today — all agents share the API pod; set per-node after distributed phases. */
   executionPodName?: string | null;
 }
@@ -1081,6 +1380,8 @@ export interface TopologyDelta {
 export interface SubtaskEvent {
   subtaskId: string;
   childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
   assignedAgent?: string;
   selectedModelId?: string;
   status: SubtaskStatus;
@@ -1098,6 +1399,8 @@ export interface WorkPlanSubtaskResponse {
   isolation: string;
   status: string;
   childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
 }
 
 export interface WorkPlanDependencyResponse {
@@ -1110,6 +1413,19 @@ export interface WorkPlanResponse {
   coordinatorRunId: string;
   outcomeSpecId: number;
   status: string;
+  parentRunId?: string | null;
+  parentWorkflowId?: string | null;
+  parentWorkflowNodeId?: string | null;
+  parentJoinNodeId?: string | null;
+  parentResumeRequestId?: string | null;
+  parentResumeState?: string | null;
+  joinedOutput?: string | null;
+  composedAssembly?: {
+    integrationBranch: string;
+    treeHash: string;
+    aggregateDiff: string;
+    includedChildRunIds: string[];
+  } | null;
   statusReason?: string | null;
   assemblyStage?: string | null;
   assemblyTerminalStage?: string | null;
@@ -1129,6 +1445,12 @@ export interface CoordinatorChildResponse {
   worktreeBranch?: string;
   treeHash?: string;
   stepCount: number;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
+  parentRunId?: string | null;
+  parentWorkflowId?: string | null;
+  parentWorkflowNodeId?: string | null;
+  parentJoinNodeId?: string | null;
 }
 
 export type SteerKind = 'send' | 'redirect' | 'amend' | 'stop';
@@ -1285,6 +1607,11 @@ export interface BacklogTaskDto {
   promotion_key?: string | null;
   promotion_reason?: string | null;
   depends_on_task_ids?: string[];
+  dependents_task_ids?: string[];
+  prerequisites?: BlockingDependencyDto[];
+  graph_revision?: number;
+  claimed_graph_revision?: number | null;
+  claimed_prerequisites?: BacklogClaimedPrerequisite[] | null;
   is_blocked?: boolean;
   blocked_reason?: string | null;
   is_ready_to_start?: boolean;
@@ -1296,6 +1623,25 @@ export interface BlockingDependencyDto {
   title: string;
   run_id?: string | null;
   run_status?: string | null;
+  reason?: string;
+  is_satisfied?: boolean;
+}
+
+export interface BacklogClaimedPrerequisite {
+  TaskId: string;
+  RunId: string;
+  Outcome: string;
+  LifecycleGeneration: number;
+  MergedCommitHash: string | null;
+  TreeHash: string | null;
+  ExecutableWorkflowContentDigest: string | null;
+}
+
+export interface BacklogDependenciesResponse {
+  revision: number;
+  prerequisites: string[];
+  affected_task_ids: string[];
+  changed: boolean;
 }
 
 // A Backlog/Ready intake card (board column kind === "intake").
@@ -1315,6 +1661,9 @@ export interface TaskCardDto {
   promotion_key?: string | null;
   promotion_reason?: string | null;
   depends_on_task_ids?: string[];
+  dependents_task_ids?: string[];
+  prerequisites?: BlockingDependencyDto[];
+  graph_revision?: number;
   is_blocked?: boolean;
   blocked_reason?: string | null;
   is_ready_to_start?: boolean;
@@ -1556,12 +1905,21 @@ export interface ClusterDiagnosticsDto {
   generated_utc: string;
   total_duration_ms: number;
   checks: DetailedHealthCheckDto[];
+  inventory_sources?: InventoryCollectionStatusDto[];
   active_agent_pods: AgentPodInfoDto[];
   orphaned_agent_pods: AgentPodInfoDto[];
   pending_capacity_runs: PendingCapacityRunDto[];
   warm_pools?: WarmPoolStatusDto[];
   sandbox_claims?: SandboxClaimObjectDto[];
   details?: TopologyResourceDetailsDto | null;
+}
+
+export interface InventoryCollectionStatusDto {
+  name: string;
+  outcome: 'available' | 'no_resources' | 'forbidden' | 'timeout' | 'unsupported' | 'malformed' | 'collection_error';
+  complete: boolean;
+  observed_at: string;
+  detail: string;
 }
 
 export type KubernetesTopologyLayer =
@@ -1773,6 +2131,8 @@ export interface WorkflowNodeDto {
   target?: string | null;
   steps?: string[] | null;
   branches?: string[] | null;
+  independent?: boolean | null;
+  declared_output_paths?: string[] | null;
 }
 
 // An edge in a workflow detail response.
@@ -2104,6 +2464,7 @@ export interface PortForwardSessionDto {
   local_port: number;
   target_port: number;
   pod_name: string;
+  preview_runner_session_id?: string | null;
   started_at: string;
   preview_url?: string | null;
   previewUrl?: string | null;

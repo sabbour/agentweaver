@@ -52,17 +52,18 @@ For ad-hoc runs or workflows that produce a runnable artifact outside a `build_t
   Everything outside the BEGIN/END markers is hand-written and preserved.
 -->
 
-The Agentweaver MCP server exposes **111 tools** across **14 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
+The Agentweaver MCP server exposes **131 tools** across **15 categories**. Tool names below are the stable identifiers to call (each is the `agentweaver-*` MCP tool); one-line descriptions live in `docs/reference/mcp-tools.md`.
 
-- **Backlog:** `backlog_archive_task`, `backlog_capture_task`, `backlog_decompose_spec`, `backlog_delete_task`, `backlog_edit_task`, `backlog_get_board`, `backlog_get_settings`, `backlog_get_task`, `backlog_get_workflow_stages`, `backlog_move_to_backlog`, `backlog_move_to_ready`, `backlog_reorder_task`, `backlog_set_settings`, `send_all_backlog_to_ready`
+- **Addressed Message:** `agent_message_acknowledge`, `agent_message_claim`, `agent_message_deliver`, `agent_message_get`, `agent_message_list`, `agent_message_send`
+- **Backlog:** `backlog_archive_task`, `backlog_capture_task`, `backlog_decompose_spec`, `backlog_delete_task`, `backlog_edit_dependencies`, `backlog_edit_task`, `backlog_get_board`, `backlog_get_dependency_revision`, `backlog_get_settings`, `backlog_get_task`, `backlog_get_workflow_stages`, `backlog_move_to_backlog`, `backlog_move_to_ready`, `backlog_reorder_task`, `backlog_set_settings`, `send_all_backlog_to_ready`
 - **Blueprint:** `blueprint_generate`, `blueprint_generation_cancel`, `blueprint_generation_result`, `blueprint_generation_retry`, `blueprint_generation_status`, `list_blueprints`, `validate_blueprint`
 - **Catalog:** `catalog_list_roles`, `catalog_list_scenarios`
 - **Coordinator:** `coordinator_children_get`, `coordinator_outcome_spec_confirm`, `coordinator_outcome_spec_get`, `coordinator_outcome_spec_revise`, `coordinator_start`, `coordinator_steer`, `coordinator_work_plan_get`, `orchestration_topology`
 - **Diagnostics:** `diagnostics_get`, `heartbeat_status`, `run_failure_diagnostic`
 - **GitHub Auth:** `github_repo_app_authorization_status`, `github_repo_app_connect`, `github_repo_app_disconnect`, `project_copilot_app_authorization_status`, `project_copilot_app_connect`, `project_copilot_app_disconnect`, `project_github_capability_status`
-- **Memory:** `decision_create`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_inbox_submit`, `decision_list`, `decision_update`, `memory_export`, `memory_get`, `memory_import`, `memory_list`, `memory_record`, `memory_search`, `session_current`, `session_start`, `session_update`, `squad_decide`
+- **Memory:** `decision_compare`, `decision_create`, `decision_history`, `decision_inbox_list`, `decision_inbox_merge`, `decision_inbox_reject`, `decision_inbox_submit`, `decision_list`, `decision_restore`, `decision_update`, `memory_compare`, `memory_export`, `memory_get`, `memory_history`, `memory_import`, `memory_list`, `memory_record`, `memory_restore`, `memory_search`, `memory_update`, `session_current`, `session_start`, `session_update`, `squad_decide`
 - **Project:** `github_repository_selection_issue`, `github_repository_selections_list`, `project_configure`, `project_create`, `project_delete`, `project_get`, `project_list`, `project_list_runs`, `project_rename`
-- **Run:** `run_archive`, `run_get_file`, `run_retry`, `run_review`, `run_show_artifacts`, `run_status`, `run_submit`, `run_task`, `run_watch`, `start_preview`
+- **Run:** `run_archive`, `run_execution_identity`, `run_get_file`, `run_output_compare`, `run_output_file`, `run_output_history`, `run_output_revision`, `run_retry`, `run_review`, `run_show_artifacts`, `run_status`, `run_submit`, `run_task`, `run_watch`, `start_preview`
 - **Sandbox Policy:** `sandbox_policy_get`, `sandbox_policy_set`
 - **Skill:** `skill_assign`, `skill_assignments_list`, `skill_create`, `skill_defaults_apply`, `skill_defaults_preview`, `skill_delete`, `skill_generate`, `skill_get`, `skill_import`, `skill_import_preview`, `skill_list`, `skill_marketplace_browse`, `skill_marketplace_import`, `skill_marketplace_source_add`, `skill_marketplace_source_remove`, `skill_marketplace_sources_list`, `skill_marketplaces_list`, `skill_sync`, `skill_unassign`
 - **Team:** `team_cast`, `team_get`, `team_member_add`, `team_member_get_charter`, `team_member_retire`
@@ -75,6 +76,7 @@ The Agentweaver MCP server exposes **111 tools** across **14 categories**. Tool 
 
 ### Submit and supervise a run
 **Recommended common case:** call `run_task` and let it handle start → poll → artifacts. It returns terminal artifacts, `awaiting_review`, `awaiting_confirmation`, or `timed_out` with the next step.
+Only `pending_request_kind: workflow_review` on the current run warrants manual `run_review`; `awaiting_review` alone can mean automated child work. On child waits or timeout, use `run_status` or `run_watch` with the original ID, never another `run_task` to continue. An absent kind or an old plan is not approval evidence.
 
 **Manual control path:**
 1. `project_list` → pick project; confirm desired workflow is in `allowed_workflow_ids`.

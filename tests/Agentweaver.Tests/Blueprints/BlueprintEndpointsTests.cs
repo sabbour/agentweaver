@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Agentweaver.AgentRuntime.Providers;
@@ -140,8 +141,11 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
     [Fact]
     public async Task WorkerClaim_ReclaimsExpiredLeaseWithTenQueuedJobs()
     {
-        await using var scope = _factory.Services.CreateAsyncScope();
-        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync();
+        await using var db = new MemoryDbContext(
+            new DbContextOptionsBuilder<MemoryDbContext>().UseSqlite(connection).Options);
+        await db.Database.EnsureCreatedAsync();
         var prefix = Guid.NewGuid().ToString("N");
         var now = DateTimeOffset.UtcNow;
         var activeId = $"{prefix}-active";
@@ -203,7 +207,7 @@ public sealed class BlueprintEndpointsTests : IClassFixture<BlueprintsWebApplica
         }
         await db.SaveChangesAsync();
 
-        var store = scope.ServiceProvider.GetRequiredService<BlueprintGenerationJobStore>();
+        var store = new BlueprintGenerationJobStore(db);
         var reclaimed = await store.TryClaimNextAsync(
             "replacement-owner",
             TimeSpan.FromMinutes(2),

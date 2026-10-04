@@ -10,7 +10,7 @@
 This page is generated from the MCP server source. Do not edit it by hand — run `node scripts/gen-docs.mjs`. For the full parameter reference of each tool, see [MCP server reference](./mcp.md).
 :::
 
-The Agentweaver MCP server exposes **111 tools** across **14 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
+The Agentweaver MCP server exposes **131 tools** across **15 categories**. This index is the authoritative list of tool names and one-line descriptions, derived directly from the `[McpServerTool]` attributes in the server source.
 
 MCP tool implementations URI-escape every route path parameter before calling the Agentweaver API. Segments such as `project_id`, `run_id`, `agent_name`, and task or workflow ids are encoded with `Uri.EscapeDataString()` so crafted ids cannot inject `../` or otherwise change the API path. Query-string parameters keep their normal query encoding.
 
@@ -27,6 +27,17 @@ All MCP tool failures surface a structured JSON message:
 
 Common mappings include Agentweaver sign-in guidance for `401`s, resource-specific list/read hints for `404`s, review-state guidance for `409`s, and `diagnostics_get` retry guidance for timeouts.
 
+## Addressed Message
+
+| Tool | Description |
+| --- | --- |
+| `agent_message_acknowledge` | Acknowledge a delivered message as received; does not change task or decision state. |
+| `agent_message_claim` | At a recipient turn boundary, lease the oldest pending addressed message. |
+| `agent_message_deliver` | Record delivery only after presenting the claimed message at a safe turn boundary. |
+| `agent_message_get` | Get one addressed message's state and correlation. |
+| `agent_message_list` | List addressed messages and delivery diagnostics visible to this caller. |
+| `agent_message_send` | Persist an addressed message to one teammate's active run; acknowledgment only confirms receipt. |
+
 ## Backlog
 
 | Tool | Description |
@@ -35,8 +46,10 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | `backlog_capture_task` | Capture a new task into the project backlog. |
 | `backlog_decompose_spec` | Decompose a workspace spec file into proposed backlog tasks for a project. Reads a markdown file from the project's workspace, runs AI decomposition, and returns proposed items for review. Use confirm=true to create the tasks, confirm=false for preview only. Results are capped at 50 items. |
 | `backlog_delete_task` | Delete a backlog task. Fails with 409 if the task has already been claimed. |
+| `backlog_edit_dependencies` | Atomically add, remove, or replace a task's prerequisites at an expected project graph revision; preview=true does not mutate. |
 | `backlog_edit_task` | Edit the title and/or description of a backlog task. |
 | `backlog_get_board` | Get the full Kanban board for a project: Backlog, Ready, Problems, Human Review, Active, and Done. |
+| `backlog_get_dependency_revision` | Get the project dependency graph revision for a safe edit or preview. |
 | `backlog_get_settings` | Get the per-project backlog pickup settings (max_ready_per_heartbeat, pickup_autopilot, pickup_auto_approve_tools). |
 | `backlog_get_task` | Get one enriched backlog task, including blocking dependency status. |
 | `backlog_get_workflow_stages` | Get the ordered canonical run-bucket definitions for a project (Problems, Human Review, Active, Done). |
@@ -69,14 +82,14 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
-| `coordinator_children_get` | List the child runs dispatched by a Coordinator run, each paired with its subtask status, assigned agent, selected model, and child run status. Empty when nothing has been dispatched. |
+| `coordinator_children_get` | List child runs from the same plan selected by coordinator_work_plan_get: an exact coordinator run plan or the latest persisted child-work node plan for a parent workflow run. Includes parent workflow correlation, branch node ids, persisted ordinals, subtask, agent, model, and child-run status. Empty when nothing has been dispatched. |
 | `coordinator_outcome_spec_confirm` | Confirm the drafted outcome spec for a Coordinator run, resuming the suspended run past the confirmation gate. |
 | `coordinator_outcome_spec_get` | Get the current persisted outcome spec for a Coordinator run. |
 | `coordinator_outcome_spec_revise` | Request a revision of the drafted outcome spec for a Coordinator run. The coordinator re-drafts using the feedback and re-suspends at the confirmation gate. |
 | `coordinator_start` | Start a Coordinator orchestration for a project from a plain-language goal. Optional per-run approval policy can auto-approve repository-defined safe tools and enable autopilot; destructive, privileged, preview, secret, and other network approvals remain gated. |
 | `coordinator_steer` | Steer a Coordinator run. Use 'stop' to cancel active subagents immediately; 'redirect' or 'amend' to inject guidance at the targeted subagent's next turn boundary; or a recovery verb (e.g. 'recover') to reset blocked/failed/parked subtasks and auto-resume the dispatch loop. Omit target_child_run_id to broadcast to every active child. instruction is required for redirect/amend and optional for stop/recovery verbs. Pause is not supported. |
-| `coordinator_work_plan_get` | Get the work plan for a Coordinator run: the decomposed subtasks with their assigned agent, selected model, status, child run id, and the dependency edges between subtasks. Returns null when no work plan has been drafted yet. |
-| `orchestration_topology` | Get a one-shot topology snapshot for a Coordinator run by combining the work plan and child runs into a current view of subtasks, dependency edges, and dispatched children. For the live graph, point run_watch at the coordinator run id and consume its coordinator.topology, subtask.*, and coordinator.steering events. |
+| `coordinator_work_plan_get` | Get a Coordinator work plan, including workflow parent/resume correlation, ordered joined output, branch node ids, persisted ordinals, status, child run ids, and dependency edges. A parent workflow run selects its latest persisted child-work node plan; an exact coordinator run id selects its own plan. Returns null when no work plan has been drafted yet. |
+| `orchestration_topology` | Combine two authenticated work-plan and children reads for an exact coordinator run or a parent workflow run's latest persisted child-work node plan. The reads are not an atomic snapshot. For the live graph, point run_watch at the coordinator run id and consume its coordinator.topology, subtask.*, and coordinator.steering events. |
 
 ## Diagnostics
 
@@ -84,7 +97,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | --- | --- |
 | `diagnostics_get` | Get a real-time system diagnostics snapshot: API version, process uptime, project/run counts, heartbeat state, and checkpoint GC state. |
 | `heartbeat_status` | Get the current coordinator heartbeat service status: enabled flag, interval, last tick time, and service state (running / waiting_first_tick / disabled). |
-| `run_failure_diagnostic` | Get the bounded, redacted terminal diagnostic for a failed run. This never returns raw logs, stacks, prompts, headers, credentials, or tool payloads. |
+| `run_failure_diagnostic` | Explain a failed run with bounded observed facts, attributable interpretations, unknowns, evidence completeness, the effective denial gate when recorded, and safe non-mutating next actions. |
 
 ## GitHub Auth
 
@@ -102,19 +115,26 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
+| `decision_compare` | Retrieve two immutable decision revisions for comparison. |
 | `decision_create` | Create a team decision directly (coordinator path). |
+| `decision_history` | List immutable revisions for a decision. |
 | `decision_inbox_list` | List inbox entries for a project. |
 | `decision_inbox_merge` | Merge a pending inbox entry into team decisions. |
 | `decision_inbox_reject` | Reject a pending inbox entry. |
 | `decision_inbox_submit` | Submit a decision or learning to the agent inbox. |
 | `decision_list` | List team decisions for a project. |
+| `decision_restore` | Restore a prior decision snapshot as a new pending revision. |
 | `decision_update` | Update a decision's status, content, or rationale. |
+| `memory_compare` | Retrieve two immutable memory revisions for comparison. |
 | `memory_export` | Export project memory to .squad/ and .agentweaver/context/ files and report the paths written. |
 | `memory_get` | Get a single memory entry. |
+| `memory_history` | List immutable revisions for a memory entry. |
 | `memory_import` | Import .squad/decisions/inbox/*.md files into the project memory DB. |
 | `memory_list` | List memory entries for a specific agent. |
 | `memory_record` | Add a memory entry for an agent. |
+| `memory_restore` | Restore a prior memory snapshot as a new pending revision. |
 | `memory_search` | Cross-agent memory search across the whole project. |
+| `memory_update` | Update memory with optimistic concurrency; approved content becomes pending. |
 | `session_current` | Get the current open session for a project. |
 | `session_start` | Start a new work session for a project. |
 | `session_update` | Update the current session's focus, summary, or end it. |
@@ -139,13 +159,18 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 | Tool | Description |
 | --- | --- |
 | `run_archive` | Archive a run off active project board/list projections. |
+| `run_execution_identity` | Get the authorization-filtered execution identity, delegation, retry, backend, permission-binding, and tool-decision record for a run. |
 | `run_get_file` | Get the content or diff of a specific file changed by a run. |
-| `run_retry` | Retry a failed run by creating a fresh run from its original inputs. |
+| `run_output_compare` | Compare exact retained file identities between two output revisions of one run. |
+| `run_output_file` | Read retained exact file bytes (base64), independent of the current branch or worktree. |
+| `run_output_history` | List immutable output revisions for a run, including collective output identities. |
+| `run_output_revision` | Read the exact immutable output revision and retained file inventory. |
+| `run_retry` | Retry a failed run, or only an exact unlaunched in-progress composed recovery. Eligible coordinators, pre-dispatch composed failures, and that narrow in-progress recovery resume the same run ID; other failed-run retries create a fresh run. Arbitrary active runs cannot be retried. |
 | `run_review` | Approve or reject a run that is awaiting review. |
 | `run_show_artifacts` | List the files changed by a run. |
 | `run_status` | Get the current status of a run. |
 | `run_submit` | Legacy compatibility alias that starts a coordinator run directly in direct mode. Prefer run_task for the common one-call flow, or coordinator_start for full manual control. |
-| `run_task` | Run the common coordinator workflow in one call: start the run, poll status until it completes or hits a gate, and return the artifacts or next action. |
+| `run_task` | Start a coordinator run once, poll the same run until completion, a proven human review or confirmation gate, or timeout. For automated child waits and timeouts, continue with run_status or run_watch; never rerun run_task to resume. |
 | `run_watch` | Watch a run live, streaming progress until completion. |
 | `start_preview` | Register a live browser preview for a web server the agent has ALREADY started and verified inside a run's sandbox pod. Call this AFTER your server is running and responding (e.g. you confirmed `curl http://localhost:PORT/` succeeds) — pass the exact port it listens on (e.g. 3000). If observe_bound_port returned a session_id, pass it so the server can verify the process is still healthy. You MUST call this whenever you start any server so the user gets a live preview link. Routes through a human-in-the-loop approval gate; returns the public HTTPS preview_url once approved. Do not finish the task without registering the preview for any server you started. |
 
@@ -153,7 +178,7 @@ Common mappings include Agentweaver sign-in guidance for `401`s, resource-specif
 
 | Tool | Description |
 | --- | --- |
-| `sandbox_policy_get` | Get the sandbox policy for a repository. |
+| `sandbox_policy_get` | Get a configured repository sandbox policy or a run's effective permission inspection. |
 | `sandbox_policy_set` | Set the sandbox policy for a repository. |
 
 ## Skill

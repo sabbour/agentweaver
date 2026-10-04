@@ -31,6 +31,7 @@ public sealed class BacklogPromotionServiceTests
         };
 
         var first = await service.PromoteAsync(project.Id, parentRun.Id, "Coordinator", stories);
+        (await backlogStore.GetDependencyRevisionAsync(project.Id)).Should().Be(1);
 
         first.CreatedCount.Should().Be(2);
         first.Tasks.Select(t => t.PromotionKey).Should().Equal("story-a", "story-b");
@@ -46,6 +47,7 @@ public sealed class BacklogPromotionServiceTests
         dependencies[0].DependsOnTaskId.Should().Be(first.Tasks.Single(t => t.PromotionKey == "story-a").Id);
 
         var replay = await service.PromoteAsync(project.Id, parentRun.Id, "Coordinator", stories);
+        (await backlogStore.GetDependencyRevisionAsync(project.Id)).Should().Be(1);
         replay.CreatedCount.Should().Be(0);
         replay.Tasks.Select(t => t.Id).Should().Equal(first.Tasks.Select(t => t.Id));
     }

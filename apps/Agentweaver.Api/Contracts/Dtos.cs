@@ -104,6 +104,9 @@ public sealed record RunResponse
     [JsonPropertyName("run_id")]
     public required string RunId { get; init; }
 
+    [JsonPropertyName("lifecycle_generation")]
+    public int LifecycleGeneration { get; init; }
+
     [JsonPropertyName("project_id")]
     public string? ProjectId { get; init; }
 
@@ -204,6 +207,12 @@ public sealed record RunResponse
     [JsonPropertyName("subtask_id")]
     public string? SubtaskId { get; init; }
 
+    [JsonPropertyName("is_coordinator_plan")]
+    public bool IsCoordinatorPlan { get; init; }
+
+    [JsonPropertyName("pending_request_kind")]
+    public string? PendingRequestKind { get; init; }
+
     /// <summary>
     /// The run_id of the FAILED run this run was retriggered from (POST /api/runs/{id}/retry).
     /// Null for runs not produced by a retry. Lets the UI/MCP surface retry provenance.
@@ -262,19 +271,10 @@ public sealed record RunResponse
 }
 
 /// <summary>
-/// Safe, bounded terminal diagnostic for a failed run. This intentionally excludes raw exceptions,
-/// stack traces, prompts, tool payloads, headers, credentials, and infrastructure logs.
+/// Compatibility name for API consumers. The shared contract lives in Agentweaver.AspNetCore so
+/// REST and MCP expose the same shape without duplicating sanitization.
 /// </summary>
-public sealed record RunTerminalDiagnosticResponse
-{
-    [JsonPropertyName("code")] public required string Code { get; init; }
-    [JsonPropertyName("message")] public required string Message { get; init; }
-    [JsonPropertyName("component")] public required string Component { get; init; }
-    [JsonPropertyName("timestamp")] public required DateTimeOffset Timestamp { get; init; }
-    [JsonPropertyName("retryable")] public bool? Retryable { get; init; }
-    [JsonPropertyName("correlation_ids")] public required IReadOnlyDictionary<string, string> CorrelationIds { get; init; }
-    [JsonPropertyName("cause_chain")] public required IReadOnlyList<string> CauseChain { get; init; }
-}
+public sealed record RunTerminalDiagnosticResponse : Agentweaver.AspNetCore.RunTerminalDiagnosticResponse;
 
 /// <summary>Summary of a workflow run returned by GET /api/projects/{id}/runs.</summary>
 public sealed record WorkflowRunSummary
@@ -355,6 +355,9 @@ public sealed record SandboxStatusDto
     [JsonPropertyName("phase")]
     public string? Phase { get; init; }
 
+    [JsonPropertyName("current_binding")]
+    public Agentweaver.Api.Sandbox.CurrentSandboxBindingResult? CurrentBinding { get; init; }
+
     [JsonPropertyName("claim_name")]
     public string? ClaimName { get; init; }
 
@@ -393,6 +396,9 @@ public sealed record SandboxPolicyDto
 
     [JsonPropertyName("max_output_bytes")]
     public int MaxOutputBytes { get; init; }
+
+    [JsonPropertyName("allowed_operations")]
+    public IReadOnlyList<string>? AllowedOperations { get; init; }
 }
 
 /// <summary>
@@ -430,6 +436,9 @@ public sealed record SandboxPolicyUpdateRequest
 
     [JsonPropertyName("max_output_bytes")]
     public int? MaxOutputBytes { get; init; }
+
+    [JsonPropertyName("allowed_operations")]
+    public IReadOnlyList<string>? AllowedOperations { get; init; }
 }
 public sealed record GitHubRepoResponse(
     string FullName,
@@ -509,6 +518,9 @@ public sealed record ReviewRequest
     /// <summary>Feedback text sent back to the agent for its next iteration.</summary>
     [JsonPropertyName("feedback")]
     public string? Feedback { get; init; }
+
+    [JsonPropertyName("output_revision_id")]
+    public string? OutputRevisionId { get; init; }
 }
 
 /// <summary>
@@ -519,6 +531,8 @@ public sealed record ReviewRequest
 /// </summary>
 public sealed record AssemblyReviewRequest
 {
+    [JsonPropertyName("output_revision_id")]
+    public string? OutputRevisionId { get; init; }
     [JsonPropertyName("approved")]
     public required bool Approved { get; init; }
 
@@ -1025,10 +1039,12 @@ public sealed record CreateDecisionRequest
 
 public sealed record UpdateDecisionRequest
 {
+    [JsonPropertyName("expected_revision")] public int? ExpectedRevision { get; init; }
     [JsonPropertyName("status")] public string? Status { get; init; }
     [JsonPropertyName("content")] public string? Content { get; init; }
     [JsonPropertyName("rationale")] public string? Rationale { get; init; }
     [JsonPropertyName("superseded_by_id")] public int? SupersededById { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
 }
 
 /// <summary>Request body for recording one agent memory against a project.</summary>
@@ -1044,10 +1060,27 @@ public sealed record RecordMemoryRequest
 /// <summary>Request body for updating editable agent-memory fields.</summary>
 public sealed record UpdateMemoryRequest
 {
+    [JsonPropertyName("expected_revision")] public int? ExpectedRevision { get; init; }
     [JsonPropertyName("type")] public string? Type { get; init; }
     [JsonPropertyName("importance")] public string? Importance { get; init; }
     [JsonPropertyName("content")] public string? Content { get; init; }
     [JsonPropertyName("tags")] public string? Tags { get; init; }
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("replaced_by_id")] public int? ReplacedById { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
+}
+
+public sealed record ExpectedRevisionRequest
+{
+    [JsonPropertyName("expected_revision")] public int? ExpectedRevision { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
+}
+
+public sealed record RestoreKnowledgeRequest
+{
+    [JsonPropertyName("expected_revision")] public int? ExpectedRevision { get; init; }
+    [JsonPropertyName("revision")] public int? Revision { get; init; }
+    [JsonPropertyName("reason")] public string? Reason { get; init; }
 }
 
 /// <summary>Request body for starting or rehydrating the current cross-agent working session for a project.</summary>
@@ -1257,6 +1290,27 @@ public sealed record WorkPlanResponse
     [JsonPropertyName("coordinatorRunId")] public required string CoordinatorRunId { get; init; }
     [JsonPropertyName("outcomeSpecId")] public required int OutcomeSpecId { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }
+    [JsonPropertyName("parentRunId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentRunId { get; init; }
+    [JsonPropertyName("parentWorkflowId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentWorkflowId { get; init; }
+    [JsonPropertyName("parentWorkflowNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentWorkflowNodeId { get; init; }
+    [JsonPropertyName("parentJoinNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentJoinNodeId { get; init; }
+    [JsonPropertyName("parentResumeRequestId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentResumeRequestId { get; init; }
+    [JsonPropertyName("parentResumeState")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentResumeState { get; init; }
+    [JsonPropertyName("joinedOutput")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? JoinedOutput { get; init; }
 
     /// <summary>
     /// Current/last assembly stage (null until a collective gate/action starts). This remains useful
@@ -1283,6 +1337,18 @@ public sealed record WorkPlanResponse
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? StatusReason { get; init; }
 
+    [JsonPropertyName("mergeEffectState")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MergeEffectState { get; init; }
+
+    [JsonPropertyName("mergeRecoveryAction")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MergeRecoveryAction { get; init; }
+
+    [JsonPropertyName("mergeEvidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MergeEvidence { get; init; }
+
     [JsonPropertyName("isolationSummary")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IsolationSummary { get; init; }
@@ -1306,6 +1372,12 @@ public sealed record WorkPlanSubtaskResponse
     [JsonPropertyName("childRunId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ChildRunId { get; init; }
+    [JsonPropertyName("workflowBranchNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkflowBranchNodeId { get; init; }
+    [JsonPropertyName("workflowBranchOrdinal")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? WorkflowBranchOrdinal { get; init; }
 }
 
 /// <summary>A dependency edge in <see cref="WorkPlanResponse"/>: subtaskId depends on dependsOnSubtaskId.</summary>
@@ -1337,6 +1409,24 @@ public sealed record CoordinatorChildResponse
     public string? TreeHash { get; init; }
 
     [JsonPropertyName("stepCount")] public required int StepCount { get; init; }
+    [JsonPropertyName("workflowBranchNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkflowBranchNodeId { get; init; }
+    [JsonPropertyName("workflowBranchOrdinal")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? WorkflowBranchOrdinal { get; init; }
+    [JsonPropertyName("parentRunId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentRunId { get; init; }
+    [JsonPropertyName("parentWorkflowId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentWorkflowId { get; init; }
+    [JsonPropertyName("parentWorkflowNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentWorkflowNodeId { get; init; }
+    [JsonPropertyName("parentJoinNodeId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ParentJoinNodeId { get; init; }
 }
 
 /// <summary>Request body for POST /api/runs/{coordinatorRunId}/steer.</summary>
@@ -1345,6 +1435,7 @@ public sealed record SteerRequest
     [JsonPropertyName("kind")] public string? Kind { get; init; }
     [JsonPropertyName("target_child_run_id")] public string? TargetChildRunId { get; init; }
     [JsonPropertyName("instruction")] public string? Instruction { get; init; }
+    [JsonPropertyName("output_revision_id")] public string? OutputRevisionId { get; init; }
 }
 
 /// <summary>
@@ -1410,6 +1501,24 @@ public sealed record BlockingDependencyDto
     [JsonPropertyName("title")] public required string Title { get; init; }
     [JsonPropertyName("run_id")] public string? RunId { get; init; }
     [JsonPropertyName("run_status")] public string? RunStatus { get; init; }
+    [JsonPropertyName("reason")] public required string Reason { get; init; }
+    [JsonPropertyName("is_satisfied")] public bool IsSatisfied { get; init; }
+}
+
+public sealed record EditBacklogDependenciesRequest
+{
+    [JsonPropertyName("expected_revision")] public long ExpectedRevision { get; init; }
+    [JsonPropertyName("add")] public IReadOnlyList<string>? Add { get; init; }
+    [JsonPropertyName("remove")] public IReadOnlyList<string>? Remove { get; init; }
+    [JsonPropertyName("replace")] public IReadOnlyList<string>? Replace { get; init; }
+}
+
+public sealed record BacklogDependenciesResponse
+{
+    [JsonPropertyName("revision")] public long Revision { get; init; }
+    [JsonPropertyName("prerequisites")] public required IReadOnlyList<string> Prerequisites { get; init; }
+    [JsonPropertyName("affected_task_ids")] public required IReadOnlyList<string> AffectedTaskIds { get; init; }
+    [JsonPropertyName("changed")] public bool Changed { get; init; }
 }
 
 /// <summary>Full backlog-task projection returned by capture/edit/move/reorder.</summary>
@@ -1433,6 +1542,11 @@ public sealed record BacklogTaskDto
     [JsonPropertyName("promotion_key")] public string? PromotionKey { get; init; }
     [JsonPropertyName("promotion_reason")] public string? PromotionReason { get; init; }
     [JsonPropertyName("depends_on_task_ids")] public required IReadOnlyList<string> DependsOnTaskIds { get; init; }
+    [JsonPropertyName("dependents_task_ids")] public required IReadOnlyList<string> DependentsTaskIds { get; init; }
+    [JsonPropertyName("prerequisites")] public required IReadOnlyList<BlockingDependencyDto> Prerequisites { get; init; }
+    [JsonPropertyName("graph_revision")] public long GraphRevision { get; init; }
+    [JsonPropertyName("claimed_graph_revision")] public long? ClaimedGraphRevision { get; init; }
+    [JsonPropertyName("claimed_prerequisites")] public IReadOnlyList<Agentweaver.Domain.BacklogClaimedPrerequisite>? ClaimedPrerequisites { get; init; }
     [JsonPropertyName("is_blocked")] public bool IsBlocked { get; init; }
     [JsonPropertyName("blocked_reason")] public string? BlockedReason { get; init; }
     [JsonPropertyName("is_ready_to_start")] public bool IsReadyToStart { get; init; }
@@ -1479,6 +1593,9 @@ public sealed record TaskCardDto
     [JsonPropertyName("promotion_key")] public string? PromotionKey { get; init; }
     [JsonPropertyName("promotion_reason")] public string? PromotionReason { get; init; }
     [JsonPropertyName("depends_on_task_ids")] public required IReadOnlyList<string> DependsOnTaskIds { get; init; }
+    [JsonPropertyName("dependents_task_ids")] public required IReadOnlyList<string> DependentsTaskIds { get; init; }
+    [JsonPropertyName("prerequisites")] public required IReadOnlyList<BlockingDependencyDto> Prerequisites { get; init; }
+    [JsonPropertyName("graph_revision")] public long GraphRevision { get; init; }
     [JsonPropertyName("is_blocked")] public bool IsBlocked { get; init; }
     [JsonPropertyName("blocked_reason")] public string? BlockedReason { get; init; }
     [JsonPropertyName("is_ready_to_start")] public bool IsReadyToStart { get; init; }
@@ -1589,7 +1706,7 @@ public sealed record ReadyAllResponse
 /// <summary>
 /// Response body for POST /api/runs/{id}/retry. Two shapes: (1) a freshly created retry run
 /// (<c>resumed=false</c>, new <c>run_id</c>, <c>retried_from</c> pointing at the source), or (2) an
-/// in-place RESUME of a coordinator run from its last failure point (#332) — same <c>run_id</c> as the
+/// in-place resume of a coordinator or eligible pre-dispatch composed workflow — same <c>run_id</c> as the
 /// source, <c>retried_from=null</c>, <c>resumed=true</c> — which preserves already-completed work and
 /// the original run options instead of restarting the whole coordinator lifecycle.
 /// </summary>
@@ -1599,7 +1716,7 @@ public sealed record RetryRunResponse
     [JsonPropertyName("retried_from")] public required string? RetriedFrom { get; init; }
     [JsonPropertyName("status")] public required string Status { get; init; }
 
-    /// <summary>True when the source coordinator run was resumed in place from its failure point
+    /// <summary>True when the source coordinator or composed workflow resumed in place
     /// (no fresh run minted, no outcome-spec redraft). False for a fresh full retry.</summary>
     [JsonPropertyName("resumed")] public bool Resumed { get; init; }
 }

@@ -1,8 +1,186 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runGenerationSeams } from '../lib/seams.mjs';
+import {
+  resolveWorkflowGenerationOutcome,
+  runGenerationSeams,
+  verifyPmDiscovery,
+} from '../lib/seams.mjs';
 import { redact } from '../../harness-shared/redaction.mjs';
+
+const SAFE_FAN_WORKFLOW = `id: retained-safe-fan
+name: Retained Safe Fan
+start: fan
+nodes:
+  - { id: fan, type: fan_out }
+  - id: customers
+    type: prompt
+    role: backend-engineer
+    prompt: Write only reports/customer-signals.md.
+    independent: true
+    declared_output_paths: [reports/customer-signals.md]
+  - id: technical
+    type: prompt
+    role: backend-engineer
+    prompt: Write only reports/technical-feasibility.md.
+    independent: true
+    declared_output_paths: [reports/technical-feasibility.md]
+  - { id: join, type: fan_in, target: fan }
+  - { id: done, type: terminal }
+edges:
+  - { from: fan, to: customers }
+  - { from: fan, to: technical }
+  - { from: customers, to: join }
+  - { from: technical, to: join }
+  - { from: join, to: done }
+`;
+
+test('verifyPmDiscovery requires the ordered two-branch fan before synthesis', () => {
+  const response = {
+    ok: true,
+    status: 200,
+    responseBody: {
+      nodes: [
+        { id: 'customer-signal-research', independent: true, declared_output_paths: ['customer-signals.md'] },
+        { id: 'technical-feasibility-research', independent: true, declared_output_paths: ['technical-feasibility.md'] },
+      ],
+      edges: [
+        { from: 'discovery-fan-out', to: 'customer-signal-research' },
+        { from: 'discovery-fan-out', to: 'technical-feasibility-research' },
+        { from: 'customer-signal-research', to: 'discovery-fan-in' },
+        { from: 'technical-feasibility-research', to: 'discovery-fan-in' },
+        { from: 'discovery-fan-in', to: 'synthesis' },
+      ],
+    },
+  };
+
+  assert.equal(verifyPmDiscovery(response).valid, true);
+  response.responseBody.edges.at(-1).to = 'synthesize';
+  assert.equal(verifyPmDiscovery(response).valid, false);
+});
+
+test('durable workflow outcome preserves failed job evidence without treating status as YAML', () => {
+  const failure = {
+    code: 'workflow_generation_invalid',
+    message: 'The generated workflow did not satisfy the workflow contract.',
+    retryable: false,
+  };
+  const outcome = resolveWorkflowGenerationOutcome({
+    durable: true,
+    accepted: { status: 202, responseBody: { job_id: 'failed-job' } },
+    final: {
+      ok: true,
+      status: 200,
+      responseBody: { job_id: 'failed-job', status: 'Failed', artifact: null, failure },
+    },
+    result: null,
+  });
+
+  assert.equal(outcome.response, null);
+  assert.equal(outcome.inconclusive, false);
+  assert.equal(outcome.evidence.jobId, 'failed-job');
+  assert.equal(outcome.evidence.terminalStatus, 'failed');
+  assert.deepEqual(outcome.evidence.failure, failure);
+  assert.equal(outcome.evidence.analysis, null);
+});
+
+test('durable workflow outcome leaves cancelled and deadline jobs unassessed', () => {
+  for (const status of ['Cancelled', 'Running']) {
+    const outcome = resolveWorkflowGenerationOutcome({
+      durable: true,
+      accepted: { status: 202, responseBody: { job_id: `${status.toLowerCase()}-job` } },
+      final: {
+        ok: true,
+        status: 200,
+        responseBody: { job_id: `${status.toLowerCase()}-job`, status, artifact: null, failure: null },
+      },
+      result: null,
+    });
+
+    assert.equal(outcome.response, null, status);
+    assert.equal(outcome.inconclusive, true, status);
+    assert.equal(outcome.evidence.terminalStatus, status.toLowerCase());
+    assert.equal(outcome.evidence.failure, null);
+    assert.equal(outcome.evidence.analysis, null);
+  }
+});
+
+test('durable workflow outcome treats canonical provider failures as inconclusive', () => {
+  for (const code of [
+    'workflow_provider_timeout',
+    'workflow_provider_unavailable',
+    'workflow_provider_authorization_required',
+  ]) {
+    const outcome = resolveWorkflowGenerationOutcome({
+      durable: true,
+      accepted: { status: 202, responseBody: { job_id: `${code}-job` } },
+      final: {
+        ok: true,
+        status: 200,
+        responseBody: {
+          job_id: `${code}-job`,
+          status: 'Failed',
+          artifact: null,
+          failure: { code, message: 'Provider request failed.', retryable: false },
+        },
+      },
+      result: null,
+    });
+
+    assert.equal(outcome.response, null, code);
+    assert.equal(outcome.inconclusive, true, code);
+    assert.equal(outcome.evidence.failure.code, code);
+    assert.equal(outcome.evidence.analysis, null);
+  }
+});
+
+test('durable workflow outcome rejects completed jobs without a successful nonempty YAML artifact', () => {
+  for (const result of [
+    null,
+    { ok: true, status: 200, responseBody: { artifact_id: 'artifact-without-yaml' } },
+    { ok: true, status: 200, responseBody: { artifact_id: 'artifact-with-empty-yaml', yaml: ' \n' } },
+  ]) {
+    const outcome = resolveWorkflowGenerationOutcome({
+      durable: true,
+      accepted: { status: 202, responseBody: { job_id: 'missing-artifact-job' } },
+      final: {
+        ok: true,
+        status: 200,
+        responseBody: { job_id: 'missing-artifact-job', status: 'Completed', artifact: null, failure: null },
+      },
+      result,
+    });
+
+    assert.equal(outcome.response, null);
+    assert.equal(outcome.inconclusive, false);
+    assert.equal(outcome.evidence.terminalStatus, 'completed');
+    assert.equal(outcome.evidence.analysis, null);
+  }
+});
+
+test('durable workflow outcome accepts only a completed job with a successful YAML result', () => {
+  const result = {
+    ok: true,
+    status: 200,
+    responseBody: { artifact_id: 'workflow-artifact', yaml: SAFE_FAN_WORKFLOW },
+  };
+  const outcome = resolveWorkflowGenerationOutcome({
+    durable: true,
+    accepted: { status: 202, responseBody: { job_id: 'completed-job' } },
+    final: {
+      ok: true,
+      status: 200,
+      responseBody: { job_id: 'completed-job', status: 'Completed', artifact: { artifact_id: 'workflow-artifact' } },
+    },
+    result,
+  });
+
+  assert.equal(outcome.response, result);
+  assert.equal(outcome.inconclusive, false);
+  assert.equal(outcome.evidence.terminalStatus, 'completed');
+  assert.equal(outcome.evidence.resultStatus, 200);
+  assert.equal(outcome.evidence.analysis, null);
+});
 
 test('Entra session preflight identifies the required bearer type without retaining config', async () => {
   const config = { ok: true, status: 200, responseBody: { mode: 'Entra', client_id: 'public-client-id' } };
@@ -303,6 +481,269 @@ edges:
   assert.equal(result.evidence.aiExecutionContexts.blueprintGeneration.replacement.retryStatus, 200);
   assert.equal(result.evidence.aiExecutionContexts.workflowGeneration.replacement.retryStatus, 200);
   assert.doesNotMatch(JSON.stringify(result.evidence), /key-canary/);
+  await result.cleanup();
+});
+
+test('generation seams cover durable job lifecycle and cancellation retry smoke', async () => {
+  const calls = [];
+  const validWorkflow = `id: advanced-workflow
+name: Advanced Workflow
+start: work
+nodes:
+  - id: work
+    type: prompt
+    role: backend-engineer
+  - id: done
+    type: terminal
+edges:
+  - { from: work, to: done }
+`;
+  const jobResponse = (jobId, baseUrl, status = 'Queued', artifact = null) => ({
+    ok: true,
+    status: 202,
+    responseBody: {
+      job_id: jobId,
+      status,
+      artifact,
+      status_url: baseUrl,
+      result_url: `${baseUrl}/result`,
+      cancel_url: `${baseUrl}/cancel`,
+      retry_url: `${baseUrl}/retry`,
+    },
+  });
+  const completedResponse = (jobId, baseUrl, artifact) => ({
+    ok: true,
+    status: 200,
+    responseBody: {
+      job_id: jobId,
+      status: 'Completed',
+      artifact,
+      status_url: baseUrl,
+      result_url: `${baseUrl}/result`,
+      cancel_url: `${baseUrl}/cancel`,
+      retry_url: `${baseUrl}/retry`,
+    },
+  });
+  const client = {
+    async get(path) {
+      calls.push(['GET', path]);
+      if (path === '/api/version')
+        return { ok: true, status: 200, responseBody: { version: 'v0.34.0', gitSha: 'abc123', isRelease: false } };
+      if (path === '/api/auth/config')
+        return { ok: true, status: 200, responseBody: { mode: 'LocalTest' } };
+      if (path === '/api/auth/session')
+        return { ok: true, status: 200, responseBody: { authenticated: true, auth_mode: 'LocalTest' } };
+      if (path === '/api/blueprints/generation-jobs/bp-job')
+        return completedResponse('bp-job', path, { artifact_id: 'bp-artifact', logical_id: 'bp', version: 1 });
+      if (path === '/api/blueprints/generation-jobs/bp-job/result')
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            job_id: 'bp-job',
+            artifact_id: 'bp-artifact',
+            logical_id: 'bp',
+            version: 1,
+            blueprint: { id: 'bp', name: 'BP', roster: ['backend-engineer', 'product-manager'], workflows: ['advanced-workflow'] },
+            generated_workflow_yaml: null,
+          },
+        };
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-job')
+        return completedResponse('wf-job', path, { artifact_id: 'wf-artifact', workflow_id: 'advanced-workflow', version: 1 });
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-job/result')
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            job_id: 'wf-job',
+            artifact_id: 'wf-artifact',
+            workflow_id: 'advanced-workflow',
+            version: 1,
+            yaml: validWorkflow,
+            was_corrected: false,
+          },
+        };
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-fan-job')
+        return completedResponse('wf-fan-job', path, { artifact_id: 'wf-fan-artifact', workflow_id: 'retained-safe-fan', version: 1 });
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-fan-job/result')
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            job_id: 'wf-fan-job',
+            artifact_id: 'wf-fan-artifact',
+            workflow_id: 'retained-safe-fan',
+            version: 1,
+            yaml: SAFE_FAN_WORKFLOW,
+            was_corrected: false,
+          },
+        };
+      throw new Error(`unexpected GET ${path}`);
+    },
+    async post(path, body, options) {
+      calls.push(['POST', path, options?.headers?.['Idempotency-Key'] ?? null]);
+      if (path === '/api/ai/execution-context') {
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            ai_required: true,
+            operation: body.operation,
+            phase: 'prepared',
+            execution_key: `${body.operation}-key-canary`,
+          },
+        };
+      }
+      if (path === '/api/blueprints/generate') {
+        return jobResponse('bp-job', '/api/blueprints/generation-jobs/bp-job');
+      }
+      if (path === '/api/projects') {
+        return { ok: true, status: 201, responseBody: { project_id: 'owned-project' } };
+      }
+      if (path === '/api/projects/owned-project/workflows/generate') {
+        return body.description.includes('Cancellation/retry probe.')
+          ? jobResponse('wf-cancel-job', '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job')
+          : body.description === 'generate safe fan'
+            ? jobResponse('wf-fan-job', '/api/projects/owned-project/workflows/generation-jobs/wf-fan-job')
+            : jobResponse('wf-job', '/api/projects/owned-project/workflows/generation-jobs/wf-job');
+      }
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job/cancel') {
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            job_id: 'wf-cancel-job',
+            status: 'Cancelled',
+            retry_url: '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job/retry',
+          },
+        };
+      }
+      if (path === '/api/projects/owned-project/workflows/generation-jobs/wf-cancel-job/retry') {
+        return { ok: true, status: 202, responseBody: { job_id: 'wf-cancel-job', status: 'Queued' } };
+      }
+      if (path === '/api/projects/owned-project/workflows/retained-safe-fan/run') {
+        return { ok: true, status: 201, responseBody: { task_id: 'retained-run-task' } };
+      }
+      throw new Error(`unexpected POST ${path}`);
+    },
+    async put(path, body) {
+      calls.push(['PUT', path]);
+      return body.yaml.includes('branches: [pass, fail]')
+        ? { ok: false, status: 400, responseBody: { error: 'invalid_workflow' } }
+        : { ok: true, status: 204, responseBody: null };
+    },
+    async del() {
+      return { ok: true, status: 204, responseBody: null };
+    },
+  };
+
+  const result = await runGenerationSeams(client, {
+    projectPrefix: 'seam',
+    baseBlueprintId: 'base-blueprint',
+    blueprintDescription: 'generate blueprint',
+    workflowDescription: 'generate advanced workflow',
+    conservativeFanCases: [
+      { id: 'safe-fan', expectedMode: 'fan', description: 'generate safe fan', startRetainedRun: true },
+    ],
+  }, { keep: true });
+
+  assert.equal(result.pass, true);
+  for (const name of [
+    'Blueprint generation job is accepted durably (202)',
+    'Blueprint generation idempotency reuses the same job',
+    'Blueprint generation reaches terminal completed status through the hosted worker',
+    'Blueprint generation exposes a result artifact',
+    'Advanced workflow generation job is accepted durably (202)',
+    'Advanced workflow generation idempotency reuses the same job',
+    'Advanced workflow generation reaches terminal completed status through the hosted worker',
+    'Advanced workflow generation exposes a result artifact',
+    'Advanced workflow generation cancellation is accepted',
+    'Advanced workflow generation retry is accepted after cancellation',
+  ]) {
+    assert.equal(result.checks.find((check) => check.name === name)?.pass, true, name);
+  }
+  assert.equal(result.evidence.aiExecutionContexts.blueprintGeneration.job.terminalStatus, 'completed');
+  assert.equal(result.evidence.aiExecutionContexts.workflowGeneration.cancelRetry.cancelledJobStatus, 'cancelled');
+  assert.equal(result.evidence.conservativeFanCases[0].analysis.mode, 'fan');
+  assert.deepEqual(result.evidence.retainedWorkflowIds.sort(), ['advanced-workflow', 'retained-safe-fan']);
+  assert.deepEqual(result.evidence.retainedRunTriggers, [{
+    caseId: 'safe-fan',
+    workflowId: 'retained-safe-fan',
+    taskId: 'retained-run-task',
+  }]);
+  assert.doesNotMatch(JSON.stringify(result.evidence), /key-canary/);
+  assert.ok(calls.some(([method, path]) => method === 'GET' && path.endsWith('/result')));
+  assert.ok(calls.some(([method, path]) => method === 'PUT' && path.endsWith('/workflows/retained-safe-fan')));
+  await result.cleanup();
+});
+
+test('generation seams fail durable-required scenarios when generation is synchronous', async () => {
+  const validWorkflow = `id: generated-workflow
+name: Generated Workflow
+start: work
+nodes:
+  - id: work
+    type: prompt
+    role: backend-engineer
+  - id: done
+    type: terminal
+edges:
+  - { from: work, to: done }
+`;
+  const client = {
+    async get(path) {
+      if (path === '/api/version')
+        return { ok: true, status: 200, responseBody: { version: 'v0.34.0', gitSha: 'abc123', isRelease: false } };
+      if (path === '/api/auth/config')
+        return { ok: true, status: 200, responseBody: { mode: 'LocalTest' } };
+      assert.equal(path, '/api/auth/session');
+      return { ok: true, status: 200, responseBody: { authenticated: true, auth_mode: 'LocalTest' } };
+    },
+    async post(path, body) {
+      if (path === '/api/ai/execution-context') {
+        return {
+          ok: true,
+          status: 200,
+          responseBody: {
+            ai_required: true,
+            operation: body.operation,
+            phase: 'prepared',
+            execution_key: `${body.operation}-key-canary`,
+          },
+        };
+      }
+      if (path === '/api/blueprints/generate') {
+        return {
+          ok: true,
+          status: 200,
+          responseBody: { blueprint: { id: 'bp', name: 'BP', roster: ['backend-engineer', 'product-manager'], workflows: ['generated-workflow'] } },
+        };
+      }
+      if (path === '/api/projects') return { ok: true, status: 201, responseBody: { project_id: 'owned-project' } };
+      assert.equal(path, '/api/projects/owned-project/workflows/generate');
+      return { ok: true, status: 200, responseBody: { workflow_id: 'generated-workflow', yaml: validWorkflow } };
+    },
+    async put(_path, body) {
+      return body.yaml.includes('branches: [pass, fail]')
+        ? { ok: false, status: 400, responseBody: { error: 'invalid_workflow' } }
+        : { ok: true, status: 204, responseBody: null };
+    },
+    async del() {
+      return { ok: true, status: 204, responseBody: null };
+    },
+  };
+
+  const result = await runGenerationSeams(client, {
+    requireDurableJobs: true,
+    projectPrefix: 'seam',
+    baseBlueprintId: 'base-blueprint',
+    blueprintDescription: 'generate blueprint',
+    workflowDescription: 'generate workflow',
+  });
+
+  assert.equal(result.pass, false);
+  assert.equal(result.checks.find((check) => check.name === 'Blueprint generation uses the durable job contract (202)')?.pass, false);
+  assert.equal(result.checks.find((check) => check.name === 'Advanced workflow generation uses the durable job contract (202)')?.pass, false);
   await result.cleanup();
 });
 

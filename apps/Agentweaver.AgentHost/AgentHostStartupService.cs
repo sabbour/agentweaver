@@ -83,6 +83,10 @@ internal sealed class AgentHostStartupService : IHostedService
         }
 
         // Env-var launch: seed runtime state from options and provision the agent now.
+        if (opts.EffectivePermissionBinding is null)
+            throw new EffectivePermissionBindingException(
+                "AgentHost env launch denied: AgentHost:EffectivePermissionBinding is required.");
+        opts.EffectivePermissionBinding.Validate(opts.RunId, opts.EffectivePermissionBinding.Attempt);
         _runtimeState.InitializeFromOptions(opts);
         await RunSetupAsync(
             new AgentHostRunConfiguration(
@@ -93,7 +97,8 @@ internal sealed class AgentHostStartupService : IHostedService
                 PreviewRunnerCredential: null,
                 SharedWorkingDirectory: null,
                 ProjectId: opts.ProjectId,
-                AgentName: opts.AgentName),
+                AgentName: opts.AgentName,
+                EffectivePermissionBinding: opts.EffectivePermissionBinding),
             cancellationToken).ConfigureAwait(false);
     }
 

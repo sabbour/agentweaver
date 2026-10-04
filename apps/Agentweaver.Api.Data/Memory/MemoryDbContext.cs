@@ -1,17 +1,24 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Agentweaver.Api.Runs;
 using Agentweaver.Api.Auth.OAuth;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Agentweaver.Api.Memory;
 
 public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) : DbContext(options)
 {
+    public bool SuppressKnowledgeRevisionCapture { get; set; }
     public DbSet<Decision> Decisions => Set<Decision>();
     public DbSet<DecisionInboxEntry> DecisionInbox => Set<DecisionInboxEntry>();
+    public DbSet<AddressedMessage> AddressedMessages => Set<AddressedMessage>();
     public DbSet<AgentMemory> AgentMemory => Set<AgentMemory>();
+    public DbSet<AgentMemoryRevision> AgentMemoryRevisions => Set<AgentMemoryRevision>();
+    public DbSet<DecisionRevision> DecisionRevisions => Set<DecisionRevision>();
     public DbSet<RunAuthorshipCapability> RunAuthorshipCapabilities => Set<RunAuthorshipCapability>();
     public DbSet<ScribeOperationAttempt> ScribeOperationAttempts => Set<ScribeOperationAttempt>();
     public DbSet<SessionContext> SessionContexts => Set<SessionContext>();
@@ -63,9 +70,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
     // Entities migrated from agentweaver.db (spec-018 P2)
     public DbSet<RunRecord> Runs => Set<RunRecord>();
+    public DbSet<ExecutionIdentityRecord> ExecutionIdentities => Set<ExecutionIdentityRecord>();
     public DbSet<TerminalRunOutcomeRecord> TerminalRunOutcomes => Set<TerminalRunOutcomeRecord>();
     public DbSet<TerminalRunOutcomeProjectionRecord> TerminalRunOutcomeProjections => Set<TerminalRunOutcomeProjectionRecord>();
     public DbSet<RunRevisionRecord> RunRevisions => Set<RunRevisionRecord>();
+    public DbSet<RunOutputRevisionRecord> RunOutputRevisions => Set<RunOutputRevisionRecord>();
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
     public DbSet<ProjectRoleAssignmentRecord> ProjectRoleAssignments => Set<ProjectRoleAssignmentRecord>();
     public DbSet<BacklogTaskRecord> BacklogTasks => Set<BacklogTaskRecord>();
@@ -92,12 +101,46 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<Decision>().HasIndex(d => d.IdentityKey).IsUnique();
         model.Entity<Decision>().Property(d => d.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<Decision>().Property(d => d.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
+        model.Entity<Decision>().Property(d => d.Revision).HasDefaultValue(1).IsConcurrencyToken();
+        model.Entity<Decision>().Property(d => d.CurrentRevisionId).HasMaxLength(32);
         model.Entity<Decision>()
             .HasOne<Decision>()
             .WithMany()
             .HasForeignKey(d => d.SupersededById)
             .IsRequired(false);
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Status });
+        model.Entity<AddressedMessage>(message =>
+        {
+            message.ToTable("addressed_messages");
+            message.HasKey(m => m.Id);
+            message.Property(m => m.Id).HasMaxLength(32);
+            message.Property(m => m.ProjectId).HasMaxLength(128);
+            message.Property(m => m.Sender).HasMaxLength(128);
+            message.Property(m => m.SenderIdentity).HasMaxLength(256);
+            message.Property(m => m.Recipient).HasMaxLength(128);
+            message.Property(m => m.SourceRunId).HasMaxLength(128);
+            message.Property(m => m.TargetRunId).HasMaxLength(128);
+            message.Property(m => m.ThreadId).HasMaxLength(32);
+            message.Property(m => m.ReplyToId).HasMaxLength(32);
+            message.Property(m => m.ReferenceKind).HasMaxLength(32);
+            message.Property(m => m.ReferenceId).HasMaxLength(128);
+            message.Property(m => m.IdempotencyKey).HasMaxLength(128);
+            message.Property(m => m.Status).HasMaxLength(32);
+            message.Property(m => m.ClaimOwner).HasMaxLength(128);
+            message.Property(m => m.FailureReason).HasMaxLength(128);
+            // UTC ticks preserve instant ordering across offsets for SQLite lease predicates.
+            var utcTicks = new ValueConverter<DateTimeOffset, long>(
+                value => value.UtcTicks,
+                value => new DateTimeOffset(value, TimeSpan.Zero));
+            message.Property(m => m.CreatedAt).HasConversion(utcTicks);
+            message.Property(m => m.ExpiresAt).HasConversion(utcTicks);
+            message.Property(m => m.ClaimedUntil).HasConversion(utcTicks);
+            message.Property(m => m.DeliveredAt).HasConversion(utcTicks);
+            message.Property(m => m.AcknowledgedAt).HasConversion(utcTicks);
+            message.HasIndex(m => new { m.ProjectId, m.SenderIdentity, m.IdempotencyKey }).IsUnique();
+            message.HasIndex(m => new { m.ProjectId, m.TargetRunId, m.Status, m.CreatedAt });
+            message.HasIndex(m => new { m.ProjectId, m.ThreadId, m.CreatedAt });
+        });
         model.Entity<DecisionInboxEntry>().HasIndex(e => new { e.ProjectId, e.Slug }).IsUnique();
         model.Entity<DecisionInboxEntry>().Property(e => e.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<DecisionInboxEntry>()
@@ -111,6 +154,42 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<AgentMemory>().HasIndex(m => m.IdentityKey).IsUnique();
         model.Entity<AgentMemory>().Property(m => m.SourceKind).HasDefaultValue(MemorySourceKinds.Legacy);
         model.Entity<AgentMemory>().Property(m => m.TrustState).HasDefaultValue(MemoryTrustStates.Legacy);
+        model.Entity<AgentMemory>().Property(m => m.Status).HasDefaultValue(KnowledgeLifecycleStates.Active);
+        model.Entity<AgentMemory>().Property(m => m.Revision).HasDefaultValue(1).IsConcurrencyToken();
+        model.Entity<AgentMemory>().Property(m => m.CurrentRevisionId).HasMaxLength(32);
+        model.Entity<AgentMemory>()
+            .HasOne<AgentMemory>()
+            .WithMany()
+            .HasForeignKey(m => m.ReplacedById)
+            .IsRequired(false);
+        model.Entity<AgentMemoryRevision>(revision =>
+        {
+            revision.ToTable("agent_memory_revisions");
+            revision.HasKey(r => r.RevisionId);
+            revision.Property(r => r.RevisionId).HasMaxLength(32);
+            revision.Property(r => r.SourceIdentityFingerprint).HasMaxLength(64);
+            revision.Property(r => r.ApprovedByFingerprint).HasMaxLength(64);
+            revision.HasIndex(r => new { r.MemoryId, r.Revision }).IsUnique();
+            revision.HasIndex(r => new { r.ProjectId, r.MemoryId, r.Revision });
+            revision.HasOne(r => r.Memory)
+                .WithMany()
+                .HasForeignKey(r => r.MemoryId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+        model.Entity<DecisionRevision>(revision =>
+        {
+            revision.ToTable("decision_revisions");
+            revision.HasKey(r => r.RevisionId);
+            revision.Property(r => r.RevisionId).HasMaxLength(32);
+            revision.Property(r => r.SourceIdentityFingerprint).HasMaxLength(64);
+            revision.Property(r => r.ApprovedByFingerprint).HasMaxLength(64);
+            revision.HasIndex(r => new { r.DecisionId, r.Revision }).IsUnique();
+            revision.HasIndex(r => new { r.ProjectId, r.DecisionId, r.Revision });
+            revision.HasOne(r => r.Decision)
+                .WithMany()
+                .HasForeignKey(r => r.DecisionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
         model.Entity<RunAuthorshipCapability>().ToTable("run_authorship_capabilities");
         model.Entity<RunAuthorshipCapability>().HasKey(capability => capability.RunId);
         model.Entity<RunAuthorshipCapability>().Property(capability => capability.RunId)
@@ -149,6 +228,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         model.Entity<SessionContext>().HasIndex(s => new { s.ProjectId, s.SessionId }).IsUnique();
         model.Entity<RunEventRecord>().HasIndex(e => e.RunId);
         model.Entity<RunEventRecord>().HasIndex(e => new { e.RunId, e.Sequence }).IsUnique();
+        model.Entity<RunEventRecord>()
+            .HasIndex(e => new { e.RunId, e.EventIdentity })
+            .IsUnique()
+            .HasFilter("\"EventIdentity\" IS NOT NULL");
         model.Entity<TerminalRunOutcomeProjectionRecord>(entity =>
         {
             entity.ToTable("terminal_run_outcome_projections");
@@ -161,12 +244,24 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
 
         model.Entity<WorkPlan>().HasIndex(w => w.CoordinatorRunId);
         model.Entity<WorkPlan>()
+            .HasIndex(w => new { w.ParentRunId, w.ParentWorkflowNodeId })
+            .IsUnique()
+            .HasFilter("\"ParentRunId\" IS NOT NULL AND \"ParentWorkflowNodeId\" IS NOT NULL");
+        model.Entity<WorkPlan>()
             .HasOne<OutcomeSpec>()
             .WithMany()
             .HasForeignKey(w => w.OutcomeSpecId)
             .OnDelete(DeleteBehavior.Cascade);
 
         model.Entity<Subtask>().HasIndex(s => s.WorkPlanId);
+        model.Entity<Subtask>()
+            .HasIndex(s => new { s.WorkPlanId, s.WorkflowBranchNodeId })
+            .IsUnique()
+            .HasFilter("\"WorkflowBranchNodeId\" IS NOT NULL");
+        model.Entity<Subtask>()
+            .HasIndex(s => new { s.WorkPlanId, s.WorkflowBranchOrdinal })
+            .IsUnique()
+            .HasFilter("\"WorkflowBranchOrdinal\" IS NOT NULL");
         model.Entity<Subtask>()
             .HasOne<WorkPlan>()
             .WithMany()
@@ -265,6 +360,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
         });
 
         model.Entity<PendingRequestRecord>().HasIndex(p => p.RunId).IsUnique();
+        model.Entity<PendingRequestRecord>().HasIndex(p => new { p.RunId, p.RequestId, p.DecisionIdentity });
+        model.Entity<PendingRequestRecord>().HasIndex(p => new { p.DeliveryState, p.DeliveryClaimedAt });
+        model.Entity<PendingRequestRecord>().Property(p => p.DeliveryState)
+            .HasDefaultValue(PendingRequestDeliveryStates.Waiting);
         model.Entity<PendingRequestRecord>().HasIndex(p => p.ExpiresAt);
         model.Entity<HeartbeatStatusRecord>().HasKey(h => h.PodName);
         model.Entity<CoordinatorDeferredDecisionRecord>().HasIndex(d => d.RunId).IsUnique();
@@ -295,10 +394,13 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
                 e.ToTable("projects");
                 e.HasKey(x => x.ProjectId);
                 e.Property(x => x.ProjectId).HasColumnName("project_id");
+                e.Ignore(x => x.BacklogGraphRevision);
             });
             model.Ignore<RunRecord>();
+            model.Ignore<ExecutionIdentityRecord>();
             model.Ignore<TerminalRunOutcomeRecord>();
             model.Ignore<RunRevisionRecord>();
+            model.Ignore<RunOutputRevisionRecord>();
             model.Ignore<ProjectRoleAssignmentRecord>();
             model.Ignore<BacklogTaskRecord>();
             model.Ignore<BacklogTaskDependencyRecord>();
@@ -323,6 +425,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.RunId).HasColumnName("run_id");
             e.Property(r => r.RepositoryPath).HasColumnName("repository_path");
             e.Property(r => r.OriginatingBranch).HasColumnName("originating_branch");
+            e.Property(r => r.ExecutionInputRequired).HasColumnName("execution_input_required").HasDefaultValue(false);
+            e.Property(r => r.ExecutionInputSourceCommitHash).HasColumnName("execution_input_source_commit_hash");
+            e.Property(r => r.ExecutionInputCommitHash).HasColumnName("execution_input_commit_hash");
+            e.Property(r => r.ExecutionInputCompositeId).HasColumnName("execution_input_composite_id");
             e.Property(r => r.ModelSource).HasColumnName("model_source");
             e.Property(r => r.Task).HasColumnName("task");
             e.Property(r => r.SubmittingUser).HasColumnName("submitting_user");
@@ -345,6 +451,8 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.WorkflowRunId).HasColumnName("workflow_run_id");
             e.Property(r => r.WorkflowSelectionReason).HasColumnName("workflow_selection_reason");
             e.Property(r => r.MergedCommitHash).HasColumnName("merged_commit_hash");
+            e.Property(r => r.ApprovedOutputRevisionId).HasColumnName("approved_output_revision_id");
+            e.Property(r => r.CurrentOutputRevisionId).HasColumnName("current_output_revision_id");
             e.Property(r => r.ParentRunId).HasColumnName("parent_run_id");
             e.Property(r => r.SubtaskId).HasColumnName("subtask_id");
             e.Property(r => r.Origin).HasColumnName("origin").HasDefaultValue("interactive");
@@ -367,12 +475,48 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(r => r.SandboxClaimName).HasColumnName("sandbox_claim_name");
             e.Property(r => r.SandboxPodName).HasColumnName("sandbox_pod_name");
             e.Property(r => r.SandboxNamespace).HasColumnName("sandbox_namespace");
+            e.Property(r => r.ExecutableWorkflowPinRequired).HasColumnName("executable_workflow_pin_required").HasDefaultValue(false);
+            e.Property(r => r.ExecutableWorkflowManifestSchemaVersion).HasColumnName("executable_workflow_manifest_schema_version");
+            e.Property(r => r.ExecutableWorkflowDefinitionId).HasColumnName("executable_workflow_definition_id");
+            e.Property(r => r.ExecutableWorkflowDefinitionVersion).HasColumnName("executable_workflow_definition_version");
+            e.Property(r => r.ExecutableWorkflowSource).HasColumnName("executable_workflow_source");
+            e.Property(r => r.ExecutableWorkflowContentDigest).HasColumnName("executable_workflow_content_digest");
+            e.Property(r => r.ExecutableWorkflowDefinitionYaml).HasColumnName("executable_workflow_definition_yaml");
+            e.Property(r => r.ExecutableWorkflowPinnedAt).HasColumnName("executable_workflow_pinned_at");
             e.Property(r => r.PreviewPublicationLeaseUntil).HasColumnName("preview_publication_lease_until");
             e.Property(r => r.PreviewPublicationLeaseOwner).HasColumnName("preview_publication_lease_owner");
             e.HasIndex(r => new { r.ProjectId, r.Status }).HasDatabaseName("IX_runs_project_status");
             e.HasIndex(r => new { r.Origin, r.Status }).HasDatabaseName("IX_runs_origin_status");
             e.HasIndex(r => new { r.ParentRunId, r.SubtaskId }).HasDatabaseName("IX_runs_parent_subtask");
             e.HasIndex(r => r.WorkflowRunId).HasDatabaseName("IX_runs_workflow_run_id");
+        });
+
+        model.Entity<ExecutionIdentityRecord>(e =>
+        {
+            e.ToTable("execution_identities");
+            e.HasKey(record => record.DescriptorId);
+            e.Property(record => record.DescriptorId).HasColumnName("descriptor_id").HasMaxLength(80);
+            e.Property(record => record.SchemaVersion).HasColumnName("schema_version");
+            e.Property(record => record.RunId).HasColumnName("run_id").HasMaxLength(128);
+            e.Property(record => record.Attempt).HasColumnName("attempt");
+            e.Property(record => record.ProjectId).HasColumnName("project_id").HasMaxLength(128);
+            e.Property(record => record.InitiatingPrincipalId).HasColumnName("initiating_principal_id").HasMaxLength(256);
+            e.Property(record => record.ExecutingServiceId).HasColumnName("executing_service_id").HasMaxLength(128);
+            e.Property(record => record.AgentAssignmentId).HasColumnName("agent_assignment_id").HasMaxLength(80);
+            e.Property(record => record.AgentRole).HasColumnName("agent_role").HasMaxLength(128);
+            e.Property(record => record.AgentDisplayName).HasColumnName("agent_display_name").HasMaxLength(128);
+            e.Property(record => record.ParentRunId).HasColumnName("parent_run_id").HasMaxLength(128);
+            e.Property(record => record.ParentDescriptorId).HasColumnName("parent_descriptor_id").HasMaxLength(80);
+            e.Property(record => record.RetryOfRunId).HasColumnName("retry_of_run_id").HasMaxLength(128);
+            e.Property(record => record.RetryOfDescriptorId).HasColumnName("retry_of_descriptor_id").HasMaxLength(80);
+            e.Property(record => record.WorkflowRunId).HasColumnName("workflow_run_id").HasMaxLength(128);
+            e.Property(record => record.SubtaskId).HasColumnName("subtask_id").HasMaxLength(128);
+            e.Property(record => record.ApprovalPolicySnapshotId).HasColumnName("approval_policy_snapshot_id").HasMaxLength(128);
+            e.Property(record => record.ExecutableWorkflowContentDigest).HasColumnName("executable_workflow_content_digest").HasMaxLength(128);
+            e.Property(record => record.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(record => new { record.RunId, record.Attempt }).IsUnique();
+            e.HasIndex(record => record.ParentDescriptorId);
+            e.HasIndex(record => record.RetryOfDescriptorId);
         });
 
         model.Entity<TerminalRunOutcomeRecord>(e =>
@@ -388,6 +532,31 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ProjectedAt).HasColumnName("projected_at");
             e.HasIndex(x => new { x.ProjectedAt, x.OccurredAt })
                 .HasDatabaseName("IX_terminal_run_outcomes_unprojected");
+        });
+
+        model.Entity<RunOutputRevisionRecord>(e =>
+        {
+            e.ToTable("run_output_revisions");
+            e.HasKey(r => r.RevisionId);
+            e.Property(r => r.RevisionId).HasColumnName("revision_id");
+            e.Property(r => r.SchemaVersion).HasColumnName("schema_version");
+            e.Property(r => r.RunId).HasColumnName("run_id");
+            e.Property(r => r.LifecycleGeneration).HasColumnName("lifecycle_generation");
+            e.Property(r => r.WorkflowDigest).HasColumnName("workflow_digest");
+            e.Property(r => r.ManifestIncomplete).HasColumnName("manifest_incomplete");
+            e.Property(r => r.TreeHash).HasColumnName("tree_hash");
+            e.Property(r => r.DiffSha256).HasColumnName("diff_sha256");
+            e.Property(r => r.PredecessorRevisionId).HasColumnName("predecessor_revision_id");
+            e.Property(r => r.OutputKind).HasColumnName("output_kind");
+            e.Property(r => r.MergedCommitHash).HasColumnName("merged_commit_hash");
+            e.Property(r => r.WorkPlanId).HasColumnName("work_plan_id");
+            e.Property(r => r.MergeEffectId).HasColumnName("merge_effect_id");
+            e.Property(r => r.AcceptedNoChange).HasColumnName("accepted_no_change");
+            e.Property(r => r.DiffBytes).HasColumnName("diff_bytes");
+            e.Property(r => r.TreeContent).HasColumnName("tree_content");
+            e.Property(r => r.TreeContentSha256).HasColumnName("tree_content_sha256");
+            e.Property(r => r.CreatedAt).HasColumnName("created_at");
+            e.HasIndex(r => new { r.RunId, r.LifecycleGeneration });
         });
 
         model.Entity<RunRevisionRecord>(e =>
@@ -419,6 +588,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(p => p.CreatedAt).HasColumnName("created_at");
             e.Property(p => p.UpdatedAt).HasColumnName("updated_at");
             e.Property(p => p.TeamRevision).HasColumnName("team_revision").HasDefaultValue(0L);
+            e.Property(p => p.BacklogGraphRevision).HasColumnName("backlog_graph_revision").HasDefaultValue(0L);
             e.Property(p => p.MaxReadyPerHeartbeat).HasColumnName("max_ready_per_heartbeat").HasDefaultValue(3);
             e.Property(p => p.PickupAutopilot).HasColumnName("pickup_autopilot").HasDefaultValue(true);
             e.Property(p => p.PickupAutoApproveTools).HasColumnName("pickup_auto_approve_tools").HasDefaultValue(true);
@@ -508,11 +678,15 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(t => t.OrderKey).HasColumnName("order_key");
             e.Property(t => t.CapturedBy).HasColumnName("captured_by");
             e.Property(t => t.CapturedByUserId).HasColumnName("captured_by_user_id");
+            e.Property(t => t.ReadyByUserId).HasColumnName("ready_by_user_id");
             e.Property(t => t.CreatedAt).HasColumnName("created_at");
             e.Property(t => t.CommittedAt).HasColumnName("committed_at");
             e.Property(t => t.ClaimedAt).HasColumnName("claimed_at");
+            e.Property(t => t.ClaimedGraphRevision).HasColumnName("claimed_graph_revision");
+            e.Property(t => t.ClaimedPrerequisitesJson).HasColumnName("claimed_prerequisites_json");
             e.Property(t => t.RunId).HasColumnName("run_id");
             e.Property(t => t.WorkflowOverrideId).HasColumnName("workflow_override_id");
+            e.Property(t => t.WorkflowDefinitionSnapshotYaml).HasColumnName("workflow_definition_snapshot_yaml");
             e.Property(t => t.ArchivedAt).HasColumnName("archived_at");
             e.Property(t => t.SourceFilePath).HasColumnName("source_file_path");
             e.Property(t => t.ParentPrdRunId).HasColumnName("parent_prd_run_id");
@@ -718,12 +892,11 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.ProjectId).HasColumnName("project_id");
             e.Property(x => x.CreatedAt).HasColumnName("created_at");
             e.Property(x => x.RevokedAt).HasColumnName("revoked_at");
-            ConfigureProjectForeignKey(e, "FK_github_installations_projects_project_id");
         });
 
         model.Entity<GitHubRepositoryGrantRecord>(e =>
         {
-            e.ToTable("github_repository_grants").HasKey(x => new { x.InstallationId, x.RepositoryId });
+            e.ToTable("github_repository_grants").HasKey(x => new { x.InstallationId, x.RepositoryId, x.ProjectId });
             e.Property(x => x.InstallationId).HasColumnName("installation_id");
             e.Property(x => x.RepositoryId).HasColumnName("repository_id");
             e.Property(x => x.ProjectId).HasColumnName("project_id");
@@ -731,7 +904,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.PermissionDigest).HasColumnName("permission_digest");
             e.Property(x => x.GrantedAt).HasColumnName("granted_at");
             e.Property(x => x.RevokedAt).HasColumnName("revoked_at");
-            e.HasIndex(x => new { x.InstallationId, x.RepositoryId }).IsUnique();
+            e.HasIndex(x => new { x.InstallationId, x.RepositoryId, x.ProjectId }).IsUnique();
             e.HasOne<GitHubInstallationRecord>().WithMany().HasForeignKey(x => x.InstallationId)
                 .OnDelete(DeleteBehavior.Cascade).HasConstraintName("FK_github_repository_grants_installations_installation_id");
             ConfigureProjectForeignKey(e, "FK_github_repository_grants_projects_project_id");
@@ -743,6 +916,7 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.Property(x => x.CodeHash).HasColumnName("code_hash");
             e.Property(x => x.EntraObjectId).HasColumnName("entra_object_id");
             e.Property(x => x.RepoAppAuthorizationId).HasColumnName("repo_app_authorization_id");
+            e.Property(x => x.InstallationId).HasColumnName("installation_id");
             e.Property(x => x.RepositoryId).HasColumnName("repository_id");
             e.Property(x => x.ExpiresAtUnixMilliseconds).HasColumnName("expires_at_unix_ms");
             e.Property(x => x.ConsumedAtUnixMilliseconds).HasColumnName("consumed_at_unix_ms");
@@ -855,10 +1029,10 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(x => x.ProjectId).IsUnique().HasFilter("status = 0")
                 .HasDatabaseName("UX_automation_activations_active_project");
             e.HasOne<GitHubRepositoryGrantRecord>().WithMany()
-                .HasForeignKey(x => new { x.InstallationId, x.RepositoryId })
+                .HasForeignKey(x => new { x.InstallationId, x.RepositoryId, x.ProjectId })
                 .IsRequired(false)
                 .OnDelete(DeleteBehavior.Cascade)
-                .HasConstraintName("FK_automation_activations_repository_grants_installation_id_repository_id");
+                .HasConstraintName("FK_automation_activations_repository_grants_authority");
             ConfigureProjectForeignKey(e, "FK_automation_activations_projects_project_id");
         });
 
@@ -999,6 +1173,134 @@ public sealed class MemoryDbContext(DbContextOptions<MemoryDbContext> options) :
             e.HasIndex(x => x.OccurredAt);
         });
     }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        CaptureKnowledgeRevisions();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken = default)
+    {
+        CaptureKnowledgeRevisions();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void CaptureKnowledgeRevisions()
+    {
+        if (SuppressKnowledgeRevisionCapture)
+            return;
+
+        if (ChangeTracker.Entries<AgentMemoryRevision>().Any(e =>
+                e.State is EntityState.Modified or EntityState.Deleted)
+            || ChangeTracker.Entries<DecisionRevision>().Any(e =>
+                e.State is EntityState.Modified or EntityState.Deleted))
+        {
+            throw new InvalidOperationException("Knowledge revisions are immutable.");
+        }
+
+        foreach (var entry in ChangeTracker.Entries<AgentMemory>()
+                     .Where(e => e.State is EntityState.Added or EntityState.Modified)
+                     .ToList())
+        {
+            if (entry.State == EntityState.Modified && !HasMeaningfulMemoryChange(entry))
+                continue;
+
+            var memory = entry.Entity;
+            var previousRevisionId = entry.State == EntityState.Added ? null : memory.CurrentRevisionId;
+            if (entry.State == EntityState.Added)
+                memory.Revision = Math.Max(1, memory.Revision);
+            else
+                memory.Revision = entry.OriginalValues.GetValue<int>(
+                    nameof(global::Agentweaver.Api.Memory.AgentMemory.Revision)) + 1;
+            memory.CurrentRevisionId = Guid.NewGuid().ToString("N");
+            AgentMemoryRevisions.Add(new AgentMemoryRevision
+            {
+                RevisionId = memory.CurrentRevisionId,
+                MemoryId = memory.Id,
+                Memory = memory,
+                ProjectId = memory.ProjectId,
+                Revision = memory.Revision,
+                PreviousRevisionId = previousRevisionId,
+                Actor = memory.RevisionActor ?? memory.AgentName,
+                SourceRunId = memory.SourceRunId,
+                Reason = memory.RevisionReason ?? (entry.State == EntityState.Added ? "created" : "updated"),
+                AgentName = memory.AgentName,
+                SessionId = memory.SessionId,
+                Type = memory.Type,
+                Importance = memory.Importance,
+                Content = memory.Content,
+                Tags = memory.Tags,
+                Status = memory.Status,
+                ReplacedById = memory.ReplacedById,
+                SourceKind = memory.SourceKind,
+                SourceIdentityFingerprint = Fingerprint(memory.SourceIdentity),
+                SourceRunReference = memory.SourceRunId,
+                TrustState = memory.TrustState,
+                ApprovedByFingerprint = Fingerprint(memory.ApprovedBy),
+                ApprovedAt = memory.ApprovedAt,
+                CreatedAt = memory.UpdatedAt,
+            });
+        }
+
+        foreach (var entry in ChangeTracker.Entries<Decision>()
+                     .Where(e => e.State is EntityState.Added or EntityState.Modified)
+                     .ToList())
+        {
+            if (entry.State == EntityState.Modified && !HasMeaningfulDecisionChange(entry))
+                continue;
+
+            var decision = entry.Entity;
+            var previousRevisionId = entry.State == EntityState.Added ? null : decision.CurrentRevisionId;
+            if (entry.State == EntityState.Added)
+                decision.Revision = Math.Max(1, decision.Revision);
+            else
+                decision.Revision = entry.OriginalValues.GetValue<int>(nameof(Decision.Revision)) + 1;
+            decision.CurrentRevisionId = Guid.NewGuid().ToString("N");
+            DecisionRevisions.Add(new DecisionRevision
+            {
+                RevisionId = decision.CurrentRevisionId,
+                DecisionId = decision.Id,
+                Decision = decision,
+                ProjectId = decision.ProjectId,
+                Revision = decision.Revision,
+                PreviousRevisionId = previousRevisionId,
+                Actor = decision.RevisionActor ?? decision.AgentName,
+                SourceRunId = decision.SourceRunId,
+                Reason = decision.RevisionReason ?? (entry.State == EntityState.Added ? "created" : "updated"),
+                AgentName = decision.AgentName,
+                Type = decision.Type,
+                Status = decision.Status,
+                Title = decision.Title,
+                Content = decision.Content,
+                Rationale = decision.Rationale,
+                Tags = decision.Tags,
+                SupersededById = decision.SupersededById,
+                SourceKind = decision.SourceKind,
+                SourceIdentityFingerprint = Fingerprint(decision.SourceIdentity),
+                SourceRunReference = decision.SourceRunId,
+                TrustState = decision.TrustState,
+                ApprovedByFingerprint = Fingerprint(decision.ApprovedBy),
+                ApprovedAt = decision.ApprovedAt,
+                CreatedAt = decision.UpdatedAt,
+            });
+        }
+    }
+
+    private static bool HasMeaningfulMemoryChange(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<AgentMemory> entry) =>
+        entry.Properties.Any(property =>
+            property.IsModified && property.Metadata.Name is not nameof(global::Agentweaver.Api.Memory.AgentMemory.IdentityKey));
+
+    private static bool HasMeaningfulDecisionChange(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry<Decision> entry) =>
+        entry.Properties.Any(property =>
+            property.IsModified && property.Metadata.Name is not nameof(Decision.IdentityKey));
+
+    private static string? Fingerprint(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     private void ConfigureProjectForeignKey<TEntity>(
         EntityTypeBuilder<TEntity> entity,

@@ -23,7 +23,7 @@ internal sealed record WorkflowTransitionGrammar(
 /// </summary>
 internal static class WorkflowGrammarContract
 {
-    public const string Version = "1.1";
+    public const string Version = "1.3";
     public const int MaxDocumentCharacters = 262_144;
     public const int MaxNodes = 128;
     public const int MaxEdges = 512;
@@ -38,10 +38,9 @@ internal static class WorkflowGrammarContract
         Node(WorkflowNodeType.BuildTest, "build_test", "build-test", "Build & Test", true, true, ["peer-review"]),
         Node(WorkflowNodeType.OpenPullRequest, "open_pull_request", "open-pull-request", "Open pull request", true, true, ["open-pull-request"]),
         Node(WorkflowNodeType.Check, "check", "check", "Check / gate", true, true, ["rai", "human-review", "rubberduck"], ["branches", "gate_kind"], ["rai", "human-review", "rubberduck"]),
-        Node(WorkflowNodeType.FanOut, "fan_out", "fan-out", "Fan-out", true, false, ["fan-out"]),
-        Node(WorkflowNodeType.FanIn, "fan_in", "fan-in", "Fan-in", true, false, ["fan-in"]),
-        Node(WorkflowNodeType.CoordinatorComposed, "coordinator_composed", "coordinator-composed", "Coordinator-composed", true, false, ["coordinator-composed"]),
-        Node(WorkflowNodeType.Serial, "serial", "serial", "Serial", true, false, ["serial"]),
+        Node(WorkflowNodeType.FanOut, "fan_out", "fan-out", "Fan-out", true, true, ["fan-out"]),
+        Node(WorkflowNodeType.FanIn, "fan_in", "fan-in", "Fan-in", true, true, ["fan-in"]),
+        Node(WorkflowNodeType.CoordinatorComposed, "coordinator_composed", "coordinator-composed", "Coordinator-composed", true, true, ["coordinator-composed"], ["prompt"]),
         Node(WorkflowNodeType.Merge, "merge", "merge", "Merge", false, true, ["merge"]),
         Node(WorkflowNodeType.Scribe, "scribe", "scribe", "Scribe", false, true, ["scribe"]),
         Node(WorkflowNodeType.Terminal, "terminal", "terminal", "Terminal", true, true, ["terminal"]),
@@ -71,6 +70,9 @@ internal static class WorkflowGrammarContract
         Unconditional(NodeKind.Agent, NodeKind.HumanReview),
         Unconditional(NodeKind.Agent, NodeKind.Rubberduck),
         Unconditional(NodeKind.Agent, NodeKind.OpenPullRequest),
+        Unconditional(NodeKind.Agent, NodeKind.CoordinatorComposed),
+        Unconditional(NodeKind.CoordinatorComposed, NodeKind.Agent),
+        Unconditional(NodeKind.CoordinatorComposed, NodeKind.Terminal),
         Transition(NodeKind.PeerReview, NodeKind.OpenPullRequest, "approved", "pass"),
         Unconditional(NodeKind.OpenPullRequest, NodeKind.Scribe),
         Transition(NodeKind.Rai, NodeKind.Merge, "review"),
@@ -121,6 +123,7 @@ internal static class WorkflowGrammarContract
             NodeKind.PeerReview,
             NodeKind.HumanReview,
             NodeKind.Rubberduck,
+            NodeKind.CoordinatorComposed,
             NodeKind.Terminal,
         };
 
@@ -150,8 +153,9 @@ internal static class WorkflowGrammarContract
             RequiredFields = ["id", "type"],
             OptionalFields =
             [
-                "label", "role", "kind", "gate_kind", "agent", "prompt", "charter", "target",
-                "steps", "branches", "title", "body", "base", "head", "draft",
+                "label", "role", "kind", "gate_kind", "agent", "prompt", "independent",
+                "declared_output_paths", "charter", "target", "steps", "branches", "title",
+                "body", "base", "head", "draft",
             ],
             MaximumPromptCharacters = MaxPromptCharacters,
             MaximumCharterCharacters = MaxCharterCharacters,
@@ -253,7 +257,6 @@ internal static class WorkflowGrammarContract
         NodeKind.Terminal => "terminal",
         NodeKind.FanOut => "fan-out",
         NodeKind.FanIn => "fan-in",
-        NodeKind.Serial => "serial",
         NodeKind.PeerReview => "peer-review",
         NodeKind.OpenPullRequest => "open-pull-request",
         NodeKind.CoordinatorComposed => "coordinator-composed",

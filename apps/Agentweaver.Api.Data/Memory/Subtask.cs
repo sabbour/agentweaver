@@ -6,6 +6,8 @@ public sealed class Subtask
 {
     [Key] public int Id { get; set; }
     public int WorkPlanId { get; set; }
+    public string? WorkflowBranchNodeId { get; set; }
+    public int? WorkflowBranchOrdinal { get; set; }
     public required string Title { get; set; }
     public required string Scope { get; set; }
     public required string AssignedAgent { get; set; }
@@ -30,6 +32,8 @@ public sealed class Subtask
     public required string Status { get; set; }            // pending | dispatched | running | rai_flagged | assemble_ready | completed | failed
     public string? ChildRunId { get; set; }
     public string? LockedOutAgents { get; set; }
+    public DateTimeOffset? CancellationRequestedAt { get; set; }
+    public string? CancellationRequestedByRunId { get; set; }
 
     /// <summary>
     /// UNIFIED AUTONOMOUS STEERING (Req-1, change #1) — the <c>ChildRunId</c> of the PRIOR child run,
@@ -41,6 +45,11 @@ public sealed class Subtask
     /// dispatched-fresh at least once.
     /// </summary>
     public string? PriorChildRunId { get; set; }
+
+    /// <summary>Immutable integrated assembly commit pinned when review requests a fresh revision.</summary>
+    public string? RevisionInputCommitHash { get; set; }
+    /// <summary>Output revision that supplied <see cref="RevisionInputCommitHash"/>.</summary>
+    public string? RevisionInputRevisionId { get; set; }
 
     /// <summary>
     /// Optional bespoke charter authored inline by the coordinator's decomposition when no catalog

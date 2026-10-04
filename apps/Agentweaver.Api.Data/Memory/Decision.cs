@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace Agentweaver.Api.Memory;
 
@@ -21,6 +22,11 @@ public sealed class Decision
     public string? ApprovedBy { get; set; }
     public DateTimeOffset? ApprovedAt { get; set; }
     public string? IdentityKey { get; set; }
+    public int Revision { get; set; } = 1;
+    public string CurrentRevisionId { get; set; } = "";
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+
+    [NotMapped] public string? RevisionReason { get; set; }
+    [NotMapped] public string? RevisionActor { get; set; }
 }

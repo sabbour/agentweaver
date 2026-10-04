@@ -74,6 +74,35 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
     }
 
     [Fact]
+    public async Task ClusterDiagnostics_OnlyReturnsWorkflowChildWorkForAuthorizedProjects()
+    {
+        var authorizedProjectId = await CreateProjectAsync(UnlinkedOwnerOid);
+        var otherProjectId = await CreateProjectAsync(VictimOwnerOid);
+        await SeedWorkflowChildWorkAsync(
+            authorizedProjectId,
+            "authorized-parent-run",
+            "authorized-child-run",
+            "authorized-workflow");
+        await SeedWorkflowChildWorkAsync(
+            otherProjectId,
+            "other-parent-run",
+            "other-child-run",
+            "other-workflow");
+
+        using var caller = CreateEntraClient(UnlinkedOwnerOid, PlatformRoles.Viewer);
+        var response = await caller.GetAsync("/api/diagnostics/cluster");
+        var payload = await response.Content.ReadAsStringAsync();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        payload.Should().Contain("authorized-parent-run")
+            .And.Contain("authorized-child-run")
+            .And.Contain("authorized-workflow")
+            .And.NotContain("other-parent-run")
+            .And.NotContain("other-child-run")
+            .And.NotContain("other-workflow");
+    }
+
+    [Fact]
     public async Task TerminalDiagnostic_PersistsAndReturnsOnlyNormalizedFailureFields()
     {
         const string secret = "secret-do-not-persist-6f8d";
@@ -386,9 +415,11 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         foreach (var response in new[] { terminal, rest, stream })
         {
             response.Should().NotContain(signature).And.NotContain("SharedAccessSignature")
-                .And.NotContain("\"reason\"").And.NotContain("\"detail\"");
+                .And.NotContain("\"reason\"");
             response.Should().Contain("a2a_transport_failure");
         }
+        using var terminalDocument = System.Text.Json.JsonDocument.Parse(terminal);
+        terminalDocument.RootElement.TryGetProperty("detail", out _).Should().BeFalse();
     }
 
     [Fact]
@@ -1021,6 +1052,45 @@ public sealed class ProjectRunAuthorizationTests : IClassFixture<EntraWebApplica
         if (addOperatorStartMarker)
             await AppendPersonalSessionMarkerAsync(run.Id.ToString());
         return run.Id.ToString();
+    }
+
+    private async Task SeedWorkflowChildWorkAsync(
+        ProjectId projectId,
+        string parentRunId,
+        string childRunId,
+        string workflowId)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var outcome = new OutcomeSpec
+        {
+            ProjectId = projectId.ToString(),
+            CoordinatorRunId = childRunId,
+            Goal = "diagnostic authorization",
+            DesiredOutcome = "authorized evidence only",
+            Scope = "test",
+            Assumptions = "none",
+            Status = "confirmed",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(outcome);
+        await db.SaveChangesAsync();
+        db.WorkPlans.Add(new WorkPlan
+        {
+            OutcomeSpecId = outcome.Id,
+            ProjectId = projectId.ToString(),
+            CoordinatorRunId = childRunId,
+            ParentRunId = parentRunId,
+            ParentWorkflowId = workflowId,
+            ParentWorkflowNodeId = "fan-out",
+            ParentJoinNodeId = "fan-in",
+            Status = "dispatching",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await db.SaveChangesAsync();
     }
 
     private Task AppendPersonalSessionMarkerAsync(

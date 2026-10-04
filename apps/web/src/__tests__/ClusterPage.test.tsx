@@ -215,6 +215,25 @@ describe('ClusterPage', () => {
     expect(screen.getByText(/every run is getting a sandbox immediately/i)).toBeDefined();
   });
 
+  it('warns when an empty inventory was not collected successfully', async () => {
+    getClusterMock().mockResolvedValue({
+      ...sampleData,
+      sandbox_claims: [],
+      inventory_sources: [{
+        name: 'sandbox_claims',
+        outcome: 'forbidden',
+        complete: false,
+        observed_at: new Date().toISOString(),
+        detail: 'The runtime identity is not authorized to list this inventory.',
+      }],
+    });
+
+    renderPage();
+
+    const warning = await screen.findByTestId('inventory-collection-warning');
+    expect(warning.textContent).toContain('sandbox_claims: forbidden');
+  });
+
   it('renders "Not available" bar when API returns 404 (null)', async () => {
     getClusterMock().mockResolvedValue(null);
 

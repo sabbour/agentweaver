@@ -11,12 +11,13 @@ import {
   it,
   vi,
 } from 'vitest';
-import type { AgentMemoryDto, DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
+import type { AgentMemoryDto, AgentMemoryRevisionDto, DecisionDto, DecisionInboxEntryDto, SessionHistoryDto } from '../api/types';
 import type { ReactNode } from 'react';
 vi.mock('../api/apiClient', () => ({
   apiClient: {
     getDecisions: vi.fn(),
     getDecisionsInbox: vi.fn(),
+    getAddressedMessages: vi.fn(),
     getProjectMemory: vi.fn(),
     getProjectSessions: vi.fn(),
     mergeDecisionInboxEntry: vi.fn(),
@@ -24,6 +25,10 @@ vi.mock('../api/apiClient', () => ({
     rejectDecisionInboxEntry: vi.fn(),
     createAgentMemory: vi.fn(),
     updateAgentMemory: vi.fn(),
+    getAgentMemoryRevisions: vi.fn(),
+    restoreAgentMemory: vi.fn(),
+    getDecisionRevisions: vi.fn(),
+    restoreDecision: vi.fn(),
   },
 }));
 
@@ -68,6 +73,8 @@ function makeActive(id: string): DecisionDto {
     title: 'Active decision',
     content: 'Active content',
     rationale: 'Active rationale',
+    revision: 1,
+    current_revision_id: `decision-${id}-r1`,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
   };
@@ -113,6 +120,31 @@ afterEach(() => {
   cleanup();
 });
 
+describe('MemoriesPage — Addressed messages tab', () => {
+  it('shows delivery correlation and errors without treating acknowledgment as a decision', async () => {
+    vi.mocked(apiClient.getDecisions).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getDecisionsInbox).mockResolvedValue(page([]));
+    vi.mocked(apiClient.getAddressedMessages).mockResolvedValue([{
+      id: 'msg-1', projectId: 'proj-001', sender: 'Neo', recipient: 'Trinity',
+      sourceRunId: 'run-a', targetRunId: 'run-b', threadId: 'thread-1',
+      replyToId: null, referenceKind: 'backlog_task', referenceId: 'task-1',
+      idempotencyKey: 'key-1', content: 'Can you check the result?',
+      status: 'undeliverable', createdAt: '2026-09-27T10:00:00Z',
+      expiresAt: '2026-09-28T10:00:00Z', deliveredAt: null,
+      acknowledgedAt: null, failureReason: 'target_cancelled',
+    }]);
+
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Addressed messages' }));
+
+    await waitFor(() => expect(screen.getByText('Can you check the result?')).toBeTruthy());
+    expect(screen.getByText(/Delivery error: target_cancelled/)).toBeTruthy();
+    expect(screen.getByText(/Thread thread-1/)).toBeTruthy();
+    expect(screen.getByText(/backlog_task: task-1/)).toBeTruthy();
+    expect(apiClient.getAddressedMessages).toHaveBeenCalledWith('proj-001');
+  });
+});
+
 function makeSession(id: string, over?: Partial<SessionHistoryDto>): SessionHistoryDto {
   return {
     id,
@@ -134,9 +166,29 @@ function makeMemory(id: string, over?: Partial<AgentMemoryDto>): AgentMemoryDto 
     type: 'learning',
     importance: 'medium',
     content: 'Before update',
+    status: 'active',
+    revision: 1,
+    current_revision_id: `memory-${id}-r1`,
     created_at: '2026-09-23T00:00:00Z',
     updated_at: '2026-09-23T00:00:00Z',
     ...over,
+  };
+}
+
+function makeMemoryRevision(revision: number): AgentMemoryRevisionDto {
+  return {
+    revision_id: `memory-42-r${revision}`,
+    memory_id: 42,
+    revision,
+    actor: 'Smith',
+    reason: 'updated',
+    agent_name: 'Smith',
+    type: 'learning',
+    importance: 'medium',
+    content: `Revision content ${revision}`,
+    status: 'active',
+    trust_state: 'pending',
+    created_at: '2026-09-23T00:00:00Z',
   };
 }
 
@@ -300,7 +352,12 @@ describe('MemoriesPage — Agent memory tab', () => {
       'proj-001',
       'Smith',
       '42',
-      { type: 'learning', content: 'After update' },
+      {
+        expected_revision: 1,
+        type: 'learning',
+        content: 'After update',
+        reason: 'Updated from the Memories page',
+      },
     ));
     await waitFor(() => expect(screen.getByText('After update')).toBeTruthy());
 
@@ -308,6 +365,33 @@ describe('MemoriesPage — Agent memory tab', () => {
     renderPage();
     fireEvent.click(screen.getByRole('tab', { name: 'Agent memory' }));
     await waitFor(() => expect(screen.getByText('After update')).toBeTruthy());
+  });
+
+  it('loads later revision-history pages', async () => {
+    vi.mocked(apiClient.getProjectMemory).mockResolvedValue(page([makeMemory('42')]));
+    vi.mocked(apiClient.getAgentMemoryRevisions).mockImplementation(
+      async (_projectId, _agentName, _memoryId, options) => {
+        const pageNumber = options?.page ?? 1;
+        return pagedResult(
+          [makeMemoryRevision(pageNumber === 1 ? 101 : 76)],
+          pageNumber,
+          25,
+          101,
+        );
+      },
+    );
+
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: 'Agent memory' }));
+    await waitFor(() => expect(screen.getByText('Before update')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'History' }));
+    await waitFor(() => expect(screen.getByText('Revision 101')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load older revisions' }));
+
+    await waitFor(() => expect(screen.getByText('Revision 76')).toBeTruthy());
+    expect(apiClient.getAgentMemoryRevisions).toHaveBeenCalledWith(
+      'proj-001', 'Smith', '42', { page: 2, pageSize: 25 });
   });
 });
 

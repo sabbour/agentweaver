@@ -72,6 +72,19 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
             return;
         }
 
+        // Reclaim terminal-parent child claims immediately after restart, before the first pickup tick.
+        try
+        {
+            using var startupScope = _scopeFactory.CreateScope();
+            await startupScope.ServiceProvider.GetRequiredService<TerminalCoordinatorChildSandboxCleanup>()
+                .SweepAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Heartbeat: startup terminal child sandbox cleanup failed; retrying on ticks");
+        }
+
         using var timer = new PeriodicTimer(_interval);
         while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
         {
@@ -200,6 +213,20 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
             _logger.LogError(exSweep, "Heartbeat: coordinator reconciler sweep failed");
         }
 
+        try
+        {
+            var childWork = sp.GetRequiredService<Agentweaver.Api.Workflows.WorkflowChildWorkService>();
+            await childWork.SweepAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exSweep)
+        {
+            _logger.LogError(exSweep, "Heartbeat: workflow child-work reconciler sweep failed");
+        }
+
         // #272 watchdog: drain outcome-spec confirm/revise decisions that were deferred to the DB but
         // have no live drain path (a coordinator parked at awaiting_confirmation whose reasoning ran in
         // a now-reaped AgentHost pod has no resident PollDeferredDecisionsAsync). The reconciler sweep
@@ -208,6 +235,7 @@ public sealed class CoordinatorHeartbeatService : BackgroundService
         try
         {
             var coordinatorRunService = sp.GetRequiredService<CoordinatorRunService>();
+            await coordinatorRunService.RecoverStalledOutcomeDraftsAsync(stoppingToken).ConfigureAwait(false);
             await coordinatorRunService.DrainOrphanedSpecDeferralsAsync(stoppingToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

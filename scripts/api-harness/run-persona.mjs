@@ -41,6 +41,10 @@ import {
   createRecorderSessionAuthProvider,
   RECORDER_SESSION_AUTH_PROVIDER,
 } from './lib/auth-providers/recorder-session.mjs';
+import {
+  createLocalTestAuthProvider,
+  LOCAL_TEST_AUTH_PROVIDER,
+} from './lib/auth-providers/local-test.mjs';
 import { runGenerationSeams } from './lib/seams.mjs';
 import { summarizeProjectMetrics } from './lib/metrics.mjs';
 import { writeFinding, printReport } from './lib/reporter.mjs';
@@ -106,6 +110,9 @@ export function resolveTargetRevision(explicitTargetRevision, deployment) {
 
 export function resolveAuthProvider(args = {}, baseUrl) {
   const providerName = args.authProvider ?? RECORDER_SESSION_AUTH_PROVIDER;
+  if (providerName === LOCAL_TEST_AUTH_PROVIDER) {
+    return createLocalTestAuthProvider();
+  }
   if (providerName !== RECORDER_SESSION_AUTH_PROVIDER) {
     throw new Error(`Unsupported auth provider "${providerName}".`);
   }
@@ -190,7 +197,7 @@ async function main() {
   let primaryError = null;
   try {
     try {
-      result = await runGenerationSeams(client, scenario, { keep: args.keep });
+      result = await runGenerationSeams(client, scenario, { keep: args.keep, timeoutMs: args.timeoutMs });
     } catch (err) {
       primaryError = err;
       console.error(`error: scenario driver threw: ${redact(String(err?.stack ?? err?.message ?? err))}`);

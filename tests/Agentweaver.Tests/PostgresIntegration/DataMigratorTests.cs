@@ -62,6 +62,10 @@ public sealed class DataMigratorTests : IDisposable
         var runs = await db.Runs.CountAsync();
         var revisions = await db.RunRevisions.CountAsync();
         var workflowRuns = await db.WorkflowRuns.CountAsync();
+        var executionIdentity = await db.ExecutionIdentities
+            .SingleAsync(identity => identity.RunId == _seededRecoveredRunId);
+        var addressedMessage = await db.AddressedMessages
+            .SingleAsync(message => message.ProjectId == _seededProjectId);
         var backlogTasks = await db.BacklogTasks.CountAsync();
         var seededProject = await db.Projects.SingleAsync(project => project.ProjectId == _seededProjectId);
         var recoveredRun = await db.Runs.SingleAsync(run => run.RunId == _seededRecoveredRunId);
@@ -80,15 +84,73 @@ public sealed class DataMigratorTests : IDisposable
         workflowRuns.Should().BeGreaterThanOrEqualTo(1, "all seeded workflow_runs must be migrated");
         backlogTasks.Should().BeGreaterThanOrEqualTo(2, "all seeded backlog_tasks must be migrated");
         seededProject.TeamRevision.Should().Be(7, "team mutation concurrency state must survive provider migration");
+        seededProject.BacklogGraphRevision.Should().Be(4);
+        var claimedStory = await db.BacklogTasks.SingleAsync(task => task.ProjectId == _seededProjectId
+            && task.State == "claimed");
+        claimedStory.ClaimedGraphRevision.Should().Be(4);
+        claimedStory.ClaimedPrerequisitesJson.Should().Be("[]");
         seededProject.WebhookSecret.Should().Be("github-webhook:seed",
             "the per-project webhook secret-store reference must survive provider migration");
         recoveredRun.ApprovalGeneration.Should().Be(2,
             "a recovered run must retain its lifecycle generation so pre-recovery approval policies cannot match");
+        recoveredRun.ExecutableWorkflowPinRequired.Should().BeTrue();
+        recoveredRun.ExecutableWorkflowManifestSchemaVersion.Should().Be(1);
+        recoveredRun.ExecutableWorkflowDefinitionId.Should().Be("pinned-workflow");
+        recoveredRun.ExecutableWorkflowDefinitionVersion.Should().Be("7");
+        recoveredRun.ExecutableWorkflowSource.Should().Be("project");
+        recoveredRun.ExecutableWorkflowContentDigest.Should().Be(new string('d', 64));
+        recoveredRun.ExecutableWorkflowDefinitionYaml.Should().Be("id: pinned-workflow");
+        recoveredRun.ExecutableWorkflowPinnedAt.Should().NotBeNull();
+        executionIdentity.Attempt.Should().Be(2);
+        executionIdentity.ProjectId.Should().Be(_seededProjectId);
+        executionIdentity.InitiatingPrincipalId.Should().Be("bob");
+        executionIdentity.ExecutingServiceId.Should().Be("service:agentweaver-api");
+        addressedMessage.Status.Should().Be(AddressedMessageStates.Accepted);
+        addressedMessage.ThreadId.Should().Be("migration-thread");
         packageVersions.Should().ContainSingle();
         packageVersions.Single().CanonicalVersionKey.Should().Be(
             BlueprintPackageLibraryLimits.CanonicalVersionKey(packageVersions.Single().CanonicalVersion));
         packagePayloads.Should().Be(1);
         packageAcquisitions.Should().Be(1);
+    }
+
+    [PostgresFact]
+    public async Task Migrator_LegacySourceWithoutRevisionTables_PreservesKnowledgeAndSeedsHistory()
+    {
+        await using (var connection = new SqliteConnection($"Data Source={_memoryDbPath}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                DROP TABLE "agent_memory_revisions";
+                DROP TABLE "decision_revisions";
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await BuildMigrator().RunAsync();
+
+        await using var db = await _pg.CreateDbContextAsync();
+        var memories = await db.AgentMemory
+            .Where(memory => memory.ProjectId == _seededProjectId)
+            .ToListAsync();
+        var decisions = await db.Decisions
+            .Where(decision => decision.ProjectId == _seededProjectId)
+            .ToListAsync();
+        memories.Should().NotBeEmpty();
+        decisions.Should().NotBeEmpty();
+        (await db.AgentMemoryRevisions
+                .Where(revision => revision.ProjectId == _seededProjectId)
+                .ToListAsync())
+            .Should().OnlyContain(revision =>
+                revision.Revision == 1
+                && !string.IsNullOrWhiteSpace(revision.SourceIdentityFingerprint));
+        (await db.DecisionRevisions
+                .Where(revision => revision.ProjectId == _seededProjectId)
+                .ToListAsync())
+            .Should().OnlyContain(revision =>
+                revision.Revision == 1
+                && !string.IsNullOrWhiteSpace(revision.SourceIdentityFingerprint));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -425,6 +487,21 @@ public sealed class DataMigratorTests : IDisposable
         var baseId = Random.Shared.Next(100_000, 900_000);
         var created = DateTimeOffset.Parse("2026-09-24T12:34:56.1234560Z");
         var updated = created.AddMinutes(5);
+        db.AddressedMessages.Add(new AddressedMessage
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            ProjectId = projectId,
+            Sender = "Tank",
+            SenderIdentity = "run:migration",
+            Recipient = "Link",
+            SourceRunId = "migration-source",
+            TargetRunId = "migration-target",
+            ThreadId = "migration-thread",
+            IdempotencyKey = "migration-retry",
+            Content = "Preserve this receipt.",
+            CreatedAt = created,
+            ExpiresAt = created.AddDays(1),
+        });
         var activeDecisionId = baseId + 2;
         var supersededDecisionId = baseId + 1;
         var mergedInboxId = baseId + 20;
@@ -617,17 +694,34 @@ public sealed class DataMigratorTests : IDisposable
 
         using var data = conn.CreateCommand();
         data.CommandText = $"""
-            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at, team_revision, webhook_secret)
-                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}',7,'github-webhook:seed');
+            INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at, team_revision, backlog_graph_revision, webhook_secret)
+                VALUES ('{pid1}','Project A','blank','/a','main','alice','github_copilot','active','{now}','{now}',7,4,'github-webhook:seed');
             INSERT INTO projects (project_id, name, origin_kind, working_directory, default_branch, owner, default_provider, state, created_at, updated_at)
                 VALUES ('{pid2}','Project B','blank','/b','main','bob','github_copilot','active','{now}','{now}');
 
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
                 VALUES ('{rid1}','/repo','main','github_copilot','task1','alice','completed','{now}','{now}','ok','{pid1}');
-            INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, project_id, approval_generation)
-                VALUES ('{rid2}','/repo','main','github_copilot','task2','bob','in_progress','{now}','{pid1}',2);
+            INSERT INTO runs (
+                run_id, repository_path, originating_branch, model_source, task, submitting_user,
+                status, started_at, project_id, approval_generation,
+                executable_workflow_pin_required, executable_workflow_manifest_schema_version,
+                executable_workflow_definition_id, executable_workflow_definition_version,
+                executable_workflow_source, executable_workflow_content_digest,
+                executable_workflow_definition_yaml, executable_workflow_pinned_at)
+                VALUES (
+                    '{rid2}','/repo','main','github_copilot','task2','bob',
+                    'in_progress','{now}','{pid1}',2,
+                    1,1,'pinned-workflow','7','project','{new string('d', 64)}',
+                    'id: pinned-workflow','{now}');
             INSERT INTO runs (run_id, repository_path, originating_branch, model_source, task, submitting_user, status, started_at, ended_at, result, project_id)
                 VALUES ('{rid3}','/repo','main','github_copilot','task3','alice','failed','{now}','{now}','err','{pid2}');
+
+            INSERT INTO execution_identities (
+                descriptor_id, schema_version, run_id, attempt, project_id,
+                initiating_principal_id, executing_service_id, agent_assignment_id, created_at)
+                VALUES (
+                    'execution-{rid2}',1,'{rid2}',2,'{pid1}',
+                    'bob','service:agentweaver-api','assignment-{rid2}','{now}');
 
             INSERT INTO run_revisions (run_id, revision_number, reviewer_user, created_at, raw_comment, sanitized_comment, previous_tree_hash)
                 VALUES ('{rid1}',1,'alice','{now}','raw1','sanitized1','hash0');
@@ -637,8 +731,8 @@ public sealed class DataMigratorTests : IDisposable
             INSERT INTO workflow_runs (workflow_run_id, project_id, task, submitting_user, started_at)
                 VALUES ('{wid1}','{pid1}','wf task','alice','{now}');
 
-            INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at, committed_at)
-                VALUES ('{tid1}','{pid1}','Task A','ready','key-a','alice','{now}','{now}');
+            INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at, committed_at, claimed_at, run_id, claimed_graph_revision, claimed_prerequisites_json)
+                VALUES ('{tid1}','{pid1}','Task A','claimed','key-a','alice','{now}','{now}','{now}','{rid1}',4,'[]');
             INSERT INTO backlog_tasks (task_id, project_id, title, state, order_key, captured_by, created_at)
                 VALUES ('{tid2}','{pid1}','Task B','backlog','key-b','alice','{now}');
 

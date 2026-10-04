@@ -69,11 +69,59 @@ public sealed class SqliteDb
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN state TEXT NOT NULL DEFAULT 'active';", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN default_branch TEXT NOT NULL DEFAULT 'main';", ct);
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN team_revision INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN backlog_graph_revision INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_name TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN agent_charter TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN reviewed_by TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN workflow_run_id TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN merged_commit_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN approved_output_revision_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN current_output_revision_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN output_kind TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN merged_commit_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN work_plan_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN merge_effect_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN accepted_no_change INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN tree_content BLOB;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE run_output_revisions ADD COLUMN tree_content_sha256 TEXT;", ct);
+        // The old uniqueness is a table constraint, requiring a rebuild rather than DROP INDEX.
+        await using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='run_output_revisions';";
+            var definition = (string?)await check.ExecuteScalarAsync(ct).ConfigureAwait(false);
+            if (definition?.Contains("UNIQUE (run_id, lifecycle_generation)", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(ct).ConfigureAwait(false);
+                await using var migrate = connection.CreateCommand();
+                migrate.Transaction = transaction;
+                migrate.CommandText = """
+                    DROP TRIGGER IF EXISTS trg_run_output_revisions_no_update;
+                    DROP TRIGGER IF EXISTS trg_run_output_revisions_no_delete;
+                    ALTER TABLE run_output_revisions RENAME TO run_output_revisions_old;
+                    CREATE TABLE run_output_revisions (
+                        revision_id TEXT NOT NULL PRIMARY KEY, schema_version INTEGER NOT NULL,
+                        run_id TEXT NOT NULL, lifecycle_generation INTEGER NOT NULL,
+                        workflow_digest TEXT, manifest_incomplete INTEGER NOT NULL,
+                        tree_hash TEXT NOT NULL, diff_sha256 TEXT NOT NULL,
+                        predecessor_revision_id TEXT, output_kind TEXT, merged_commit_hash TEXT,
+                        work_plan_id TEXT, merge_effect_id TEXT,
+                        accepted_no_change INTEGER NOT NULL DEFAULT 0,
+                        diff_bytes BLOB, tree_content BLOB, tree_content_sha256 TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    INSERT INTO run_output_revisions SELECT * FROM run_output_revisions_old;
+                    DROP TABLE run_output_revisions_old;
+                    CREATE INDEX idx_run_output_revisions_history
+                        ON run_output_revisions (run_id, lifecycle_generation DESC);
+                    CREATE TRIGGER trg_run_output_revisions_no_update BEFORE UPDATE ON run_output_revisions
+                        BEGIN SELECT RAISE(ABORT, 'run_output_revisions is immutable'); END;
+                    CREATE TRIGGER trg_run_output_revisions_no_delete BEFORE DELETE ON run_output_revisions
+                        BEGIN SELECT RAISE(ABORT, 'run_output_revisions is immutable'); END;
+                    """;
+                await migrate.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
+            }
+        }
         // Coordinator workflow-selection reasoning (#167): short human-readable explanation of why the
         // coordinator selected the workflow it planned this run against. NULL for runs with no captured reason.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN workflow_selection_reason TEXT;", ct);
@@ -122,6 +170,47 @@ public sealed class SqliteDb
         // publication commits its ready events or the lease expires.
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN preview_publication_lease_until TEXT;", ct);
         await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN preview_publication_lease_owner TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_pin_required INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_manifest_schema_version INTEGER;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_definition_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_definition_version TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_source TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_content_digest TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_definition_yaml TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN executable_workflow_pinned_at TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN execution_input_required INTEGER NOT NULL DEFAULT 0;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN execution_input_source_commit_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN execution_input_commit_hash TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE runs ADD COLUMN execution_input_composite_id TEXT;", ct);
+        await TryAlterAsync(connection,
+            """
+            CREATE TABLE IF NOT EXISTS execution_identities (
+                descriptor_id TEXT NOT NULL PRIMARY KEY,
+                schema_version INTEGER NOT NULL,
+                run_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                project_id TEXT,
+                initiating_principal_id TEXT NOT NULL,
+                executing_service_id TEXT NOT NULL,
+                agent_assignment_id TEXT NOT NULL,
+                agent_role TEXT,
+                agent_display_name TEXT,
+                parent_run_id TEXT,
+                parent_descriptor_id TEXT,
+                retry_of_run_id TEXT,
+                retry_of_descriptor_id TEXT,
+                workflow_run_id TEXT,
+                subtask_id TEXT,
+                approval_policy_snapshot_id TEXT,
+                executable_workflow_content_digest TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE (run_id, attempt)
+            );
+            CREATE INDEX IF NOT EXISTS idx_execution_identities_parent
+                ON execution_identities (parent_descriptor_id);
+            CREATE INDEX IF NOT EXISTS idx_execution_identities_retry
+                ON execution_identities (retry_of_descriptor_id);
+            """, ct);
 
         // Per-project backlog pickup configuration (Feature 009, FR-008a + unattended seeding).
         await TryAlterAsync(connection, "ALTER TABLE projects ADD COLUMN max_ready_per_heartbeat INTEGER NOT NULL DEFAULT 3;", ct);
@@ -203,6 +292,10 @@ public sealed class SqliteDb
         await TryAlterAsync(connection,
             "ALTER TABLE backlog_tasks ADD COLUMN automation_invocation_pending INTEGER NOT NULL DEFAULT 0;", ct);
         await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN ai_execution_provider_key TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN ready_by_user_id TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN workflow_definition_snapshot_yaml TEXT;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN claimed_graph_revision INTEGER;", ct);
+        await TryAlterAsync(connection, "ALTER TABLE backlog_tasks ADD COLUMN claimed_prerequisites_json TEXT;", ct);
         await TryAlterAsync(connection,
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_backlog_tasks_parent_promotion_key
@@ -509,6 +602,8 @@ public sealed class SqliteDb
                 task               TEXT NOT NULL,
                 submitting_user    TEXT NOT NULL,
                 status             TEXT NOT NULL,
+                approval_generation INTEGER NOT NULL DEFAULT 1,
+                lifecycle_generation INTEGER NOT NULL DEFAULT 1,
                 started_at         TEXT NOT NULL,
                 ended_at           TEXT,
                 result             TEXT,
@@ -525,6 +620,8 @@ public sealed class SqliteDb
                 reviewed_by        TEXT,
                 workflow_run_id    TEXT,
                 merged_commit_hash TEXT,
+                approved_output_revision_id TEXT,
+                current_output_revision_id TEXT,
                 parent_run_id      TEXT,
                 subtask_id         TEXT,
                 origin             TEXT NOT NULL DEFAULT 'interactive',
@@ -534,27 +631,70 @@ public sealed class SqliteDb
                 sandbox_claim_name TEXT,
                 sandbox_pod_name   TEXT,
                 sandbox_namespace  TEXT,
-                workflow_selection_reason TEXT
+                workflow_selection_reason TEXT,
+                preview_publication_lease_until TEXT,
+                preview_publication_lease_owner TEXT,
+                launch_auto_approve_tools INTEGER,
+                launch_autopilot INTEGER,
+                approval_policy_snapshot_id TEXT,
+                approval_policy_source TEXT,
+                approval_policy_captured_at TEXT,
+                approval_policy_settings_updated_at TEXT,
+                approval_policy_inherited_from_run_id TEXT,
+                executable_workflow_pin_required INTEGER NOT NULL DEFAULT 0,
+                executable_workflow_manifest_schema_version INTEGER,
+                executable_workflow_definition_id TEXT,
+                executable_workflow_definition_version TEXT,
+                executable_workflow_source TEXT,
+                executable_workflow_content_digest TEXT,
+                executable_workflow_definition_yaml TEXT,
+                executable_workflow_pinned_at TEXT,
+                execution_input_required INTEGER NOT NULL DEFAULT 0,
+                execution_input_source_commit_hash TEXT,
+                execution_input_commit_hash TEXT,
+                execution_input_composite_id TEXT
             );
 
             INSERT INTO runs__new (
                 run_id, repository_path, originating_branch, model_source, task,
-                submitting_user, status, started_at, ended_at, result,
+                submitting_user, status, approval_generation, lifecycle_generation,
+                started_at, ended_at, result,
                 worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
-                reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+                reviewed_by, workflow_run_id, merged_commit_hash, approved_output_revision_id, current_output_revision_id, parent_run_id, subtask_id,
                 origin, retried_from, archived_at, sandbox_backend, sandbox_claim_name,
-                sandbox_pod_name, sandbox_namespace, workflow_selection_reason
+                sandbox_pod_name, sandbox_namespace, workflow_selection_reason,
+                preview_publication_lease_until, preview_publication_lease_owner,
+                launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
+                approval_policy_source, approval_policy_captured_at,
+                approval_policy_settings_updated_at, approval_policy_inherited_from_run_id,
+                executable_workflow_pin_required, executable_workflow_manifest_schema_version,
+                executable_workflow_definition_id, executable_workflow_definition_version,
+                executable_workflow_source, executable_workflow_content_digest,
+                executable_workflow_definition_yaml, executable_workflow_pinned_at,
+                execution_input_required, execution_input_source_commit_hash,
+                execution_input_commit_hash, execution_input_composite_id
             )
             SELECT
                 run_id, repository_path, originating_branch, model_source, task,
-                submitting_user, status, started_at, ended_at, result,
+                submitting_user, status, approval_generation, lifecycle_generation,
+                started_at, ended_at, result,
                 worktree_path, worktree_branch, tree_hash, diff, review_ready_at,
                 merge_conflicts, project_id, model_id, agent_name, agent_charter,
-                reviewed_by, workflow_run_id, merged_commit_hash, parent_run_id, subtask_id,
+                reviewed_by, workflow_run_id, merged_commit_hash, approved_output_revision_id, current_output_revision_id, parent_run_id, subtask_id,
                 COALESCE(origin, 'interactive'), retried_from, archived_at,
                 sandbox_backend, sandbox_claim_name, sandbox_pod_name, sandbox_namespace,
-                workflow_selection_reason
+                workflow_selection_reason,
+                preview_publication_lease_until, preview_publication_lease_owner,
+                launch_auto_approve_tools, launch_autopilot, approval_policy_snapshot_id,
+                approval_policy_source, approval_policy_captured_at,
+                approval_policy_settings_updated_at, approval_policy_inherited_from_run_id,
+                executable_workflow_pin_required, executable_workflow_manifest_schema_version,
+                executable_workflow_definition_id, executable_workflow_definition_version,
+                executable_workflow_source, executable_workflow_content_digest,
+                executable_workflow_definition_yaml, executable_workflow_pinned_at,
+                execution_input_required, execution_input_source_commit_hash,
+                execution_input_commit_hash, execution_input_composite_id
             FROM runs;
 
             DROP TABLE runs;
@@ -613,8 +753,61 @@ public sealed class SqliteDb
             approval_policy_source TEXT,
             approval_policy_captured_at TEXT,
             approval_policy_settings_updated_at TEXT,
-            approval_policy_inherited_from_run_id TEXT
+            approval_policy_inherited_from_run_id TEXT,
+            executable_workflow_pin_required INTEGER NOT NULL DEFAULT 0,
+            executable_workflow_manifest_schema_version INTEGER,
+            executable_workflow_definition_id TEXT,
+            executable_workflow_definition_version TEXT,
+            executable_workflow_source TEXT,
+            executable_workflow_content_digest TEXT,
+            executable_workflow_definition_yaml TEXT,
+            executable_workflow_pinned_at TEXT,
+            execution_input_required INTEGER NOT NULL DEFAULT 0,
+            execution_input_source_commit_hash TEXT,
+            execution_input_commit_hash TEXT,
+            execution_input_composite_id TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS run_execution_leases (
+            run_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            fencing_token INTEGER NOT NULL,
+            lease_expires_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS run_output_revisions (
+            revision_id TEXT NOT NULL PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            run_id TEXT NOT NULL,
+            lifecycle_generation INTEGER NOT NULL,
+            workflow_digest TEXT,
+            manifest_incomplete INTEGER NOT NULL,
+            tree_hash TEXT NOT NULL,
+            diff_sha256 TEXT NOT NULL,
+            predecessor_revision_id TEXT,
+            output_kind TEXT,
+            merged_commit_hash TEXT,
+            work_plan_id TEXT,
+            merge_effect_id TEXT,
+            accepted_no_change INTEGER NOT NULL DEFAULT 0,
+            diff_bytes BLOB,
+            tree_content BLOB,
+            tree_content_sha256 TEXT,
+            created_at TEXT NOT NULL,
+            CHECK (length(revision_id) > 0)
+        );
+        CREATE INDEX IF NOT EXISTS idx_run_output_revisions_history
+            ON run_output_revisions (run_id, lifecycle_generation DESC);
+        CREATE TRIGGER IF NOT EXISTS trg_run_output_revisions_no_update
+            BEFORE UPDATE ON run_output_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'run_output_revisions is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_run_output_revisions_no_delete
+            BEFORE DELETE ON run_output_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'run_output_revisions is immutable');
+        END;
 
         CREATE TABLE IF NOT EXISTS run_revisions (
             run_id              TEXT NOT NULL,
@@ -655,6 +848,7 @@ public sealed class SqliteDb
             updated_at              TEXT NOT NULL,
             webhook_secret          TEXT,
             team_revision           INTEGER NOT NULL DEFAULT 0,
+            backlog_graph_revision  INTEGER NOT NULL DEFAULT 0,
             preview_approval_timeout_minutes INTEGER NOT NULL DEFAULT 1440,
             preview_lifetime_minutes INTEGER NOT NULL DEFAULT 1440,
             preview_dns_convergence_timeout_seconds INTEGER NOT NULL DEFAULT 600
@@ -696,10 +890,12 @@ public sealed class SqliteDb
             order_key     TEXT NOT NULL,
             captured_by   TEXT NOT NULL,
             captured_by_user_id TEXT,
+            ready_by_user_id TEXT,
             created_at    TEXT NOT NULL,
             committed_at  TEXT,
             claimed_at    TEXT,
             run_id        TEXT,                      -- non-null iff state = 'claimed'
+            workflow_definition_snapshot_yaml TEXT,
             archived_at   TEXT,
             source_file_path TEXT,
             parent_prd_run_id TEXT,

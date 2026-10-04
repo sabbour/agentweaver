@@ -592,8 +592,19 @@ public sealed class BlueprintGenerationJobWorker(
                 ct).ConfigureAwait(false);
             return true;
         }
-        catch (WorkflowGenerationException)
+        catch (WorkflowGenerationException ex)
         {
+            WorkflowGenerationJobPayload.TryDeserialize(
+                snapshot.Job.Description, out var workflowRequest);
+            var validationErrors = ex.ValidationErrors
+                .Select(SensitiveDataRedactor.RedactJsonStringIfApplicable)
+                .ToArray();
+            logger.LogWarning(
+                "Workflow generation job {JobId} failed validation with code {Code}; content_only={ContentOnly}; validation_errors={ValidationErrors}",
+                snapshot.Job.JobId,
+                ex.Code,
+                workflowRequest?.ContentOnly,
+                validationErrors);
             await store.FailAsync(
                 snapshot.Job.JobId,
                 leaseOwner,
@@ -665,7 +676,7 @@ public sealed class BlueprintGenerationJobWorker(
         if (isWorkflow)
         {
             var generator = services.GetRequiredService<IWorkflowGenerator>();
-            var result = await generator.GenerateAsync(
+            var result = ConservativeWorkflowFanPolicy.Enforce(await generator.GenerateAsync(
                 new WorkflowGenerationRequest(
                     workflowRequest!.Description,
                     workflowRequest.ProjectId,
@@ -677,7 +688,7 @@ public sealed class BlueprintGenerationJobWorker(
                     workflowRequest.BaseWorkflowIsBuiltIn,
                     workflowRequest.GenerationModel,
                     workflowRequest.ContentOnly),
-                ct).ConfigureAwait(false);
+                ct).ConfigureAwait(false));
             var projects = services.GetRequiredService<IProjectStore>();
             var project = projectId is null
                 ? null

@@ -62,8 +62,19 @@ public static class DiagnosticsEndpoints
         // installation token, Key Vault, agent-pod quota, warm pool, K8s API) concurrently with a
         // per-check timeout, and returns a live agent-pod inventory (active / orphaned) plus subtasks
         // parked in PendingCapacity. Powers the dedicated frontend "Cluster" page.
-        app.MapGet("/api/diagnostics/cluster", async (DiagnosticsService service, CancellationToken ct) =>
-            Results.Ok(await service.GetClusterDiagnosticsAsync(ct)));
+        app.MapGet("/api/diagnostics/cluster", async (
+            HttpContext httpContext,
+            DiagnosticsService service,
+            IProjectRoleAuthorizationService projectRoles,
+            CancellationToken ct) =>
+        {
+            var caller = httpContext.GetCaller();
+            var projectScope = projectRoles.IsPlatformAdmin(caller)
+                ? ClusterDiagnosticsProjectScope.AllProjects
+                : ClusterDiagnosticsProjectScope.ForProjects(
+                    (await projectRoles.ListExplicitRolesAsync(caller, ct).ConfigureAwait(false)).Keys);
+            return Results.Ok(await service.GetClusterDiagnosticsAsync(projectScope, ct).ConfigureAwait(false));
+        });
 
         // Bounded Kubernetes relationship discovery is separate from the 30-second diagnostics
         // poll so broader opt-in layers do not multiply the normal polling budget.

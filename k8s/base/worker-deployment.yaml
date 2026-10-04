@@ -162,6 +162,13 @@ spec:
                 secretKeyRef:
                   name: agentweaver-postgres
                   key: connectionstring
+            # Durable generation runs on workers, so they must verify execution
+            # contexts with the same signing key used by API replicas.
+            - name: AiExecution__ProviderKeySigningKey
+              valueFrom:
+                secretKeyRef:
+                  name: agentweaver-secrets
+                  key: ai-execution-provider-key-signing-key
             # Coordinator assembly executes on workers and revalidates each run's immutable
             # provider snapshot before every model turn. Those snapshots live in Key Vault, so
             # workers must use the same durable secret store as API replicas rather than the

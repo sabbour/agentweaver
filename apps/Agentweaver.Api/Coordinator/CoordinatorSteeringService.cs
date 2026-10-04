@@ -398,6 +398,7 @@ public sealed class CoordinatorSteeringService
     private readonly IOutcomeSpecReplyClassifier? _replyClassifier;
     private readonly ILogger<CoordinatorSteeringService> _logger;
     private readonly IAgentHostPodLifecycle? _podLifecycle;
+    private readonly TerminalCoordinatorChildSandboxCleanup? _childSandboxCleanup;
     private readonly SandboxRuntimeOptions _sandboxRuntime;
 
     /// <summary>
@@ -434,7 +435,8 @@ public sealed class CoordinatorSteeringService
         AssemblyReviewGate? reviewGate = null,
         IOutcomeSpecReplyClassifier? replyClassifier = null,
         IAgentHostPodLifecycle? podLifecycle = null,
-        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null)
+        IOptions<SandboxRuntimeOptions>? sandboxRuntime = null,
+        TerminalCoordinatorChildSandboxCleanup? childSandboxCleanup = null)
     {
         _streamStore = streamStore;
         _registry = registry;
@@ -449,6 +451,7 @@ public sealed class CoordinatorSteeringService
         _logger = logger;
         _runWorkflowFactory = runWorkflowFactory;
         _podLifecycle = podLifecycle;
+        _childSandboxCleanup = childSandboxCleanup;
         _sandboxRuntime = sandboxRuntime?.Value ?? new SandboxRuntimeOptions();
     }
 
@@ -518,7 +521,8 @@ public sealed class CoordinatorSteeringService
         string instruction,
         string createdBy,
         string? createdByGitHubLogin = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? outputRevisionId = null)
     {
         var normalized = (kind ?? string.Empty).Trim().ToLowerInvariant();
 
@@ -531,6 +535,20 @@ public sealed class CoordinatorSteeringService
         if (normalized is not SteeringKind.Send && SteeringKind.IsNextBoundary(normalized) && string.IsNullOrWhiteSpace(instruction))
             throw new SteeringValidationException(
                 $"A '{normalized}' directive requires a non-empty instruction.");
+        if (normalized is SteeringKind.Redirect or SteeringKind.Amend && _runStore is not null
+            && RunId.TryParse(coordinatorRunId, out var reviewRunId))
+        {
+            var reviewRun = await _runStore.GetAsync(reviewRunId, ct).ConfigureAwait(false);
+            if (reviewRun?.Status == RunStatus.AwaitingReview)
+            {
+                var pending = await CoordinatorAssemblyReviewPersistence.GetAsync(
+                    _scopeFactory, coordinatorRunId, ct).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(outputRevisionId)
+                    || pending?.OutputRevisionId != outputRevisionId
+                    || reviewRun.CurrentOutputRevisionId != outputRevisionId)
+                    throw new RunOutputRevisionUnavailableException("stale_output_revision");
+            }
+        }
 
         if (normalized != SteeringKind.Stop
             && _runStore is not null
@@ -596,7 +614,7 @@ public sealed class CoordinatorSteeringService
         {
             var reviewGateView = await TryDeliverAtAssemblyReviewGateAsync(
                 coordinatorRunId, directiveId, normalized, targetChildRunId, resolvedInstruction,
-                createdBy, createdByGitHubLogin, createdAt, ct).ConfigureAwait(false);
+                createdBy, createdByGitHubLogin, createdAt, ct, outputRevisionId).ConfigureAwait(false);
             if (reviewGateView is not null)
                 return reviewGateView;
         }
@@ -930,7 +948,7 @@ public sealed class CoordinatorSteeringService
             ? await _coordinatorRunService.ConfirmOutcomeSpecAsync(coordinatorRunId, createdBy, allowTaskPromotion: false, ct).ConfigureAwait(false)
             : await _coordinatorRunService.ReviseOutcomeSpecAsync(coordinatorRunId, instruction, createdBy, ct).ConfigureAwait(false);
 
-        if (outcome != CoordinatorGateOutcome.Accepted)
+        if (outcome is not (CoordinatorGateOutcome.Accepted or CoordinatorGateOutcome.Queued))
         {
             _logger.LogInformation(
                 "Outcome-spec chat reply for coordinator {RunId} could not be applied via the confirmation gate ({Outcome}); falling back to normal send semantics",
@@ -938,20 +956,23 @@ public sealed class CoordinatorSteeringService
             return null;
         }
 
-        var appliedAt = DateTimeOffset.UtcNow;
-        await UpdateDirectiveAsync(directiveId, SteeringStatus.Applied, appliedAt, ct).ConfigureAwait(false);
+        var status = outcome == CoordinatorGateOutcome.Queued ? SteeringStatus.Queued : SteeringStatus.Applied;
+        var appliedAt = status == SteeringStatus.Applied ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
+        await UpdateDirectiveAsync(
+            directiveId, status, appliedAt, ct,
+            outcome == CoordinatorGateOutcome.Queued ? "gate:outcome-spec" : null).ConfigureAwait(false);
         await EmitSteeringAsync(
-            coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId, SteeringStatus.Applied, instruction, ct)
+            coordinatorRunId, directiveId, SteeringKind.Send, targetChildRunId, status, instruction, ct)
             .ConfigureAwait(false);
         _waitRegistry.Signal(coordinatorRunId);
 
         _logger.LogInformation(
-            "Outcome-spec chat reply for coordinator {RunId} applied as {ReplyKind} via the existing confirmation gate",
-            coordinatorRunId, replyKind);
+            "Outcome-spec chat reply for coordinator {RunId} {Status} as {ReplyKind} via the existing confirmation gate",
+            coordinatorRunId, status, replyKind);
 
         return new SteeringDirectiveView(
             directiveId, coordinatorRunId, targetChildRunId, SteeringKind.Send, instruction,
-            SteeringStatus.Applied, createdBy, createdAt, appliedAt);
+            status, createdBy, createdAt, appliedAt);
     }
 
     /// <summary>
@@ -1116,7 +1137,8 @@ public sealed class CoordinatorSteeringService
     /// </summary>
     private async Task<SteeringDirectiveView?> TryDeliverAtAssemblyReviewGateAsync(
         string coordinatorRunId, int directiveId, string kind, string? targetChildRunId, string instruction,
-        string createdBy, string? createdByGitHubLogin, DateTimeOffset createdAt, CancellationToken ct)
+        string createdBy, string? createdByGitHubLogin, DateTimeOffset createdAt, CancellationToken ct,
+        string? outputRevisionId)
     {
         // The AwaitingReview interception needs the run store (to confirm the parking state) and the
         // review gate (to deliver). Lightweight unit tests register neither; fall through to the normal
@@ -1151,7 +1173,8 @@ public sealed class CoordinatorSteeringService
             RequestChanges: true,
             Feedback: instruction,
             TargetFiles: targetFiles,
-            Reviewer: createdBy);
+            Reviewer: createdBy,
+            OutputRevisionId: outputRevisionId);
 
         var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
             _scopeFactory, _reviewGate, coordinatorRunId, decision, createdBy, createdByGitHubLogin, ct)
@@ -1329,6 +1352,8 @@ public sealed class CoordinatorSteeringService
         // #350: the coordinator's own AgentHost pod (when pod-per-run) also needs reliable teardown —
         // mirrors the child-release call in ApplyStopAsync above.
         await ReleaseAgentHostPodSafeAsync(coordinatorRunId, ct).ConfigureAwait(false);
+        if (_childSandboxCleanup is not null)
+            await _childSandboxCleanup.ReleaseForParentAsync(coordinatorRunId, ct).ConfigureAwait(false);
         _logger.LogInformation("Steering stop: coordinator run {RunId} terminated as stopped", coordinatorRunId);
     }
 
@@ -1721,7 +1746,8 @@ public sealed class CoordinatorSteeringService
             .ToListAsync(ct).ConfigureAwait(false);
     }
 
-    private async Task UpdateDirectiveAsync(int directiveId, string status, DateTimeOffset? relayedAt, CancellationToken ct)
+    private async Task UpdateDirectiveAsync(
+        int directiveId, string status, DateTimeOffset? relayedAt, CancellationToken ct, string? source = null)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -1729,6 +1755,8 @@ public sealed class CoordinatorSteeringService
         if (row is null)
             return;
         row.Status = status;
+        if (source is not null)
+            row.Source = source;
         if (relayedAt is not null)
             row.RelayedAt = relayedAt;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);

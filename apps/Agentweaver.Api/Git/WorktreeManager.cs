@@ -19,6 +19,7 @@ namespace Agentweaver.Api.Git;
 /// </summary>
 public sealed class WorktreeManager
 {
+    internal const long MaxContentBytes = 1 * 1024 * 1024;
     private readonly string _basePath;
     private readonly Signature _signature;
     private readonly ILogger<WorktreeManager> _logger;
@@ -151,16 +152,17 @@ public sealed class WorktreeManager
 
             if (!branchExists)
             {
-                var origin = repo.Branches[originatingBranch]
+                var origin = repo.Branches[originatingBranch]?.Tip
+                    ?? repo.Lookup<Commit>(originatingBranch)
                     ?? throw new RunSubmissionValidationException(
-                        $"Originating branch '{Truncate(originatingBranch, 200)}' was not found.");
+                        $"Starting revision '{Truncate(originatingBranch, 200)}' was not found.");
 
                 // Resolve the originating branch to a concrete commit SHA while the repo handle is open.
                 // Passing the resolved SHA (NOT the raw branch string) to `git worktree add` preserves the
                 // case-insensitive branch resolution LibGit2Sharp gives us (e.g. originatingBranch="main"
                 // resolving against a HEAD named "Main"), which callers/tests rely on and which the
                 // case-sensitive git CLI would otherwise fail to reproduce.
-                startSha = origin.Tip.Sha;
+                startSha = origin.Sha;
             }
         }
         // Dispose the LibGit2Sharp repo handle (exit the using block) BEFORE invoking the git CLI to
@@ -242,6 +244,10 @@ public sealed class WorktreeManager
             worktreePath,
             sourceBranch);
 
+        using (var created = new Repository(worktreePath))
+            File.WriteAllText(Path.Combine(created.Info.Path, "agentweaver-source-id"),
+                Guid.NewGuid().ToString("N"));
+
         return new WorktreeInfo
         {
             WorktreePath = worktreePath,
@@ -251,6 +257,33 @@ public sealed class WorktreeManager
 
     public string DetachedWorktreePath(string worktreeName) =>
         Path.Combine(_basePath, SanitizeWorktreeName(worktreeName));
+
+    internal static string? ReadDetachedWorktreeIdentity(
+        string repositoryPath, string worktreePath, string commitSha, string treeHash)
+    {
+        if (!Directory.Exists(worktreePath) || !Repository.IsValid(worktreePath))
+            return null;
+
+        using var origin = new Repository(repositoryPath);
+        var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(worktreePath));
+        var registered = origin.Worktrees[name];
+        if (registered is null)
+            return null;
+        using var expected = registered.WorktreeRepository;
+        using var actual = new Repository(worktreePath);
+        static string Canonical(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (!string.Equals(Canonical(expected.Info.WorkingDirectory), Canonical(worktreePath),
+                StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(Canonical(actual.Info.Path), Canonical(expected.Info.Path),
+                StringComparison.OrdinalIgnoreCase)
+            || !actual.Info.IsHeadDetached
+            || actual.Head.Tip?.Sha != commitSha
+            || actual.Head.Tip.Tree.Sha != treeHash
+            || actual.RetrieveStatus().IsDirty)
+            return null;
+        var marker = Path.Combine(actual.Info.Path, "agentweaver-source-id");
+        return File.Exists(marker) ? File.ReadAllText(marker) : null;
+    }
 
     private static bool IsPathUnder(string path, string root)
     {
@@ -479,6 +512,21 @@ public sealed class WorktreeManager
         return repo.Branches[branchName]?.Tip?.Tree.Sha;
     }
 
+    /// <summary>Reads the tip once and returns its immutable commit only if its tree matches the handoff.</summary>
+    public IntegrationChildInput? GetVerifiedChildInput(
+        string repositoryPath, string branchName, string expectedTreeSha)
+    {
+        if (string.IsNullOrWhiteSpace(branchName) || string.IsNullOrWhiteSpace(expectedTreeSha)
+            || !Repository.IsValid(repositoryPath))
+            return null;
+
+        using var repo = new Repository(repositoryPath);
+        var tip = repo.Branches[branchName]?.Tip;
+        return tip is not null && string.Equals(tip.Tree.Sha, expectedTreeSha, StringComparison.Ordinal)
+            ? new IntegrationChildInput(branchName, tip.Sha)
+            : null;
+    }
+
     /// <summary>
     /// Ancestor / containment check used to VERIFY that an integration branch actually incorporates a
     /// required dependency's HEAD before a dependent child dispatches from it (issue #197, BLOCKING #3).
@@ -691,6 +739,139 @@ public sealed class WorktreeManager
         }
     }
 
+    public void TransferComposedTree(
+        string repositoryPath,
+        string parentWorktreePath,
+        RunId parentRunId,
+        string expectedBaseTree,
+        string integrationBranch,
+        string assembledTree)
+    {
+        if (!PodLocalExecutionWorkspace.IsGitObjectId(expectedBaseTree)
+            || !PodLocalExecutionWorkspace.IsGitObjectId(assembledTree))
+            throw new InvalidOperationException("Composed transfer requires valid captured tree identities.");
+
+        using var repository = new Repository(repositoryPath);
+        using var worktree = new Repository(parentWorktreePath);
+        var target = repository.Branches[integrationBranch]?.Tip
+            ?? throw new InvalidOperationException("The assembled integration branch is unavailable.");
+        if (!string.Equals(target.Tree.Sha, assembledTree, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The assembled integration branch no longer has its verified tree.");
+
+        var current = worktree.Head.Tip
+            ?? throw new InvalidOperationException("The parent worktree has no HEAD.");
+        if (worktree.Info.IsHeadDetached
+            || !string.Equals(worktree.Head.FriendlyName, BranchNameFor(parentRunId), StringComparison.Ordinal))
+            throw new InvalidOperationException("Composed transfer target is not the isolated parent branch.");
+        if (worktree.RetrieveStatus(new StatusOptions
+            {
+                IncludeUntracked = true,
+                IncludeIgnored = false,
+                RecurseUntrackedDirs = true,
+                RecurseIgnoredDirs = false,
+            }).Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0))
+            throw new InvalidOperationException("Composed transfer refused a dirty parent worktree.");
+        if (string.Equals(current.Tree.Sha, assembledTree, StringComparison.OrdinalIgnoreCase))
+            return;
+        if (!string.Equals(current.Tree.Sha, expectedBaseTree, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The parent tree changed after composition began.");
+        if (!string.Equals(
+                repository.ObjectDatabase.FindMergeBase(current, target)?.Sha,
+                current.Sha,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The assembled commit does not descend from the parent revision.");
+
+        RunGit(parentWorktreePath, "merge", "--ff-only", target.Sha);
+        using var verified = new Repository(parentWorktreePath);
+        if (!string.Equals(verified.Head.Tip?.Tree.Sha, assembledTree, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Composed transfer did not install the verified tree.");
+    }
+
+    public (string CommitHash, string TreeHash) PrepareFanInputProjection(
+        string repositoryPath, string parentWorktreePath, RunId parentRunId,
+        string expectedBaseCommit, string expectedBaseTree,
+        IReadOnlyList<RunOutputTree.File> files)
+    {
+        using var repository = new Repository(repositoryPath);
+        using var worktree = !string.IsNullOrWhiteSpace(parentWorktreePath)
+            && Directory.Exists(parentWorktreePath) ? new Repository(parentWorktreePath) : null;
+        var baseCommit = worktree?.Head.Tip
+            ?? repository.Branches[BranchNameFor(parentRunId)]?.Tip;
+        if (baseCommit?.Sha != expectedBaseCommit || baseCommit.Tree.Sha != expectedBaseTree
+            || (worktree is not null
+                && (worktree.Info.IsHeadDetached
+                    || worktree.Head.FriendlyName != BranchNameFor(parentRunId)
+                    || worktree.RetrieveStatus(new StatusOptions
+            {
+                IncludeUntracked = true,
+                RecurseUntrackedDirs = true,
+            }).Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0))))
+            throw new RunOutputRevisionUnavailableException("fan_projection_base_changed");
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in files)
+        {
+            if (!paths.Add(file.Path) || file.Mode is not (33188 or 33261)
+                || baseCommit.Tree[file.Path] is not null)
+                throw new RunOutputRevisionUnavailableException("fan_projection_path_collision");
+            var cursor = baseCommit.Tree;
+            var segments = file.Path.Split('/');
+            for (var i = 0; i < segments.Length; i++)
+            {
+                var match = cursor.FirstOrDefault(entry =>
+                    string.Equals(entry.Name, segments[i], StringComparison.OrdinalIgnoreCase));
+                if (match is null)
+                    break;
+                if (match.Name != segments[i] || i == segments.Length - 1 || match.Target is not Tree childTree)
+                    throw new RunOutputRevisionUnavailableException("fan_projection_path_collision");
+                cursor = childTree;
+            }
+            foreach (var other in paths)
+                if (other != file.Path
+                    && (other.StartsWith(file.Path + "/", StringComparison.OrdinalIgnoreCase)
+                        || file.Path.StartsWith(other + "/", StringComparison.OrdinalIgnoreCase)))
+                    throw new RunOutputRevisionUnavailableException("fan_projection_path_collision");
+        }
+        var definition = TreeDefinition.From(baseCommit.Tree);
+        foreach (var file in files)
+        {
+            var blob = repository.ObjectDatabase.CreateBlob(new MemoryStream(file.Bytes, writable: false));
+            definition.Add(file.Path, blob, (Mode)file.Mode);
+        }
+        var tree = repository.ObjectDatabase.CreateTree(definition);
+        var signature = new Signature("Agentweaver", "agentweaver@localhost", DateTimeOffset.UnixEpoch);
+        var commit = repository.ObjectDatabase.CreateCommit(
+            signature, signature, $"Fan inputs for {parentRunId}", tree, [baseCommit], prettifyMessage: false);
+        return (commit.Sha, tree.Sha);
+    }
+
+    public void ApplyFanInputProjection(
+        string parentWorktreePath, RunId parentRunId,
+        string expectedBaseCommit, string preparedCommit, string preparedTree)
+    {
+        using (var worktree = new Repository(parentWorktreePath))
+        {
+            if (worktree.Info.IsHeadDetached || worktree.Head.FriendlyName != BranchNameFor(parentRunId)
+                || worktree.RetrieveStatus(new StatusOptions
+                {
+                    IncludeUntracked = true,
+                    RecurseUntrackedDirs = true,
+                }).Any(entry => entry.State != 0 && (entry.State & FileStatus.Ignored) == 0))
+                throw new RunOutputRevisionUnavailableException("fan_projection_base_changed");
+            if (worktree.Head.Tip?.Sha == preparedCommit
+                && worktree.Head.Tip.Tree.Sha == preparedTree)
+                return;
+            var target = worktree.Lookup<Commit>(preparedCommit);
+            if (worktree.Head.Tip?.Sha != expectedBaseCommit
+                || target?.Tree.Sha != preparedTree
+                || target.Parents.SingleOrDefault()?.Sha != expectedBaseCommit)
+                throw new RunOutputRevisionUnavailableException("fan_projection_base_changed");
+        }
+        RunGit(parentWorktreePath, "merge", "--ff-only", preparedCommit);
+        using var verified = new Repository(parentWorktreePath);
+        if (verified.Head.Tip?.Sha != preparedCommit || verified.Head.Tip.Tree.Sha != preparedTree)
+            throw new RunOutputRevisionUnavailableException("fan_projection_writeback_mismatch");
+    }
+
     public string CommitChanges(string worktreePath, RunId runId)
     {
         using var repo = new Repository(worktreePath);
@@ -853,14 +1034,14 @@ public sealed class WorktreeManager
     /// <summary>
     /// Phase 3 (D1): builds the COLLECTIVE integration branch. Creates (or resets)
     /// <paramref name="integrationBranch"/> at the originating branch tip, then merges each eligible
-    /// child branch in <paramref name="childBranchesInOrder"/> (already dependency/topologically
+    /// child commit in <paramref name="childInputsInOrder"/> (already dependency/topologically
     /// ordered) into it using HEADLESS tree merges (<see cref="ObjectDatabase.MergeCommits"/>) — no
-    /// working directory or worktree is checked out, so this is safe to run from the coordinator's
-    /// background loop. When a merge conflict occurs, the coordinator currently auto-resolves it by
-    /// accepting the CHILD branch's version for each conflicting path and continues building the
-    /// aggregate. On success it returns the aggregate tree hash, the aggregate diff vs the
-    /// originating branch, and any auto-resolutions that occurred. An empty
-    /// <paramref name="childBranchesInOrder"/> (every child was a no-change <c>completed</c>) yields
+    /// working directory or worktree is checked out. Missing inputs and independent overlapping
+    /// edits stop the build without publishing a partial integration ref. Canonical Squad
+    /// bookkeeping keeps the integration revision's version at every merge, including fast-forwards.
+    /// On success it returns
+    /// the aggregate tree hash and diff vs the originating branch. An empty
+    /// <paramref name="childInputsInOrder"/> (every child was a no-change <c>completed</c>) yields
     /// an empty-diff success.
     /// <para>Branch-ref only: the originating branch is never modified here; that happens later in the
     /// single collective merge.</para>
@@ -869,140 +1050,201 @@ public sealed class WorktreeManager
         string repositoryPath,
         string originatingBranch,
         string integrationBranch,
-        IReadOnlyList<string> childBranchesInOrder)
+        IReadOnlyList<IntegrationChildInput> childInputsInOrder,
+        bool publish = true)
     {
-        EnsurePrimaryWorktreeNotCheckedOutOnBranch(repositoryPath, originatingBranch, integrationBranch);
+        if (publish)
+            EnsurePrimaryWorktreeNotCheckedOutOnBranch(repositoryPath, originatingBranch, integrationBranch);
 
         // Defensive: a prior — or interrupted — assembly can leave a LINKED worktree checked out on
         // the integration branch, which makes the ref undeletable below ("Cannot delete branch ... as
         // it is the current HEAD of a linked repository"). The integration branch is built headlessly
         // and is never meant to be checked out, so prune any such stale worktree first so a re-run
         // (e.g. after request-changes re-dispatch) can reset the branch cleanly.
-        PruneWorktreesCheckedOutOnBranch(repositoryPath, integrationBranch);
+        if (publish)
+            PruneWorktreesCheckedOutOnBranch(repositoryPath, integrationBranch);
 
         using var repo = new Repository(repositoryPath);
 
         var origin = repo.Branches[originatingBranch]
             ?? throw new InvalidOperationException($"Originating branch '{originatingBranch}' was not found.");
 
-        EnsureMainRepositoryNotCheckedOutOnBranch(repo, integrationBranch, origin);
-
-        // Create/reset the integration branch ref at the originating branch tip.
-        var existing = repo.Branches[integrationBranch];
-        if (existing is not null)
-            repo.Branches.Remove(existing);
-        var intBranch = repo.CreateBranch(integrationBranch, origin.Tip);
+        if (publish)
+            EnsureMainRepositoryNotCheckedOutOnBranch(repo, integrationBranch, origin);
 
         var integrationCommit = origin.Tip;
-        var autoResolutions = new List<(string Branch, IReadOnlyList<string> Files)>();
+        var pathOwners = new Dictionary<string, (string Branch, Commit Tip)>(StringComparer.Ordinal);
 
-        foreach (var childBranch in childBranchesInOrder)
+        foreach (var input in childInputsInOrder)
         {
-            var child = repo.Branches[childBranch];
-            if (child?.Tip is null)
-            {
-                _logger.LogWarning(
-                    "Integration build: child branch '{Branch}' not found or empty — skipping", childBranch);
-                continue;
-            }
+            var childBranch = input.Branch;
+            var childTip = string.IsNullOrWhiteSpace(input.CommitSha)
+                ? null : repo.Lookup<Commit>(input.CommitSha);
+            if (childTip is null)
+                return IntegrationBranchResult.MissingInput(integrationBranch, childBranch);
 
-            var mergeBase = repo.ObjectDatabase.FindMergeBase(integrationCommit, child.Tip);
+            var mergeBase = repo.ObjectDatabase.FindMergeBase(integrationCommit, childTip);
+            if (mergeBase is null)
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch, childBranch, [],
+                    $"Child branch '{childBranch}' has no common base with the integration revision.");
 
             // Child is already contained in the integration branch — no-op.
-            if (mergeBase is not null && string.Equals(mergeBase.Sha, child.Tip.Sha, StringComparison.Ordinal))
+            if (string.Equals(mergeBase.Sha, childTip.Sha, StringComparison.Ordinal))
                 continue;
 
-            // Fast-forward: integration is an ancestor of the child tip.
-            if (mergeBase is not null && string.Equals(mergeBase.Sha, integrationCommit.Sha, StringComparison.Ordinal))
+            var revisionBase = input.RevisionBaseCommitSha is null
+                ? mergeBase : repo.Lookup<Commit>(input.RevisionBaseCommitSha);
+            if (revisionBase is null
+                || !string.Equals(
+                    repo.ObjectDatabase.FindMergeBase(revisionBase, childTip)?.Sha,
+                    revisionBase.Sha, StringComparison.Ordinal))
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch, childBranch, [],
+                    $"Pinned revision input {input.RevisionBaseCommitSha} is unavailable or is not an ancestor of child '{childBranch}'.");
+
+            // A revision child inherits the entire reviewed assembly. Only its delta from that
+            // pinned input is owned by this child; retained sibling files must not look like
+            // conflicting edits when two independent revisions are assembled together.
+            var childChanges = repo.Diff.Compare<TreeChanges>(revisionBase.Tree, childTip.Tree);
+            var overlapping = new HashSet<string>(StringComparer.Ordinal);
+            var overlappingOwners = new Dictionary<string, (string Branch, Commit Tip)>(StringComparer.Ordinal);
+            foreach (var change in childChanges)
             {
-                integrationCommit = child.Tip;
-                continue;
+                foreach (var path in new[] { change.Path, change.OldPath }.OfType<string>())
+                {
+                    if (IsSquadConsolidatedStatePath(path))
+                        continue;
+
+                    foreach (var (ownedPath, owner) in pathOwners)
+                    {
+                        if (!PathsOverlap(path, ownedPath)
+                            || string.Equals(
+                                repo.ObjectDatabase.FindMergeBase(owner.Tip, childTip)?.Sha,
+                                owner.Tip.Sha, StringComparison.Ordinal))
+                            continue;
+                        overlapping.Add(path);
+                        overlapping.Add(ownedPath);
+                        overlappingOwners[ownedPath] = owner;
+                    }
+                }
+            }
+            if (overlapping.Count > 0)
+            {
+                var inputs = overlappingOwners.Values
+                    .GroupBy(owner => owner.Branch, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First().Tip.Sha, StringComparer.Ordinal);
+                inputs[childBranch] = childTip.Sha;
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch, childBranch, overlapping.Order(StringComparer.Ordinal).ToArray(),
+                    $"Independent child '{childBranch}' overlaps accepted child output. Resolve the named paths explicitly.",
+                    inputs);
             }
 
-            // 3-way headless tree merge.
-            var merge = repo.ObjectDatabase.MergeCommits(integrationCommit, child.Tip, new MergeTreeOptions());
+            var fastForward = string.Equals(mergeBase.Sha, integrationCommit.Sha, StringComparison.Ordinal);
+            var merge = MergeCommitsPreferringSquadStateFromOurs(repo, integrationCommit, childTip);
             if (merge.Status == MergeTreeStatus.Conflicts)
             {
                 var conflictingFiles = ExtractConflictingFiles(merge);
-                _logger.LogInformation(
-                    "Integration build: auto-resolving {Count} conflict(s) from branch '{Branch}' by accepting child changes. Files: {Files}",
-                    conflictingFiles.Count,
-                    childBranch,
-                    string.Join(", ", conflictingFiles));
-
-                // TODO(issue-85): distinguish "single child amends another child's file" (safe to
-                // auto-resolve) from true sibling-vs-sibling conflicts that should still surface as
-                // IntegrationBranchOutcome.Conflict for human resolution.
-                if (mergeBase is null)
-                {
-                    return IntegrationBranchResult.Conflict(
-                        integrationBranch,
-                        childBranch,
-                        conflictingFiles,
-                        "Unable to auto-resolve integration conflict because no merge base was found.");
-                }
-
-                var treeDefinition = TreeDefinition.From(integrationCommit.Tree);
-                var childTree = child.Tip.Tree;
-                var childChanges = repo.Diff.Compare<TreeChanges>(mergeBase.Tree, child.Tip.Tree);
-                foreach (var change in childChanges)
-                {
-                    if (change.Status is ChangeKind.Deleted or ChangeKind.Renamed)
-                        treeDefinition.Remove(change.OldPath ?? change.Path);
-
-                    if (change.Status is ChangeKind.Deleted or ChangeKind.Unmodified)
-                        continue;
-
-                    var childEntry = childTree[change.Path];
-                    if (childEntry?.TargetType == TreeEntryTargetType.Blob)
-                    {
-                        var childBlob = repo.Lookup<Blob>(childEntry.Target.Id);
-                        if (childBlob is not null)
-                            treeDefinition.Add(change.Path, childBlob, childEntry.Mode);
-                    }
-                }
-
-                var resolvedTree = repo.ObjectDatabase.CreateTree(treeDefinition);
-                var resolvedSignature = WithTimestamp();
-                integrationCommit = repo.ObjectDatabase.CreateCommit(
-                    resolvedSignature,
-                    resolvedSignature,
-                    $"Assemble {childBranch} into {integrationBranch} [auto-resolved {conflictingFiles.Count} conflict(s) — accepted child changes]",
-                    resolvedTree,
-                    new[] { integrationCommit, child.Tip },
-                    prettifyMessage: true);
-
-                autoResolutions.Add((childBranch, conflictingFiles));
-                continue;
+                var contributors = pathOwners
+                    .Where(entry => conflictingFiles.Any(path => PathsOverlap(entry.Key, path)))
+                    .Select(entry => entry.Value)
+                    .ToList();
+                if (contributors.Count == 0)
+                    contributors.AddRange(pathOwners.Values);
+                var inputs = contributors
+                    .GroupBy(owner => owner.Branch, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First().Tip.Sha, StringComparer.Ordinal);
+                inputs[childBranch] = childTip.Sha;
+                return IntegrationBranchResult.Conflict(
+                    integrationBranch, childBranch, conflictingFiles,
+                    $"Child '{childBranch}' conflicts with the integration revision. Resolve the named paths explicitly.",
+                    inputs);
             }
 
-            var signature = WithTimestamp();
-            integrationCommit = repo.ObjectDatabase.CreateCommit(
-                signature,
-                signature,
-                $"Assemble {childBranch} into {integrationBranch}",
-                merge.Tree,
-                new[] { integrationCommit, child.Tip },
-                prettifyMessage: true);
+            // Reuse the child commit only when its tree already preserves our bookkeeping.
+            if (fastForward && string.Equals(merge.Tree.Sha, childTip.Tree.Sha, StringComparison.Ordinal))
+            {
+                integrationCommit = childTip;
+            }
+            else
+            {
+                var signature = WithTimestamp();
+                integrationCommit = repo.ObjectDatabase.CreateCommit(
+                    signature,
+                    signature,
+                    $"Assemble {childBranch} into {integrationBranch}",
+                    merge.Tree,
+                    new[] { integrationCommit, childTip },
+                    prettifyMessage: true);
+            }
+
+            foreach (var change in childChanges)
+            {
+                if (change.Path is not null && !IsSquadConsolidatedStatePath(change.Path))
+                    pathOwners[change.Path] = (childBranch, childTip);
+                if (change.OldPath is not null && !IsSquadConsolidatedStatePath(change.OldPath))
+                    pathOwners[change.OldPath] = (childBranch, childTip);
+            }
         }
 
-        // Point the integration branch ref at the final assembled commit. Under the shared-repo race
-        // (issue #218) a concurrent build can delete+recreate this ref between its creation above and
-        // here, so repo.Refs[intBranch.CanonicalName] may momentarily be null. Re-create the ref in that
-        // case instead of dereferencing null (which surfaced as an ArgumentNullException from UpdateTarget).
-        var intRef = repo.Refs[intBranch.CanonicalName];
-        if (intRef is null)
-            repo.Refs.Add(intBranch.CanonicalName, integrationCommit.Id, allowOverwrite: true);
-        else
-            repo.Refs.UpdateTarget(intRef, integrationCommit.Id);
+        if (publish)
+        {
+            // Publish only the complete result; on failure preserve the previous revision for diagnosis.
+            MigrateLegacyIntegrationBranch(repo, integrationBranch);
+            var refName = $"refs/heads/{integrationBranch}";
+            var intRef = repo.Refs[refName];
+            if (intRef is null)
+                repo.Refs.Add(refName, integrationCommit.Id, allowOverwrite: true);
+            else
+                repo.Refs.UpdateTarget(intRef, integrationCommit.Id);
+        }
 
         using var patch = repo.Diff.Compare<Patch>(origin.Tip.Tree, integrationCommit.Tree);
         return IntegrationBranchResult.Success(
             integrationBranch,
             integrationCommit.Tree.Sha,
-            patch.Content,
-            autoResolutions);
+            patch.Content);
     }
+
+    private void MigrateLegacyIntegrationBranch(Repository repo, string integrationBranch)
+    {
+        var match = Regex.Match(integrationBranch, @"^agentweaver/integration/([^/]+)/attempt-[^/]+$");
+        if (!match.Success)
+            return;
+
+        var legacyName = $"agentweaver/integration/{match.Groups[1].Value}";
+        var legacy = repo.Branches[legacyName];
+        if (legacy is null)
+            return;
+
+        if (!repo.Info.IsHeadDetached && string.Equals(repo.Head.FriendlyName, legacyName, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Cannot migrate legacy integration branch '{legacyName}' while it is checked out in the primary worktree.");
+        foreach (var worktree in repo.Worktrees)
+        {
+            using var worktreeRepo = worktree.WorktreeRepository;
+            if (!worktreeRepo.Info.IsHeadDetached
+                && string.Equals(worktreeRepo.Head.FriendlyName, legacyName, StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    $"Cannot migrate legacy integration branch '{legacyName}' while it is checked out in worktree '{worktree.Name}'.");
+        }
+
+        var archivedName = $"agentweaver/legacy-integration/{match.Groups[1].Value}";
+        if (repo.Branches[archivedName] is not null)
+            throw new InvalidOperationException(
+                $"Cannot migrate legacy integration branch '{legacyName}': archive '{archivedName}' already exists.");
+
+        repo.Branches.Rename(legacy, archivedName);
+        _logger.LogInformation(
+            "Migrated legacy integration branch '{LegacyBranch}' to '{ArchivedBranch}' before publishing '{IntegrationBranch}'",
+            legacyName, archivedName, integrationBranch);
+    }
+
+    private static bool PathsOverlap(string first, string second) =>
+        string.Equals(first, second, StringComparison.Ordinal)
+        || first.StartsWith(second + "/", StringComparison.Ordinal)
+        || second.StartsWith(first + "/", StringComparison.Ordinal);
 
     private static string SanitizeWorktreeName(string name)
     {
@@ -1585,9 +1827,11 @@ public sealed class WorktreeManager
         string? worktreeBranch,
         string? commitHash,
         string relativeFilePath,
-        out bool isBinary)
+        out bool isBinary,
+        out bool sourceAvailable)
     {
         isBinary = false;
+        sourceAvailable = false;
         if (string.IsNullOrEmpty(repositoryPath) || !Repository.IsValid(repositoryPath))
             return null;
 
@@ -1596,11 +1840,12 @@ public sealed class WorktreeManager
         Commit? commit = null;
         if (!string.IsNullOrEmpty(commitHash))
             commit = repo.Lookup<Commit>(commitHash);
-        if (commit is null && !string.IsNullOrEmpty(worktreeBranch))
+        else if (!string.IsNullOrEmpty(worktreeBranch))
             commit = repo.Branches[worktreeBranch]?.Tip;
         if (commit is null)
             return null;
 
+        sourceAvailable = true;
         var gitPath = relativeFilePath.Replace('\\', '/');
         var treeEntry = commit[gitPath];
         if (treeEntry is null || treeEntry.TargetType != TreeEntryTargetType.Blob)
@@ -1624,7 +1869,7 @@ public sealed class WorktreeManager
             };
         }
 
-        const long maxContentBytes = 1 * 1024 * 1024; // 1 MB — mirrors the filesystem content endpoint.
+        const long maxContentBytes = MaxContentBytes; // 1 MB — mirrors the filesystem content endpoint.
         if (blob.Size > maxContentBytes)
         {
             return new WorkspaceFileContent
@@ -1909,6 +2154,367 @@ public sealed class WorktreeManager
         if ((state & FileStatus.TypeChangeInWorkdir) != 0) return "modified";
         return null;
     }
+
+    public PrepareGitMergeResult PrepareMerge(
+        string repositoryPath,
+        string originatingBranch,
+        string sourceBranch,
+        string expectedTreeHash,
+        string effectId,
+        int lifecycleGeneration)
+    {
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            var target = repo.Branches[originatingBranch];
+            var source = repo.Branches[sourceBranch];
+            if (target?.Tip is null)
+                return new PrepareGitMergeResult(PrepareGitMergeOutcome.Failed, Reason: "missing_target_ref");
+            if (source?.Tip is null)
+                return new PrepareGitMergeResult(PrepareGitMergeOutcome.Failed, Reason: "missing_source_ref");
+            if (!string.Equals(source.Tip.Tree.Sha, expectedTreeHash, StringComparison.Ordinal))
+            {
+                return new PrepareGitMergeResult(
+                    PrepareGitMergeOutcome.Conflict,
+                    Reason: "source_tree_changed");
+            }
+
+            var targetRef = target.CanonicalName;
+            var sourceRef = source.CanonicalName;
+            var expectedTarget = target.Tip;
+            var sourceCommit = source.Tip;
+            var mergeBase = repo.ObjectDatabase.FindMergeBase(expectedTarget, sourceCommit);
+
+            Commit intended;
+            PreparedGitMergeKind kind;
+            if (mergeBase is not null
+                && string.Equals(mergeBase.Sha, sourceCommit.Sha, StringComparison.Ordinal))
+            {
+                intended = expectedTarget;
+                kind = PreparedGitMergeKind.AlreadyApplied;
+            }
+            else if (mergeBase is not null
+                     && string.Equals(mergeBase.Sha, expectedTarget.Sha, StringComparison.Ordinal))
+            {
+                intended = sourceCommit;
+                kind = PreparedGitMergeKind.FastForward;
+            }
+            else
+            {
+                var merge = MergeCommitsPreferringSquadStateFromOurs(repo, expectedTarget, sourceCommit);
+                if (merge.Status == MergeTreeStatus.Conflicts)
+                {
+                    return new PrepareGitMergeResult(
+                        PrepareGitMergeOutcome.Conflict,
+                        Reason: "merge_conflict",
+                        ConflictingFiles: ExtractConflictingFiles(merge));
+                }
+
+                var signature = WithTimestamp();
+                intended = repo.ObjectDatabase.CreateCommit(
+                    signature,
+                    signature,
+                    $"Merge agentweaver run into {originatingBranch}",
+                    merge.Tree,
+                    new[] { expectedTarget, sourceCommit },
+                    prettifyMessage: true);
+                kind = PreparedGitMergeKind.MergeCommit;
+            }
+
+            var checkout = GitReferenceTransaction.CaptureCheckedOutPreState(
+                repositoryPath,
+                targetRef,
+                expectedTarget.Sha,
+                out var checkoutError);
+            if (checkoutError is not null)
+            {
+                return new PrepareGitMergeResult(
+                    PrepareGitMergeOutcome.Failed,
+                    Reason: checkoutError);
+            }
+
+            return new PrepareGitMergeResult(
+                PrepareGitMergeOutcome.Prepared,
+                new PreparedGitMergeIntent(
+                    effectId,
+                    lifecycleGeneration,
+                    RepositoryIdentity(repo),
+                    sourceRef,
+                    sourceCommit.Sha,
+                    sourceCommit.Tree.Sha,
+                    targetRef,
+                    expectedTarget.Sha,
+                    intended.Sha,
+                    intended.Tree.Sha,
+                    kind,
+                    checkout is null
+                        ? null
+                        : new PreparedGitCheckoutState(
+                            checkout.WorktreePath,
+                            checkout.FullRef,
+                            checkout.HeadOid,
+                            checkout.IndexTreeOid)));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to prepare collective merge intent.");
+            return new PrepareGitMergeResult(
+                PrepareGitMergeOutcome.Failed,
+                Reason: "prepare_merge_failed");
+        }
+    }
+
+    public ApplyPreparedGitMergeResult InspectPreparedMerge(
+        string repositoryPath,
+        PreparedGitMergeIntent intent)
+    {
+        var validation = ValidatePreparedMerge(repositoryPath, intent);
+        if (validation is not null)
+            return validation;
+
+        var observed = GitReferenceTransaction.ReadReference(repositoryPath, intent.TargetRef);
+        if (observed.Kind != GitReferenceUpdateKind.Applied || observed.CurrentOid is null)
+        {
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.Unknown,
+                observed.CurrentOid,
+                observed.Error ?? observed.Kind.ToString());
+        }
+
+        if (string.Equals(observed.CurrentOid, intent.ExpectedTargetCommit, StringComparison.Ordinal))
+        {
+            if (intent.Kind == PreparedGitMergeKind.AlreadyApplied)
+            {
+                return VerifyRecoveredCheckout(
+                    repositoryPath,
+                    intent,
+                    observed.CurrentOid,
+                    exactIntended: true);
+            }
+
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.NotApplied,
+                observed.CurrentOid,
+                "target_still_at_precondition");
+        }
+
+        if (string.Equals(observed.CurrentOid, intent.IntendedCommit, StringComparison.Ordinal))
+        {
+            return VerifyRecoveredCheckout(
+                repositoryPath,
+                intent,
+                observed.CurrentOid,
+                exactIntended: true);
+        }
+
+        using var repo = new Repository(repositoryPath);
+        var current = repo.Lookup<Commit>(observed.CurrentOid);
+        var intended = repo.Lookup<Commit>(intent.IntendedCommit);
+        if (current is not null && intended is not null && IsAncestor(repo, intended, current))
+        {
+            return VerifyRecoveredCheckout(
+                repositoryPath,
+                intent,
+                observed.CurrentOid,
+                exactIntended: false);
+        }
+
+        return new ApplyPreparedGitMergeResult(
+            ApplyPreparedGitMergeOutcome.Unknown,
+            observed.CurrentOid,
+            "target_moved_without_intended_commit");
+    }
+
+    public ApplyPreparedGitMergeResult ApplyPreparedMerge(
+        string repositoryPath,
+        PreparedGitMergeIntent intent)
+    {
+        var inspected = InspectPreparedMerge(repositoryPath, intent);
+        if (inspected.Outcome != ApplyPreparedGitMergeOutcome.NotApplied)
+            return inspected;
+
+        if (intent.CheckedOutState is null)
+        {
+            var checkout = GitReferenceTransaction.VerifyNotCheckedOut(
+                repositoryPath,
+                intent.TargetRef);
+            if (checkout.Kind != GitCheckoutConvergenceKind.NotCheckedOut)
+            {
+                return new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    intent.ExpectedTargetCommit,
+                    "checked_out_worktree_appeared_after_prepare",
+                    checkout.Error ?? checkout.Kind.ToString());
+            }
+        }
+
+        var update = GitReferenceTransaction.CompareExchange(
+            repositoryPath,
+            intent.TargetRef,
+            intent.IntendedCommit,
+            intent.ExpectedTargetCommit);
+        if (update.Kind != GitReferenceUpdateKind.Applied)
+            return InspectPreparedMerge(repositoryPath, intent);
+
+        var convergence = intent.CheckedOutState is null
+            ? GitReferenceTransaction.VerifyNotCheckedOut(repositoryPath, intent.TargetRef)
+            : GitReferenceTransaction.ConvergeCheckedOut(
+                repositoryPath,
+                ToCheckoutPreState(intent.CheckedOutState),
+                intent.IntendedCommit);
+        if (convergence.Kind is not (GitCheckoutConvergenceKind.Converged
+            or GitCheckoutConvergenceKind.NotCheckedOut))
+        {
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.Unknown,
+                intent.IntendedCommit,
+                "checked_out_convergence_unknown",
+                convergence.Error ?? convergence.Kind.ToString());
+        }
+
+        return new ApplyPreparedGitMergeResult(
+            ApplyPreparedGitMergeOutcome.AppliedNow,
+            intent.IntendedCommit,
+            CheckoutOutcome: convergence.Kind.ToString());
+    }
+
+    private ApplyPreparedGitMergeResult? ValidatePreparedMerge(
+        string repositoryPath,
+        PreparedGitMergeIntent intent)
+    {
+        try
+        {
+            using var repo = new Repository(repositoryPath);
+            if (!string.Equals(
+                    RepositoryIdentity(repo),
+                    intent.RepositoryIdentity,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                return new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    null,
+                    "repository_identity_changed");
+            }
+
+            var sourceRef = repo.Refs[intent.SourceRef];
+            var source = repo.Lookup<Commit>(intent.SourceCommit);
+            var expected = repo.Lookup<Commit>(intent.ExpectedTargetCommit);
+            var intended = repo.Lookup<Commit>(intent.IntendedCommit);
+            if (sourceRef?.TargetIdentifier is null
+                || !string.Equals(sourceRef.TargetIdentifier, intent.SourceCommit, StringComparison.Ordinal)
+                || source is null
+                || expected is null
+                || intended is null
+                || !string.Equals(source.Tree.Sha, intent.SourceTree, StringComparison.Ordinal)
+                || !string.Equals(intended.Tree.Sha, intent.IntendedTree, StringComparison.Ordinal))
+            {
+                return new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    null,
+                    "prepared_objects_or_source_changed");
+            }
+
+            var valid = intent.Kind switch
+            {
+                PreparedGitMergeKind.AlreadyApplied =>
+                    string.Equals(intended.Sha, expected.Sha, StringComparison.Ordinal)
+                    && IsAncestor(repo, source, expected),
+                PreparedGitMergeKind.FastForward =>
+                    string.Equals(intended.Sha, source.Sha, StringComparison.Ordinal)
+                    && IsAncestor(repo, expected, source),
+                PreparedGitMergeKind.MergeCommit =>
+                    intended.Parents.Count() == 2
+                    && string.Equals(intended.Parents.ElementAt(0).Sha, expected.Sha, StringComparison.Ordinal)
+                    && string.Equals(intended.Parents.ElementAt(1).Sha, source.Sha, StringComparison.Ordinal),
+                _ => false,
+            };
+            return valid
+                ? null
+                : new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    null,
+                    "prepared_commit_proof_failed");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to validate prepared collective merge intent.");
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.Unknown,
+                null,
+                "prepared_merge_validation_failed");
+        }
+    }
+
+    private static ApplyPreparedGitMergeResult VerifyRecoveredCheckout(
+        string repositoryPath,
+        PreparedGitMergeIntent intent,
+        string currentTarget,
+        bool exactIntended)
+    {
+        if (intent.CheckedOutState is null)
+        {
+            var absent = GitReferenceTransaction.VerifyNotCheckedOut(
+                repositoryPath,
+                intent.TargetRef);
+            return absent.Kind == GitCheckoutConvergenceKind.NotCheckedOut
+                ? new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.RecoveredApplied,
+                    currentTarget,
+                    CheckoutOutcome: absent.Kind.ToString())
+                : new ApplyPreparedGitMergeResult(
+                    ApplyPreparedGitMergeOutcome.Unknown,
+                    currentTarget,
+                    "checked_out_convergence_unknown",
+                    absent.Error ?? absent.Kind.ToString());
+        }
+
+        var preState = ToCheckoutPreState(intent.CheckedOutState);
+        var checkout = GitReferenceTransaction.VerifyCheckedOut(
+            repositoryPath,
+            preState,
+            currentTarget);
+        if (exactIntended
+            && checkout.Kind == GitCheckoutConvergenceKind.PreStateMismatch)
+        {
+            checkout = GitReferenceTransaction.ConvergeCheckedOut(
+                repositoryPath,
+                preState,
+                intent.IntendedCommit);
+        }
+        if (checkout.Kind is not (GitCheckoutConvergenceKind.Converged
+            or GitCheckoutConvergenceKind.NotCheckedOut))
+        {
+            return new ApplyPreparedGitMergeResult(
+                ApplyPreparedGitMergeOutcome.Unknown,
+                currentTarget,
+                "checked_out_convergence_unknown",
+                checkout.Error ?? checkout.Kind.ToString());
+        }
+
+        return new ApplyPreparedGitMergeResult(
+            ApplyPreparedGitMergeOutcome.RecoveredApplied,
+            currentTarget,
+            CheckoutOutcome: checkout.Kind.ToString());
+    }
+
+    private static GitCheckoutPreState? ToCheckoutPreState(PreparedGitCheckoutState? state) =>
+        state is null
+            ? null
+            : new GitCheckoutPreState(
+                state.WorktreePath,
+                state.FullRef,
+                state.HeadCommit,
+                state.IndexTree);
+
+    private static bool IsAncestor(Repository repo, Commit ancestor, Commit descendant) =>
+        string.Equals(
+            repo.ObjectDatabase.FindMergeBase(ancestor, descendant)?.Sha,
+            ancestor.Sha,
+            StringComparison.Ordinal);
+
+    private static string RepositoryIdentity(Repository repo) =>
+        Path.GetFullPath(repo.Info.Path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     /// <summary>
     /// Attempts to merge the run's worktree branch back into the originating branch.

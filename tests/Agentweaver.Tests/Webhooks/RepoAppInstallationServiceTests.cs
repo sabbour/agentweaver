@@ -257,7 +257,7 @@ public sealed class RepoAppInstallationServiceTests
     }
 
     [Fact]
-    public async Task Bind_RejectsCrossProjectReplacement()
+    public async Task Bind_AllowsOneInstallationRepositoryForMultipleProjects()
     {
         await using var db = await OpenDbAsync();
         var lifecycle = new RepoAppInstallationLifecycleService(db);
@@ -265,8 +265,78 @@ public sealed class RepoAppInstallationServiceTests
         var authority = new RepoAppInstallationAuthority(
             7, 8, "owner/repo", new Dictionary<string, string> { ["contents"] = "read" });
         (await lifecycle.BindAsync("project-id", authority)).Should().Be(RepoAppInstallationBindingOutcome.Bound);
-        (await lifecycle.BindAsync("project-a", authority)).Should().Be(RepoAppInstallationBindingOutcome.Conflict);
-        (await db.GitHubRepositoryGrants.SingleAsync()).ProjectId.Should().Be("project-id");
+        (await lifecycle.BindAsync("project-a", authority)).Should().Be(RepoAppInstallationBindingOutcome.Bound);
+        (await db.GitHubInstallations.CountAsync()).Should().Be(1);
+        (await db.GitHubRepositoryGrants.OrderBy(grant => grant.ProjectId)
+            .Select(grant => grant.ProjectId).ToListAsync()).Should().Equal("project-a", "project-id");
+
+        db.Projects.Remove(await db.Projects.SingleAsync(project => project.ProjectId == "project-id"));
+        await db.SaveChangesAsync();
+
+        (await db.GitHubInstallations.CountAsync()).Should().Be(1);
+        (await db.GitHubRepositoryGrants.SingleAsync()).ProjectId.Should().Be("project-a");
+    }
+
+    [Fact]
+    public async Task BindSelectedRepository_RejectsRevokedIssuingAuthorization()
+    {
+        await using var db = await OpenDbAsync();
+        db.GitHubAppAuthorizations.Add(new GitHubAppAuthorizationRecord
+        {
+            Id = "authorization",
+            EntraObjectId = "owner",
+            AppKind = GitHubAppKind.Repo,
+            Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
+            CredentialReference = "credential",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            CreatedAt = DateTimeOffset.UtcNow,
+            RevokedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var authority = new RepoAppInstallationAuthority(
+            72, 99, "owner/repository", new Dictionary<string, string> { ["contents"] = "read" });
+
+        var outcome = await new RepoAppInstallationLifecycleService(db)
+            .BindSelectedRepositoryAsync("project-id", "owner", "authorization", authority);
+
+        outcome.Should().Be(RepoAppInstallationBindingOutcome.AuthorizationUnavailable);
+        (await db.GitHubInstallations.CountAsync()).Should().Be(0);
+        (await db.GitHubRepositoryGrants.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task BindSelectedRepository_DoesNotReviveARevokedProjectGrant()
+    {
+        await using var db = await OpenDbAsync();
+        db.GitHubAppAuthorizations.Add(new GitHubAppAuthorizationRecord
+        {
+            Id = "authorization",
+            EntraObjectId = "owner",
+            AppKind = GitHubAppKind.Repo,
+            Purpose = GitHubAuthorizationPurpose.InteractiveRepository,
+            CredentialReference = "credential",
+            CredentialVersion = "version",
+            GrantDigest = "digest",
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var authority = new RepoAppInstallationAuthority(
+            72, 99, "owner/repository", new Dictionary<string, string> { ["contents"] = "read" });
+        var lifecycle = new RepoAppInstallationLifecycleService(db);
+        (await lifecycle.BindSelectedRepositoryAsync(
+            "project-id", "owner", "authorization", authority))
+            .Should().Be(RepoAppInstallationBindingOutcome.Bound);
+        var grant = await db.GitHubRepositoryGrants.SingleAsync();
+        grant.RevokedAt = DateTimeOffset.UtcNow;
+        await db.SaveChangesAsync();
+
+        (await lifecycle.BindSelectedRepositoryAsync(
+            "project-id", "owner", "authorization", authority))
+            .Should().Be(RepoAppInstallationBindingOutcome.Conflict);
+
+        db.ChangeTracker.Clear();
+        (await db.GitHubRepositoryGrants.SingleAsync()).RevokedAt.Should().NotBeNull();
     }
 
     [Fact]
@@ -346,6 +416,36 @@ public sealed class RepoAppInstallationServiceTests
         var activation = await db.AutomationActivations.SingleAsync();
         activation.Status.Should().Be(AutomationActivationStatus.Invalidated);
         activation.InvalidatedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Bind_NewProjectWithChangedPermissionsInvalidatesAllExistingProjectGrants()
+    {
+        await using var db = await OpenDbAsync();
+        var lifecycle = new RepoAppInstallationLifecycleService(db);
+        var prior = new RepoAppInstallationAuthority(
+            72, 99, "provider/repository", new Dictionary<string, string> { ["contents"] = "read" });
+        (await lifecycle.BindAsync("project-id", prior)).Should().Be(RepoAppInstallationBindingOutcome.Bound);
+        db.AutomationActivations.Add(new AutomationActivationRecord
+        {
+            Id = Guid.NewGuid().ToString("N"), ProjectId = "project-id", InstallationId = 72, RepositoryId = 99,
+            RepositoryGrantDigest = RepoAppInstallationTokenService.CreatePermissionDigest(prior.Permissions),
+            CopilotBindingId = "binding", CopilotBindingGrantDigest = "copilot-digest",
+            AutomationKey = "nightly", Status = AutomationActivationStatus.Active, ActivatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        var changed = prior with
+        {
+            Permissions = new Dictionary<string, string> { ["contents"] = "write" },
+        };
+
+        (await lifecycle.BindAsync("project-a", changed))
+            .Should().Be(RepoAppInstallationBindingOutcome.PermissionChanged);
+
+        db.ChangeTracker.Clear();
+        (await db.GitHubRepositoryGrants.ToListAsync()).Should()
+            .OnlyContain(grant => grant.RevokedAt != null);
+        (await db.AutomationActivations.SingleAsync()).Status.Should().Be(AutomationActivationStatus.Invalidated);
     }
 
     [Fact]

@@ -87,6 +87,7 @@ internal sealed class AgentHostRuntimeState
     public GitHubCapabilitySnapshotCredential? CopilotCredential { get; private set; }
     public ByokProviderConfiguration? ByokProviderConfiguration { get; private set; }
     public string? ModelProviderKey { get; private set; }
+    public EffectivePermissionBinding? EffectivePermissionBinding { get; private set; }
 
     /// <summary>
     /// Short-lived installation credential for the configured run and repository. The shell tool
@@ -123,6 +124,7 @@ internal sealed class AgentHostRuntimeState
         CopilotCredential = null; // env-var launches cannot bypass run snapshot redemption
         ByokProviderConfiguration = null;
         RepositoryAccessToken = null;
+        EffectivePermissionBinding = options.EffectivePermissionBinding;
         Volatile.Write(ref _mcpBrokerToken, null); // operator-assistant-only warm-pod input
         SetToolApprovalApiAccess(options.ApiBaseUrl, options.ApiKey);
         Purpose = AgentHostPurpose.Default;
@@ -172,6 +174,7 @@ internal sealed class AgentHostRuntimeState
         RepositoryAccessToken = string.IsNullOrWhiteSpace(configuration.RepositoryAccessToken)
             ? null
             : configuration.RepositoryAccessToken;
+        EffectivePermissionBinding = configuration.EffectivePermissionBinding;
         Volatile.Write(
             ref _mcpBrokerToken,
             string.IsNullOrWhiteSpace(configuration.McpBrokerToken) ? null : configuration.McpBrokerToken);
@@ -237,6 +240,14 @@ internal sealed class AgentHostRuntimeState
     public void SetEffectiveWorkingDirectory(string workingDirectory) =>
         EffectiveWorkingDirectory = workingDirectory;
 
+    public void SetEffectivePermissionBinding(EffectivePermissionBinding binding)
+    {
+        binding.Validate(RunId, binding.Attempt);
+        EffectivePermissionBinding = EffectivePermissionBinding is null
+            ? binding
+            : EffectivePermissionBinding.Intersect(binding, EffectivePermissionBinding);
+    }
+
     /// <summary>
     /// The static, pod-environment system-prompt context assembled once at startup/configure time
     /// (sandbox tool manifest + execution-purpose guidance + any image-baked context). The pod-side
@@ -275,4 +286,5 @@ internal sealed record AgentHostRunConfiguration(
     string? RepositoryAccessToken = null,
     string? ToolApprovalApiBaseUrl = null,
     ByokProviderConfiguration? ByokProviderConfiguration = null,
-    string? ModelProviderKey = null);
+    string? ModelProviderKey = null,
+    EffectivePermissionBinding? EffectivePermissionBinding = null);

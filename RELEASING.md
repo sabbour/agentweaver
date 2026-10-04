@@ -11,8 +11,8 @@ Repository release identity and Azure deployment are separate operations.
 | `npm run azure:deploy-from-local` | Current HEAD short SHA | Deploy local work to an existing environment. No release identity is created or consumed. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
 | `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag, wait for GHCR images, then create the GitHub Release. No Azure work. |
-| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source acr-build]` | Existing published semver tag | Import already-published GHCR images by default (or, with `--image-source acr-build`, rebuild from source) and deploy that exact release to the configured environment. |
-| `npm run azure:release` | Prepared `vX.Y.Z` | First-shipment convenience command: publish, then deploy the same release. |
+| `npm run azure:deploy-from-release -- vX.Y.Z --feature-manifest <path> [--image-source acr-build]` | Existing published semver tag | Validate declared release coverage, import/build and deploy that exact release, then keep acceptance pending until exact post-deployment results close it at this same boundary. |
+| `npm run azure:release -- --feature-manifest <path>` | Prepared `vX.Y.Z` | Publish and deploy the same release through the same two-phase acceptance boundary. |
 | `npm run azure:verify` | Running environment | Read-only health verification. |
 
 ```text
@@ -23,11 +23,13 @@ local HEAD SHA
 arbitrary branch / PR tip / commit
   └─ azure:deploy-from-commit -- <sha-or-ref>
        └─ detached exact-commit worktree → image:<short-SHA> → running environment
+            └─ representative integration + feature-specific API/UI E2E acceptance
+                 └─ only if passing: prepare and promote release
 
 prepared exact main SHA
   └─ release:publish
        └─ annotated vX.Y.Z tag + GHCR images + GitHub Release
-            └─ azure:deploy-from-release -- vX.Y.Z
+            └─ azure:deploy-from-release -- vX.Y.Z --feature-manifest <path>
                  └─ image:vX.Y.Z → running versioned environment
 ```
 
@@ -56,8 +58,26 @@ from its exact matching section; do not run another changelog generator.
    forward-port. Never bypass that guard: create a short-lived branch from
    current `dev`, run `npm run release:sync-dev -- <release-preparation-sha>`,
    merge that PR, and plan again.
-2. Create `release/vX.Y.Z` from that SHA and soak it.
-3. On the clean release branch run:
+2. Create `release/vX.Y.Z` from that SHA and soak it. After stabilization fixes
+   are committed, record the exact candidate SHA and deploy it before preparing
+   release metadata or creating any release identity:
+
+   ```bash
+   npm run azure:deploy-from-commit -- <candidate-sha>
+   npm run azure:verify
+   ```
+
+   Run intermediate end-to-end tests **against this exact-SHA deployment**:
+   representative integration coverage and feature-specific API/UI acceptance
+   for everything shipping. Include the staging identity smoke
+   (`node scripts/api-harness/run-persona.mjs` against the deployed staging URL
+   with the default recorder-session auth provider) when identity or repository
+   authorization is affected. Record the candidate SHA, deployment identity,
+   selected tests, and passing results as release evidence. Failures block
+   preparation, promotion, publication, and release deployment; fix the
+   candidate, commit, redeploy its new SHA, and rerun acceptance.
+
+3. Only after exact-SHA candidate acceptance passes, on the clean release branch run:
 
    ```bash
    npm run release:prepare -- --expected X.Y.Z
@@ -82,38 +102,25 @@ from its exact matching section; do not run another changelog generator.
    fails and prints the same `git merge` command.
 
    CI enforces this rule on `release/*` pull requests into `main`.
-6. Promote the prepared branch to `main` through a green PR, merged with
-   **"Squash and merge"**.
-7. Reconcile the milestones against what the release actually consumed. Merge order
-   decides the real contents, so a milestone set before the cut can name the wrong
-   release. `release:prepare` consumes the changeset fragments it shipped. Map each
-   consumed fragment back to the pull request that added it:
+6. Promote the prepared branch to `main` through a green PR using a **merge
+   commit**, not rebase or squash:
 
    ```bash
-   git log origin/dev --oneline --diff-filter=A -- ".changeset/<fragment>.md"
+   gh pr merge <release-pr-number> --merge
    ```
 
-   Put every pull request that appears in that list on this release's milestone. Move
-   every pull request that does not appear to the next milestone.
+   After promotion, confirm the resulting `main` source content matches the
+   accepted candidate apart from prepared release metadata and reviewed
+   promotion changes. Any substantive change requires another exact-SHA
+   deployment and acceptance before publication.
 
-8. Create the next milestone (`vX.Y.Z+1`) and close the milestone for the release
-   you just published. Move any unshipped work to the new milestone:
-
-   ```bash
-   gh api repos/<owner>/<repo>/milestones -f title="vX.Y.Z+1" -f state=open
-   gh api repos/<owner>/<repo>/milestones/<number> -X PATCH -f state=closed
-   ```
-
-   See [CONTRIBUTING.md → Target release
-   milestone](CONTRIBUTING.md#target-release-milestone) for the contributor side.
-
-> **Promotion history is not release identity.** Squash merging creates a new `main`
-> commit; it does not preserve the release branch's individual commits or guarantee
-> that later promotions are conflict-free. The `release:prepare` ancestry merge remains
-> the mechanism that incorporates `origin/main` into the release branch before release
-> metadata changes. Inspect the actual merge base and review every conflict resolution;
-> do not treat `-X ours` as proof that conflicts are cosmetic. `release:publish`
-> requires the exact fetched `origin/main` SHA.
+> **Promotion history is not release identity.** The merge commit preserves the
+> release branch's ancestry on `main` but does not guarantee that later promotions
+> are conflict-free. The `release:prepare` ancestry merge incorporates `origin/main`
+> into the release branch before release metadata changes. Inspect the actual merge
+> base and review every conflict resolution; do not treat `-X ours` as proof that
+> conflicts are cosmetic. `release:publish` requires the exact fetched `origin/main`
+> SHA, not the release branch tip.
 
 > `release:prepare` runs from a normal dev checkout — you do **not** need to
 > delete `node_modules/` or build output first (the script itself invokes the
@@ -130,28 +137,67 @@ From a clean checkout at the exact resulting `origin/main` SHA (including no
 untracked or unexpected git-ignored files). Publication uses the same ignored-file
 policy as preparation: normal dependency, build, test, and harness outputs are
 allowed, while stray ignored files outside those recognized locations still block
-the release:
+the release. **Do not publish until the exact-SHA candidate deployment and its
+representative integration and feature-specific API/UI acceptance have passed**
+as described above:
 
 ```bash
 # Repository identity only: tag + GHCR images + GitHub Release
 npm run release:publish
 
-# Deploy that already-published release now or later
-npm run azure:deploy-from-release -- vX.Y.Z
+# Validate coverage and deploy that already-published release now or later
+npm run azure:deploy-from-release -- vX.Y.Z \
+  --feature-manifest <release-feature-manifest.json>
 ```
 
 For the normal first shipment to the default environment, the composite command
-performs both operations:
+publishes and deploys, then deliberately remains blocked until post-deployment
+acceptance evidence is supplied:
 
 ```bash
-npm run azure:release
+npm run azure:release -- \
+  --feature-manifest <release-feature-manifest.json>
 ```
 
-The composite is resumable orchestration, not a transaction. If deployment
-fails after publication, the tag and GitHub Release remain durable:
+The first deployment phase validates the closed feature manifest and selected
+representative/feature-specific coverage before any deployment mutation. The manifest
+must name the exact tag commit and target deployment identity. After deployment and
+live verification, the command intentionally stops with acceptance pending.
+
+Run the selected Harness scenarios against that verified deployment. Close acceptance
+only by resuming the release deployment boundary with exact result manifests:
 
 ```bash
-npm run azure:release -- --resume vX.Y.Z
+npm run azure:deploy-from-release -- vX.Y.Z --resume \
+  --feature-manifest <release-feature-manifest.json> \
+  --acceptance-bundle <canonical-harness-judge-bundle.json>
+```
+
+For the composite workflow, use the same arguments with `azure:release -- --resume
+vX.Y.Z`. The gate validates declared manifests; it does not execute Harnesses. It requires the
+selected representative challenge, direct API/UI/MCP coverage for every shipped
+behavior and affected surface, non-empty typed evidence bound to the exact deployment,
+project, challenge execution, run, catalog version, and surface, successful cleanup,
+and no unresolved abnormal anomalies. A no-evidence result cannot complete acceptance.
+The bundle manifest binds immutable bundle, batch, result, scenario, and execution IDs.
+Every referenced result and evidence artifact must resolve beneath the bundle directory;
+the deployment boundary recomputes SHA-256 and compares path/media metadata before
+acceptance can close. Missing, outside-root, or hash-mismatched artifacts fail closed.
+
+This is an integrity boundary inside the repository's trusted-operator model, not a
+cryptographic defense against a malicious release operator. The operator controls the
+local files and is trusted, while the verifier prevents accidental omissions and simple
+fabricated result JSON from becoming authoritative. Only a verified canonical
+Harness/Judge bundle passed through `azure:deploy-from-release` can close acceptance.
+Direct helper execution is diagnostic only.
+
+The composite is resumable orchestration, not a transaction. If deployment
+or acceptance fails after publication, the tag and GitHub Release remain durable:
+
+```bash
+npm run azure:release -- --resume vX.Y.Z \
+  --feature-manifest <release-feature-manifest.json> \
+  --acceptance-bundle <canonical-harness-judge-bundle.json>
 ```
 
 If the image build fails, `release:publish` stops before it creates the
@@ -164,8 +210,9 @@ npm run release:publish -- --resume vX.Y.Z
 To deploy the same release to another configured environment, check out the
 exact tag commit and run `azure:deploy-from-release` with that tag. The command
 requires a clean checkout whose `HEAD` equals the annotated tag, verifies that
-the GitHub Release and prepared metadata exist, and then builds/deploys/verifies
-the release without publishing anything new.
+the GitHub Release and prepared metadata exist, validates that environment's feature
+manifest, and then builds/deploys/verifies the release without publishing anything new.
+Each target environment requires its own post-deployment acceptance closure.
 
 By default, `azure:deploy-from-release` imports the release images that
 `.github/workflows/publish-images.yml` already published for this exact tag
@@ -173,7 +220,9 @@ By default, `azure:deploy-from-release` imports the release images that
 images from source into ACR instead, add `--image-source acr-build`:
 
 ```bash
-npm run azure:deploy-from-release -- vX.Y.Z --image-source acr-build
+npm run azure:deploy-from-release -- vX.Y.Z \
+  --feature-manifest <release-feature-manifest.json> \
+  --image-source acr-build
 ```
 
 The GHCR ref is always the release tag itself, and the GHCR owner/repository
@@ -193,6 +242,28 @@ Before deleting the release branch, create a short-lived branch from current
 ```bash
 npm run release:sync-dev -- <release-preparation-sha>
 ```
+
+After publication, reconcile the milestones against what the release actually
+consumed. Merge order decides the real contents, so a milestone set before the cut
+can name the wrong release. `release:prepare` consumes the changeset fragments it
+shipped. Map each consumed fragment back to the pull request that added it:
+
+```bash
+git log origin/dev --oneline --diff-filter=A -- ".changeset/<fragment>.md"
+```
+
+Put every pull request that appears in that list on this release's milestone.
+Move every pull request that does not appear to the next milestone. Create the
+next milestone (`vX.Y.Z+1`) and close the milestone for the release just
+published; move any unshipped work to the new milestone:
+
+```bash
+gh api repos/<owner>/<repo>/milestones -f title="vX.Y.Z+1" -f state=open
+gh api repos/<owner>/<repo>/milestones/<number> -X PATCH -f state=closed
+```
+
+See [CONTRIBUTING.md → Target release
+milestone](CONTRIBUTING.md#target-release-milestone) for the contributor side.
 
 ## Published container images
 
@@ -264,8 +335,9 @@ uncommitted changes and has no dirty-tree override.
 After any deployment, use `npm run azure:verify` or inspect the cluster directly
 before considering the change shipped.
 
-For a consolidated PR, release acceptance continues after the PR is merged, the release
-is created, and that released build is deployed: run a Preview harness pass and targeted
-API-harness smoke tests against the deployed system. Record their results with the release
-evidence. Do not target production before the release exists; failures in either harness
-gate block promotion until the deployed release is corrected and revalidated.
+After the release is created and its identity deployed, run the separate
+post-deployment acceptance boundary above against the released build (including
+Preview harness and targeted API smoke where applicable). These results do not
+replace the passing pre-publication exact-SHA candidate E2E evidence. Do not
+target production before the release exists; failures block further promotion
+until corrected and revalidated.
