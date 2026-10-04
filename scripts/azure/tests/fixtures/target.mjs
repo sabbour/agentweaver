@@ -9,7 +9,11 @@ export const tags = { 'agentweaver:environment': 'v1-p0', 'agentweaver:managed-b
 export const source = { sha: 'a'.repeat(40), sourceTree: 'c'.repeat(40), sourceHash: 'b'.repeat(64), branch: 'candidate',
   template: 'infra/bicep/main.bicep', parametersFile: 'infra/bicep/parameters/approved.json',
   owner: 'team', costCenter: 'p0', scope: 'infrastructure-only',
-  postgresEntraAdminObjectId: '33333333-3333-3333-3333-333333333333', appRoutingDnsZoneResourceIds: [] };
+  location: 'eastus2euap', monitorLocation: 'eastus2',
+  postgresEntraAdminObjectId: '33333333-3333-3333-3333-333333333333',
+  postgresEntraAdminPrincipalName: 'generated-admin-principal',
+  postgresEntraAdminPrincipalType: 'User',
+  appRoutingDnsZoneResourceIds: [] };
 export const fixture = { ...ids, resourceGroup: 'aw-v1-p0', repoRoot: process.cwd(),
   template: source.template, parametersFile: source.parametersFile, expectedSha: source.sha,
   deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}`,

@@ -39,6 +39,13 @@ matching environment, manager, owner, and cost-center tags.
 Access denied, malformed JSON, null tags, and missing groups block execution.
 No failed lookup permits creation or fallback to the default subscription.
 
+The P0 parameter example explicitly splits regions: `location` is
+`eastus2euap` for the VNet, AKS, PostgreSQL, Key Vault, Blob, and subnet-bound
+private endpoints; required `monitorLocation` is `eastus2` for Log Analytics
+and Application Insights. AMPLS stays global, and its private endpoint stays in
+the VNet `location`. PostgreSQL remains on its delegated subnet in the primary
+region; no cross-region database subnet is created.
+
 ## Exact-source route
 
 The tooling requires a clean full HEAD commit equal to the locally fetched
@@ -189,6 +196,12 @@ The installed Bicep compiler reports BCP081 because it has no type metadata for
 this preview API. The offline build still compiles the template.
 
 ## PostgreSQL bootstrap prerequisite
+
+The reviewed parameters identify the existing Entra administrator by object
+ID and directory name and require its `principalType`. Bicep accepts only the
+native `User`, `Group`, and `ServicePrincipal` values; `Unknown` is rejected.
+A group is not required. The administrator remains distinct from the
+Identity runtime and migration principals and does not receive broad tenant roles.
 
 The declarative Entra administrator is not a runtime database principal.
 [`postgres-bootstrap.sql`](../../infra/bicep/postgres-bootstrap.sql) defines a

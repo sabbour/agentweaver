@@ -5,11 +5,13 @@ using '../main.bicep'
 // is checked in. The coordinator supplies real values out-of-band when an
 // authorized target is confirmed; scripts/azure/deploy.mjs refuses to run
 // without an explicit, non-placeholder namePrefix and target resource group.
-param location = 'eastus2'
+param location = 'eastus2euap'
+param monitorLocation = 'eastus2'
 param namePrefix = 'aw-v1-p0'
 param tenantId = '00000000-0000-0000-0000-000000000000'
 param postgresEntraAdminObjectId = '00000000-0000-0000-0000-000000000000'
-param postgresEntraAdminPrincipalName = 'agentweaver-v1-p0-admins'
+param postgresEntraAdminPrincipalName = 'CHANGEME-ENTRA-ADMIN-PRINCIPAL-NAME'
+param postgresEntraAdminPrincipalType = 'CHANGEME-ENTRA-ADMIN-PRINCIPAL-TYPE'
 param appRoutingDnsZoneResourceIds = []
 param owner = 'agentweaver-v1-platform'
 param costCenter = 'unassigned'

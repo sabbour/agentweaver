@@ -9,6 +9,13 @@ Entra-only PostgreSQL, Key Vault, Blob, and Azure Monitor.
 Key Vault and Blob have Private Endpoints and private DNS.
 PostgreSQL has a delegated subnet and private DNS.
 
+The P0 parameter example keeps the VNet, AKS, PostgreSQL, Key Vault, Blob, and
+their private endpoints in `eastus2euap`. Its required `monitorLocation` places
+Log Analytics and Application Insights in `eastus2`; the AMPLS remains global,
+and the Monitor Private Endpoint stays in the VNet's `location`. PostgreSQL
+continues to use the delegated subnet in the primary `location`; no cross-region
+database subnet is introduced.
+
 The AKS control-plane identity receives Network Contributor on the dedicated AKS subnet.
 The role assignment uses its system-assigned principal ID and depends on cluster creation.
 It does not grant permissions at VNet, resource-group, or subscription scope.
@@ -54,6 +61,10 @@ identities separately.
 
 The PostgreSQL Entra administrator definition does not create a runtime
 database principal, schema, or table.
+The reviewed parameter file supplies its exact object ID, principal name, and
+supported `principalType` (`User`, `Group`, or `ServicePrincipal`). `Unknown`
+is rejected. A directory group is not required; use the existing approved
+operator principal when its native type is supported.
 `postgres-bootstrap.sql` defines a separately approved admin procedure.
 It maps the UAMI **principalId**, not clientId, through the native
 `pgaadauth_create_principal_with_oid` function while connected to `postgres`.

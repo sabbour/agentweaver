@@ -9,7 +9,44 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(template.parameters.sourceSha.type, 'string');
   assert.equal(template.parameters.sourceTree.type, 'string');
   assert.equal(template.parameters.sourceHash.type, 'string');
+  assert.equal(template.parameters.monitorLocation.type, 'string');
+  assert.deepEqual(template.parameters.postgresEntraAdminPrincipalType.allowedValues, [
+    'User', 'Group', 'ServicePrincipal',
+  ]);
   assert.ok(template.outputs.sourceSha && template.outputs.sourceHash);
+  const networkDeployment = template.resources.find(resource =>
+    resource.name === "[format('{0}-network', parameters('namePrefix'))]");
+  assert.equal(networkDeployment.properties.parameters.location.value, "[parameters('location')]");
+  const postgresDeployment = template.resources.find(resource =>
+    resource.name === "[format('{0}-postgres', parameters('namePrefix'))]");
+  assert.equal(postgresDeployment.properties.parameters.location.value, "[parameters('location')]");
+  assert.match(postgresDeployment.properties.parameters.delegatedSubnetId.value, /postgresSubnetId/);
+  assert.equal(postgresDeployment.properties.parameters.entraAdminPrincipalType.value,
+    "[parameters('postgresEntraAdminPrincipalType')]");
+  const postgres = postgresDeployment.properties.template;
+  const postgresServer = postgres.resources.find(resource =>
+    resource.type === 'Microsoft.DBforPostgreSQL/flexibleServers');
+  const postgresAdmin = postgres.resources.find(resource =>
+    resource.type === 'Microsoft.DBforPostgreSQL/flexibleServers/administrators');
+  assert.equal(postgresServer.location, "[parameters('location')]");
+  assert.equal(postgresAdmin.properties.principalType, "[parameters('entraAdminPrincipalType')]");
+  const monitorDeployment = template.resources.find(resource =>
+    resource.name === "[format('{0}-monitor', parameters('namePrefix'))]");
+  assert.equal(monitorDeployment.properties.parameters.location.value, "[parameters('location')]");
+  assert.equal(monitorDeployment.properties.parameters.monitorLocation.value, "[parameters('monitorLocation')]");
+  const monitor = monitorDeployment.properties.template;
+  const workspace = monitor.resources.find(resource => resource.type === 'Microsoft.OperationalInsights/workspaces');
+  const appInsights = monitor.resources.find(resource => resource.type === 'Microsoft.Insights/components');
+  const monitorPrivateEndpoint = monitor.resources.find(resource => resource.type === 'Microsoft.Network/privateEndpoints');
+  const ampls = monitor.resources.find(resource =>
+    resource.type.toLowerCase() === 'microsoft.insights/privatelinkscopes');
+  assert.equal(workspace.location, "[parameters('monitorLocation')]");
+  assert.equal(appInsights.location, "[parameters('monitorLocation')]");
+  assert.equal(monitorPrivateEndpoint.location, "[parameters('location')]");
+  assert.equal(ampls.location, 'global');
+  const exampleParameters = JSON.parse(readFileSync('infra/bicep/parameters/p0-integration.example.json', 'utf8')).parameters;
+  assert.equal(exampleParameters.location.value, 'eastus2euap');
+  assert.equal(exampleParameters.monitorLocation.value, 'eastus2');
   const aksDeployment = template.resources.find(resource =>
     resource.name === "[format('{0}-aks', parameters('namePrefix'))]");
   const aks = aksDeployment.properties.template;

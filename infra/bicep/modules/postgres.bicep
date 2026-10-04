@@ -17,11 +17,19 @@ param delegatedSubnetId string
 @description('Private DNS zone resource ID for privatelink.postgres.database.azure.com, linked to the dedicated VNet.')
 param privateDnsZoneId string
 
-@description('Microsoft Entra administrator object ID (group recommended) for the server.')
+@description('Microsoft Entra administrator object ID for the server.')
 param entraAdminObjectId string
 
-@description('Microsoft Entra administrator principal name (user or group display name).')
+@description('Microsoft Entra administrator principal name as returned by the directory.')
 param entraAdminPrincipalName string
+
+@allowed([
+  'User'
+  'Group'
+  'ServicePrincipal'
+])
+@description('Supported Microsoft Entra administrator principal type.')
+param entraAdminPrincipalType string
 
 @description('Compute SKU for the P0 smoke environment.')
 param skuName string = 'Standard_B2s'
@@ -60,7 +68,7 @@ resource entraAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@20
   parent: server
   name: entraAdminObjectId
   properties: {
-    principalType: 'Group'
+    principalType: entraAdminPrincipalType
     principalName: entraAdminPrincipalName
     tenantId: subscription().tenantId
   }

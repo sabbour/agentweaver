@@ -88,7 +88,11 @@ Every Azure command explicitly binds the selected subscription.
 
 The inventory guard checks exact resource IDs, types, and names.
 Declared child resources and module deployments do not require ownership tags.
-The PostgreSQL administrator ID comes from the reviewed JSON parameters.
+The reviewed JSON parameters bind the existing PostgreSQL Entra administrator
+object ID, name, and supported type (`User`, `Group`, or `ServicePrincipal`);
+they do not require a new group. The P0 example keeps `location` for VNet/AKS/
+PostgreSQL and subnet-bound resources separate from required
+`monitorLocation` for Log Analytics and Application Insights.
 Historical outer deployments require matching SHA-derived names and source outputs.
 Historical receipts also require a lowercase, 40-character `sourceTree`.
 Missing or invalid tree outputs block plan and redeploy, including prior receipts without that field.

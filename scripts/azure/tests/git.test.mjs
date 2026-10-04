@@ -18,7 +18,11 @@ function sourceFixture(overrides = {}) {
   const parameterPath = 'infra/bicep/parameters/approved.json';
   const parameterValues = { namePrefix: { value: 'aw-v1-p0' },
     tenantId: { value: ids.tenantId }, owner: { value: 'team' }, costCenter: { value: 'p0' },
-    postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId } };
+    location: { value: source.location }, monitorLocation: { value: source.monitorLocation },
+    postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId },
+    postgresEntraAdminPrincipalName: { value: source.postgresEntraAdminPrincipalName },
+    postgresEntraAdminPrincipalType: { value: source.postgresEntraAdminPrincipalType } };
+  Object.assign(parameterValues, overrides.parameterValues);
   if (!overrides.omitZones) parameterValues.appRoutingDnsZoneResourceIds = { value: overrides.zoneIds ?? [] };
   const parameters = JSON.stringify({ parameters: parameterValues });
   const files = { [template]: 'targetScope = \'resourceGroup\'\n', [parameterPath]: parameters };
@@ -58,8 +62,31 @@ test('exact source hashes tracked reviewed inputs and binds JSON parameters to t
   assert.match(receipt.sourceHash, /^[0-9a-f]{64}$/);
   assert.equal(receipt.scope, 'infrastructure-only');
   assert.equal(receipt.owner, 'team');
+  assert.equal(receipt.location, 'eastus2euap');
+  assert.equal(receipt.monitorLocation, 'eastus2');
   assert.equal(receipt.postgresEntraAdminObjectId, source.postgresEntraAdminObjectId);
+  assert.equal(receipt.postgresEntraAdminPrincipalName, source.postgresEntraAdminPrincipalName);
+  assert.equal(receipt.postgresEntraAdminPrincipalType, 'User');
   assert.deepEqual(receipt.appRoutingDnsZoneResourceIds, []);
+});
+
+test('source parameters require a supported Entra administrator and separate Monitor region', () => {
+  for (const principalType of ['User', 'Group', 'ServicePrincipal']) {
+    const { config, deps } = sourceFixture({
+      parameterValues: { postgresEntraAdminPrincipalType: { value: principalType } },
+    });
+    assert.equal(resolveSource(config, deps).postgresEntraAdminPrincipalType, principalType);
+  }
+  for (const parameterValues of [
+    { postgresEntraAdminPrincipalType: { value: 'Unknown' } },
+    { postgresEntraAdminObjectId: { value: 'not-a-guid' } },
+    { postgresEntraAdminPrincipalName: { value: '' } },
+    { location: { value: 'eastus2' }, monitorLocation: { value: 'EASTUS2' } },
+    { monitorLocation: undefined },
+  ]) {
+    const { config, deps } = sourceFixture({ parameterValues });
+    assert.throws(() => resolveSource(config, deps));
+  }
 });
 
 test('custom App Routing DNS zones are optional and bind approved public or private zones', () => {

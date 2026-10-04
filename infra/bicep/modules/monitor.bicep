@@ -8,8 +8,11 @@
 // Link Scope (AMPLS), a private endpoint for it on the dedicated subnet,
 // and all five documented private DNS zones. Open ingestion permits public
 // access but does not override private DNS or provide a public fallback.
-@description('Azure region for the workspace.')
+@description('Azure region of the dedicated VNet and Monitor private endpoint.')
 param location string
+
+@description('Azure region for the Log Analytics workspace and Application Insights.')
+param monitorLocation string
 
 @description('Dedicated naming prefix, e.g. aw-v1-p0.')
 param namePrefix string
@@ -37,7 +40,7 @@ param blobPrivateDnsZoneId string
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${namePrefix}-law'
-  location: location
+  location: monitorLocation
   tags: tags
   properties: {
     sku: {
@@ -51,7 +54,7 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: '${namePrefix}-appi'
-  location: location
+  location: monitorLocation
   tags: tags
   kind: 'web'
   properties: {

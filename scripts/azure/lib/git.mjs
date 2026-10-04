@@ -9,6 +9,8 @@ import { validateFile } from '../../release/validate.mjs';
 import { validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
+const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const POSTGRES_ADMIN_TYPES = new Set(['User', 'Group', 'ServicePrincipal']);
 
 export function isFullSha(value) {
   return typeof value === 'string' && FULL_SHA_PATTERN.test(value);
@@ -81,10 +83,21 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   }
   const document = JSON.parse(readFile(parameters.absolute, 'utf8'));
   const values = document.parameters;
+  const location = values?.location?.value;
+  const monitorLocation = values?.monitorLocation?.value;
+  const postgresEntraAdminObjectId = values?.postgresEntraAdminObjectId?.value;
+  const postgresEntraAdminPrincipalName = values?.postgresEntraAdminPrincipalName?.value;
+  const postgresEntraAdminPrincipalType = values?.postgresEntraAdminPrincipalType?.value;
   if (values?.namePrefix?.value !== resourceGroup || values?.tenantId?.value !== tenantId ||
       !values?.owner?.value || !values?.costCenter?.value ||
+      typeof location !== 'string' || !location.trim() ||
+      typeof monitorLocation !== 'string' || !monitorLocation.trim() ||
+      location.toLowerCase() === monitorLocation.toLowerCase() ||
+      !GUID_PATTERN.test(postgresEntraAdminObjectId ?? '') ||
+      typeof postgresEntraAdminPrincipalName !== 'string' || !postgresEntraAdminPrincipalName.trim() ||
+      !POSTGRES_ADMIN_TYPES.has(postgresEntraAdminPrincipalType) ||
       /unassigned|CHANGEME|00000000-0000/i.test(JSON.stringify(document))) {
-    throw new Error('Parameters do not bind the exact dedicated target or contain placeholders.');
+    throw new Error('Parameters must bind the target, separate Monitor region, and supported PostgreSQL Entra administrator without placeholders.');
   }
   const appRoutingDnsZoneResourceIds = validateAppRoutingDnsZoneResourceIds(
     values.appRoutingDnsZoneResourceIds?.value, subscriptionId,
@@ -92,7 +105,8 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
   return { sha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner: values.owner.value, costCenter: values.costCenter.value,
-    postgresEntraAdminObjectId: values.postgresEntraAdminObjectId?.value,
+    location, monitorLocation, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
+    postgresEntraAdminPrincipalType,
     appRoutingDnsZoneResourceIds,
     scope: 'infrastructure-only' };
 }
