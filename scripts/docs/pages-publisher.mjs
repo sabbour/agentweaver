@@ -464,17 +464,28 @@ function expectedSourceFromEnvironment(environment) {
 
 export async function composePagesDist({ rootDist, artifactDir, source, summaryPath }) {
   const resolvedRootDist = path.resolve(rootDist);
-  const resolvedArtifactDir = path.resolve(artifactDir);
-  const v1Dist = path.join(resolvedArtifactDir, 'dist');
+  let resolvedArtifactDir = path.resolve(artifactDir);
   const rootIndexPath = path.join(resolvedRootDist, 'index.html');
-  const v1IndexPath = path.join(v1Dist, 'index.html');
-  const metadataPath = path.join(resolvedArtifactDir, 'metadata.json');
+  const expectedArtifactName = artifactNameFor(source.sourceSha, source.runAttempt);
+  if (source.artifactName !== expectedArtifactName) {
+    fail('The selected v1 docs artifact identity is invalid.');
+  }
 
   const artifactRootDetails = await statIfPresent(resolvedArtifactDir, lstat);
   if (!artifactRootDetails?.isDirectory() || artifactRootDetails.isSymbolicLink()) {
     fail('The v1 docs artifact directory is missing or unsafe.');
   }
-  const metadataDetails = await statIfPresent(metadataPath, lstat);
+  let metadataPath = path.join(resolvedArtifactDir, 'metadata.json');
+  let metadataDetails = await statIfPresent(metadataPath, lstat);
+  if (!metadataDetails) {
+    resolvedArtifactDir = path.join(resolvedArtifactDir, expectedArtifactName);
+    const namedArtifactDetails = await statIfPresent(resolvedArtifactDir, lstat);
+    if (!namedArtifactDetails?.isDirectory() || namedArtifactDetails.isSymbolicLink()) {
+      fail('The v1 docs artifact directory is missing or unsafe.');
+    }
+    metadataPath = path.join(resolvedArtifactDir, 'metadata.json');
+    metadataDetails = await statIfPresent(metadataPath, lstat);
+  }
   if (
     !metadataDetails?.isFile() ||
     metadataDetails.isSymbolicLink() ||
@@ -482,6 +493,8 @@ export async function composePagesDist({ rootDist, artifactDir, source, summaryP
   ) {
     fail('The v1 docs artifact does not contain safe metadata.json.');
   }
+  const v1Dist = path.join(resolvedArtifactDir, 'dist');
+  const v1IndexPath = path.join(v1Dist, 'index.html');
   await assertNoSymlinks(v1Dist);
 
   const [rootDetails, v1Details] = await Promise.all([
