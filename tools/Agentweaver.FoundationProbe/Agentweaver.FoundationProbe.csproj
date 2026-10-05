@@ -3,7 +3,7 @@
     <ContainerUser>10001:10001</ContainerUser>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <Version>0.0.1</Version>
+    <Version>0.0.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>

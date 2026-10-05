@@ -373,8 +373,7 @@ ownership, observed AKS security settings, and exact workload-identity
 federation configuration. AKS-only collection also requires
 `--foundation-expected-sha` and the exact original full-foundation receipt.
 The current selected AKS issuer can differ from the historical foundation issuer.
-These
-configuration checks do not prove that a Job ran or exchanged a token.
+These configuration checks do not prove that a Job ran or exchanged a token.
 
 Successful deployment outputs include `foundationProbeIdentity` and `foundationResources`.
 The tooling checks their exact dedicated resource IDs, endpoints, namespace, ServiceAccount, and workspace GUID.

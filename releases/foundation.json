@@ -60,7 +60,7 @@
     {
       "id": "Agentweaver.FoundationProbe",
       "kind": "service",
-      "version": "0.0.1",
+      "version": "0.0.0",
       "project": "tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj"
     }
   ],

@@ -6,8 +6,10 @@ import path from 'node:path';
 import test from 'node:test';
 import { packComponentsFromFile } from '../pack.mjs';
 import { publishArtifacts } from '../publish.mjs';
+import { resolveProbeImageSource } from '../../azure/build-foundation-probe-image.mjs';
 
-function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml, foundationProbe = false } = {}) {
+function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml,
+  foundationProbe = false, probeVersion = '0.0.1' } = {}) {
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
   const root = mkdtempSync(path.join(parent, 'publication-'));
@@ -16,7 +18,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   const components = [{ id: 'Pkg', kind: 'library', version: '0.1.0', project: 'packages/Pkg/Pkg.csproj' }];
   if (service) components.push({ id: 'Svc', kind: 'service', version: '0.1.0', project: 'services/Svc/Svc.csproj' });
   if (foundationProbe) components.push({
-    id: 'Agentweaver.FoundationProbe', kind: 'service', version: '0.0.1',
+    id: 'Agentweaver.FoundationProbe', kind: 'service', version: probeVersion,
     project: 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj',
   });
   const manifest = { schemaVersion: 1, stage: 'draft', components, compatibility: [] };
@@ -245,6 +247,170 @@ test('Probe-only publication refuses a full preparation and contradictory select
   assert.throws(() => f.publish({ foundationProbeOnly: true, packagesOnly: true }), /mutually exclusive/);
   assert.deepEqual(f.remoteCalls, []);
   assert.deepEqual(f.externalCalls, []);
+});
+
+const oldProbeDigest = 'sha256:452be7e284ee6c33814fcedcf1d7c98f98384d09ea7239ad851f9cb316727c9a';
+const oldProbePlatform = 'sha256:517fb4f4d1af150d703e94b324fce6b1f22d5af8bf93b840ef4743b3883b7358';
+const oldProbeAttestation = 'sha256:01c4362f57d59be166e15d1963ee285ca7cd46de2d53a053255e0c1a24986e5f';
+const probeTarget = 'ghcr.io/sabbour/agentweaver-foundation-probe:0.0.0';
+const replacementNamespace = 'agentweaver-publication/initial-foundation-probe-0.0.0-replacement';
+
+function initialProbeFixture(t) {
+  const f = fixture(t, { foundationProbe: true, probeVersion: '0.0.0' });
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/v1', f.sourceSha], { cwd: f.root });
+  f.prepare({ foundationProbeOnly: true });
+  const env = { ...f.env, GITHUB_REPOSITORY: 'sabbour/agentweaver', RELEASE_REGISTRY: 'ghcr.io/sabbour' };
+  const source = resolveProbeImageSource({ repoRoot: f.root });
+  const options = { foundationProbeOnly: true, confirmFoundationProbeInitialReplacement: f.sourceSha, env };
+  let pushed = false;
+  let targetReads = 0;
+  const oldIndex = {
+    schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json', digest: oldProbeDigest,
+    manifests: [{ digest: oldProbePlatform }, { digest: oldProbeAttestation }],
+  };
+  const native = (bin, args) => {
+    if (bin !== 'docker') return '';
+    if (args[0] === 'push') pushed = true;
+    if (args[0] === 'buildx') {
+      const reference = args[3];
+      if (reference === probeTarget) {
+        targetReads++;
+        return JSON.stringify(pushed ? { schemaVersion: 2, digest: `sha256:${'b'.repeat(64)}` } : oldIndex);
+      }
+      return JSON.stringify({ schemaVersion: 2, digest: reference.split('@')[1] });
+    }
+    if (args[0] === 'inspect' && args.includes('{{json .Config}}')) return JSON.stringify({
+      User: '10001:10001', Entrypoint: ['dotnet', 'Agentweaver.FoundationProbe.dll'],
+      Labels: {
+        'org.opencontainers.image.revision': source.sourceSha,
+        'io.agentweaver.source-tree': source.sourceTree,
+        'io.agentweaver.infrastructure-source-hash': source.sourceHash,
+        'org.opencontainers.image.version': '0.0.0',
+      },
+    });
+    if (args[0] === 'inspect') return JSON.stringify([
+      `ghcr.io/sabbour/agentweaver-foundation-probe@sha256:${'b'.repeat(64)}`,
+    ]);
+    return '';
+  };
+  return { f, options, native, get targetReads() { return targetReads; } };
+}
+
+test('confirmed initial replacement updates only the approved tag and preserves old index/platforms and history', t => {
+  const { f, options, native } = initialProbeFixture(t);
+  const historicalRef = 'refs/tags/agentweaver-publication/old-source/claim';
+  const historical = { ref: historicalRef, object: { type: 'tag', sha: 'd'.repeat(40) } };
+  f.refs.set(historicalRef, historical);
+  const receipt = f.publish({ ...options, run: native });
+  assert.equal(receipt.status, 'published');
+  assert.deepEqual(receipt.planned.map(record => [record.id, record.version, record.destination]),
+    [['Agentweaver.FoundationProbe', '0.0.0', probeTarget]]);
+  assert.equal(receipt.initialProbeReplacement.previousIndex.digest, oldProbeDigest);
+  assert.equal(receipt.initialProbeReplacement.newDigest, `sha256:${'b'.repeat(64)}`);
+  assert.equal(receipt.initialProbeReplacement.userConfirmedBaselineOverride, true);
+  assert.equal(receipt.initialProbeReplacement.originalIndexAndPlatformsRetained, true);
+  assert.equal(f.refs.get(historicalRef), historical);
+  assert.ok(f.refs.has(`refs/tags/${replacementNamespace}/claim`));
+  assert.ok(f.refs.has(`refs/tags/${replacementNamespace}/result`));
+  assert.deepEqual(f.externalCalls.filter(call => call.bin === 'docker' && call.args[0] === 'push')
+    .map(call => call.args), [['push', probeTarget]]);
+  assert.ok(!f.externalCalls.some(call => call.bin === 'dotnet'));
+  for (const digest of [oldProbeDigest, oldProbePlatform, oldProbeAttestation]) {
+    assert.ok(f.externalCalls.some(call => call.args[0] === 'buildx' &&
+      call.args[3] === `ghcr.io/sabbour/agentweaver-foundation-probe@${digest}`));
+  }
+});
+
+test('initial replacement rejects absent confirmation, wrong source/repository/component/version without writes', t => {
+  const { f, options } = initialProbeFixture(t);
+  for (const change of [
+    { confirmFoundationProbeInitialReplacement: undefined },
+    { confirmFoundationProbeInitialReplacement: 'e'.repeat(40) },
+    { foundationProbeOnly: false },
+    { env: { ...options.env, RELEASE_REGISTRY: 'ghcr.io/different' } },
+  ]) {
+    assert.throws(() => f.publish({ ...options, ...change }), /initial Probe|initial Probe tag/);
+    assert.deepEqual(f.remoteCalls, []);
+    assert.deepEqual(f.externalCalls, []);
+  }
+  const otherCommit = execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    'commit-tree', 'HEAD^{tree}', '-m', 'different admitted source'], { cwd: f.root, encoding: 'utf8' }).trim();
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/v1', otherCommit], { cwd: f.root });
+  assert.throws(() => f.publish(options), /exact admitted origin\/v1 source/);
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
+  const future = fixture(t, { foundationProbe: true });
+  future.prepare({ foundationProbeOnly: true });
+  assert.throws(() => future.publish({ ...options, confirmFoundationProbeInitialReplacement: future.sourceSha }),
+    /approved Probe 0.0.0/);
+  assert.deepEqual(future.remoteCalls, []);
+  assert.deepEqual(future.externalCalls, []);
+});
+
+test('initial replacement refuses both preflight and concurrent native tag drift before push', t => {
+  for (const concurrent of [false, true]) {
+    const { f, options, native } = initialProbeFixture(t);
+    let reads = 0;
+    assert.throws(() => f.publish({ ...options, run(bin, args) {
+      if (bin === 'docker' && args[0] === 'buildx' && args[3] === probeTarget &&
+          ++reads === (concurrent ? 2 : 1)) {
+        return JSON.stringify({
+          schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json',
+          digest: `sha256:${'c'.repeat(64)}`, manifests: [{ digest: oldProbePlatform }],
+        });
+      }
+      return native(bin, args);
+    } }), /drifted|changed before push/);
+    assert.ok(!f.externalCalls.some(call => call.args[0] === 'push'));
+    if (concurrent) {
+      const receipt = JSON.parse(readFileSync(path.join(f.outDir, 'publication.json'), 'utf8'));
+      assert.equal(receipt.status, 'partial');
+      assert.equal(receipt.initialProbeReplacement.previousIndex.digest, oldProbeDigest);
+    }
+  }
+});
+
+test('a permanent initial replacement claim blocks a second source attempt before image effects', t => {
+  const { f, options, native } = initialProbeFixture(t);
+  const ref = `refs/tags/${replacementNamespace}/claim`;
+  f.refs.set(ref, { ref, object: { type: 'tag', sha: 'e'.repeat(40) } });
+  assert.throws(() => f.publish({ ...options, run: native }), /already claimed/);
+  assert.deepEqual(f.externalCalls, []);
+  assert.ok(!f.remoteCalls.some(call => call.args.includes('POST')));
+});
+
+test('initial replacement refuses a relabeled or wrong-user prepared image before pushing', t => {
+  for (const field of ['source', 'user', 'version', 'entrypoint']) {
+    const { f, options, native } = initialProbeFixture(t);
+    assert.throws(() => f.publish({ ...options, run(bin, args) {
+      const output = native(bin, args);
+      if (bin !== 'docker' || !args.includes('{{json .Config}}')) return output;
+      const config = JSON.parse(output);
+      if (field === 'source') config.Labels['org.opencontainers.image.revision'] = 'a'.repeat(40);
+      if (field === 'user') config.User = '0:0';
+      if (field === 'version') config.Labels['org.opencontainers.image.version'] = '0.0.1';
+      if (field === 'entrypoint') config.Entrypoint = ['sh'];
+      return JSON.stringify(config);
+    } }), /corrected source, binary baseline, and image contract/);
+    assert.ok(!f.externalCalls.some(call => call.args[0] === 'push'));
+    assert.equal(JSON.parse(readFileSync(path.join(f.outDir, 'publication.json'), 'utf8')).status, 'partial');
+  }
+});
+
+test('old-platform retention failure records the actual new digest without claiming complete replacement', t => {
+  const { f, options, native } = initialProbeFixture(t);
+  assert.throws(() => f.publish({ ...options, run(bin, args) {
+    if (bin === 'docker' && args[0] === 'buildx' &&
+        args[3] === `ghcr.io/sabbour/agentweaver-foundation-probe@${oldProbePlatform}`) {
+      throw new Error('Native old platform read failed');
+    }
+    return native(bin, args);
+  } }), /Native old platform read failed/);
+  const receipt = JSON.parse(readFileSync(path.join(f.outDir, 'publication.json'), 'utf8'));
+  assert.equal(receipt.status, 'partial');
+  assert.equal(receipt.initialProbeReplacement.previousIndex.digest, oldProbeDigest);
+  assert.equal(receipt.initialProbeReplacement.newDigest, `sha256:${'b'.repeat(64)}`);
+  assert.equal(receipt.initialProbeReplacement.originalIndexAndPlatformsRetained, undefined);
 });
 
 test('manual publication records actual immutable registry digests and never changes draft composition', (t) => {
