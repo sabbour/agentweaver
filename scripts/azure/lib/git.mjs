@@ -130,8 +130,25 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
         !POSTGRES_ADMIN_TYPES.has(postgresEntraAdminPrincipalType)) {
       throw new Error('Foundation parameters must specify a separate Monitor region and supported PostgreSQL Entra administrator.');
     }
-  } else if (parameters.local !== 'infra/bicep/parameters/p0-aks-redeploy.approved.json') {
-    throw new Error('AKS-only redeployment requires its exact reviewed P0 parameter file.');
+  } else {
+    if (parameters.local !== 'infra/bicep/parameters/p0-aks-redeploy.approved.json') {
+      throw new Error('AKS-only redeployment requires its exact reviewed P0 parameter file.');
+    }
+    const approvedFoundation = trackedPath('infra/bicep/parameters/p0-integration.approved.json');
+    const foundationValues = JSON.parse(readFile(approvedFoundation.absolute, 'utf8')).parameters;
+    postgresEntraAdminObjectId = foundationValues?.postgresEntraAdminObjectId?.value;
+    postgresEntraAdminPrincipalName = foundationValues?.postgresEntraAdminPrincipalName?.value;
+    postgresEntraAdminPrincipalType = foundationValues?.postgresEntraAdminPrincipalType?.value;
+    if (foundationValues?.namePrefix?.value !== namePrefix ||
+        foundationValues?.tenantId?.value !== parameterTenantId ||
+        foundationValues?.owner?.value !== owner ||
+        foundationValues?.costCenter?.value !== costCenter ||
+        foundationValues?.location?.value !== location ||
+        !GUID_PATTERN.test(postgresEntraAdminObjectId ?? '') ||
+        typeof postgresEntraAdminPrincipalName !== 'string' || !postgresEntraAdminPrincipalName.trim() ||
+        !POSTGRES_ADMIN_TYPES.has(postgresEntraAdminPrincipalType)) {
+      throw new Error('AKS-only PostgreSQL bootstrap inputs do not match the approved full-foundation parameters.');
+    }
   }
   const appRoutingDnsZoneResourceIds = validateAppRoutingDnsZoneResourceIds(
     values.appRoutingDnsZoneResourceIds?.value, subscriptionId,

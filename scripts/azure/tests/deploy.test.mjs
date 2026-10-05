@@ -19,8 +19,8 @@ test('deployment uses supported source parameters, explicit subscription and inc
   assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
 });
 
-test('offline dry-run never reads account or mutates', () => {
-  const result = deploy(fixture, { sourceResolver: () => source, execAz: () => { throw new Error('cloud call'); } });
+test('offline dry-run never reads account or mutates', async () => {
+  const result = await deploy(fixture, { sourceResolver: () => source, execAz: () => { throw new Error('cloud call'); } });
   assert.equal(result.executed, false);
   assert.equal(result.scope, 'infrastructure-only');
 });
@@ -31,13 +31,36 @@ test('stale subnet-role cleanup requires a separate explicit CLI authorization',
   assert.equal(cliConfig({ 'allow-stale-aks-subnet-role-cleanup': true }).allowStaleAksSubnetRoleCleanup, true);
 });
 
-test('deployment checks real account, group and resources, then what-if before create', () => {
+test('identity PostgreSQL bootstrap is a separate default-off deployment option', () => {
+  assert.equal(cliOptions['bootstrap-identity-postgres'].type, 'boolean');
+  assert.equal(cliOptions['bootstrap-identity-postgres'].default, false);
+  assert.equal(cliConfig({}).bootstrapIdentityPostgres, false);
+  assert.equal(cliConfig({ 'bootstrap-identity-postgres': true }).bootstrapIdentityPostgres, true);
+});
+
+test('dry-run never invokes namespace or PostgreSQL bootstrap, even when requested', async () => {
+  let namespaceCalled = false;
+  let postgresCalled = false;
+  const result = await deploy({ ...fixture, bootstrapIdentityPostgres: true }, {
+    sourceResolver: () => source,
+    execAz: () => { throw new Error('cloud call'); },
+    bootstrapNamespace: () => { namespaceCalled = true; },
+    initializeIdentityPostgres: () => { postgresCalled = true; },
+  });
+  assert.equal(result.executed, false);
+  assert.equal(result.bootstrapIdentityPostgres, true);
+  assert.equal(namespaceCalled, false);
+  assert.equal(postgresCalled, false);
+});
+
+test('deployment checks real account, group and resources, then what-if before create', async () => {
   const calls = [];
   const bootstrapCalls = [];
-  const result = deploy({ ...fixture, execute: true }, {
+  const result = await deploy({ ...fixture, execute: true }, {
     sourceResolver: () => source,
     execAz: fakeAzure({}, calls),
     bootstrapNamespace: options => bootstrapCalls.push(options),
+    initializeIdentityPostgres: () => { throw new Error('unexpected PostgreSQL bootstrap'); },
   });
   assert.equal(result.executed, true);
   assert.deepEqual(bootstrapCalls, [{
@@ -60,7 +83,121 @@ test('deployment checks real account, group and resources, then what-if before c
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
 });
 
-test('source/account/ownership/plan/deployment failures never report a deployment receipt', () => {
+test('explicit PostgreSQL bootstrap runs after namespace setup with exact deployment identities', async () => {
+  const calls = [];
+  const steps = [];
+  const result = await deploy({ ...fixture, execute: true, bootstrapIdentityPostgres: true }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({}, calls),
+    bootstrapNamespace: () => steps.push('namespace'),
+    initializeIdentityPostgres: options => {
+      steps.push('postgres');
+      assert.deepEqual(options, {
+        repoRoot: fixture.repoRoot,
+        resourceGroup: fixture.resourceGroup,
+        subscriptionId: ids.subscriptionId,
+        tenantId: ids.tenantId,
+        clusterName: 'aw-v1-p0-aks',
+        postgresHost: deploymentOutputs.foundationResources.value.postgresHost,
+        adminUsername: source.postgresEntraAdminPrincipalName,
+        runtimePrincipalObjectId: deploymentOutputs.identityBrokerRuntimeIdentity.value.principalObjectId,
+        migrationPrincipalObjectId: deploymentOutputs.identityBrokerMigrationIdentity.value.principalObjectId,
+      });
+      return { database: 'agentweaver', schema: 'identity_broker' };
+    },
+  });
+  assert.deepEqual(steps, ['namespace', 'postgres']);
+  assert.deepEqual(result.receipt.identityPostgresBootstrap,
+    { database: 'agentweaver', schema: 'identity_broker' });
+});
+
+test('identity PostgreSQL bootstrap supports guarded AKS-only redeployment without replacing P0 resources', async () => {
+  const aksSource = {
+    ...source,
+    scope: 'aks-only',
+    template: 'infra/bicep/aks-redeploy.bicep',
+    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
+  };
+  const calls = [];
+  const steps = [];
+  const result = await deploy({ ...fixture, template: aksSource.template ?? 'infra/bicep/aks-redeploy.bicep',
+    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
+    execute: true, bootstrapIdentityPostgres: true }, {
+    sourceResolver: () => aksSource,
+    execAz: fakeAzure({}, calls),
+    bootstrapNamespace: () => steps.push('namespace'),
+    initializeIdentityPostgres: options => {
+      steps.push('postgres');
+      assert.deepEqual(options, {
+        repoRoot: fixture.repoRoot,
+        resourceGroup: fixture.resourceGroup,
+        subscriptionId: ids.subscriptionId,
+        tenantId: ids.tenantId,
+        clusterName: 'aw-v1-p0-aks',
+        postgresHost: 'aw-v1-p0-pg.postgres.database.azure.com',
+        adminUsername: source.postgresEntraAdminPrincipalName,
+        runtimePrincipalObjectId: deploymentOutputs.identityBrokerRuntimeIdentity.value.principalObjectId,
+        migrationPrincipalObjectId: deploymentOutputs.identityBrokerMigrationIdentity.value.principalObjectId,
+      });
+      return { database: 'agentweaver', schema: 'identity_broker', cleanup: { podRemoved: true } };
+    },
+  });
+  assert.deepEqual(steps, ['namespace', 'postgres']);
+  assert.equal(result.receipt.scope, 'aks-only');
+  assert.equal(result.receipt.identityPostgresBootstrap.cleanup.podRemoved, true);
+  assert.ok(calls.some(args => args[0] === 'postgres' && args[1] === 'flexible-server' && args[2] === 'show'));
+  assert.ok(calls.some(args => args[0] === 'identity' && args[1] === 'show'));
+  assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'create' &&
+    args.includes('infra/bicep/main.bicep')));
+  assert.ok(calls.some(args => args[0] === 'deployment' && args[2] === 'create' &&
+    args.includes('infra/bicep/aks-redeploy.bicep')));
+});
+
+test('AKS-only bootstrap refuses altered PostgreSQL network or authentication metadata before deployment', async () => {
+  const aksSource = {
+    ...source,
+    scope: 'aks-only',
+    template: 'infra/bicep/aks-redeploy.bicep',
+    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
+  };
+  const server = {
+    id: deploymentOutputs.foundationResources.value.postgresServerId,
+    name: 'aw-v1-p0-pg',
+    location: source.location,
+    version: '16',
+    fullyQualifiedDomainName: deploymentOutputs.foundationResources.value.postgresHost,
+    network: {
+      delegatedSubnetResourceId:
+        `${fixture.groupId}/providers/Microsoft.Network/virtualNetworks/aw-v1-p0-vnet/subnets/postgres`,
+      privateDnsZoneArmResourceId:
+        `${fixture.groupId}/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com`,
+      publicNetworkAccess: 'Disabled',
+    },
+    authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Disabled', tenantId: ids.tenantId },
+  };
+  for (const altered of [
+    { ...server, network: { ...server.network, delegatedSubnetResourceId: `${fixture.groupId}/subnets/unapproved` } },
+    { ...server, network: { ...server.network, privateDnsZoneArmResourceId: `${fixture.groupId}/privateDnsZones/unapproved` } },
+    { ...server, network: { ...server.network, publicNetworkAccess: 'Enabled' } },
+    { ...server, authConfig: { ...server.authConfig, passwordAuth: 'Enabled' } },
+    { ...server, authConfig: { ...server.authConfig, tenantId: '33333333-3333-4333-8333-333333333333' } },
+  ]) {
+    const calls = [];
+    await assert.rejects(deploy({
+      ...fixture,
+      template: aksSource.template,
+      parametersFile: aksSource.parametersFile,
+      execute: true,
+      bootstrapIdentityPostgres: true,
+    }, {
+      sourceResolver: () => aksSource,
+      execAz: fakeAzure({ postgresServer: { status: 0, stdout: JSON.stringify(altered), stderr: '' } }, calls),
+    }), /exact approved private P0 source inputs/);
+    assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'create'));
+  }
+});
+
+test('source/account/ownership/plan/deployment failures never report a deployment receipt', async () => {
   for (const overrides of [
     { account: { id: 'wrong', tenantId: ids.tenantId, state: 'Enabled' } },
     { account: { id: ids.subscriptionId, tenantId: 'wrong', state: 'Enabled' } },
@@ -75,19 +212,19 @@ test('source/account/ownership/plan/deployment failures never report a deploymen
     { operatorAssignments: { status: 1, stderr: '(AuthorizationFailed)', stdout: '' } },
   ]) {
     const calls = [];
-    assert.throws(() => deploy({ ...fixture, execute: true },
+    await assert.rejects(deploy({ ...fixture, execute: true },
       { sourceResolver: () => source, execAz: fakeAzure(overrides, calls) }));
     assert.ok(!calls.some(args => args[2] === 'create'));
   }
-  assert.throws(() => deploy({ ...fixture, execute: true }, {
+  await assert.rejects(deploy({ ...fixture, execute: true }, {
     sourceResolver: () => { throw new Error('changed input'); }, execAz: () => { throw new Error('unexpected'); },
   }), /changed input/);
-  assert.throws(() => deploy({ ...fixture, execute: true }, { sourceResolver: () => source,
+  await assert.rejects(deploy({ ...fixture, execute: true }, { sourceResolver: () => source,
     execAz: fakeAzure({ create: { status: 0, stdout: '{"properties":{"provisioningState":"Failed"}}' } }) }),
   /source-bound/);
 });
 
-test('full foundation execution refuses to rewrite an existing protected P0 resource', () => {
+test('full foundation execution refuses to rewrite an existing protected P0 resource', async () => {
   for (const protectedResource of [
     {
       id: `${fixture.groupId}/providers/Microsoft.DBforPostgreSQL/flexibleServers/aw-v1-p0-pg`,
@@ -103,7 +240,7 @@ test('full foundation execution refuses to rewrite an existing protected P0 reso
     },
   ]) {
     const calls = [];
-    assert.throws(() => deploy({ ...fixture, execute: true }, {
+    await assert.rejects(deploy({ ...fixture, execute: true }, {
       sourceResolver: () => source,
       execAz: fakeAzure({ resources: [protectedResource] }, calls),
     }), /empty dedicated P0 resource group/);
@@ -111,7 +248,7 @@ test('full foundation execution refuses to rewrite an existing protected P0 reso
   }
 });
 
-test('scoped redeploy resolves and reuses the exact existing Cluster Admin assignment', () => {
+test('scoped redeploy resolves and reuses the exact existing Cluster Admin assignment', async () => {
   const existingName = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
   const clusterId = deploymentOutputs.foundationResources.value.clusterId;
   const assignmentId = `${clusterId}/providers/Microsoft.Authorization/roleAssignments/${existingName}`;
@@ -126,7 +263,7 @@ test('scoped redeploy resolves and reuses the exact existing Cluster Admin assig
   };
   const scopedFixture = { ...fixture, template: scopedSource.template, parametersFile: scopedSource.parametersFile };
   const calls = [];
-  const result = deploy({ ...scopedFixture, execute: true }, {
+  const result = await deploy({ ...scopedFixture, execute: true }, {
     sourceResolver: () => scopedSource,
     execAz: fakeAzure({ operatorAssignments: { status: 0, stdout: JSON.stringify(assignments), stderr: '' } }, calls),
     bootstrapNamespace: options => {
@@ -146,7 +283,7 @@ test('scoped redeploy resolves and reuses the exact existing Cluster Admin assig
   assert.equal(calls.filter(args => args[0] === 'deployment' && args[2] === 'create').length, 1);
 });
 
-test('full-foundation and AKS-only deployments report namespace bootstrap failure after infrastructure success', () => {
+test('full-foundation and AKS-only deployments report namespace bootstrap failure after infrastructure success', async () => {
   const aksSource = {
     ...source,
     scope: 'aks-only',
@@ -162,7 +299,7 @@ test('full-foundation and AKS-only deployments report namespace bootstrap failur
   ];
   for (const scenario of scenarios) {
     const calls = [];
-    assert.throws(() => deploy({ ...scenario.config, execute: true }, {
+    await assert.rejects(deploy({ ...scenario.config, execute: true }, {
       sourceResolver: () => scenario.source,
       execAz: fakeAzure({}, calls),
       bootstrapNamespace: () => { throw new Error('RBAC denied'); },
@@ -171,7 +308,7 @@ test('full-foundation and AKS-only deployments report namespace bootstrap failur
   }
 });
 
-test('default execute refuses a proven dangling subnet role without deleting it', () => {
+test('default execute refuses a proven dangling subnet role without deleting it', async () => {
   const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
   const stale = {
     id: subnetAssignmentId,
@@ -185,7 +322,7 @@ test('default execute refuses a proven dangling subnet role without deleting it'
     },
   };
   const calls = [];
-  assert.throws(() => deploy({ ...fixture, execute: true }, {
+  await assert.rejects(deploy({ ...fixture, execute: true }, {
     sourceResolver: () => source,
     execAz: fakeAzure({
       networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
@@ -197,7 +334,7 @@ test('default execute refuses a proven dangling subnet role without deleting it'
   assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'create'));
 });
 
-test('only an exact dangling subnet Network Contributor assignment is removed with explicit authorization', () => {
+test('only an exact dangling subnet Network Contributor assignment is removed with explicit authorization', async () => {
   const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
   const stale = {
     id: subnetAssignmentId,
@@ -211,7 +348,7 @@ test('only an exact dangling subnet Network Contributor assignment is removed wi
     },
   };
   const calls = [];
-  deploy({ ...fixture, execute: true, allowStaleAksSubnetRoleCleanup: true }, {
+  await deploy({ ...fixture, execute: true, allowStaleAksSubnetRoleCleanup: true }, {
     sourceResolver: () => source,
     execAz: fakeAzure({
       networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
@@ -228,7 +365,7 @@ test('only an exact dangling subnet Network Contributor assignment is removed wi
   assert.ok(calls.indexOf(remove) < calls.indexOf(whatIfCalls[1]));
 });
 
-test('a live or unverifiable subnet role principal is never removed', () => {
+test('a live or unverifiable subnet role principal is never removed', async () => {
   const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
   const stale = {
     id: subnetAssignmentId, name: subnetRoleAssignmentName,
@@ -245,7 +382,7 @@ test('a live or unverifiable subnet role principal is never removed', () => {
     { status: 1, stdout: '', stderr: '(AuthorizationFailed)' },
   ]) {
     const calls = [];
-    assert.throws(() => deploy({ ...fixture, execute: true, allowStaleAksSubnetRoleCleanup: true }, {
+    await assert.rejects(deploy({ ...fixture, execute: true, allowStaleAksSubnetRoleCleanup: true }, {
       sourceResolver: () => source,
       execAz: fakeAzure({
         networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
@@ -257,11 +394,11 @@ test('a live or unverifiable subnet role principal is never removed', () => {
   }
 });
 
-test('changed inputs after what-if never reach create', () => {
+test('changed inputs after what-if never reach create', async () => {
   for (const change of [{ sourceHash: 'c'.repeat(64) }, { sourceTree: 'd'.repeat(40) }]) {
     let resolves = 0;
     const calls = [];
-    assert.throws(() => deploy({ ...fixture, execute: true }, {
+    await assert.rejects(deploy({ ...fixture, execute: true }, {
       sourceResolver: () => (++resolves === 1 ? source : { ...source, ...change }),
       execAz: fakeAzure({}, calls),
     }), /changed after what-if/);
@@ -269,9 +406,9 @@ test('changed inputs after what-if never reach create', () => {
   }
 });
 
-test('deployment cannot publish a source-bound receipt with missing or substituted Git tree', () => {
+test('deployment cannot publish a source-bound receipt with missing or substituted Git tree', async () => {
   for (const value of [undefined, source.sourceHash, 'd'.repeat(40)]) {
-    assert.throws(() => deploy({ ...fixture, execute: true }, { sourceResolver: () => source,
+    await assert.rejects(deploy({ ...fixture, execute: true }, { sourceResolver: () => source,
       execAz: fakeAzure({ create: { status: 0, stdout: JSON.stringify({
         id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
         properties: { provisioningState: 'Succeeded', outputs: {
@@ -282,7 +419,7 @@ test('deployment cannot publish a source-bound receipt with missing or substitut
   }
 });
 
-test('deployment receipt rejects substituted resources, identity, workspace and deployment scope', () => {
+test('deployment receipt rejects substituted resources, identity, workspace and deployment scope', async () => {
   const valid = { id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
     properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } };
   const variants = [
@@ -292,6 +429,6 @@ test('deployment receipt rejects substituted resources, identity, workspace and 
   ];
   for (const response of variants) {
     const execAz = fakeAzure({ create: { status: 0, stdout: JSON.stringify(response) } });
-    assert.throws(() => deploy({ ...fixture, execute: true }, { sourceResolver: () => source, execAz }));
+    await assert.rejects(deploy({ ...fixture, execute: true }, { sourceResolver: () => source, execAz }));
   }
 });

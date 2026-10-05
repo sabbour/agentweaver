@@ -129,7 +129,7 @@ test('populated post-deployment inventory admits exact roots, untagged children,
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], fixture.subscriptionId);
 });
 
-test('the same populated layout reaches plan, redeploy and configuration acceptance, never runtime success', () => {
+test('the same populated layout reaches plan, redeploy and configuration acceptance, never runtime success', async () => {
   const dependencies = () => ({ sourceResolver: () => source, execAz: fakeAzure(postDeploymentAzure) });
   assert.equal(plan({ ...fixture, postgresEntraAdminObjectId: 'unreviewed-caller' }, dependencies()).status, 0);
   const aksSource = {
@@ -156,7 +156,7 @@ test('the same populated layout reaches plan, redeploy and configuration accepta
       } },
     }) },
   };
-  assert.equal(deploy({
+  assert.equal((await deploy({
     ...fixture,
     template: aksSource.template,
     parametersFile: aksSource.parametersFile,
@@ -166,7 +166,7 @@ test('the same populated layout reaches plan, redeploy and configuration accepta
     sourceResolver: () => aksSource,
     execAz: fakeAzure(aksOnlyAzure),
     bootstrapNamespace() {},
-  }).executed, true);
+  })).executed, true);
   const report = runAcceptance({ ...fixture, deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}` }, dependencies());
   assert.ok(!report.checks.some(check => check.name === 'target-and-source'));
   assert.equal(report.checks.find(check => check.name === 'target-inventory').status, 'passed');

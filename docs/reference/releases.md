@@ -12,7 +12,7 @@
 | `Agentweaver.Telemetry` | Library | `0.0.0` |
 | `Agentweaver.Telemetry.AzureMonitor` | Library | `0.0.0` |
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `0.0.0` |
-| `Agentweaver.Identity.Broker` | Service | `0.2.0` |
+| `Agentweaver.Identity.Broker` | Service | `0.0.0` |
 
 The manifest pins exact project-reference compatibility. Its Broker entry does
 not pin an image digest; the existing f989 image remains separate from this

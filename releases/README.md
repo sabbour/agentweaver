@@ -7,7 +7,7 @@ It pins eight independently versioned .NET foundation NuGet packages:
 `Agentweaver.Identity`, `Agentweaver.Telemetry`,
 `Agentweaver.Telemetry.AzureMonitor`, and `Agentweaver.ObjectStore.AzureBlob`.
 The current package baseline for all eight is `0.0.0`.
-`Agentweaver.Identity.Broker` remains service version `0.2.0`; it is not one
+`Agentweaver.Identity.Broker` uses service baseline `0.0.0`; it is not one
 of the NuGet packages.
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
@@ -56,7 +56,7 @@ suffixes; a prerelease numeric identifier cannot have a leading zero.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
 The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
-Its current manifest/project version is `0.2.0`.
+Its current manifest/project baseline is `0.0.0`.
 The record is release intent, not a registry artifact or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 

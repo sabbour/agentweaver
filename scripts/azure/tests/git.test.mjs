@@ -34,6 +34,21 @@ function sourceFixture(overrides = {}) {
   if (!overrides.omitZones) parameterValues.appRoutingDnsZoneResourceIds = { value: overrides.zoneIds ?? [] };
   const parameters = JSON.stringify({ parameters: parameterValues });
   const files = { [template]: 'targetScope = \'resourceGroup\'\n', [parameterPath]: parameters };
+  if (aksOnly) {
+    files['infra/bicep/parameters/p0-integration.approved.json'] = JSON.stringify({
+      parameters: {
+        namePrefix: { value: 'aw-v1-p0' },
+        tenantId: { value: ids.tenantId },
+        owner: { value: 'team' },
+        costCenter: { value: 'p0' },
+        location: { value: source.location },
+        postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId },
+        postgresEntraAdminPrincipalName: { value: source.postgresEntraAdminPrincipalName },
+        postgresEntraAdminPrincipalType: { value: source.postgresEntraAdminPrincipalType },
+        ...overrides.foundationValues,
+      },
+    });
+  }
   const config = { ...fixture, repoRoot: root, template, parametersFile: parameterPath, ...overrides.config };
   const deps = {
     realpath: path => resolve(path),
@@ -100,6 +115,31 @@ test('AKS-only source accepts only its reviewed template and parameter file', ()
   ]) {
     const invalid = sourceFixture({ config: { template: 'infra/bicep/aks-redeploy.bicep', ...overrides.config } });
     assert.throws(() => resolveSource(invalid.config, invalid.deps));
+  }
+});
+
+test('AKS-only source binds existing PostgreSQL admin to the exact approved full-foundation inputs', () => {
+  const { config, deps } = sourceFixture({
+    config: { template: 'infra/bicep/aks-redeploy.bicep' },
+  });
+  const receipt = resolveSource(config, deps);
+  assert.equal(receipt.postgresEntraAdminObjectId, source.postgresEntraAdminObjectId);
+  assert.equal(receipt.postgresEntraAdminPrincipalName, source.postgresEntraAdminPrincipalName);
+  assert.equal(receipt.postgresEntraAdminPrincipalType, source.postgresEntraAdminPrincipalType);
+
+  for (const foundationValues of [
+    { tenantId: { value: 'other' } },
+    { postgresEntraAdminObjectId: { value: 'invalid' } },
+    { postgresEntraAdminPrincipalName: { value: '' } },
+    { postgresEntraAdminPrincipalType: { value: 'Unknown' } },
+    { location: { value: 'other' } },
+  ]) {
+    const invalid = sourceFixture({
+      config: { template: 'infra/bicep/aks-redeploy.bicep' },
+      foundationValues,
+    });
+    assert.throws(() => resolveSource(invalid.config, invalid.deps),
+      /approved full-foundation parameters/);
   }
 });
 

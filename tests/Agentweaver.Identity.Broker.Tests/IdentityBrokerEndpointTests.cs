@@ -93,6 +93,41 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ExternalLoginSupportsPublicPkceAndConfiguredConfidentialClient()
+    {
+        var publicConnectionString = await _postgres.CreateMigratedDatabaseAsync();
+        await using var publicFactory = new IdentityBrokerWebApplicationFactory(
+            publicConnectionString, _fakeIdp, signingCertificate: _signingCertificate,
+            externalProviderClientSecret: null);
+        using var publicBroker = publicFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local"),
+        });
+
+        var (_, publicChallenge) = Pkce.Create();
+        var publicCallback = await BrokerFlowDriver.AttemptExternalCallbackAsync(
+            publicBroker, _fakeIdpClient, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, "openid profile email",
+            publicChallenge);
+        Assert.Equal(HttpStatusCode.Redirect, publicCallback.StatusCode);
+        var publicTokenRequest = Assert.Single(_fakeIdp.TokenRequests);
+        Assert.False(publicTokenRequest.HasClientSecret);
+        Assert.True(publicTokenRequest.HasCodeVerifier);
+
+        var (_, confidentialChallenge) = Pkce.Create();
+        var confidentialCallback = await BrokerFlowDriver.AttemptExternalCallbackAsync(
+            _broker, _fakeIdpClient, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, "openid profile email",
+            confidentialChallenge);
+        Assert.Equal(HttpStatusCode.Redirect, confidentialCallback.StatusCode);
+        var confidentialTokenRequest = _fakeIdp.TokenRequests[1];
+        Assert.True(confidentialTokenRequest.HasClientSecret);
+        Assert.Equal("fake-idp-client-secret", confidentialTokenRequest.ClientSecret);
+        Assert.True(confidentialTokenRequest.HasCodeVerifier);
+    }
+
+    [Fact]
     public async Task Authorize_UnregisteredClient_IsRejected()
     {
         var (_, challenge) = Pkce.Create();

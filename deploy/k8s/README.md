@@ -36,11 +36,15 @@ The manifests reference, but do not create, these objects:
 | --- | --- |
 | `identity-broker-runtime-config` ConfigMap | `ConnectionStrings__IdentityBroker`, public HTTPS issuer, external OIDC authority and client ID, exact `IdentityBroker__Clients__...` registration, redemption audience and Key Vault URI, runtime workload-identity tenant/client/token-file settings, and `IdentityBroker__DataProtectionKeyPath`. |
 | `identity-broker-signing` Secret | `signing.pfx` and its `password`; the PFX signs/encrypts tokens and protects the durable data-protection key ring. |
-| `identity-broker-upstream-oidc` Secret | `clientSecret` for the registered external OIDC client. |
-| `identity-broker-client-secrets` Secret | Optional `IdentityBroker__Clients__<index>__ClientSecret` keys for each configured confidential client. Public clients have no secret. |
+| `identity-broker-client-secrets` Secret | Optional `IdentityBroker__ExternalProvider__ClientSecret` for a confidential upstream client and `IdentityBroker__Clients__<index>__ClientSecret` keys for configured confidential clients. Public clients omit their secrets. |
 | `identity-broker-tls` Secret | Approved `tls.crt` and `tls.key` for Kestrel HTTPS. No certificate is created here. |
 | `identity-broker-key-ring` PVC | Durable writable storage mounted for the protected ASP.NET data-protection key ring. The host runs one replica with a recreate strategy. |
 | `identity-broker-migration-config` ConfigMap | `ConnectionStrings__IdentityBrokerMigration` and the separate migration workload-identity tenant, client, and absolute projected-token-file settings. |
+
+The external OIDC client secret is optional. When omitted, the Broker uses
+authorization-code flow with PKCE as a public OIDC client. When a confidential
+upstream client is explicitly configured, provide its secret through the
+operator-managed `identity-broker-client-secrets` Secret.
 
 All connection strings must omit passwords. The runtime database username is
 the separately bootstrapped Entra runtime role. The migration connection uses
@@ -61,6 +65,34 @@ run the migration Job from `deploy/k8s/migrations/identity-broker`. It uses a
 different ServiceAccount and workload identity. The runtime has no schema
 ownership or migration privileges; missing schema/configuration/authentication
 fails startup.
+
+## One-time bootstrap commands
+
+The Broker executable provides an explicit
+`--bootstrap-identity-postgres` maintenance command. It uses the operator's
+Azure CLI login only on the operator host, then connects with Npgsql using
+`VerifyFull` TLS and the configured PostgreSQL FQDN. It creates the configured
+database, two exact Entra workload roles, and the `identity_broker` schema
+only when no unexpected user database or partial bootstrap exists. It does
+not run migrations or run as part of ordinary startup. Supply
+`ConnectionStrings:IdentityBrokerBootstrap` and the
+`IdentityBroker:Bootstrap:*` values for the approved exact server, admin,
+database, role names, and UAMI principal object IDs.
+
+The PostgreSQL bootstrap is available through the existing installer only
+with both `--execute` and the separate, default-off
+`--bootstrap-identity-postgres` option. It supports the guarded full-foundation
+path and AKS-only redeployment to the verified existing P0 target; the
+full-foundation empty-resource-group guard remains unchanged. For the approved
+private PostgreSQL endpoint, the installer creates a temporary TCP-only proxy
+pod and loopback-only port-forward. The operator host keeps the password-free
+Azure CLI Entra token and connects through that tunnel using `VerifyFull` TLS
+with the PostgreSQL FQDN as the certificate target. It removes only the exact
+run-owned pod and ConfigMap, stops its exact port-forward process, and removes
+temporary local files. It does not create a public route, app registration,
+secret, or Azure role assignment. An interrupted database creation requires
+manual reconciliation of the exact database target before retry. Ordinary
+`--execute` does not run the database bootstrap.
 
 ## Workload identity wiring
 

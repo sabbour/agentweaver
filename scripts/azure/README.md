@@ -188,6 +188,23 @@ A bootstrap failure is reported even if the infrastructure deployment already
 succeeded; the command never falls back to an admin kubeconfig or applies other
 manifests.
 
+Initial Identity PostgreSQL setup has a separate default-off
+`--bootstrap-identity-postgres` option. It is available after either an
+approved full foundation deployment or an AKS-only redeployment to the exact
+existing P0 target. The full-foundation empty-resource-group guard is unchanged.
+The installer verifies the existing PostgreSQL server, Entra administrator,
+and both workload identities before an AKS-only deployment. After namespace
+setup, it starts a temporary TCP-only proxy pod and a loopback-only
+`kubectl port-forward`. The operator host runs the Broker's guarded bootstrap
+command with the exact PostgreSQL FQDN, runtime and migration principal IDs,
+and approved Entra administrator. The Azure CLI Entra token stays on the
+operator host; Npgsql uses `VerifyFull` with the PostgreSQL FQDN as TLS target
+host. The installer removes only its exact run-owned pod and ConfigMap, stops
+its port-forward process, and deletes its temporary local files. It does not
+create a public route, app registration, secret, or Azure role assignment.
+Ordinary `--execute` does not run this initializer. A failed bootstrap or
+transport cleanup is reported and is not converted into a successful receipt.
+
 ## Acceptance
 
 `verify-acceptance.mjs` accepts the full-foundation source/target arguments,

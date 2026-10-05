@@ -100,8 +100,51 @@ export function fakeAzure(overrides = {}, calls = []) {
     if (args[0] === 'role' && args[1] === 'assignment' && args[2] === 'list') {
       return overrides.operatorAssignments ?? ok([]);
     }
+    if (args[0] === 'postgres' && args[1] === 'flexible-server' && args[2] === 'show') {
+      return overrides.postgresServer ?? ok({
+        id: deploymentOutputs.foundationResources.value.postgresServerId,
+        name: 'aw-v1-p0-pg',
+        location: source.location,
+        version: '16',
+        fullyQualifiedDomainName: deploymentOutputs.foundationResources.value.postgresHost,
+        network: {
+          delegatedSubnetResourceId: `${fixture.groupId}/providers/Microsoft.Network/virtualNetworks/aw-v1-p0-vnet/subnets/postgres`,
+          privateDnsZoneArmResourceId:
+            `${fixture.groupId}/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com`,
+          publicNetworkAccess: 'Disabled',
+        },
+        authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Disabled', tenantId: ids.tenantId },
+      });
+    }
+    if (args[0] === 'identity' && args[1] === 'show') {
+      const name = args[args.indexOf('--name') + 1];
+      const runtime = name.endsWith('-identity-broker');
+      const identity = runtime
+        ? deploymentOutputs.identityBrokerRuntimeIdentity.value
+        : deploymentOutputs.identityBrokerMigrationIdentity.value;
+      return overrides.identities?.[name] ?? ok({
+        id: identity.resourceId,
+        name,
+        location: source.location,
+        clientId: identity.clientId,
+        principalId: identity.principalObjectId,
+      });
+    }
     if (args[0] === 'resource' && args[1] === 'show') {
       const id = args[args.indexOf('--ids') + 1];
+      if (id?.toLowerCase().includes('/administrators/')) {
+        return overrides.postgresAdmin ?? ok({
+          id,
+          type: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
+          name: source.postgresEntraAdminPrincipalName,
+          properties: {
+            objectId: source.postgresEntraAdminObjectId,
+            principalName: source.postgresEntraAdminPrincipalName,
+            principalType: source.postgresEntraAdminPrincipalType,
+            tenantId: ids.tenantId,
+          },
+        });
+      }
       if (id?.toLowerCase().includes('/providers/microsoft.authorization/roleassignments/')) {
         if (id.toLowerCase() ===
           `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`.toLowerCase()) {
