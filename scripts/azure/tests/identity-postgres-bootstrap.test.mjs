@@ -150,7 +150,7 @@ test('bootstraps through the owned pod and loopback tunnel with the Entra token 
   assert.equal(pod.spec.containers[0].ports[0].containerPort, 5432);
   assert.equal(pod.spec.containers[0].readinessProbe.tcpSocket.port, 5432);
   assert.equal(pod.spec.containers[0].image,
-    'ghcr.io/sabbour/agentweaver.identity.broker@sha256:c3758e2be89891728dcdb7c0f7704dc2b77737f846a42f0d58191848a31537f1');
+    'mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4');
 
   const forwardArgs = fakes.calls.find(call =>
     call.kind === 'kubectl' && call.args.includes('delete'))?.args;

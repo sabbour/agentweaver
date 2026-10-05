@@ -195,7 +195,10 @@ existing P0 target. The full-foundation empty-resource-group guard is unchanged.
 The installer verifies the existing PostgreSQL server, Entra administrator,
 and both workload identities before an AKS-only deployment. After namespace
 setup, it starts a temporary TCP-only proxy pod and a loopback-only
-`kubectl port-forward`. The operator host runs the Broker's guarded bootstrap
+`kubectl port-forward`. The internal proxy is part of the solution build and
+publishes with locked dependency restore. Its pod runs on the pinned public
+ASP.NET 10 base image, not a historical Broker product image.
+The operator host runs the Broker's guarded bootstrap
 command with the exact PostgreSQL FQDN, runtime and migration principal IDs,
 and approved Entra administrator. The Azure CLI Entra token stays on the
 operator host; Npgsql uses `VerifyFull` with the PostgreSQL FQDN as TLS target

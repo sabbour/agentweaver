@@ -17,5 +17,6 @@
   <Project Path="tests\Agentweaver.ObjectStore.AzureBlob.Tests\Agentweaver.ObjectStore.AzureBlob.Tests.csproj" />
   <Project Path="tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj" />
   <Project Path="tools\Agentweaver.FoundationProbe\Agentweaver.FoundationProbe.csproj" />
+  <Project Path="tools\IdentityPostgresTcpProxy\IdentityPostgresTcpProxy.csproj" />
   <Project Path="tests\Agentweaver.FoundationProbe.Tests\Agentweaver.FoundationProbe.Tests.csproj" />
 </Solution>
