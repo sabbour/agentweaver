@@ -55,6 +55,8 @@ internal sealed class ProbeRunner(
         PostgresEvidence postgres;
         try
         {
+            if (!activity.Recorded)
+                throw new ProbeException("telemetry_activity_not_recorded");
             keyVault = await operations.RedeemKeyVaultAsync(target, nonce, cancellationToken).ConfigureAwait(false);
             ValidateKeyVaultEvidence(target, keyVault);
             blob = await operations.RunBlobRoundTripAsync(target, source, nonce, cancellationToken).ConfigureAwait(false);

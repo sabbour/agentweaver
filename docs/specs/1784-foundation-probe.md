@@ -115,7 +115,10 @@ The probe then performs these bounded checks:
    after commit. It never runs migrations or creates roles.
 4. **Azure Monitor:** start a `foundation-probe` server Activity tagged with
    `probe.source_sha`, `probe.source_tree`, and a fresh 32-lowercase-hex
-   `probe.nonce`, then force-flush the exporter. The receipt records the exact
+   `probe.nonce`, then force-flush the exporter. The Probe host uses an
+   `AlwaysOnSampler`; other hosts keep their existing sampling policy.
+   An unrecorded Activity fails with `telemetry_activity_not_recorded` before
+   Key Vault, Blob, or PostgreSQL operations. The receipt records the exact
    trace and span IDs and start time. No raw connection string or key is
    recorded.
 

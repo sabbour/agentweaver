@@ -467,7 +467,10 @@ the exact workspace from the deployment output. The fixed Logs query searches
 `AppDependencies` and `AppRequests`, not `AppTraces`, and matches the probe
 trace/span with `probe.source_sha`, `probe.source_tree`, and the 32-character
 nonce. A fresh matching row is required; exporter flush alone is not proof of
-stored telemetry. Caller-supplied digests, booleans, trace IDs, and secret
+stored telemetry. The Probe host uses `AlwaysOnSampler` for its acceptance span.
+An unrecorded span fails with `telemetry_activity_not_recorded` before fixture
+operations. This setting does not change sampling in other Azure Monitor hosts.
+Caller-supplied digests, booleans, trace IDs, and secret
 versions do not satisfy the gate. Failed terminal pods retain only allow-listed
 probe failure codes and types; raw logs and credential-shaped diagnostics are
 not copied into the report.
