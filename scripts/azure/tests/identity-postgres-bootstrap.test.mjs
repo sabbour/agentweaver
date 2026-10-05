@@ -24,6 +24,19 @@ const privilegeReadback =
   'IDENTITY_POSTGRES_PRIVILEGES database=agentweaver schemaOwner=aw-v1-p0-id-identity-broker-migration';
 const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
 
+test('Probe principal registration and validation use postgres before the transactional agentweaver fixture', () => {
+  const source = readFileSync('scripts/azure/lib/bootstrap-probe-postgres.cs', 'utf8');
+  assert.match(source, /principalSettings[\s\S]*Database = "postgres"/);
+  assert.match(source, /current_database\(\) = 'postgres'[\s\S]*principalConnection/);
+  assert.match(source, /pgaadauth_list_principals\(false\)[\s\S]*principalConnection/);
+  assert.match(source, /pgaadauth_create_principal_with_oid[\s\S]*principalConnection, principalTransaction/);
+  assert.match(source, /principalTransaction\.CommitAsync/);
+  assert.match(source, /schemaExists && !roleExists/);
+  assert.match(source, /Existing Probe role does not map to the exact approved principal/);
+  assert.match(source, /NOT rolcreatedb AND NOT rolcreaterole[\s\S]*NOT rolreplication AND NOT rolinherit/);
+  assert.match(source, /if \(!schemaExists\)[\s\S]*CREATE SCHEMA foundation_probe/);
+});
+
 function dependencies({ dotnetResult, alterPodOwner = false } = {}) {
   const calls = [];
   const resources = new Map();
@@ -249,6 +262,7 @@ test('Probe operator fixture reuses the canonical domain and embedded persistenc
   assert.ok(bootstrap.includes('SslMode = SslMode.VerifyFull'));
   assert.ok(bootstrap.includes('options.TargetHost = host'));
   assert.ok(bootstrap.includes('pgaadauth_create_principal_with_oid'));
+  assert.ok(bootstrap.includes("AND principaltype = 'service' AND isadmin = 0"));
   assert.ok(bootstrap.includes("array_agg(version ORDER BY version) = ARRAY[1, 2]"));
   assert.ok(bootstrap.includes("NOT has_schema_privilege('foundation_probe_runtime', 'identity_broker', 'USAGE')"));
   assert.ok(!bootstrap.includes('CREATE TABLE foundation_probe.probe_effects'));

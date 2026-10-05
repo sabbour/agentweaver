@@ -94,6 +94,8 @@ export function brokerObjectHash(value) {
       for (const key of ['revisionHistoryLimit', 'progressDeadlineSeconds']) delete spec[key];
       delete spec.strategy.rollingUpdate;
       const pod = spec.template.spec;
+      if (typeof pod.serviceAccountName === 'string' && pod.serviceAccountName &&
+          pod.serviceAccount === pod.serviceAccountName) delete pod.serviceAccount;
       for (const key of ['restartPolicy', 'dnsPolicy', 'schedulerName', 'enableServiceLinks']) delete pod[key];
       for (const container of pod.containers ?? []) {
         for (const key of ['terminationMessagePath', 'terminationMessagePolicy']) delete container[key];

@@ -19,7 +19,7 @@ function command(bin, args, input) {
   const result = spawnSync(bin, args, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
   // Subprocess output can contain credentials. Never relay it, even on failure.
   if (result.error || result.status !== 0) fail(`${bin} failed; inspect the target independently before retrying`);
-  return result.stdout.trim();
+  return args.includes('--raw') ? result.stdout : result.stdout.trim();
 }
 
 function parseRegistry(value) {
@@ -139,9 +139,19 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const readDescriptor = reference => {
     const descriptor = JSON.parse(run('docker', ['buildx', 'imagetools', 'inspect', reference,
       '--format', '{{json .Manifest}}']));
-    if (!/^sha256:[a-f0-9]{64}$/.test(descriptor?.digest ?? '') || descriptor.schemaVersion !== 2) {
+    if (!/^sha256:[a-f0-9]{64}$/.test(descriptor?.digest ?? '')) {
       fail('native Probe manifest descriptor is missing or malformed');
     }
+    if (descriptor.schemaVersion === undefined) {
+      const raw = run('docker', ['buildx', 'imagetools', 'inspect', reference, '--raw']);
+      const manifest = JSON.parse(raw);
+      if (`sha256:${hash(raw)}` !== descriptor.digest || Buffer.byteLength(raw) !== descriptor.size ||
+          manifest.schemaVersion !== 2 || manifest.mediaType !== descriptor.mediaType) {
+        fail('native Probe raw manifest does not match its descriptor bytes, size, and schema');
+      }
+      return { ...manifest, digest: descriptor.digest, size: descriptor.size };
+    }
+    if (descriptor.schemaVersion !== 2) fail('native Probe manifest descriptor is missing or malformed');
     return descriptor;
   };
   let previousProbeIndex;
@@ -228,11 +238,11 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         const digest = digests.find((value) => value.startsWith(`${imageRepositories.get(component.id)}@sha256:`));
         if (!digest || !/@sha256:[a-f0-9]{64}$/.test(digest)) fail(`registry did not return an immutable digest for ${component.id}`);
         if (replaceInitialProbe) {
+          receipt.initialProbeReplacement.newDigest = digest.slice(digest.lastIndexOf('@') + 1);
           const current = readDescriptor(initialProbeTarget);
           if (current.digest === initialProbeDigest || digest !== `${imageRepositories.get(component.id)}@${current.digest}`) {
             fail('corrected Probe tag did not resolve to the actual new published manifest');
           }
-          receipt.initialProbeReplacement.newDigest = current.digest;
           const retained = readDescriptor(`${imageRepositories.get(component.id)}@${initialProbeDigest}`);
           if (retained.digest !== initialProbeDigest) fail('the original Probe index is not retained by digest');
           for (const manifest of previousProbeIndex.manifests) {

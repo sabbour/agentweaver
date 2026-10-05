@@ -41,6 +41,12 @@ Any observed drift blocks publication. The additive replacement receipt records
 the old index, actual new digest, source, and user-confirmed baseline exception.
 The original index and platform manifests must remain readable by digest.
 Historical claims and receipts are never changed or removed.
+Native single-image descriptors can omit `schemaVersion`.
+In that case, the publisher reads the exact raw manifest bytes.
+Its SHA-256 digest, byte size, media type, and schema must match the descriptor.
+The receipt records the actual pushed digest before later verification steps.
+A later verification error retains that digest in a partial receipt.
+The permanent claim continues to block a second push.
 The pending patch records future ordinary release intent. No release plan or
 version bump runs for this initial replacement.
 The Broker and eight NuGet baselines remain unchanged.

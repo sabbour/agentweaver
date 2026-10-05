@@ -104,7 +104,8 @@ export async function deploy(config, {
       resources.some(resource => resource.type?.toLowerCase() !== 'microsoft.resources/deployments')) {
     throw new Error('Full foundation deployment is limited to an empty dedicated P0 resource group; use the AKS-only template to preserve existing resources.');
   }
-  const existingIdentityPostgres = (config.bootstrapIdentityPostgres || config.bootstrapFoundationProbePostgres) && source.scope === 'aks-only'
+  const existingIdentityPostgres = (config.bootstrapIdentityPostgres || config.bootstrapFoundationProbePostgres ||
+    config.bootstrapIdentityBrokerRuntime) && source.scope === 'aks-only'
     ? readExistingIdentityPostgresMetadata({ ...config, ...source }, boundAz)
     : undefined;
   operatorRoleAssignmentName = resolveClusterAdminRoleAssignmentName({ ...config, ...source }, boundAz);
@@ -275,8 +276,24 @@ export async function deploy(config, {
     }
   }
   let identityBrokerRuntime;
+  let identityPostgresRuntimeBootstrap;
   if (config.bootstrapIdentityBrokerRuntime) {
     try {
+      assertSourceUnchanged();
+      const target = existingIdentityPostgres ?? {
+        resources: deploymentReceipt.resources,
+        postgresEntraAdminPrincipalName: source.postgresEntraAdminPrincipalName,
+        identityBrokerRuntimeIdentity: deploymentReceipt.identityBrokerRuntimeIdentity,
+        identityBrokerMigrationIdentity: deploymentReceipt.identityBrokerMigrationIdentity,
+      };
+      identityPostgresRuntimeBootstrap = await initializeIdentityPostgres({
+        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId, tenantId: config.tenantId,
+        clusterName: `${config.resourceGroup}-aks`, postgresHost: target.resources.postgresHost,
+        adminUsername: target.postgresEntraAdminPrincipalName,
+        runtimePrincipalObjectId: target.identityBrokerRuntimeIdentity.principalObjectId,
+        migrationPrincipalObjectId: target.identityBrokerMigrationIdentity.principalObjectId,
+      });
       assertSourceUnchanged();
       identityBrokerRuntime = await initializeIdentityBrokerRuntime({
         repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
@@ -326,6 +343,7 @@ export async function deploy(config, {
     ...(identityBrokerState ? { identityBrokerState } : {}),
     ...(identityHostnameAlignment ? { identityHostnameAlignment } : {}),
     ...(identityBrokerRuntime ? { identityBrokerRuntime } : {}),
+    ...(identityPostgresRuntimeBootstrap ? { identityPostgresRuntimeBootstrap } : {}),
     ...(foundationProbeInputs ? { foundationProbeInputs } : {}),
     ...(foundationProbePostgresBootstrap ? { foundationProbePostgresBootstrap } : {}),
     ...deploymentReceipt } };

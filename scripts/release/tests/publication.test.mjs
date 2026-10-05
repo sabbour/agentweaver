@@ -413,6 +413,61 @@ test('old-platform retention failure records the actual new digest without claim
   assert.equal(receipt.initialProbeReplacement.originalIndexAndPlatformsRetained, undefined);
 });
 
+test('native single Docker V2 descriptors bind schema to exact raw bytes after push', t => {
+  const { f, options, native } = initialProbeFixture(t);
+  const raw = JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+    config: { digest: `sha256:${'a'.repeat(64)}`, size: 10 }, layers: [] });
+  const digest = `sha256:${createHash('sha256').update(raw).digest('hex')}`;
+  const receipt = f.publish({ ...options, run(bin, args) {
+    if (bin === 'docker' && args.includes('--raw')) return raw;
+    const output = native(bin, args);
+    if (bin === 'docker' && args[0] === 'buildx' && args[3] === probeTarget &&
+        JSON.parse(output).digest === `sha256:${'b'.repeat(64)}`) {
+      return JSON.stringify({ mediaType: JSON.parse(raw).mediaType, digest, size: Buffer.byteLength(raw) });
+    }
+    if (bin === 'docker' && args[0] === 'inspect' && !args.includes('{{json .Config}}')) {
+      return JSON.stringify([`ghcr.io/sabbour/agentweaver-foundation-probe@${digest}`]);
+    }
+    return output;
+  } });
+  assert.equal(receipt.status, 'published');
+  assert.equal(receipt.initialProbeReplacement.newDigest, digest);
+  assert.equal(receipt.initialProbeReplacement.originalIndexAndPlatformsRetained, true);
+  assert.equal(f.externalCalls.filter(call => call.args[0] === 'push').length, 1);
+});
+
+test('post-push raw digest, size, schema, and media-type failures retain the actual irreversible digest', t => {
+  for (const failure of ['digest', 'size', 'schema', 'media-type', 'read']) {
+    const { f, options, native } = initialProbeFixture(t);
+    const raw = JSON.stringify({ schemaVersion: failure === 'schema' ? 1 : 2,
+      mediaType: 'application/vnd.docker.distribution.manifest.v2+json', layers: [] });
+    const digest = `sha256:${createHash('sha256').update(raw).digest('hex')}`;
+    assert.throws(() => f.publish({ ...options, run(bin, args) {
+      if (bin === 'docker' && args.includes('--raw')) {
+        if (failure === 'read') throw new Error('Native post-push raw read failed');
+        return failure === 'digest' ? `${raw}\n` : raw;
+      }
+      const output = native(bin, args);
+      if (bin === 'docker' && args[0] === 'buildx' && args[3] === probeTarget &&
+          JSON.parse(output).digest === `sha256:${'b'.repeat(64)}`) {
+        return JSON.stringify({ mediaType: failure === 'media-type' ? 'foreign' : JSON.parse(raw).mediaType,
+          digest, size: Buffer.byteLength(raw) + (failure === 'size' ? 1 : 0) });
+      }
+      if (bin === 'docker' && args[0] === 'inspect' && !args.includes('{{json .Config}}')) {
+        return JSON.stringify([`ghcr.io/sabbour/agentweaver-foundation-probe@${digest}`]);
+      }
+      return output;
+    } }), /raw manifest|Native post-push raw read failed/);
+    const receipt = JSON.parse(readFileSync(path.join(f.outDir, 'publication.json'), 'utf8'));
+    assert.equal(receipt.status, 'partial');
+    assert.equal(receipt.initialProbeReplacement.newDigest, digest);
+    assert.equal(receipt.initialProbeReplacement.originalIndexAndPlatformsRetained, undefined);
+    assert.equal(f.externalCalls.filter(call => call.args[0] === 'push').length, 1);
+    assert.ok(f.refs.has(`refs/tags/${replacementNamespace}/claim`));
+    assert.throws(() => f.publish(options), /receipt already exists/);
+  }
+});
+
 test('manual publication records actual immutable registry digests and never changes draft composition', (t) => {
   const f = fixture(t);
   f.prepare();
