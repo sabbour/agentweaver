@@ -370,7 +370,10 @@ transport cleanup is reported and is not converted into a successful receipt.
 including the operator object ID, plus `--expected-sha` and `--deployment-name`.
 It checks the exact source-bound deployment, target
 ownership, observed AKS security settings, and exact workload-identity
-federation configuration. It rejects an AKS-only deployment receipt. These
+federation configuration. AKS-only collection also requires
+`--foundation-expected-sha` and the exact original full-foundation receipt.
+The current selected AKS issuer can differ from the historical foundation issuer.
+These
 configuration checks do not prove that a Job ran or exchanged a token.
 
 Successful deployment outputs include `foundationProbeIdentity` and `foundationResources`.
