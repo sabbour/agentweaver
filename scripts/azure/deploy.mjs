@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
+import { bootstrapP0Namespace } from './lib/namespace-bootstrap.mjs';
 import {
   AKS_RBAC_CLUSTER_ADMIN_ROLE_ID,
   armGuid,
@@ -34,7 +35,9 @@ export function buildDeployArgs({
     '--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json'];
 }
 
-export function deploy(config, { execAz = runAz, sourceResolver = resolveSource } = {}) {
+export function deploy(config, {
+  execAz = runAz, sourceResolver = resolveSource, bootstrapNamespace = bootstrapP0Namespace,
+} = {}) {
   assertDedicatedTarget(config.resourceGroup);
   assertSubscription(config.subscriptionId, config.allowedSubscriptionId);
   assertTenant(config.tenantId, config.allowedTenantId);
@@ -81,6 +84,9 @@ export function deploy(config, { execAz = runAz, sourceResolver = resolveSource 
   assertSourceUnchanged();
   const staleAssignmentId = findDanglingAksSubnetRoleAssignment(config, boundAz);
   if (staleAssignmentId) {
+    if (!config.allowStaleAksSubnetRoleCleanup) {
+      throw new Error('An exact stale AKS subnet role assignment was proven; pass --allow-stale-aks-subnet-role-cleanup to authorize its removal.');
+    }
     const cleanup = boundAz(['role', 'assignment', 'delete', '--ids', staleAssignmentId, '--yes', '-o', 'none'],
       { check: false });
     if (cleanup.status !== 0) throw new Error(`Exact stale AKS subnet role cleanup failed: ${cleanup.stderr}`);
@@ -120,6 +126,17 @@ export function deploy(config, { execAz = runAz, sourceResolver = resolveSource 
       operatorRoleAssignmentId: verifiedOperatorRoleAssignmentId,
       appRoutingDomain: outputs.appRoutingDomain?.value,
     };
+    try {
+      assertSourceUnchanged();
+      bootstrapNamespace({
+        resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId,
+        repoRoot: config.repoRoot,
+        clusterName: deploymentReceipt.clusterName,
+      });
+    } catch (error) {
+      throw new Error(`AKS infrastructure deployment succeeded, but namespace-only bootstrap failed: ${error.message}`);
+    }
   } else {
     deploymentReceipt = {
       ...readFoundationOutputs(outputs, { ...config, ...source }),
@@ -136,14 +153,17 @@ export function cliConfig(values) {
   return { resourceGroup: values['resource-group'], template: values.template, parametersFile: values.parameters,
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
-    operatorObjectId: values['operator-object-id'] };
+    operatorObjectId: values['operator-object-id'],
+    allowStaleAksSubnetRoleCleanup: values['allow-stale-aks-subnet-role-cleanup'] };
 }
 
 export const cliOptions = {
   'resource-group': { type: 'string' }, template: { type: 'string', default: 'infra/bicep/main.bicep' },
   parameters: { type: 'string' }, subscription: { type: 'string' }, 'allowed-subscription': { type: 'string' },
   tenant: { type: 'string' }, 'allowed-tenant': { type: 'string' },
-  'operator-object-id': { type: 'string' }, execute: { type: 'boolean', default: false },
+  'operator-object-id': { type: 'string' },
+  'allow-stale-aks-subnet-role-cleanup': { type: 'boolean', default: false },
+  execute: { type: 'boolean', default: false },
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

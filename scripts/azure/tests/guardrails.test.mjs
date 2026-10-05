@@ -162,7 +162,11 @@ test('the same populated layout reaches plan, redeploy and configuration accepta
     parametersFile: aksSource.parametersFile,
     operatorObjectId: aksSource.operatorObjectId,
     execute: true,
-  }, { sourceResolver: () => aksSource, execAz: fakeAzure(aksOnlyAzure) }).executed, true);
+  }, {
+    sourceResolver: () => aksSource,
+    execAz: fakeAzure(aksOnlyAzure),
+    bootstrapNamespace() {},
+  }).executed, true);
   const report = runAcceptance({ ...fixture, deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}` }, dependencies());
   assert.ok(!report.checks.some(check => check.name === 'target-and-source'));
   assert.equal(report.checks.find(check => check.name === 'target-inventory').status, 'passed');
