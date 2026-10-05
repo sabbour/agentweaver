@@ -14,8 +14,8 @@ const RUN_LABEL = 'agentweaver.io/task-run';
 const OWNER = 'identity-postgres-bootstrap';
 const LOCAL_PORT = 15432;
 const POSTGRES_PORT = 5432;
-const BROKER_IMAGE =
-  'ghcr.io/sabbour/agentweaver.identity.broker@sha256:c3758e2be89891728dcdb7c0f7704dc2b77737f846a42f0d58191848a31537f1';
+const PROXY_IMAGE =
+  'mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4';
 const BROKER_PROJECT = join('services', 'identity', 'Agentweaver.Identity.Broker', 'Agentweaver.Identity.Broker.csproj');
 const PROXY_PROJECT = join('tools', 'IdentityPostgresTcpProxy', 'IdentityPostgresTcpProxy.csproj');
 const SUCCESS_MARKERS = {
@@ -159,7 +159,7 @@ function buildProxy(repoRoot, outputDirectory, {
 } = {}) {
   const result = execDotnet([
     'publish', join(repoRoot, PROXY_PROJECT), '--configuration', 'Release',
-    '--output', outputDirectory, '--no-self-contained',
+    '--output', outputDirectory, '--no-self-contained', '--property:RestoreLockedMode=true',
   ], { check: false, cwd: repoRoot, timeout: 180_000 });
   assertCommand(result, 'Could not build the temporary PostgreSQL TCP proxy');
 }
@@ -266,7 +266,7 @@ export async function bootstrapIdentityPostgres({
         },
         containers: [{
           name: 'tcp-proxy',
-          image: BROKER_IMAGE,
+          image: PROXY_IMAGE,
           imagePullPolicy: 'IfNotPresent',
           command: ['dotnet', '/proxy/Relay.dll'],
           args: [postgresHost],
@@ -300,7 +300,7 @@ export async function bootstrapIdentityPostgres({
     ], { check: false, cwd: repoRoot, input: JSON.stringify(pod), timeout: 30_000 }),
     'Could not create the uniquely owned temporary PostgreSQL proxy Pod');
     const podReadback = ownedObject(execKubectl, kubeconfig, 'pod', podName, runId);
-    if (!podReadback || podReadback.spec?.containers?.[0]?.image !== BROKER_IMAGE)
+    if (!podReadback || podReadback.spec?.containers?.[0]?.image !== PROXY_IMAGE)
       throw new Error('Temporary PostgreSQL proxy Pod image readback differed from the pinned runtime.');
 
     assertCommand(execKubectl([
