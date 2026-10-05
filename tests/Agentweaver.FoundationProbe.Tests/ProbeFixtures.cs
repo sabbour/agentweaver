@@ -4,7 +4,10 @@ namespace Agentweaver.FoundationProbe.Tests;
 
 internal static class ProbeFixtures
 {
-    public static ProbeSource Source { get; } = new(new string('a', 40), new string('b', 40), new string('c', 64));
+    public static ProbeSource Source { get; } = new(
+        "a7e4fb318cd7339cbb32ef44b8685eb919b7df01",
+        "d8c15d05f0511c1f28f2acae0d90281c65d1ec5d",
+        "993178aa83383d3ec32367c31db7211b43114e8d5ae3e757b37711b93637f1b2");
 
     public static ProbeTarget Target() => new()
     {
@@ -15,9 +18,26 @@ internal static class ProbeFixtures
         TenantId = "22222222-2222-2222-2222-222222222222",
         ResourceGroup = "aw-v1-p0",
         ResourceGroupId = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0",
-        DeploymentName = $"aw-v1-p0-{Source.Sha[..12]}",
+        DeploymentName = "aw-v1-p0-aks-9b7da6e64dfd",
         DeploymentId =
-            $"/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.Resources/deployments/aw-v1-p0-{Source.Sha[..12]}",
+            "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.Resources/deployments/aw-v1-p0-aks-9b7da6e64dfd",
+        Infrastructure = new ProbeInfrastructure
+        {
+            Scope = "aks-only",
+            SourceSha = "9b7da6e64dfd733b69917b7e783c4107a5bf17dc",
+            SourceTree = "26122cb2d9fddc50a7aa7647e1de7719a8d43cb3",
+            SourceHash = "993178aa83383d3ec32367c31db7211b43114e8d5ae3e757b37711b93637f1b2",
+            Foundation = new ProbeFoundationDeployment
+            {
+                Scope = "infrastructure-only",
+                SourceSha = "f989c5c3457af84e2a0ffbbb7ab82f5ea07901ac",
+                SourceTree = "20d54d53867e091a62ed25b52681c53e49b0de05",
+                SourceHash = "993178aa83383d3ec32367c31db7211b43114e8d5ae3e757b37711b93637f1b2",
+                DeploymentName = "aw-v1-p0-f989c5c3457a",
+                DeploymentId =
+                    "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.Resources/deployments/aw-v1-p0-f989c5c3457a",
+            },
+        },
         AksOidcIssuerUrl = "https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/",
         FoundationProbeIdentity = new ProbeIdentity
         {

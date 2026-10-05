@@ -1,15 +1,25 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <ContainerUser>10001:10001</ContainerUser>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <Version>0.0.0</Version>
+    <Version>0.0.1</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
+    <ContainerRuntimeIdentifier>linux-x64</ContainerRuntimeIdentifier>
+    <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4</ContainerBaseImage>
     <ProbeSourceSha Condition="'$(ProbeSourceSha)' == ''">unbound</ProbeSourceSha>
     <ProbeSourceTree Condition="'$(ProbeSourceTree)' == ''">unbound</ProbeSourceTree>
     <ProbeInfrastructureHash Condition="'$(ProbeInfrastructureHash)' == ''">unbound</ProbeInfrastructureHash>
   </PropertyGroup>
+  <ItemGroup>
+    <ContainerAppCommand Include="dotnet" />
+    <ContainerAppCommand Include="Agentweaver.FoundationProbe.dll" />
+    <ContainerLabel Include="org.opencontainers.image.revision" Value="$(ProbeSourceSha)" />
+    <ContainerLabel Include="io.agentweaver.source-tree" Value="$(ProbeSourceTree)" />
+    <ContainerLabel Include="io.agentweaver.infrastructure-source-hash" Value="$(ProbeInfrastructureHash)" />
+  </ItemGroup>
   <ItemGroup>
     <AssemblyMetadata Include="Agentweaver.SourceSha" Value="$(ProbeSourceSha)" />
     <AssemblyMetadata Include="Agentweaver.SourceTree" Value="$(ProbeSourceTree)" />

@@ -5,7 +5,10 @@ import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
 import { bootstrapP0Namespace } from './lib/namespace-bootstrap.mjs';
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
-import { assertIdentityRoutingPlacement, bootstrapIdentityRouting } from './lib/identity-broker-routing.mjs';
+import { alignExistingP0BrokerHostname, assertIdentityRoutingPlacement, bootstrapIdentityRouting } from './lib/identity-broker-routing.mjs';
+import { bootstrapIdentityBrokerState } from './lib/identity-broker-state.mjs';
+import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime } from './lib/identity-broker-runtime.mjs';
+import { bootstrapFoundationProbeInputs } from './lib/foundation-probe-inputs.mjs';
 import {
   AKS_RBAC_CLUSTER_ADMIN_ROLE_ID,
   armGuid,
@@ -42,10 +45,19 @@ export async function deploy(config, {
   execAz = runAz, sourceResolver = resolveSource, bootstrapNamespace = bootstrapP0Namespace,
   initializeIdentityPostgres = bootstrapIdentityPostgres,
   initializeIdentityRouting = bootstrapIdentityRouting,
+  initializeIdentityBrokerState = bootstrapIdentityBrokerState,
+  alignIdentityBrokerHostname = alignExistingP0BrokerHostname,
+  initializeIdentityBrokerRuntime = bootstrapIdentityBrokerRuntime,
+  initializeFoundationProbeInputs = bootstrapFoundationProbeInputs,
 } = {}) {
   assertDedicatedTarget(config.resourceGroup);
   assertSubscription(config.subscriptionId, config.allowedSubscriptionId);
   assertTenant(config.tenantId, config.allowedTenantId);
+  if (config.bootstrapIdentityBrokerRuntime) {
+    assertBrokerRuntimeInputs({ ...config, clusterName: `${config.resourceGroup}-aks` });
+  } else if (config.acceptanceRunId || config.acceptanceRedirectUri || config.brokerImage) {
+    throw new Error('Broker runtime inputs require --bootstrap-identity-broker-runtime.');
+  }
   if (config.bootstrapIdentityRouting) {
     assertIdentityRoutingPlacement(config);
     if (!GUID_PATTERN.test(config.upstreamClientId ?? '')) {
@@ -57,7 +69,8 @@ export async function deploy(config, {
     if (config.confirmBrokerCallback && !config.registerBrokerCallback) {
       throw new Error('Callback confirmation requires --register-identity-broker-callback.');
     }
-  } else if (config.gatewayNamespace || config.gatewaySecurityPolicy || config.upstreamClientId ||
+  } else if (config.gatewayNamespace || config.gatewaySecurityPolicy ||
+      config.upstreamClientId && !config.bootstrapIdentityBrokerRuntime ||
       config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback) {
     throw new Error('Identity routing inputs require the separate --bootstrap-identity-routing option.');
   }
@@ -70,6 +83,11 @@ export async function deploy(config, {
   const summary = { ...source, resourceGroup: config.resourceGroup, deploymentName, args, executed: false,
     bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres),
     bootstrapIdentityRouting: Boolean(config.bootstrapIdentityRouting),
+    bootstrapIdentityBrokerState: Boolean(config.bootstrapIdentityBrokerState),
+    alignExistingIdentityBrokerHostname: Boolean(config.alignExistingIdentityBrokerHostname),
+    bootstrapIdentityBrokerRuntime: Boolean(config.bootstrapIdentityBrokerRuntime),
+    bootstrapFoundationProbeInputs: Boolean(config.bootstrapFoundationProbeInputs),
+    bootstrapFoundationProbePostgres: Boolean(config.bootstrapFoundationProbePostgres),
     ...(config.bootstrapIdentityRouting ? { identityRoutingPlan: {
       gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
       upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
@@ -86,7 +104,7 @@ export async function deploy(config, {
       resources.some(resource => resource.type?.toLowerCase() !== 'microsoft.resources/deployments')) {
     throw new Error('Full foundation deployment is limited to an empty dedicated P0 resource group; use the AKS-only template to preserve existing resources.');
   }
-  const existingIdentityPostgres = config.bootstrapIdentityPostgres && source.scope === 'aks-only'
+  const existingIdentityPostgres = (config.bootstrapIdentityPostgres || config.bootstrapFoundationProbePostgres) && source.scope === 'aks-only'
     ? readExistingIdentityPostgresMetadata({ ...config, ...source }, boundAz)
     : undefined;
   operatorRoleAssignmentName = resolveClusterAdminRoleAssignmentName({ ...config, ...source }, boundAz);
@@ -200,6 +218,90 @@ export async function deploy(config, {
       throw new Error(`Infrastructure deployment succeeded, but Identity PostgreSQL bootstrap failed: ${error.message}`);
     }
   }
+  let foundationProbePostgresBootstrap;
+  if (config.bootstrapFoundationProbePostgres) {
+    try {
+      assertSourceUnchanged();
+      const target = existingIdentityPostgres ?? {
+        resources: deploymentReceipt.resources,
+        postgresEntraAdminPrincipalName: source.postgresEntraAdminPrincipalName,
+        identityBrokerRuntimeIdentity: deploymentReceipt.identityBrokerRuntimeIdentity,
+        identityBrokerMigrationIdentity: deploymentReceipt.identityBrokerMigrationIdentity,
+      };
+      const probe = boundAz(['identity', 'show', '--resource-group', config.resourceGroup,
+        '--name', `${config.resourceGroup}-id-foundation-probe`, '-o', 'json'],
+      { check: false, projectJson: value => ({ id: value.id, principalId: value.principalId }), preserveProjectedJson: true });
+      if (probe.status !== 0) throw new Error(`Probe native identity lookup failed: ${probe.stderr}`);
+      const identity = JSON.parse(probe.stdout);
+      const expected = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${config.resourceGroup}-id-foundation-probe`;
+      if (identity.id?.toLowerCase() !== expected.toLowerCase() || !GUID_PATTERN.test(identity.principalId ?? '')) {
+        throw new Error('Probe PostgreSQL bootstrap requires the exact existing approved Probe principal.');
+      }
+      foundationProbePostgresBootstrap = await initializeIdentityPostgres({
+        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId, tenantId: config.tenantId,
+        clusterName: `${config.resourceGroup}-aks`, postgresHost: target.resources.postgresHost,
+        adminUsername: target.postgresEntraAdminPrincipalName,
+        runtimePrincipalObjectId: target.identityBrokerRuntimeIdentity.principalObjectId,
+        migrationPrincipalObjectId: target.identityBrokerMigrationIdentity.principalObjectId,
+        foundationProbePrincipalObjectId: identity.principalId,
+      });
+    } catch (error) {
+      throw new Error(`Infrastructure deployment succeeded, but Foundation Probe PostgreSQL bootstrap failed: ${error.message}`);
+    }
+  }
+  let identityHostnameAlignment;
+  if (config.alignExistingIdentityBrokerHostname) {
+    try {
+      assertSourceUnchanged();
+      identityHostnameAlignment = await alignIdentityBrokerHostname({
+        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId, clusterName: `${config.resourceGroup}-aks`,
+      });
+    } catch (error) {
+      throw new Error(`Infrastructure deployment succeeded, but existing P0 Identity hostname alignment failed: ${error.message}`);
+    }
+  }
+  let identityBrokerState;
+  if (config.bootstrapIdentityBrokerState) {
+    try {
+      assertSourceUnchanged();
+      identityBrokerState = await initializeIdentityBrokerState({
+        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId, clusterName: `${config.resourceGroup}-aks`,
+      });
+    } catch (error) {
+      throw new Error(`Infrastructure deployment succeeded, but initial Identity Broker state bootstrap failed: ${error.message}`);
+    }
+  }
+  let identityBrokerRuntime;
+  if (config.bootstrapIdentityBrokerRuntime) {
+    try {
+      assertSourceUnchanged();
+      identityBrokerRuntime = await initializeIdentityBrokerRuntime({
+        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId, tenantId: config.tenantId,
+        clusterName: `${config.resourceGroup}-aks`, upstreamClientId: config.upstreamClientId,
+        acceptanceRunId: config.acceptanceRunId, acceptanceRedirectUri: config.acceptanceRedirectUri,
+        brokerImage: config.brokerImage,
+      });
+    } catch (error) {
+      throw new Error(`Infrastructure deployment succeeded, but Identity Broker runtime setup failed: ${error.message}`);
+    }
+  }
+  let foundationProbeInputs;
+  if (config.bootstrapFoundationProbeInputs) {
+    try {
+      assertSourceUnchanged();
+      foundationProbeInputs = await initializeFoundationProbeInputs({
+        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId, tenantId: config.tenantId,
+        clusterName: `${config.resourceGroup}-aks`,
+      });
+    } catch (error) {
+      throw new Error(`Infrastructure deployment succeeded, but Foundation Probe input setup failed: ${error.message}`);
+    }
+  }
   let identityRouting;
   if (config.bootstrapIdentityRouting) {
     try {
@@ -221,6 +323,11 @@ export async function deploy(config, {
     resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id,
     ...(identityPostgresBootstrap ? { identityPostgresBootstrap } : {}),
     ...(identityRouting ? { identityRouting } : {}),
+    ...(identityBrokerState ? { identityBrokerState } : {}),
+    ...(identityHostnameAlignment ? { identityHostnameAlignment } : {}),
+    ...(identityBrokerRuntime ? { identityBrokerRuntime } : {}),
+    ...(foundationProbeInputs ? { foundationProbeInputs } : {}),
+    ...(foundationProbePostgresBootstrap ? { foundationProbePostgresBootstrap } : {}),
     ...deploymentReceipt } };
 }
 
@@ -232,6 +339,14 @@ export function cliConfig(values) {
     allowStaleAksSubnetRoleCleanup: values['allow-stale-aks-subnet-role-cleanup'],
     bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
     bootstrapIdentityRouting: values['bootstrap-identity-routing'] ?? false,
+    bootstrapIdentityBrokerState: values['bootstrap-identity-broker-state'] ?? false,
+    alignExistingIdentityBrokerHostname: values['align-existing-identity-broker-hostname'] ?? false,
+    bootstrapIdentityBrokerRuntime: values['bootstrap-identity-broker-runtime'] ?? false,
+    acceptanceRunId: values['identity-acceptance-run-id'],
+    acceptanceRedirectUri: values['identity-acceptance-redirect-uri'],
+    brokerImage: values['identity-broker-image'],
+    bootstrapFoundationProbeInputs: values['bootstrap-foundation-probe-inputs'] ?? false,
+    bootstrapFoundationProbePostgres: values['bootstrap-foundation-probe-postgres'] ?? false,
     gatewayNamespace: values['identity-gateway-namespace'],
     gatewaySecurityPolicy: values['identity-gateway-security-policy'],
     upstreamClientId: values['identity-upstream-client-id'],
@@ -248,6 +363,14 @@ export const cliOptions = {
   'allow-stale-aks-subnet-role-cleanup': { type: 'boolean', default: false },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },
   'bootstrap-identity-routing': { type: 'boolean', default: false },
+  'bootstrap-identity-broker-state': { type: 'boolean', default: false },
+  'align-existing-identity-broker-hostname': { type: 'boolean', default: false },
+  'bootstrap-identity-broker-runtime': { type: 'boolean', default: false },
+  'identity-acceptance-run-id': { type: 'string' },
+  'identity-acceptance-redirect-uri': { type: 'string' },
+  'identity-broker-image': { type: 'string' },
+  'bootstrap-foundation-probe-inputs': { type: 'boolean', default: false },
+  'bootstrap-foundation-probe-postgres': { type: 'boolean', default: false },
   'identity-gateway-namespace': { type: 'string' },
   'identity-gateway-security-policy': { type: 'string' },
   'identity-upstream-client-id': { type: 'string' },

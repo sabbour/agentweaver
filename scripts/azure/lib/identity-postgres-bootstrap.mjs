@@ -168,6 +168,7 @@ export async function bootstrapIdentityPostgres({
   repoRoot = process.cwd(), resourceGroup, subscriptionId, tenantId, clusterName,
   postgresHost, adminUsername, runtimePrincipalObjectId, migrationPrincipalObjectId,
   verifyOnly = false,
+  foundationProbePrincipalObjectId,
 }, {
   execAz = runAz,
   execKubelogin = (args, options) => run('kubelogin', args, options),
@@ -184,6 +185,12 @@ export async function bootstrapIdentityPostgres({
       !GUID_PATTERN.test(migrationPrincipalObjectId ?? '') ||
       runtimePrincipalObjectId.toLowerCase() === migrationPrincipalObjectId.toLowerCase()) {
     throw new Error('Identity PostgreSQL bootstrap requires the exact P0 AKS/PG target, Entra admin, and distinct workload identities.');
+  }
+  if (foundationProbePrincipalObjectId !== undefined &&
+      (!GUID_PATTERN.test(foundationProbePrincipalObjectId) || verifyOnly ||
+       [runtimePrincipalObjectId, migrationPrincipalObjectId].some(value =>
+         value.toLowerCase() === foundationProbePrincipalObjectId.toLowerCase()))) {
+    throw new Error('Probe PostgreSQL bootstrap requires its distinct exact native principal and cannot run Identity verification.');
   }
 
   const account = parseJson(
@@ -325,23 +332,32 @@ export async function bootstrapIdentityPostgres({
       IdentityBroker__Bootstrap__RuntimePrincipalObjectId: runtimePrincipalObjectId,
       IdentityBroker__Bootstrap__MigrationRole: `${resourceGroup}-id-identity-broker-migration`,
       IdentityBroker__Bootstrap__MigrationPrincipalObjectId: migrationPrincipalObjectId,
+      ...(foundationProbePrincipalObjectId
+        ? { FoundationProbe__Bootstrap__PrincipalObjectId: foundationProbePrincipalObjectId } : {}),
     };
     const mode = verifyOnly ? 'verify' : 'bootstrap';
-    const result = execDotnet([
+    const command = foundationProbePrincipalObjectId ? [
+      'run', '--file', join(repoRoot, 'scripts', 'azure', 'lib', 'bootstrap-probe-postgres.cs'),
+      '--verbosity', 'quiet', '--', '--execute',
+    ] : [
       'run', '--project', join(repoRoot, BROKER_PROJECT), '--no-launch-profile', '--',
       verifyOnly ? '--verify-identity-postgres-bootstrap' : '--bootstrap-identity-postgres',
-    ], { check: false, cwd: repoRoot, env, timeout: 300_000 });
+    ];
+    const result = execDotnet(command, { check: false, cwd: repoRoot, env, timeout: 300_000 });
     const output = [result.stderr, result.stdout].filter(Boolean).join('\n').trim();
-    if (result.status !== 0 || !result.stdout.includes(SUCCESS_MARKERS[mode]))
+    const marker = foundationProbePrincipalObjectId
+      ? 'FOUNDATION_PROBE_POSTGRES_BOOTSTRAP_OK database=agentweaver schema=foundation_probe' : SUCCESS_MARKERS[mode];
+    if (result.status !== 0 || !result.stdout.includes(marker))
       throw new Error(`Identity PostgreSQL ${mode} failed: ${redact(output || `dotnet exited with status ${result.status}`)}`);
     const privilegeReadback = result.stdout.split(/\r?\n/)
-      .find(line => line.startsWith('IDENTITY_POSTGRES_PRIVILEGES '));
+      .find(line => line.startsWith(foundationProbePrincipalObjectId
+        ? 'FOUNDATION_PROBE_POSTGRES_PRIVILEGES ' : 'IDENTITY_POSTGRES_PRIVILEGES '));
     if (!privilegeReadback)
       throw new Error('Identity PostgreSQL verification omitted the required privilege readback.');
 
     bootstrapReceipt = {
       database: 'agentweaver',
-      schema: 'identity_broker',
+      schema: foundationProbePrincipalObjectId ? 'foundation_probe' : 'identity_broker',
       verification: verifyOnly ? 'read-only' : 'bootstrap',
       privilegeReadback,
       proxyPod: podName,

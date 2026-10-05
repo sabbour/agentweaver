@@ -85,7 +85,7 @@ internal sealed class ProbeRunner(
             new ProbeDeploymentBinding(
                 target.SubscriptionId, target.TenantId, target.ResourceGroup, target.ResourceGroupId,
                 target.DeploymentName, target.DeploymentId, target.AksOidcIssuerUrl,
-                target.FoundationProbeIdentity, target.FoundationResources),
+                target.FoundationProbeIdentity, target.FoundationResources, target.Infrastructure),
             identity,
             monitorConfiguration,
             bindings,

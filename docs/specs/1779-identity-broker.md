@@ -8,6 +8,17 @@ It owns the `identity_broker` PostgreSQL schema and native OpenIddict stores.
 It requires an external OIDC provider, an HTTPS issuer, and explicit certificate material.
 It has no development certificate, ambient user-secrets ID, implicit principal, or local product-runtime mode.
 
+The guarded installer can create initial signing material and retained
+key-ring storage through a separate default-off operation.
+It never generates a fallback certificate during Broker startup.
+Existing material remains unchanged, and an orphaned key ring requires its
+original signing certificate.
+The installer can create an explicit run-owned public acceptance client with
+an HTTP loopback callback.
+It creates no upstream Entra application or credential.
+An intended route-derived issuer is configuration, not public routing or
+authorization acceptance.
+
 ## Authentication and grants
 
 The native OIDC handler completes token-response and nonce validation before it provisions a local user.

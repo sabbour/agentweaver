@@ -19,7 +19,8 @@ export function projectIdentityRoutingReadback(value) {
   const projected = {
     apiVersion: value?.apiVersion, kind: value?.kind,
     metadata: {
-      name: metadata?.name, namespace: metadata?.namespace, uid: metadata?.uid, generation: metadata?.generation,
+      name: metadata?.name, namespace: metadata?.namespace, uid: metadata?.uid,
+      resourceVersion: metadata?.resourceVersion, generation: metadata?.generation,
       labels: Object.fromEntries(Object.entries(metadata?.labels ?? {}).filter(([key]) =>
         ['agentweaver.io/environment', 'agentweaver.io/managed-by', 'agentweaver.io/workload',
           'agentweaver.io/service', 'pod-security.kubernetes.io/enforce',
@@ -143,6 +144,118 @@ export function managedBrokerHostname(certificate, namespace) {
   return `agentweaver.${domain.slice(2)}`;
 }
 
+export function observeExistingP0BrokerRouting({ certificate, gateway, route, backendPolicy }) {
+  const hostname = managedBrokerHostname(certificate, P0_NAMESPACE);
+  const permittedHosts = [hostname, hostname.replace(/^agentweaver\./, 'identity-broker.')];
+  const gatewayNamespace = route?.spec?.parentRefs?.[0]?.namespace;
+  if (gatewayNamespace !== GATEWAY_NAMESPACE) {
+    throw new Error('Existing P0 HTTPRoute does not identify the exact approved Gateway namespace.');
+  }
+  for (const [object, kind] of [[gateway, 'Gateway'], [route, 'HTTPRoute'], [backendPolicy, 'BackendTLSPolicy']]) {
+    assertObject(object, kind, kind === 'Gateway' ? gatewayNamespace : P0_NAMESPACE);
+    if (object.metadata.labels?.['agentweaver.io/service'] !== 'identity-broker' ||
+        !object.metadata.resourceVersion) throw new Error('Existing P0 routing object is not the exact owned version.');
+  }
+  const listener = gateway.spec?.listeners?.[0];
+  const reference = listener?.tls?.certificateRefs?.[0];
+  const namespaces = listener?.allowedRoutes?.namespaces;
+  const exactAttachment = namespaces?.from === 'Selector' &&
+      namespaces.selector?.matchLabels?.['kubernetes.io/metadata.name'] === P0_NAMESPACE &&
+      Object.keys(namespaces.selector.matchLabels).length === 1 &&
+      !namespaces.selector.matchExpressions?.length;
+  if (gateway.spec?.gatewayClassName !== 'approuting-istio' || gateway.spec.listeners?.length !== 1 ||
+      listener?.name !== 'https' || !permittedHosts.includes(listener.hostname) ||
+      listener.protocol !== 'HTTPS' || listener.port !== 443 || listener.tls?.mode !== 'Terminate' ||
+      listener.tls.certificateRefs?.length !== 1 || reference?.name !== 'identity-broker-tls' ||
+      (reference.kind ?? 'Secret') !== 'Secret' || (reference.group ?? '') !== '' ||
+      (reference.namespace ?? gatewayNamespace) !== gatewayNamespace || !exactAttachment) {
+    throw new Error('Existing P0 Gateway references or managed TLS configuration changed.');
+  }
+  const parent = route.spec?.parentRefs?.[0];
+  const rule = route.spec?.rules?.[0];
+  const backend = rule?.backendRefs?.[0];
+  const match = rule?.matches?.[0];
+  if (route.spec?.hostnames?.length !== 1 || !permittedHosts.includes(route.spec.hostnames[0]) ||
+      route.spec.parentRefs?.length !== 1 || !gatewayReference(parent, gatewayNamespace, P0_NAMESPACE) ||
+      parent.sectionName !== 'https' || route.spec.rules?.length !== 1 ||
+      rule.backendRefs?.length !== 1 || rule.filters?.length || backend?.filters?.length ||
+      backend?.name !== 'identity-broker' || (backend.namespace ?? P0_NAMESPACE) !== P0_NAMESPACE ||
+      (backend.kind ?? 'Service') !== 'Service' || (backend.group ?? '') !== '' || backend.port !== 443 ||
+      (backend.weight ?? 1) !== 1 || rule.matches?.length !== 1 ||
+      Object.keys(match ?? {}).length !== 1 || match?.path?.type !== 'PathPrefix' || match.path.value !== '/') {
+    throw new Error('Existing P0 HTTPRoute references or backend configuration changed.');
+  }
+  const target = backendPolicy.spec?.targetRefs?.[0];
+  const validation = backendPolicy.spec?.validation;
+  if (backendPolicy.spec?.targetRefs?.length !== 1 || target?.name !== 'identity-broker' ||
+      (target.kind ?? 'Service') !== 'Service' || (target.group ?? '') !== '' ||
+      (target.namespace ?? P0_NAMESPACE) !== P0_NAMESPACE || target.sectionName !== 'https' ||
+      !permittedHosts.includes(validation?.hostname) || validation.wellKnownCACertificates !== 'System' ||
+      validation.caCertificateRefs?.length || validation.subjectAltNames?.length) {
+    throw new Error('Existing P0 BackendTLSPolicy target or system trust configuration changed.');
+  }
+  return {
+    hostname,
+    issuer: `https://${route.spec.hostnames[0]}/`,
+    hostnameAligned: [listener.hostname, route.spec.hostnames[0], validation.hostname].every(value => value === hostname),
+    gatewayProgrammed: gateway.status?.conditions?.some(condition => condition.type === 'Programmed' &&
+      condition.status === 'True' && condition.observedGeneration === gateway.metadata.generation) ?? false,
+    gatewayNamespace,
+    configurationOnly: true,
+    runtimeVerified: false,
+  };
+}
+
+export function alignExistingP0BrokerHostname(config, {
+  withKubeconfig = withP0UserKubeconfig,
+  execKubectl = (args, options) => run('kubectl', args, options),
+} = {}) {
+  return withKubeconfig(config, base => {
+    const args = [...base, '--request-timeout=30s'];
+    function read(resource, namespace = P0_NAMESPACE) {
+      const result = execKubectl([...args, '--namespace', namespace, 'get', resource, 'identity-broker', '-o', 'json'], {
+        ...COMMAND_OPTIONS, projectJson: projectIdentityRoutingReadback, preserveProjectedJson: true,
+      });
+      if (result.status !== 0) throw new Error(`Existing P0 routing readback failed: ${redact(result.stderr)}`);
+      return JSON.parse(result.stdout);
+    }
+    const certificate = read('defaultdomaincertificate');
+    const route = read('httproute');
+    const gatewayNamespace = route?.spec?.parentRefs?.[0]?.namespace;
+    if (gatewayNamespace !== GATEWAY_NAMESPACE) {
+      throw new Error('Existing P0 HTTPRoute does not identify the exact approved Gateway namespace.');
+    }
+    const gateway = read('gateway', gatewayNamespace);
+    const backendPolicy = read('backendtlspolicy');
+    const observed = observeExistingP0BrokerRouting({ certificate, gateway, route, backendPolicy });
+    const updates = [
+      ['gateway', gateway, '/spec/listeners/0/hostname', gateway.spec.listeners[0].hostname, observed.hostname],
+      ['httproute', route, '/spec/hostnames', route.spec.hostnames, [observed.hostname]],
+      ['backendtlspolicy', backendPolicy, '/spec/validation/hostname', backendPolicy.spec.validation.hostname, observed.hostname],
+    ];
+    let changed = false;
+    for (const [resource, object, path, current, value] of updates) {
+      if (JSON.stringify(current) === JSON.stringify(value)) continue;
+      const patch = [
+        { op: 'test', path: '/metadata/uid', value: object.metadata.uid },
+        { op: 'test', path: '/metadata/resourceVersion', value: object.metadata.resourceVersion },
+        { op: 'test', path, value: current },
+        { op: 'replace', path, value },
+      ];
+      const result = execKubectl([...args, '--namespace', object.metadata.namespace, 'patch', resource, 'identity-broker', '--type=json',
+        '--patch', JSON.stringify(patch), '-o', 'name'], COMMAND_OPTIONS);
+      if (result.status !== 0) throw new Error(`Existing P0 hostname alignment failed for ${resource}: ${redact(result.stderr)}`);
+      changed = true;
+    }
+    const receipt = observeExistingP0BrokerRouting({
+      certificate: read('defaultdomaincertificate'), gateway: read('gateway', gatewayNamespace),
+      route: read('httproute'), backendPolicy: read('backendtlspolicy'),
+    });
+    if (!receipt.hostnameAligned) throw new Error('Existing P0 hostname alignment did not read back the exact native hostname.');
+    return { ...receipt, changed, routingBlocked: !receipt.gatewayProgrammed };
+  });
+}
+
 function gatewayReference(reference, gatewayNamespace, objectNamespace) {
   return reference?.name === 'identity-broker' &&
     (reference.namespace ?? objectNamespace) === gatewayNamespace &&
@@ -210,8 +323,16 @@ export function deriveIdentityRouting({ gatewayCertificate, brokerCertificate, g
       backendPolicy.spec.validation.subjectAltNames?.length) {
     throw new Error('Broker backend TLS must use the exact route hostname and system certificate trust.');
   }
-  const ancestor = backendPolicy.status?.ancestors?.find(item => item.controllerName === CONTROLLER &&
-    gatewayReference(item.ancestorRef, GATEWAY_NAMESPACE, P0_NAMESPACE));
+  const managedAncestors = backendPolicy.status?.ancestors?.filter(item => item.controllerName === CONTROLLER);
+  const ancestorReference = managedAncestors?.length === 1 ? managedAncestors[0].ancestorRef : undefined;
+  // AKS may omit this status namespace; bind it to the independently verified route parent.
+  const scopedAncestorReference = {
+    ...ancestorReference, namespace: ancestorReference?.namespace ?? parent.parentRef.namespace,
+  };
+  const ancestor = managedAncestors?.length === 1 &&
+    gatewayReference(scopedAncestorReference, gateway.metadata.namespace, P0_NAMESPACE) &&
+    (ancestorReference?.sectionName === undefined || ancestorReference.sectionName === parent.parentRef.sectionName)
+    ? managedAncestors[0] : undefined;
   requireConditions(backendPolicy, ancestor?.conditions, ['Accepted', 'ResolvedRefs']);
   const addresses = gateway.status?.addresses?.filter(item => item.type === 'IPAddress' && isIP(item.value))
     .map(item => item.value);
@@ -255,7 +376,7 @@ export function registerPublicBrokerCallback(plan, config, { execAz = runAz } = 
       config.upstreamClientId !== plan.clientId) {
     throw new Error('Callback registration requires confirmation of the exact route-derived URI and selected tenant/application.');
   }
-  const account = execAz(['account', 'show', '--subscription', config.subscriptionId,
+  const account = execAz(['account', 'show',
     '--query', '{id:id,tenantId:tenantId}', '-o', 'json'], COMMAND_OPTIONS);
   if (account.status !== 0) throw new Error(`Callback account read failed: ${redact(account.stderr)}`);
   const selected = JSON.parse(account.stdout);
@@ -264,7 +385,7 @@ export function registerPublicBrokerCallback(plan, config, { execAz = runAz } = 
     throw new Error('Callback registration selected account/tenant changed; refusing an application write.');
   }
   function readApplication() {
-    const result = execAz(['ad', 'app', 'show', '--id', plan.clientId, '--subscription', config.subscriptionId,
+    const result = execAz(['ad', 'app', 'show', '--id', plan.clientId,
       '--query', '{id:id,appId:appId,publicClient:publicClient}', '-o', 'json'], {
       ...COMMAND_OPTIONS, projectJson: projectPublicApplication, preserveProjectedJson: true,
     });
@@ -322,6 +443,17 @@ export function bootstrapIdentityRouting(config, {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.upstreamClientId ?? '')) {
     throw new Error('Identity routing requires the exact upstream public application client ID.');
   }
+  const account = execAz(['account', 'show', '-o', 'json'], {
+    ...COMMAND_OPTIONS,
+    projectJson: value => ({ id: value.id, tenantId: value.tenantId, state: value.state }),
+    preserveProjectedJson: true,
+  });
+  if (account.status !== 0) throw new Error(`Routing account read failed: ${redact(account.stderr)}`);
+  const selected = JSON.parse(account.stdout);
+  if (selected.id?.toLowerCase() !== config.subscriptionId.toLowerCase() ||
+      selected.tenantId?.toLowerCase() !== config.tenantId.toLowerCase() || selected.state !== 'Enabled') {
+    throw new Error('Identity routing selected account/tenant changed; refusing native routing changes.');
+  }
   return withP0UserKubeconfig(config, baseArgs => {
     function command(args, options = {}) {
       const result = execKubectl([...baseArgs, '--request-timeout=30s', ...args], {
@@ -362,7 +494,6 @@ export function bootstrapIdentityRouting(config, {
     }
     requireConditions(gatewayClass, gatewayClass.status?.conditions, ['Accepted']);
     const application = execAz(['ad', 'app', 'show', '--id', config.upstreamClientId,
-      '--subscription', config.subscriptionId,
       '--query', '{id:id,appId:appId,publicClient:publicClient}', '-o', 'json'], {
       ...COMMAND_OPTIONS, projectJson: projectPublicApplication, preserveProjectedJson: true,
     });
@@ -429,6 +560,15 @@ export function bootstrapIdentityRouting(config, {
       for (const condition of ['Accepted', 'ResolvedRefs']) {
         command(['wait',
           `--for=jsonpath={.status.${field}[?(@.controllerName=="${CONTROLLER}")].conditions[?(@.type=="${condition}")].status}=True`,
+          `${kind}/identity-broker`, '--namespace', P0_NAMESPACE, '--timeout=180s'], { timeout: 190_000 });
+      }
+      const generation = read(kind, P0_NAMESPACE).metadata?.generation;
+      if (!Number.isInteger(generation) || generation < 1) {
+        throw new Error(`${kind} has no current native generation.`);
+      }
+      for (const condition of ['Accepted', 'ResolvedRefs']) {
+        command(['wait',
+          `--for=jsonpath={.status.${field}[?(@.controllerName=="${CONTROLLER}")].conditions[?(@.type=="${condition}")].observedGeneration}=${generation}`,
           `${kind}/identity-broker`, '--namespace', P0_NAMESPACE, '--timeout=180s'], { timeout: 190_000 });
       }
     }

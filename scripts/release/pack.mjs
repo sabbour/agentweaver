@@ -9,9 +9,14 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync,
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateFile } from './validate.mjs';
+import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sha = /^[a-f0-9]{40}$/;
+
+export function componentImageRepository(componentId) {
+  return componentId === 'Agentweaver.FoundationProbe' ? 'agentweaver-foundation-probe' : componentId.toLowerCase();
+}
 
 function fail(location, message) {
   throw new Error(`${location}: ${message}`);
@@ -71,9 +76,13 @@ export function packComponents(manifest, {
   now = () => new Date(),
   outDir,
   packagesOnly = false,
+  foundationProbeOnly = false,
 } = {}) {
   if (typeof outDir !== 'string' || outDir.trim() === '') fail('outDir', 'expected an output directory path');
-  const components = packagesOnly
+  if (packagesOnly && foundationProbeOnly) fail('selection', 'package-only and Foundation Probe-only preparation are mutually exclusive');
+  const components = foundationProbeOnly
+    ? manifest.components.filter(component => component.id === 'Agentweaver.FoundationProbe' && component.kind === 'service')
+    : packagesOnly
     ? manifest.components.filter((component) => component.kind !== 'service')
     : manifest.components;
   if (components.length === 0) fail('manifest.components', 'no components to prepare');
@@ -84,6 +93,9 @@ export function packComponents(manifest, {
   const sourceSha = git('rev-parse', 'HEAD');
   if (!sha.test(sourceSha)) fail('git', 'cannot resolve a full 40-character commit SHA for HEAD');
   if (manifest.stage === 'release' && manifest.evidence.sourceSha !== sourceSha) fail('manifest.evidence', 'released composition evidence must match preparation HEAD');
+  const probeSource = components.some(component => component.id === 'Agentweaver.FoundationProbe')
+    ? resolveProbeImageSource({ repoRoot: root, readFile }) : undefined;
+  if (probeSource && probeSource.sourceSha !== sourceSha) fail('git', 'Probe image source changed before preparation');
   const expectedArtifacts = new Map();
   const locks = new Map();
   for (const component of components) {
@@ -102,7 +114,7 @@ export function packComponents(manifest, {
         fail(component.project, 'service preparation requires exactly one active explicit immutable ContainerBaseImage digest in the project');
       }
       expectedArtifacts.set(`${component.id}.${component.version}.tar.gz`, {
-        componentId: component.id, kind: 'image', repository: component.id.toLowerCase(), tag: component.version, baseImage,
+        componentId: component.id, kind: 'image', repository: componentImageRepository(component.id), tag: component.version, baseImage,
       });
     } else {
       expectedArtifacts.set(`${path.basename(component.project, '.csproj')}.${component.version}.nupkg`, { componentId: component.id, kind: 'package' });
@@ -119,17 +131,22 @@ export function packComponents(manifest, {
     const project = path.resolve(root, component.project);
     const image = [...expectedArtifacts.values()].find((artifact) => artifact.componentId === component.id && artifact.kind === 'image');
     const baseImageArgs = image ? [`-p:ContainerBaseImage=${image.baseImage}`] : [];
+    const probeSourceArgs = component.id === 'Agentweaver.FoundationProbe' ? [
+      `-p:ProbeSourceSha=${probeSource.sourceSha}`,
+      `-p:ProbeSourceTree=${probeSource.sourceTree}`,
+      `-p:ProbeInfrastructureHash=${probeSource.sourceHash}`,
+    ] : [];
     dotnet(['restore', project, '--locked-mode']);
     dotnet(['build', project, '--configuration', 'Release', '--no-restore',
-      '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`, ...baseImageArgs]);
+      '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`, ...baseImageArgs, ...probeSourceArgs]);
     const projectStem = path.basename(component.project, '.csproj');
     const expectedFile = component.kind === 'service'
       ? `${component.id}.${component.version}.tar.gz` : `${projectStem}.${component.version}.nupkg`;
     if (component.kind === 'service') {
       dotnet(['publish', project, '--configuration', 'Release', '--no-restore', '-t:PublishContainer',
         '-p:EnableSdkContainerSupport=true', '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`,
-        ...baseImageArgs,
-        `-p:ContainerRepository=${component.id.toLowerCase()}`, `-p:ContainerImageTag=${component.version}`,
+        ...baseImageArgs, ...probeSourceArgs,
+        `-p:ContainerRepository=${image.repository}`, `-p:ContainerImageTag=${component.version}`,
         `-p:ContainerArchiveOutputPath=${path.join(resolvedOutDir, expectedFile)}`]);
     } else {
       dotnet(['pack', project, '--configuration', 'Release', '--no-build', '--no-restore', '--output', resolvedOutDir,
@@ -203,10 +220,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const outIndex = args.indexOf('--out');
     const out = outIndex >= 0 ? args[outIndex + 1] : 'artifacts/release/pack';
     const packagesOnly = args.includes('--packages-only');
+    const foundationProbeOnly = args.includes('--foundation-probe-only');
     if (!manifestArg || (outIndex >= 0 && !args[outIndex + 1])) {
-      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only] [--out <dir>]');
+      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --foundation-probe-only] [--out <dir>]');
     }
-    const provenance = packComponentsFromFile(manifestArg, { root: repositoryRoot, outDir: out, packagesOnly });
+    const provenance = packComponentsFromFile(manifestArg, { root: repositoryRoot, outDir: out, packagesOnly, foundationProbeOnly });
     console.log(`Packed ${provenance.components.length} component(s) at source ${provenance.sourceSha} into ${out}`);
     for (const artifact of provenance.artifacts) {
       console.log(`  ${artifact.path} (${artifact.sha256})`);

@@ -42,6 +42,7 @@ export const deploymentOutputs = {
   clusterId: { value: `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks` },
   controlPlanePrincipalId: { value: '66666666-6666-4666-8666-666666666666' },
   oidcIssuerUrl: { value: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/' },
+  aksOidcIssuerUrl: { value: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/' },
   monitorWorkspaceId: { value: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
   foundationProbeIdentity: { value: {
     name: 'foundation-probe', resourceId: `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-foundation-probe`,

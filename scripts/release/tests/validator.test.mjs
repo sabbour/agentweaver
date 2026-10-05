@@ -9,6 +9,10 @@ import { validateFile, validateManifest } from '../validate.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const fixture = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
 const projectReferences = new Map([
+  ['Agentweaver.FoundationProbe', ['Agentweaver.Abstractions', 'Agentweaver.Providers',
+    'Agentweaver.Persistence.Postgres', 'Agentweaver.Secrets.AzureKeyVault',
+    'Agentweaver.ObjectStore.AzureBlob', 'Agentweaver.Telemetry.AzureMonitor']
+    .map(id => `..\\..\\packages\\${id}\\${id}.csproj`)],
   ['Agentweaver.Providers', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.Secrets.AzureKeyVault', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.Identity', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
@@ -44,6 +48,16 @@ const nextPatchVersion = (version) => {
 
 test('the checked-in draft composition has a valid shape and references', () => {
   assert.equal(check(fixture).stage, 'draft');
+});
+
+test('the acceptance-only Probe is tracked as its exact image artifact, not an arbitrary tools project', () => {
+  const probe = fixture.components.find(component => component.id === 'Agentweaver.FoundationProbe');
+  assert.equal(probe.kind, 'service');
+  assert.equal(probe.version, '0.0.1');
+  assert.equal(probe.project, 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj');
+  assert.throws(() => check(edit(manifest => {
+    manifest.components.find(component => component.id === probe.id).project = 'tools/Other/Other.csproj';
+  })), /safe services/);
 });
 
 test('the initial P0 NuGet baseline contains exactly the eight packages at 0.0.0', () => {

@@ -39,6 +39,7 @@ function version(value, location) {
 }
 
 function projectPath(value, kind, location) {
+  if (kind === 'service' && value === 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj') return;
   const prefix = kind === 'service' ? 'services' : 'packages';
   if (typeof value !== 'string' || !new RegExp(`^${prefix}/[A-Za-z0-9./-]+\\.csproj$`).test(value) ||
       value.split('/').some((part) => part === '.' || part === '..' || part === '')) {

@@ -178,6 +178,101 @@ test('read-only verification uses only the verify command and cleans its exact t
   assert.equal(receipt.cleanup.configMapRemoved, true);
 });
 
+test('Probe bootstrap reuses the owned transport without executing the Broker bootstrap', async () => {
+  const principal = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const fakes = dependencies({
+    dotnetResult: ok(
+      'FOUNDATION_PROBE_POSTGRES_PRIVILEGES database=agentweaver schema=foundation_probe\n' +
+      'FOUNDATION_PROBE_POSTGRES_BOOTSTRAP_OK database=agentweaver schema=foundation_probe\n'),
+  });
+  const receipt = await bootstrapIdentityPostgres({
+    ...options, foundationProbePrincipalObjectId: principal,
+  }, fakes.deps);
+
+  assert.equal(receipt.database, 'agentweaver');
+  assert.equal(receipt.schema, 'foundation_probe');
+  assert.equal(receipt.verification, 'bootstrap');
+  assert.match(receipt.privilegeReadback, /^FOUNDATION_PROBE_POSTGRES_PRIVILEGES /);
+  assert.deepEqual(receipt.cleanup, {
+    portForwardStopped: true,
+    podRemoved: true,
+    configMapRemoved: true,
+    kubeconfigRemoved: true,
+    proxyFilesRemoved: true,
+  });
+  assert.deepEqual(fakes.resources, new Map());
+  const { args, settings } = fakes.dotnetInvocation;
+  assert.ok(args.includes('--file'));
+  assert.ok(args.some(value => /bootstrap-probe-postgres\.cs$/.test(value)));
+  assert.ok(args.includes('--execute'));
+  assert.ok(!args.includes('--bootstrap-identity-postgres'));
+  assert.ok(!args.includes('--verify-identity-postgres-bootstrap'));
+  assert.equal(settings.env.FoundationProbe__Bootstrap__PrincipalObjectId, principal);
+  assert.equal(settings.env.ConnectionStrings__IdentityBrokerBootstrap,
+    'Host=127.0.0.1;Port=15432;Database=postgres;SSL Mode=VerifyFull');
+  assert.equal(settings.env.IdentityBroker__Bootstrap__PostgresHost, options.postgresHost);
+  assert.equal(fakes.portForwardOptions.localPort, 15432);
+  assert.equal(fakes.portForwardStopped, true);
+  assert.equal(existsSync(dirname(fakes.pathNames[0])), false);
+});
+
+test('Probe bootstrap rejects reused principals and Identity verification before creating transport', async () => {
+  for (const input of [
+    { foundationProbePrincipalObjectId: options.runtimePrincipalObjectId.toUpperCase() },
+    { foundationProbePrincipalObjectId: options.migrationPrincipalObjectId },
+    { foundationProbePrincipalObjectId: 'not-a-principal' },
+    { foundationProbePrincipalObjectId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', verifyOnly: true },
+  ]) {
+    const fakes = dependencies();
+    await assert.rejects(bootstrapIdentityPostgres({ ...options, ...input }, fakes.deps),
+      /distinct exact native principal/);
+    assert.equal(fakes.calls.length, 0);
+    assert.equal(fakes.dotnetInvocation, undefined);
+  }
+});
+
+test('Probe bootstrap rejects missing native privilege evidence and cleans transport', async () => {
+  const fakes = dependencies({
+    dotnetResult: ok('FOUNDATION_PROBE_POSTGRES_BOOTSTRAP_OK database=agentweaver schema=foundation_probe\n'),
+  });
+  await assert.rejects(bootstrapIdentityPostgres({
+    ...options, foundationProbePrincipalObjectId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  }, fakes.deps), /omitted the required privilege readback/);
+  assert.deepEqual(fakes.resources, new Map());
+  assert.equal(fakes.portForwardStopped, true);
+});
+
+test('Probe operator fixture reuses the canonical domain and embedded persistence migrations with DML-only grants', () => {
+  const bootstrap = readFileSync(new URL('../lib/bootstrap-probe-postgres.cs', import.meta.url), 'utf8');
+  assert.ok(bootstrap.includes('"tools", "Agentweaver.FoundationProbe", "schema", "001_probe_effects.sql"'));
+  assert.ok(bootstrap.includes('"001_outbox.sql", "002_consumer_inbox.sql"'));
+  assert.ok(bootstrap.includes('SslMode = SslMode.VerifyFull'));
+  assert.ok(bootstrap.includes('options.TargetHost = host'));
+  assert.ok(bootstrap.includes('pgaadauth_create_principal_with_oid'));
+  assert.ok(bootstrap.includes("array_agg(version ORDER BY version) = ARRAY[1, 2]"));
+  assert.ok(bootstrap.includes("NOT has_schema_privilege('foundation_probe_runtime', 'identity_broker', 'USAGE')"));
+  assert.ok(!bootstrap.includes('CREATE TABLE foundation_probe.probe_effects'));
+  assert.ok(!bootstrap.includes('DefaultAzureCredential'));
+  const domain = readFileSync(new URL('../../../tools/Agentweaver.FoundationProbe/schema/001_probe_effects.sql',
+    import.meta.url), 'utf8');
+  for (const column of ['effect_id uuid', 'nonce char(32)', 'source_sha char(40)', 'source_tree char(40)', 'runtime_role name']) {
+    assert.ok(domain.includes(column), `canonical domain column ${column}`);
+  }
+  assert.ok(domain.includes('GRANT SELECT, INSERT'));
+  assert.ok(!bootstrap.includes('await Execute(effectsSql);'));
+  assert.ok(bootstrap.includes('transactionStatements.Count != 2'));
+  assert.ok(bootstrap.includes('await Execute(Regex.Replace(effectsSql'));
+  const envelope = domain.match(/^(BEGIN|COMMIT);\r?$/gm);
+  assert.deepEqual(envelope?.map(line => line.trim()), ['BEGIN;', 'COMMIT;']);
+  const body = domain.replace(/^(BEGIN|COMMIT);\r?$/gm, '');
+  assert.ok(!/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/im.test(body));
+  for (const file of ['001_outbox.sql', '002_consumer_inbox.sql']) {
+    const embedded = readFileSync(new URL(
+      `../../../packages/Agentweaver.Persistence.Postgres/Migrations/${file}`, import.meta.url), 'utf8');
+    assert.ok(!/^\s*(BEGIN|COMMIT|ROLLBACK)\s*;/im.test(embedded));
+  }
+});
+
 test('reports bootstrap failure after stopping the tunnel and cleaning only run-owned resources', async () => {
   const fakes = dependencies({
     dotnetResult: { status: 1, stdout: '', stderr: 'PostgreSQL connection refused' },

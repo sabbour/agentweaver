@@ -134,7 +134,12 @@ function checkKubernetesTarget(kubeConfig, kubeContext, cluster) {
 
 const targetKeys = [
   'sourceSha', 'sourceTree', 'sourceHash', 'subscriptionId', 'tenantId', 'resourceGroup', 'resourceGroupId',
-  'deploymentName', 'deploymentId', 'aksOidcIssuerUrl', 'foundationProbeIdentity', 'foundationResources', 'runtime',
+  'deploymentName', 'deploymentId', 'infrastructure', 'aksOidcIssuerUrl', 'foundationProbeIdentity',
+  'foundationResources', 'runtime',
+];
+const infrastructureKeys = ['scope', 'sourceSha', 'sourceTree', 'sourceHash', 'foundation'];
+const foundationDeploymentKeys = [
+  'scope', 'sourceSha', 'sourceTree', 'sourceHash', 'deploymentName', 'deploymentId',
 ];
 const identityKeys = ['name', 'resourceId', 'clientId', 'principalObjectId', 'namespace', 'serviceAccount'];
 const resourceKeys = [
@@ -143,16 +148,30 @@ const resourceKeys = [
 ];
 const runtimeKeys = ['databaseName', 'databaseRole', 'schemaName', 'keyVaultSecretName', 'keyVaultSecretVersion'];
 
-function targetMatchesSourceAndDeployment(target, source, deployment) {
+function sameFoundationDeployment(actual, expected) {
+  return hasExactKeys(actual, foundationDeploymentKeys) && isObject(expected) &&
+    actual.scope === expected.scope && actual.sourceSha === expected.sourceSha &&
+    actual.sourceTree === expected.sourceTree && actual.sourceHash === expected.sourceHash &&
+    actual.deploymentName === expected.deploymentName &&
+    sameResourceId(actual.deploymentId, expected.deploymentId);
+}
+
+function targetMatchesSourceAndDeployment(target, imageSource, deployment) {
   const identity = deployment?.foundationProbeIdentity;
   const resources = deployment?.resources;
-  return target.sourceSha === source.sha && target.sourceTree === source.sourceTree &&
-    target.sourceHash === source.sourceHash &&
+  return target.sourceSha === imageSource.sha && target.sourceTree === imageSource.sourceTree &&
+    target.sourceHash === imageSource.sourceHash &&
     sameResourceId(target.subscriptionId, deployment.subscriptionId) &&
     sameResourceId(target.tenantId, deployment.tenantId) &&
     target.resourceGroup === deployment.resourceGroup &&
     sameResourceId(target.resourceGroupId, deployment.resourceGroupId) &&
     target.deploymentName === deployment.deploymentName && sameResourceId(target.deploymentId, deployment.deploymentId) &&
+    hasExactKeys(target.infrastructure, infrastructureKeys) &&
+    target.infrastructure.scope === deployment.scope &&
+    target.infrastructure.sourceSha === deployment.sourceSha &&
+    target.infrastructure.sourceTree === deployment.sourceTree &&
+    target.infrastructure.sourceHash === deployment.sourceHash &&
+    sameFoundationDeployment(target.infrastructure.foundation, deployment.foundation) &&
     target.aksOidcIssuerUrl === deployment.aksOidcIssuerUrl &&
     sameIdentity(target.foundationProbeIdentity, identity) &&
     resourceKeys.every(key => {
@@ -163,17 +182,38 @@ function targetMatchesSourceAndDeployment(target, source, deployment) {
     });
 }
 
-function validateTarget(target, source, deployment) {
+function validateTarget(target, imageSource, deployment) {
   if (!hasExactKeys(target, targetKeys) ||
+      !hasExactKeys(target.infrastructure, infrastructureKeys) ||
+      !hasExactKeys(target.infrastructure.foundation, foundationDeploymentKeys) ||
       !hasExactKeys(target.foundationProbeIdentity, identityKeys) ||
       !hasExactKeys(target.foundationResources, resourceKeys) ||
       !hasExactKeys(target.runtime, runtimeKeys)) {
     throw new Error('Observed probe target does not match the strict #1784 target shape.');
   }
+  const infrastructure = target.infrastructure;
+  const foundation = infrastructure.foundation;
+  const nativeNamePrefix = infrastructure.scope === 'aks-only'
+    ? `${target.resourceGroup}-aks` : `${target.resourceGroup}`;
   if (!fullSha.test(target.sourceSha ?? '') || !fullSha.test(target.sourceTree ?? '') ||
       !fullHash.test(target.sourceHash ?? '') || !guid.test(target.subscriptionId ?? '') ||
       !guid.test(target.tenantId ?? '') || target.resourceGroup !== 'aw-v1-p0' ||
-      target.deploymentName !== `${target.resourceGroup}-${target.sourceSha.slice(0, 12)}` ||
+      !['aks-only', 'infrastructure-only'].includes(infrastructure.scope) ||
+      !fullSha.test(infrastructure.sourceSha ?? '') || !fullSha.test(infrastructure.sourceTree ?? '') ||
+      !fullHash.test(infrastructure.sourceHash ?? '') ||
+      target.deploymentName !== `${nativeNamePrefix}-${infrastructure.sourceSha.slice(0, 12)}` ||
+      foundation.scope !== 'infrastructure-only' ||
+      !fullSha.test(foundation.sourceSha ?? '') || !fullSha.test(foundation.sourceTree ?? '') ||
+      !fullHash.test(foundation.sourceHash ?? '') ||
+      foundation.deploymentName !== `${target.resourceGroup}-${foundation.sourceSha.slice(0, 12)}` ||
+      !sameResourceId(foundation.deploymentId,
+        `${target.resourceGroupId}/providers/Microsoft.Resources/deployments/${foundation.deploymentName}`) ||
+      infrastructure.scope === 'infrastructure-only' &&
+        (infrastructure.sourceSha !== foundation.sourceSha || infrastructure.sourceTree !== foundation.sourceTree ||
+          infrastructure.sourceHash !== foundation.sourceHash || target.deploymentName !== foundation.deploymentName ||
+          !sameResourceId(target.deploymentId, foundation.deploymentId)) ||
+      !sameResourceId(target.deploymentId,
+        `${target.resourceGroupId}/providers/Microsoft.Resources/deployments/${target.deploymentName}`) ||
       !validIssuer(target.aksOidcIssuerUrl) ||
       !/^[a-z][a-z0-9_]{0,62}$/.test(target.runtime.databaseName ?? '') ||
       target.runtime.databaseRole !== 'foundation_probe_runtime' ||
@@ -182,13 +222,13 @@ function validateTarget(target, source, deployment) {
       !noncePattern.test(target.runtime.keyVaultSecretVersion ?? '')) {
     throw new Error('Observed probe target has invalid or unsupported source/runtime values.');
   }
-  if (!targetMatchesSourceAndDeployment(target, source, deployment)) {
+  if (!targetMatchesSourceAndDeployment(target, imageSource, deployment)) {
     throw new Error('Observed probe target does not match the admitted source and deployment receipt.');
   }
   return target;
 }
 
-function checkTargetConfigMap(configMap, source, deployment) {
+function checkTargetConfigMap(configMap, imageSource, deployment) {
   try {
     if (configMap?.apiVersion !== 'v1' || configMap.kind !== 'ConfigMap' ||
         configMap.metadata?.name !== configMapName || configMap.metadata?.namespace !== namespace ||
@@ -198,7 +238,7 @@ function checkTargetConfigMap(configMap, source, deployment) {
       throw new Error('Observed target ConfigMap is not the exact immutable foundation-probe configuration.');
     }
     const target = parseJsonObject(configMap.data['target.json'], 'Probe target ConfigMap');
-    validateTarget(target, source, deployment);
+    validateTarget(target, imageSource, deployment);
     return { check: passed('foundation-probe-target', 'configuration', {
       name: configMapName,
       namespace,
@@ -430,13 +470,17 @@ function checkWorkloadIdentityProjection(pod, serviceAccount, target) {
   }
 }
 
-function checkProbeJobImage(job, pod, verifiedReceipt, imageReference, source) {
+function checkProbeJobImage(job, pod, verifiedReceipt, imageReference, imageSource) {
   const name = 'foundation-probe-registry-image';
   try {
     const repository = imageRepository(imageReference);
-    if (!repository || verifiedReceipt?.kind !== 'foundation-probe-image' ||
-        verifiedReceipt.schemaVersion !== 1 || verifiedReceipt.sourceSha !== source.sha ||
-        verifiedReceipt.sourceTree !== source.sourceTree || verifiedReceipt.sourceHash !== source.sourceHash ||
+    if (!repository || !hasExactKeys(verifiedReceipt,
+      ['kind', 'schemaVersion', 'sourceSha', 'sourceTree', 'sourceHash', 'image']) ||
+        !hasExactKeys(verifiedReceipt.image, [
+          'localReference', 'localConfigDigest', 'configUser', 'repositoryDigests', 'publishedReference',
+        ]) || verifiedReceipt.kind !== 'foundation-probe-image' ||
+        verifiedReceipt.schemaVersion !== 1 || verifiedReceipt.sourceSha !== imageSource.sha ||
+        verifiedReceipt.sourceTree !== imageSource.sourceTree || verifiedReceipt.sourceHash !== imageSource.sourceHash ||
         verifiedReceipt.image?.publishedReference !== imageReference ||
         verifiedReceipt.image?.configUser !== '10001:10001' ||
         !manifestDigest.test(verifiedReceipt.image?.localConfigDigest ?? '') ||
@@ -457,9 +501,9 @@ function checkProbeJobImage(job, pod, verifiedReceipt, imageReference, source) {
     }
     return passed(name, 'integration', {
       image: expectedImage,
-      sourceSha: source.sha,
-      sourceTree: source.sourceTree,
-      sourceHash: source.sourceHash,
+      sourceSha: imageSource.sha,
+      sourceTree: imageSource.sourceTree,
+      sourceHash: imageSource.sourceHash,
       configUser: verifiedReceipt.image.configUser,
       localConfigDigest: verifiedReceipt.image.localConfigDigest,
       registryManifestDigest: matches[0].slice(repository.length + 1),
@@ -480,7 +524,7 @@ const receiptKeys = [
 ];
 const deploymentKeys = [
   'subscriptionId', 'tenantId', 'resourceGroup', 'resourceGroupId', 'deploymentName', 'deploymentId',
-  'aksOidcIssuerUrl', 'identity', 'resources',
+  'aksOidcIssuerUrl', 'identity', 'resources', 'infrastructure',
 ];
 const monitorConfigKeys = ['appInsightsResourceId', 'ingestionEndpoint', 'instrumentationKeyConfigured'];
 const providerPinKeys = [
@@ -497,11 +541,13 @@ const postgresKeys = [
 ];
 const telemetryKeys = ['name', 'traceId', 'spanId', 'startedAt'];
 
-function checkProbeReceipt(receipt, target, source, execution) {
+function checkProbeReceipt(receipt, target, imageSource, execution) {
   const name = 'foundation-probe-receipt';
   try {
     if (!hasExactKeys(receipt, receiptKeys) ||
         !hasExactKeys(receipt.deployment, deploymentKeys) ||
+        !hasExactKeys(receipt.deployment.infrastructure, infrastructureKeys) ||
+        !hasExactKeys(receipt.deployment.infrastructure.foundation, foundationDeploymentKeys) ||
         !hasExactKeys(receipt.workloadIdentity, ['issuer', 'subject', 'audience']) ||
         !hasExactKeys(receipt.monitorConfiguration, monitorConfigKeys) ||
         !hasExactKeys(receipt.keyVault, keyVaultKeys) || !hasExactKeys(receipt.blob, blobKeys) ||
@@ -514,6 +560,7 @@ function checkProbeReceipt(receipt, target, source, execution) {
     const identity = target.foundationProbeIdentity;
     const resources = target.foundationResources;
     const deployment = receipt.deployment;
+    const infrastructure = deployment.infrastructure;
     const monitorUrl = new URL(receipt.monitorConfiguration.ingestionEndpoint);
     const startedAt = Date.parse(receipt.telemetry.startedAt);
     const containerStartedAt = Date.parse(execution?.containerStartedAt);
@@ -537,15 +584,21 @@ function checkProbeReceipt(receipt, target, source, execution) {
       resourceKeys.every(key => key.endsWith('Id') || key === 'monitorWorkspaceResourceId'
         ? sameResourceId(deployment.resources[key], resources[key])
         : deployment.resources[key] === resources[key]);
+    const infrastructureMatches = infrastructure.scope === target.infrastructure.scope &&
+      infrastructure.sourceSha === target.infrastructure.sourceSha &&
+      infrastructure.sourceTree === target.infrastructure.sourceTree &&
+      infrastructure.sourceHash === target.infrastructure.sourceHash &&
+      sameFoundationDeployment(infrastructure.foundation, target.infrastructure.foundation);
     const postgres = receipt.postgres;
     const blob = receipt.blob;
     const keyVault = receipt.keyVault;
-    if (receipt.sourceSha !== source.sha || receipt.sourceTree !== source.sourceTree ||
-        receipt.sourceHash !== source.sourceHash || !noncePattern.test(nonce ?? '') ||
+    if (receipt.sourceSha !== imageSource.sha || receipt.sourceTree !== imageSource.sourceTree ||
+        receipt.sourceHash !== imageSource.sourceHash || !noncePattern.test(nonce ?? '') ||
         deployment.subscriptionId !== target.subscriptionId || deployment.tenantId !== target.tenantId ||
         deployment.resourceGroup !== target.resourceGroup || deployment.resourceGroupId !== target.resourceGroupId ||
         deployment.deploymentName !== target.deploymentName || deployment.deploymentId !== target.deploymentId ||
         deployment.aksOidcIssuerUrl !== target.aksOidcIssuerUrl || !deploymentMatches ||
+        !infrastructureMatches ||
         receipt.workloadIdentity.issuer !== target.aksOidcIssuerUrl ||
         receipt.workloadIdentity.subject !== `system:serviceaccount:${namespace}:${identity.serviceAccount}` ||
         receipt.workloadIdentity.audience !== workloadAudience ||
@@ -662,7 +715,7 @@ function summarizeFailedProbeLog(text) {
 }
 
 export function collectFoundationProbeEvidence({
-  source,
+  imageSource,
   deployment,
   observedCluster,
   kubeContext,
@@ -676,7 +729,7 @@ export function collectFoundationProbeEvidence({
 } = {}) {
   const checks = [];
   const collected = { checks, probeReceipt: undefined, completedAt: undefined };
-  if (!source || !deployment || !observedCluster || !kubeContext) {
+  if (!imageSource || !deployment || !observedCluster || !kubeContext) {
     checks.push(configurationBlocked('kubernetes-target',
       'Exact source, deployment, observed AKS resource, and explicit context are required.'));
     checks.push(configurationBlocked('foundation-probe-target',
@@ -734,7 +787,7 @@ export function collectFoundationProbeEvidence({
 
   let target;
   if (observations.configMap && !observations.configMap.error) {
-    const result = checkTargetConfigMap(observations.configMap, source, deployment);
+    const result = checkTargetConfigMap(observations.configMap, imageSource, deployment);
     checks.push(result.check);
     target = result.target;
   } else {
@@ -771,7 +824,7 @@ export function collectFoundationProbeEvidence({
         repoRoot,
         readReceiptPath: imageReceiptPath,
       }).receipt;
-      const imageCheck = checkProbeJobImage(observations.job, jobPod.pod, verifiedImage, imageReference, source);
+      const imageCheck = checkProbeJobImage(observations.job, jobPod.pod, verifiedImage, imageReference, imageSource);
       checks.push(imageCheck);
       imageStatus = imageCheck.status;
     } catch (error) {
@@ -818,7 +871,7 @@ export function collectFoundationProbeEvidence({
         return collected;
       }
       const receipt = parseProbeLog(logs);
-      const result = checkProbeReceipt(receipt, target, source, {
+      const result = checkProbeReceipt(receipt, target, imageSource, {
         completedAt: jobPod.completedAt,
         containerStartedAt: jobPod.containerStartedAt,
         containerFinishedAt: jobPod.containerFinishedAt,
