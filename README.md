@@ -71,6 +71,12 @@ deployment and smoke acceptance are tracked separately in
 [#1814](https://github.com/sabbour/agentweaver/issues/1814). See
 [Azure infrastructure tooling](scripts/azure/README.md) for the guardrails.
 
+The [Azure installer](scripts/azure/README.md) offers guarded PostgreSQL setup
+through the separate, default-off `--bootstrap-identity-postgres` option.
+Ordinary `--execute` does not run this setup. The Identity broker supports
+upstream authorization-code login with PKCE and no required client secret.
+An upstream client secret is optional for explicitly configured confidential clients.
+
 The [P0 Foundation Probe story](docs/specs/1784-foundation-probe.md) adds an
 acceptance-only .NET workload Job, source-bound image receipt, and ownership-safe
 Key Vault, Blob, PostgreSQL, and Azure Monitor checks. Its default CLI plan is
