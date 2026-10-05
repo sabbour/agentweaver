@@ -101,12 +101,15 @@ The host supplies native .NET configuration through its deployment secret/config
 | --- | --- |
 | `ConnectionStrings:IdentityBroker` | Entra-only runtime role; `VerifyFull` TLS; no password; no schema or migration privileges |
 | `ConnectionStrings:IdentityBrokerMigration` | Used only by `--migrate`; separate Entra-only schema-owner role; no password |
+| `ConnectionStrings:IdentityBrokerBootstrap` | Used only by `--bootstrap-identity-postgres`; connects to `postgres` as the approved Entra administrator with `VerifyFull` TLS and no password |
+| `IdentityBroker:Bootstrap:*` | Exact PostgreSQL FQDN, administrator username, initial database name, runtime and migration role names, and the two UAMI principal object IDs |
 | `IdentityBroker:Issuer` | Public, absolute HTTPS issuer |
 | `IdentityBroker:Signing:PfxPath` | Mounted private-key certificate for signing, token encryption, and key-ring protection |
 | `IdentityBroker:Signing:PfxPassword` | Deployment secret, never a checked-in value |
 | `IdentityBroker:DataProtectionKeyPath` | Durable writable key-ring volume protected by the signing certificate |
 | `IdentityBroker:ExternalProvider:Authority` | Absolute HTTPS OIDC authority |
-| `IdentityBroker:ExternalProvider:ClientId` / `ClientSecret` | Registered upstream confidential client |
+| `IdentityBroker:ExternalProvider:ClientId` | Registered upstream client ID |
+| `IdentityBroker:ExternalProvider:ClientSecret` | Optional secret for an explicitly configured confidential upstream client; omit for public authorization-code + PKCE |
 | `IdentityBroker:ExternalProvider:MetadataAddress` | Optional explicit HTTPS discovery address |
 | `IdentityBroker:Clients` | Explicit client IDs, type, redirects, scopes, resources, and confidential-client secrets |
 | `IdentityBroker:SecretRedemption:Audience` | Required HTTPS resource audience, also registered in an operator-seeded client resource list |
@@ -116,7 +119,11 @@ The host supplies native .NET configuration through its deployment secret/config
 | `IdentityBroker:Migration:WorkloadIdentityTenantId` / `WorkloadIdentityClientId` | Separate explicit identity used only by the migration Job |
 | `IdentityBroker:Migration:WorkloadIdentityTokenFilePath` | Absolute projected token path for the migration ServiceAccount |
 
-The upstream registration permits the broker's public `/signin-oidc` callback.
+The upstream app registration must contain the broker's exact public
+`/signin-oidc` callback before deployment. This source change does not modify
+the app registration. The Broker uses authorization-code flow with PKCE and
+omits `client_secret` when `ClientSecret` is unset. A confidential upstream
+client can use the optional direct setting supplied by the operator.
 The deployment retains signing/encryption material and the protected key ring
 across restart. The HTTPS listener uses a separate operator-approved TLS
 certificate. The repository contains no certificate, password, OAuth secret,
@@ -125,14 +132,13 @@ Certificate rotation requires overlap with previous verification and decryption 
 Replacing the sole certificate immediately invalidates previous encrypted tokens and cookies.
 
 The Kubernetes base references the required `identity-broker-runtime-config`
-ConfigMap, `identity-broker-signing`, `identity-broker-upstream-oidc`, and
-`identity-broker-tls` Secrets, and the durable `identity-broker-key-ring` PVC.
-It also references `identity-broker-client-secrets` when confidential OAuth
-clients are configured. It does not create any of these objects. The runtime
-ConfigMap contains non-secret settings and must register the exact issuer,
-upstream OIDC authority/client, and every accepted client, redirect, scope, and
-resource audience. Confidential client secrets use indexed Secret keys, not
-ConfigMap values.
+ConfigMap, `identity-broker-signing` and `identity-broker-tls` Secrets, and the
+durable `identity-broker-key-ring` PVC. It also references
+`identity-broker-client-secrets` when a confidential upstream or OAuth client
+is configured. It does not create any of these objects. The runtime ConfigMap
+contains non-secret settings and must register the exact issuer, upstream OIDC
+authority/client, and every accepted client, redirect, scope, and resource
+audience. Confidential client secrets use Secret keys, not ConfigMap values.
 
 The `identity-broker` runtime ServiceAccount is federated to its own UAMI.
 That identity uses the same explicit workload-identity settings for native
@@ -162,6 +168,29 @@ This candidate does not trust arbitrary forwarded headers.
 The orchestrator probes `/health/live` and `/health/ready` over HTTPS. No shell health-check utility is required.
 The key-ring volume must retain encrypted keys across process restart.
 
+The explicit `--bootstrap-identity-postgres` command is an operator-only
+first-time path. It uses the local Azure CLI credential, connects to the
+configured `postgres` database, and creates the configured service database,
+two UAMI principals, and the migration-owned schema only when the target has
+no user databases or partial bootstrap state. It verifies an existing complete
+bootstrap and refuses to adopt or reset partial state. It does not run EF
+migrations. An interrupted creation requires manual reconciliation of the
+exact PostgreSQL target before retry. Source support for this command does not
+prove that it was used against a live database.
+
+The installer runs this command only when both `--execute` and the separate,
+default-off `--bootstrap-identity-postgres` option are supplied. It supports
+the guarded full-foundation path and AKS-only redeployment to the exact existing
+P0 target; the full-foundation empty-resource-group guard remains unchanged.
+For the private PostgreSQL endpoint, the installer creates a temporary TCP-only
+proxy pod and loopback-only port-forward. The operator host keeps the
+password-free Azure CLI Entra token and uses `VerifyFull` TLS with the
+PostgreSQL FQDN as the certificate target. It removes only the run-owned pod
+and ConfigMap, stops its port-forward process, and removes temporary local
+files. It does not create a public route, Entra app or secret, or Azure role
+assignment. Ordinary `--execute` never runs the initializer. The Foundation
+Probe remains read-only.
+
 Ordinary startup never runs EF migrations or creates the schema. It checks
 that the owned `identity_broker` schema exists and all migrations are applied,
 then reconciles the configured clients and scopes. Missing schema, pending
@@ -174,8 +203,8 @@ The separate command
 migrations under the schema-specific PostgreSQL advisory lock and exits; it
 does not start the web host or seed OAuth clients. Operators must first run the
 approved `postgres-identity-bootstrap.sql`, then run the migration Job, then
-apply `postgres-identity-runtime-grants.sql`. None of these operations ran
-against a live database for this source change.
+apply `postgres-identity-runtime-grants.sql`. No bootstrap or migration write
+was run against a live database for this source change.
 
 Readiness alone does not prove OAuth or deployed acceptance.
 
@@ -204,7 +233,7 @@ cross-project/run denial using the broker-issued token. These local tests do
 not prove deployed token issuance, workload identity, Key Vault RBAC, or Azure
 acceptance.
 
-The draft release manifest registers `Agentweaver.Identity.Broker` at project version `0.2.0`.
+The draft release manifest registers `Agentweaver.Identity.Broker` at project version `0.0.0`.
 The draft omits `imageDigest` until actual publication supplies it.
 A local Docker image proves only the local build, not registry publication or cloud execution.
 

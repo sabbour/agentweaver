@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
 import { bootstrapP0Namespace } from './lib/namespace-bootstrap.mjs';
+import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
 import {
   AKS_RBAC_CLUSTER_ADMIN_ROLE_ID,
   armGuid,
@@ -13,6 +14,7 @@ import {
   findDanglingAksSubnetRoleAssignment,
   guardAzureTarget,
   readFoundationOutputs,
+  readExistingIdentityPostgresMetadata,
   resolveClusterAdminRoleAssignmentName,
   verifyClusterAdminRoleAssignment,
 } from './lib/guardrails.mjs';
@@ -35,8 +37,9 @@ export function buildDeployArgs({
     '--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json'];
 }
 
-export function deploy(config, {
+export async function deploy(config, {
   execAz = runAz, sourceResolver = resolveSource, bootstrapNamespace = bootstrapP0Namespace,
+  initializeIdentityPostgres = bootstrapIdentityPostgres,
 } = {}) {
   assertDedicatedTarget(config.resourceGroup);
   assertSubscription(config.subscriptionId, config.allowedSubscriptionId);
@@ -47,7 +50,8 @@ export function deploy(config, {
   let operatorRoleAssignmentName = armGuid(clusterId, source.operatorObjectId, AKS_RBAC_CLUSTER_ADMIN_ROLE_ID);
   let args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source, operatorRoleAssignmentName,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName });
-  const summary = { ...source, resourceGroup: config.resourceGroup, deploymentName, args, executed: false };
+  const summary = { ...source, resourceGroup: config.resourceGroup, deploymentName, args, executed: false,
+    bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres) };
   if (!config.execute) return summary;
   const { execAz: boundAz, group, resources } = guardAzureTarget({ ...config, ...source }, execAz);
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
@@ -57,6 +61,9 @@ export function deploy(config, {
       resources.some(resource => resource.type?.toLowerCase() !== 'microsoft.resources/deployments')) {
     throw new Error('Full foundation deployment is limited to an empty dedicated P0 resource group; use the AKS-only template to preserve existing resources.');
   }
+  const existingIdentityPostgres = config.bootstrapIdentityPostgres && source.scope === 'aks-only'
+    ? readExistingIdentityPostgresMetadata({ ...config, ...source }, boundAz)
+    : undefined;
   operatorRoleAssignmentName = resolveClusterAdminRoleAssignmentName({ ...config, ...source }, boundAz);
   args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source, operatorRoleAssignmentName,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName });
@@ -134,7 +141,7 @@ export function deploy(config, {
   }
   try {
     assertSourceUnchanged();
-    bootstrapNamespace({
+    await bootstrapNamespace({
       resourceGroup: config.resourceGroup,
       subscriptionId: config.subscriptionId,
       repoRoot: config.repoRoot,
@@ -143,9 +150,35 @@ export function deploy(config, {
   } catch (error) {
     throw new Error(`Infrastructure deployment succeeded, but namespace-only bootstrap failed: ${error.message}`);
   }
+  let identityPostgresBootstrap;
+  if (config.bootstrapIdentityPostgres) {
+    try {
+      assertSourceUnchanged();
+      const target = existingIdentityPostgres ?? {
+        resources: deploymentReceipt.resources,
+        postgresEntraAdminPrincipalName: source.postgresEntraAdminPrincipalName,
+        identityBrokerRuntimeIdentity: deploymentReceipt.identityBrokerRuntimeIdentity,
+        identityBrokerMigrationIdentity: deploymentReceipt.identityBrokerMigrationIdentity,
+      };
+      identityPostgresBootstrap = await initializeIdentityPostgres({
+        repoRoot: config.repoRoot,
+        resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId,
+        tenantId: config.tenantId,
+        clusterName: `${config.resourceGroup}-aks`,
+        postgresHost: target.resources.postgresHost,
+        adminUsername: target.postgresEntraAdminPrincipalName,
+        runtimePrincipalObjectId: target.identityBrokerRuntimeIdentity.principalObjectId,
+        migrationPrincipalObjectId: target.identityBrokerMigrationIdentity.principalObjectId,
+      });
+    } catch (error) {
+      throw new Error(`Infrastructure deployment succeeded, but Identity PostgreSQL bootstrap failed: ${error.message}`);
+    }
+  }
   return { ...summary, executed: true, receipt: { scope: source.scope, sourceSha: source.sha,
     sourceTree: source.sourceTree, sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,
     resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id,
+    ...(identityPostgresBootstrap ? { identityPostgresBootstrap } : {}),
     ...deploymentReceipt } };
 }
 
@@ -154,7 +187,8 @@ export function cliConfig(values) {
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
     operatorObjectId: values['operator-object-id'],
-    allowStaleAksSubnetRoleCleanup: values['allow-stale-aks-subnet-role-cleanup'] };
+    allowStaleAksSubnetRoleCleanup: values['allow-stale-aks-subnet-role-cleanup'],
+    bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false };
 }
 
 export const cliOptions = {
@@ -163,15 +197,18 @@ export const cliOptions = {
   tenant: { type: 'string' }, 'allowed-tenant': { type: 'string' },
   'operator-object-id': { type: 'string' },
   'allow-stale-aks-subnet-role-cleanup': { type: 'boolean', default: false },
+  'bootstrap-identity-postgres': { type: 'boolean', default: false },
   execute: { type: 'boolean', default: false },
 };
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  try {
+  Promise.resolve().then(() => {
     const { values } = parseArgs({ options: cliOptions });
-    console.log(JSON.stringify(deploy(cliConfig(values)), null, 2));
-  } catch (error) {
+    return deploy(cliConfig(values));
+  }).then(result => {
+    console.log(JSON.stringify(result, null, 2));
+  }).catch(error => {
     console.error(error.message);
     process.exitCode = 1;
-  }
+  });
 }

@@ -55,12 +55,6 @@ spec:
                   name: identity-broker-signing
                   key: password
                   optional: false
-            - name: IdentityBroker__ExternalProvider__ClientSecret
-              valueFrom:
-                secretKeyRef:
-                  name: identity-broker-upstream-oidc
-                  key: clientSecret
-                  optional: false
           envFrom:
             - configMapRef:
                 name: identity-broker-runtime-config

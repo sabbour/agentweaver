@@ -79,8 +79,7 @@ public sealed class ExternalProviderOptions
     [Required]
     public required string ClientId { get; set; }
 
-    [Required]
-    public required string ClientSecret { get; set; }
+    public string? ClientSecret { get; set; }
 
     /// <summary>
     /// Overrides the discovery metadata address. Production composition omits this and

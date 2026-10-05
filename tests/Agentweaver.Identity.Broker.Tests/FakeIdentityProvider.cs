@@ -30,6 +30,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
     private readonly RsaSecurityKey _attackerKey;
     private readonly Dictionary<string, PendingCode> _codes = new();
     public List<string> SensitiveValues { get; } = [];
+    public List<(bool HasClientSecret, string? ClientSecret, bool HasCodeVerifier)> TokenRequests { get; } = [];
 
     public IdTokenTampering Tampering { get; set; } = IdTokenTampering.None;
 
@@ -140,6 +141,11 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
     private async Task HandleTokenAsync(HttpContext context)
     {
         var form = await context.Request.ReadFormAsync();
+        var clientSecret = form["client_secret"].ToString();
+        TokenRequests.Add((
+            form.ContainsKey("client_secret"),
+            string.IsNullOrEmpty(clientSecret) ? null : clientSecret,
+            form.ContainsKey("code_verifier")));
         var code = form["code"].ToString();
         var codeVerifier = form["code_verifier"].ToString();
 

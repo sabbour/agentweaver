@@ -217,6 +217,94 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
   };
 }
 
+export function readExistingIdentityPostgresMetadata(source, execAz) {
+  const {
+    resourceGroup, subscriptionId, tenantId, location,
+    postgresEntraAdminObjectId, postgresEntraAdminPrincipalName, postgresEntraAdminPrincipalType,
+  } = source;
+  if (!GUID_PATTERN.test(postgresEntraAdminObjectId ?? '') ||
+      typeof postgresEntraAdminPrincipalName !== 'string' || !postgresEntraAdminPrincipalName.trim() ||
+      !['User', 'Group', 'ServicePrincipal'].includes(postgresEntraAdminPrincipalType)) {
+    throw new Error('AKS-only PostgreSQL bootstrap needs the approved foundation Entra administrator inputs.');
+  }
+
+  const serverName = `${resourceGroup}-pg`;
+  const postgresHost = `${serverName}.postgres.database.azure.com`;
+  const serverId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${serverName}`;
+  const normalizeLocation = value => value?.replace(/\s+/g, '').toLowerCase();
+  const vnetId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/virtualNetworks/${resourceGroup}-vnet`;
+  const postgresSubnetId = `${vnetId}/subnets/postgres`;
+  const postgresPrivateDnsZoneId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com`;
+  const server = jsonResult(execAz([
+    'postgres', 'flexible-server', 'show', '--resource-group', resourceGroup, '--name', serverName, '-o', 'json',
+  ], { check: false }), 'Existing PostgreSQL server lookup');
+  if (server.id?.toLowerCase() !== serverId.toLowerCase() ||
+      server.name !== serverName || normalizeLocation(server.location) !== normalizeLocation(location) ||
+      server.version !== '16' || server.fullyQualifiedDomainName !== postgresHost ||
+      server.network?.delegatedSubnetResourceId?.toLowerCase() !== postgresSubnetId.toLowerCase() ||
+      server.network?.privateDnsZoneArmResourceId?.toLowerCase() !== postgresPrivateDnsZoneId.toLowerCase() ||
+      server.network?.publicNetworkAccess !== 'Disabled' ||
+      server.authConfig?.activeDirectoryAuth !== 'Enabled' ||
+      server.authConfig?.passwordAuth !== 'Disabled' ||
+      server.authConfig?.tenantId?.toLowerCase() !== tenantId?.toLowerCase()) {
+    throw new Error('Existing PostgreSQL server does not match the exact approved private P0 source inputs.');
+  }
+
+  const adminId = `${serverId}/administrators/${postgresEntraAdminObjectId}`;
+  const admin = jsonResult(execAz([
+    'resource', 'show', '--ids', adminId, '-o', 'json',
+  ], { check: false }), 'Existing PostgreSQL Entra administrator lookup');
+  if (admin.id?.toLowerCase() !== adminId.toLowerCase() ||
+      admin.type?.toLowerCase() !== 'microsoft.dbforpostgresql/flexibleservers/administrators' ||
+      admin.name?.toLowerCase() !== postgresEntraAdminPrincipalName.toLowerCase() ||
+      admin.properties?.objectId?.toLowerCase() !== postgresEntraAdminObjectId.toLowerCase() ||
+      admin.properties?.principalName !== postgresEntraAdminPrincipalName ||
+      admin.properties?.principalType !== postgresEntraAdminPrincipalType ||
+      admin.properties?.tenantId?.toLowerCase() !== tenantId?.toLowerCase()) {
+    throw new Error('Existing PostgreSQL Entra administrator differs from the approved foundation parameters.');
+  }
+
+  function readIdentity(name, serviceAccount) {
+    const identityName = `${resourceGroup}-id-${name}`;
+    const identityId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${identityName}`;
+    const identity = jsonResult(execAz([
+      'identity', 'show', '--resource-group', resourceGroup, '--name', identityName, '-o', 'json',
+    ], { check: false }), `Existing ${name} workload identity lookup`);
+    if (identity.id?.toLowerCase() !== identityId.toLowerCase() ||
+        identity.name !== identityName || identity.location?.toLowerCase() !== location?.toLowerCase() ||
+        !GUID_PATTERN.test(identity.clientId ?? '') || !GUID_PATTERN.test(identity.principalId ?? '') ||
+        identity.clientId.toLowerCase() === identity.principalId.toLowerCase()) {
+      throw new Error(`Existing ${name} workload identity does not match the exact P0 target.`);
+    }
+    return {
+      name,
+      resourceId: identityId,
+      clientId: identity.clientId,
+      principalObjectId: identity.principalId,
+      namespace: 'agentweaver-v1-p0',
+      serviceAccount,
+    };
+  }
+
+  const identityBrokerRuntimeIdentity = readIdentity('identity-broker', 'identity-broker');
+  const identityBrokerMigrationIdentity = readIdentity('identity-broker-migration', 'identity-broker-migration');
+  const principalIds = [
+    identityBrokerRuntimeIdentity.clientId,
+    identityBrokerRuntimeIdentity.principalObjectId,
+    identityBrokerMigrationIdentity.clientId,
+    identityBrokerMigrationIdentity.principalObjectId,
+  ].map(value => value.toLowerCase());
+  if (new Set(principalIds).size !== principalIds.length)
+    throw new Error('Existing Identity Broker workload identities do not have four distinct client and principal IDs.');
+
+  return {
+    resources: { postgresHost, postgresServerId: serverId },
+    postgresEntraAdminPrincipalName,
+    identityBrokerRuntimeIdentity,
+    identityBrokerMigrationIdentity,
+  };
+}
+
 // ARM guid() uses UUID v5 with this namespace and hyphen-joined arguments.
 export function armGuid(...values) {
   const namespace = Buffer.from('11fb06fb712d4ddd98c7e71bbd588830', 'hex');

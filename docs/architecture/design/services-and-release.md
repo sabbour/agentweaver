@@ -146,6 +146,8 @@ requirements from [#1229](https://github.com/sabbour/agentweaver/issues/1229),
 [#1428](https://github.com/sabbour/agentweaver/issues/1428) have owners in this split: catalog and
 outbound mediation at the Tool & MCP gateway, surface tools in the MCP server, and rendering in web.
 These issues are parity inputs, not an excuse to create a second UI.
+P1 frontend work retains most of the existing Agentweaver UI and adapts its API wiring; redesign
+requires an explicit user request.
 
 ### Data plane
 

@@ -25,10 +25,20 @@ using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentit
 using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.WorkloadIdentityCredentialOptions;
 
 var runMigrations = IdentityBrokerMigrationCommand.IsRequested(args);
+var runPostgresBootstrap = IdentityBrokerPostgresBootstrapCommand.IsRequested(args);
+var verifyPostgresBootstrap = IdentityBrokerPostgresBootstrapCommand.IsVerifyRequested(args);
 if (IdentityBrokerMigrationCommand.ContainsArgument(args) && !runMigrations)
     throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
+if (IdentityBrokerPostgresBootstrapCommand.ContainsArgument(args) &&
+    !runPostgresBootstrap && !verifyPostgresBootstrap)
+    throw new ArgumentException("An identity PostgreSQL maintenance command must be used by itself.", nameof(args));
+if ((runMigrations ? 1 : 0) + (runPostgresBootstrap ? 1 : 0) + (verifyPostgresBootstrap ? 1 : 0) > 1)
+    throw new ArgumentException("Only one Identity broker maintenance command can run at a time.", nameof(args));
 
-var builder = WebApplication.CreateBuilder(runMigrations ? Array.Empty<string>() : args);
+var builder = WebApplication.CreateBuilder(
+    runMigrations || runPostgresBootstrap || verifyPostgresBootstrap
+        ? Array.Empty<string>()
+        : args);
 if (runMigrations)
 {
     using var cancellation = new CancellationTokenSource();
@@ -52,6 +62,16 @@ if (runMigrations)
     {
         Console.CancelKeyPress -= cancelHandler;
     }
+    return;
+}
+if (runPostgresBootstrap)
+{
+    await IdentityBrokerPostgresBootstrapCommand.RunAsync(builder.Configuration);
+    return;
+}
+if (verifyPostgresBootstrap)
+{
+    await IdentityBrokerPostgresBootstrapCommand.RunAsync(builder.Configuration, verifyOnly: true);
     return;
 }
 
@@ -80,7 +100,6 @@ if (!Uri.TryCreate(identityOptions.SecretRedemption.Audience, UriKind.Absolute, 
     throw new InvalidOperationException("Secret redemption requires an HTTPS audience registered on an Identity client.");
 if (!Path.IsPathFullyQualified(identityOptions.SecretRedemption.WorkloadIdentityTokenFilePath))
     throw new InvalidOperationException("Secret redemption requires an absolute workload-identity token file path.");
-
 // Validate the vault URI and workload-identity settings before opening the database or
 // starting the host. The projected token file is read only when Key Vault is contacted.
 var vaultConfiguration = new AzureKeyVaultConfiguration(new Uri(identityOptions.SecretRedemption.VaultUri));

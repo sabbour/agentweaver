@@ -68,7 +68,8 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
         bool confidential = false, string clientSecret = "generated-test-client-secret",
         string redirectUri = TestClientRedirectUri, (string PfxPath, string Password)? signingCertificate = null,
         Action<Dictionary<string, string?>>? configure = null,
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        string? externalProviderClientSecret = "fake-idp-client-secret")
     {
         _connectionString = connectionString;
         _fakeIdp = fakeIdp;
@@ -90,7 +91,7 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
             ["IdentityBroker__ExternalProvider__MetadataAddress"] =
                 $"{FakeIdentityProvider.Authority}/.well-known/openid-configuration",
             ["IdentityBroker__ExternalProvider__ClientId"] = "broker-to-fake-idp",
-            ["IdentityBroker__ExternalProvider__ClientSecret"] = "fake-idp-client-secret",
+            ["IdentityBroker__ExternalProvider__ClientSecret"] = externalProviderClientSecret,
             ["IdentityBroker__SecretRedemption__Audience"] = "https://api.test",
             ["IdentityBroker__SecretRedemption__VaultUri"] = "https://identity-test-vault.vault.azure.net/",
             ["IdentityBroker__SecretRedemption__WorkloadIdentityTenantId"] = Guid.NewGuid().ToString(),
