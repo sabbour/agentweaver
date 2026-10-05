@@ -8,6 +8,7 @@ const P0_NAMESPACE = 'agentweaver-v1-p0';
 const GATEWAY_NAMESPACE = 'agentweaver-v1-gateway';
 const CONTROLLER = 'istio.aks.azure.com/gateway-controller';
 const COMMAND_OPTIONS = { check: false, timeout: 35_000 };
+const GUID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 export function projectIdentityRoutingReadback(value) {
   if (Array.isArray(value?.items)) {
@@ -97,7 +98,7 @@ export function projectIdentityRoutingReadback(value) {
 }
 
 function projectPublicApplication(value) {
-  return { appId: value?.appId, publicClient: { redirectUris: value?.publicClient?.redirectUris } };
+  return { id: value?.id, appId: value?.appId, publicClient: { redirectUris: value?.publicClient?.redirectUris } };
 }
 
 export function assertIdentityRoutingPlacement({ gatewayNamespace, gatewaySecurityPolicy }) {
@@ -223,9 +224,10 @@ export function deriveIdentityRouting({ gatewayCertificate, brokerCertificate, g
   };
 }
 
-export function planPublicBrokerCallback(application, clientId, callbackUri) {
+export function planPublicBrokerCallback(application, clientId, callbackUri, tenantId) {
   const callback = new URL(callbackUri);
-  if (application?.appId?.toLowerCase() !== clientId?.toLowerCase() ||
+  if (!GUID_PATTERN.test(application?.id ?? '') || !GUID_PATTERN.test(clientId ?? '') ||
+      !GUID_PATTERN.test(tenantId ?? '') || application?.appId?.toLowerCase() !== clientId?.toLowerCase() ||
       callback.protocol !== 'https:' || callback.pathname !== '/signin-oidc' ||
       callback.search || callback.hash || callback.username || callback.password ||
       !callback.hostname.startsWith('agentweaver.') || !callback.hostname.endsWith('.aksapp.io') ||
@@ -236,10 +238,56 @@ export function planPublicBrokerCallback(application, clientId, callbackUri) {
   const existing = application.publicClient.redirectUris;
   const unchanged = existing.includes(callbackUri);
   return {
-    clientId, platform: 'publicClient', action: unchanged ? 'noop' : 'append',
+    tenantId, clientId, applicationObjectId: application.id,
+    patchUri: `https://graph.microsoft.com/v1.0/applications/${application.id}`,
+    platform: 'publicClient', action: unchanged ? 'noop' : 'append',
     redirectUris: unchanged ? [...existing] : [...existing, callbackUri],
     callbackUri, mutationExecuted: false,
   };
+}
+
+export function registerPublicBrokerCallback(plan, config, { execAz = runAz } = {}) {
+  if (!config.registerBrokerCallback) {
+    if (config.confirmBrokerCallback) throw new Error('Callback confirmation requires --register-identity-broker-callback.');
+    return plan;
+  }
+  if (config.confirmBrokerCallback !== plan.callbackUri || config.tenantId !== plan.tenantId ||
+      config.upstreamClientId !== plan.clientId) {
+    throw new Error('Callback registration requires confirmation of the exact route-derived URI and selected tenant/application.');
+  }
+  const account = execAz(['account', 'show', '--subscription', config.subscriptionId,
+    '--query', '{id:id,tenantId:tenantId}', '-o', 'json'], COMMAND_OPTIONS);
+  if (account.status !== 0) throw new Error(`Callback account read failed: ${redact(account.stderr)}`);
+  const selected = JSON.parse(account.stdout);
+  if (selected.id?.toLowerCase() !== config.subscriptionId.toLowerCase() ||
+      selected.tenantId?.toLowerCase() !== plan.tenantId.toLowerCase()) {
+    throw new Error('Callback registration selected account/tenant changed; refusing an application write.');
+  }
+  function readApplication() {
+    const result = execAz(['ad', 'app', 'show', '--id', plan.clientId, '--subscription', config.subscriptionId,
+      '--query', '{id:id,appId:appId,publicClient:publicClient}', '-o', 'json'], {
+      ...COMMAND_OPTIONS, projectJson: projectPublicApplication, preserveProjectedJson: true,
+    });
+    if (result.status !== 0) throw new Error(`Public callback read failed: ${redact(result.stderr)}`);
+    const fresh = planPublicBrokerCallback(JSON.parse(result.stdout), plan.clientId, plan.callbackUri, plan.tenantId);
+    if (fresh.applicationObjectId.toLowerCase() !== plan.applicationObjectId.toLowerCase()) {
+      throw new Error('Callback application object identity changed; refusing an application write.');
+    }
+    return fresh;
+  }
+  const fresh = readApplication();
+  if (fresh.action === 'noop') return fresh;
+  const patch = execAz(['rest', '--method', 'PATCH', '--uri', fresh.patchUri,
+    '--subscription', config.subscriptionId, '--headers', 'Content-Type=application/json',
+    '--body', JSON.stringify({ publicClient: { redirectUris: fresh.redirectUris } }), '-o', 'none'], COMMAND_OPTIONS);
+  if (patch.status !== 0) {
+    throw new Error(`Public callback append failed; no permissions were granted: ${redact(patch.stderr)}`);
+  }
+  const verified = readApplication();
+  if (verified.action !== 'noop' || fresh.redirectUris.some(uri => !verified.redirectUris.includes(uri))) {
+    throw new Error('Public callback append returned success but the exact URI or previous public redirects are missing.');
+  }
+  return { ...verified, action: 'append', mutationExecuted: true };
 }
 
 export function verifyIdentityBrokerReadiness(receipt, {
@@ -315,14 +363,15 @@ export function bootstrapIdentityRouting(config, {
     requireConditions(gatewayClass, gatewayClass.status?.conditions, ['Accepted']);
     const application = execAz(['ad', 'app', 'show', '--id', config.upstreamClientId,
       '--subscription', config.subscriptionId,
-      '--query', '{appId:appId,publicClient:publicClient}', '-o', 'json'], {
+      '--query', '{id:id,appId:appId,publicClient:publicClient}', '-o', 'json'], {
       ...COMMAND_OPTIONS, projectJson: projectPublicApplication, preserveProjectedJson: true,
     });
     if (application.status !== 0) {
       throw new Error(`Public callback read failed: ${redact(application.stderr)}`);
     }
     const publicApplication = JSON.parse(application.stdout);
-    if (publicApplication.appId?.toLowerCase() !== config.upstreamClientId.toLowerCase() ||
+    if (!GUID_PATTERN.test(publicApplication.id ?? '') ||
+        publicApplication.appId?.toLowerCase() !== config.upstreamClientId.toLowerCase() ||
         !Array.isArray(publicApplication.publicClient?.redirectUris)) {
       throw new Error('Exact upstream public application metadata is unavailable.');
     }
@@ -389,8 +438,8 @@ export function bootstrapIdentityRouting(config, {
       route: read('httproute', P0_NAMESPACE),
       backendPolicy: read('backendtlspolicy', P0_NAMESPACE),
     });
-    receipt.publicCallbackPlan = planPublicBrokerCallback(
-      publicApplication, config.upstreamClientId, receipt.callbackUri);
+    receipt.publicCallbackPlan = registerPublicBrokerCallback(planPublicBrokerCallback(
+      publicApplication, config.upstreamClientId, receipt.callbackUri, config.tenantId), config, { execAz });
     receipt.runtimeConfigInputs = {
       IdentityBroker__Issuer: receipt.issuer,
       IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,

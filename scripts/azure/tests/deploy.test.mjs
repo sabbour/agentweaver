@@ -59,6 +59,8 @@ test('Identity routing is default-off with explicit placement, policy, and publi
   assert.equal(cliOptions['identity-gateway-namespace'].default, undefined);
   assert.equal(cliOptions['identity-gateway-security-policy'].default, undefined);
   assert.equal(cliOptions['verify-identity-broker-readiness'].default, false);
+  assert.equal(cliOptions['register-identity-broker-callback'].default, false);
+  assert.equal(cliOptions['confirm-identity-broker-callback'].default, undefined);
   const routing = { bootstrapIdentityRouting: true, gatewayNamespace: 'agentweaver-v1-gateway',
     gatewaySecurityPolicy: 'baseline', upstreamClientId: ids.subscriptionId };
   const result = await deploy({ ...fixture, ...routing }, {
@@ -71,6 +73,16 @@ test('Identity routing is default-off with explicit placement, policy, and publi
   assert.equal(result.identityRoutingPlan.appRegistrationMutation, false);
   await assert.rejects(deploy({ ...fixture, bootstrapIdentityRouting: true }), /requires explicit/);
   await assert.rejects(deploy({ ...fixture, gatewaySecurityPolicy: 'baseline' }), /require the separate/);
+  await assert.rejects(deploy({ ...fixture, ...routing, registerBrokerCallback: true }), /requires --confirm/);
+  await assert.rejects(deploy({ ...fixture, ...routing, confirmBrokerCallback: 'https://agentweaver.test.aksapp.io/signin-oidc' }),
+    /confirmation requires/);
+  const confirmedPlan = await deploy({ ...fixture, ...routing, registerBrokerCallback: true,
+    confirmBrokerCallback: 'https://agentweaver.test.aksapp.io/signin-oidc' }, {
+    sourceResolver: () => source, execAz: () => { throw new Error('dry-run cloud call'); },
+    initializeIdentityRouting: () => { throw new Error('dry-run callback write'); },
+  });
+  assert.equal(confirmedPlan.identityRoutingPlan.appRegistrationMutationRequested, true);
+  assert.equal(confirmedPlan.identityRoutingPlan.appRegistrationMutation, false);
 });
 
 test('guarded routing runs after namespace setup, without PostgreSQL or application mutation', async () => {

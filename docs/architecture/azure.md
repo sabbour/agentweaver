@@ -60,7 +60,9 @@ v1 Gateway and HTTPRoute resources, and verified backend HTTPS.
 It requires explicit approved Gateway namespace and security-policy inputs.
 The P0 workload namespace remains restricted.
 The issuer comes from the admitted route hostname.
-Public callback changes remain read-only append/no-op plans.
+Public callback changes default to read-only append/no-op plans.
+An append requires separate explicit registration and exact-URI confirmation.
+The installer fresh-reads the selected application and preserves all other properties.
 Only the optional ordinary-DNS and trusted-HTTPS health checks prove Broker readiness.
 See [the operator interface](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting).
 

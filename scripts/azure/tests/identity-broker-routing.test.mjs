@@ -6,6 +6,7 @@ import {
   assertIdentityRoutingPlacement, bootstrapIdentityRouting, deriveIdentityRouting,
   managedBrokerHostname, planPublicBrokerCallback, verifyIdentityBrokerReadiness,
   projectIdentityRoutingReadback,
+  registerPublicBrokerCallback,
 } from '../lib/identity-broker-routing.mjs';
 import { run } from '../lib/exec.mjs';
 
@@ -14,8 +15,9 @@ const gatewayNamespace = 'agentweaver-v1-gateway';
 const hostname = 'agentweaver.test.eastus2.aksapp.io';
 const controller = 'istio.aks.azure.com/gateway-controller';
 const clientId = '11111111-1111-1111-1111-111111111111';
+const applicationObjectId = '22222222-2222-2222-2222-222222222222';
 const config = {
-  resourceGroup: 'aw-v1-p0', clusterName: 'aw-v1-p0-aks', subscriptionId: clientId,
+  resourceGroup: 'aw-v1-p0', clusterName: 'aw-v1-p0-aks', subscriptionId: clientId, tenantId: clientId,
   repoRoot: process.cwd(), gatewayNamespace, gatewaySecurityPolicy: 'baseline', upstreamClientId: clientId,
 };
 const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
@@ -70,7 +72,7 @@ function transport({ native = snapshot(), namespace, failWait = false } = {}) {
     execAz: args => {
       azureCalls.push(args);
       return args[0] === 'ad'
-        ? ok(JSON.stringify({ appId: clientId, publicClient: { redirectUris: ['http://localhost'] } }))
+        ? ok(JSON.stringify({ id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost'] } }))
         : ok();
     },
     execKubelogin: () => ok(),
@@ -154,19 +156,19 @@ test('missing, stale, unprogrammed, cross-target, or unsafe native evidence neve
 
 test('public callback planning appends without loss and becomes a no-op without application writes', () => {
   const callbackUri = deriveIdentityRouting(snapshot()).callbackUri;
-  const application = { appId: clientId, publicClient: { redirectUris: ['http://localhost'] },
+  const application = { id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost'] },
     web: { redirectUris: ['https://existing.example.com/callback'] } };
   const original = structuredClone(application);
-  const plan = planPublicBrokerCallback(application, clientId, callbackUri);
+  const plan = planPublicBrokerCallback(application, clientId, callbackUri, clientId);
   assert.equal(plan.action, 'append');
   assert.equal(plan.platform, 'publicClient');
   assert.equal(plan.mutationExecuted, false);
   assert.deepEqual(plan.redirectUris, ['http://localhost', callbackUri]);
   assert.deepEqual(application, original);
   application.publicClient.redirectUris.push(callbackUri);
-  assert.equal(planPublicBrokerCallback(application, clientId, callbackUri).action, 'noop');
-  assert.throws(() => planPublicBrokerCallback(application, 'wrong-client', callbackUri), /exact upstream/);
-  assert.throws(() => planPublicBrokerCallback(application, clientId, callbackUri.replace('signin-oidc', 'auth/callback')),
+  assert.equal(planPublicBrokerCallback(application, clientId, callbackUri, clientId).action, 'noop');
+  assert.throws(() => planPublicBrokerCallback(application, 'wrong-client', callbackUri, clientId), /exact upstream/);
+  assert.throws(() => planPublicBrokerCallback(application, clientId, callbackUri.replace('signin-oidc', 'auth/callback'), clientId),
     /exact upstream/);
 });
 
@@ -216,7 +218,7 @@ test('production JSON projections preserve the native long DNS hostname and exis
   const { dependencies } = transport({ native: projected });
   const previousAzure = dependencies.execAz;
   const callbackUri = `https://${observedHost}/signin-oidc`;
-  const application = { appId: clientId, publicClient: { redirectUris: ['http://localhost', callbackUri] } };
+  const application = { id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost', callbackUri] } };
   dependencies.execAz = (args, options) => {
     if (args[0] !== 'ad') return previousAzure(args, options);
     publicReadOptions = options;
@@ -233,6 +235,92 @@ test('production JSON projections preserve the native long DNS hostname and exis
   withSensitiveFields.spec.rules[0].filters = [{ type: 'RequestHeaderModifier',
     requestHeaderModifier: { add: [{ name: 'Authorization', value: 'secret-value' }] } }];
   assert.ok(!JSON.stringify(projectIdentityRoutingReadback(withSensitiveFields)).includes('secret-value'));
+});
+
+test('explicit confirmed callback registration fresh-reads and patches only public redirects, preserving legacy platforms', () => {
+  const callbackUri = deriveIdentityRouting(snapshot()).callbackUri;
+  const application = {
+    id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost'] },
+    web: { redirectUris: ['https://legacy.example.com/callback'] }, isFallbackPublicClient: true,
+    spa: { redirectUris: ['https://spa.example.com'] }, appRoles: [{ id: 'existing-role' }],
+  };
+  const original = structuredClone(application);
+  const plan = planPublicBrokerCallback(application, clientId, callbackUri, clientId);
+  application.publicClient.redirectUris.push('http://localhost/newly-added');
+  const calls = [];
+  const execAz = args => {
+    calls.push(args);
+    if (args[0] === 'account') return ok(JSON.stringify({ id: config.subscriptionId, tenantId: config.tenantId }));
+    if (args[0] === 'ad') return ok(JSON.stringify(application));
+    const patch = JSON.parse(args[args.indexOf('--body') + 1]);
+    assert.deepEqual(Object.keys(patch), ['publicClient']);
+    assert.deepEqual(Object.keys(patch.publicClient), ['redirectUris']);
+    assert.equal(args[args.indexOf('--method') + 1], 'PATCH');
+    assert.equal(args[args.indexOf('--uri') + 1], `https://graph.microsoft.com/v1.0/applications/${applicationObjectId}`);
+    assert.equal(args[args.indexOf('--subscription') + 1], config.subscriptionId);
+    application.publicClient = patch.publicClient;
+    return ok();
+  };
+  const result = registerPublicBrokerCallback(plan, { ...config,
+    registerBrokerCallback: true, confirmBrokerCallback: callbackUri,
+  }, { execAz });
+  assert.equal(result.mutationExecuted, true);
+  assert.equal(result.action, 'append');
+  assert.deepEqual(result.redirectUris, ['http://localhost', 'http://localhost/newly-added', callbackUri]);
+  for (const field of ['web', 'spa', 'appRoles', 'isFallbackPublicClient']) {
+    assert.deepEqual(application[field], original[field]);
+  }
+  assert.deepEqual(calls.map(args => args[0]), ['account', 'ad', 'rest', 'ad']);
+  const again = registerPublicBrokerCallback(result, { ...config,
+    registerBrokerCallback: true, confirmBrokerCallback: callbackUri,
+  }, { execAz });
+  assert.equal(again.action, 'noop');
+  assert.equal(again.mutationExecuted, false);
+  assert.equal(calls.filter(args => args[0] === 'rest').length, 1);
+});
+
+test('callback registration refuses absent confirmation, changed account/app, and preserves native permission failure', () => {
+  const callbackUri = deriveIdentityRouting(snapshot()).callbackUri;
+  const application = { id: applicationObjectId, appId: clientId, publicClient: { redirectUris: [] } };
+  const plan = planPublicBrokerCallback(application, clientId, callbackUri, clientId);
+  assert.equal(registerPublicBrokerCallback(plan, config, {
+    execAz: () => { throw new Error('unexpected Azure call'); },
+  }), plan);
+  for (const flags of [{ registerBrokerCallback: true }, { confirmBrokerCallback: callbackUri },
+    { registerBrokerCallback: true, confirmBrokerCallback: 'https://wrong.example.com/signin-oidc' }]) {
+    assert.throws(() => registerPublicBrokerCallback(plan, { ...config, ...flags }, {
+      execAz: () => { throw new Error('unexpected Azure call'); },
+    }), /confirmation|confirmation requires/);
+  }
+  for (const changed of [
+    { tenantId: applicationObjectId }, { id: applicationObjectId },
+    { appId: applicationObjectId }, { objectId: clientId },
+  ]) {
+    let writes = 0;
+    assert.throws(() => registerPublicBrokerCallback(plan, {
+      ...config, registerBrokerCallback: true, confirmBrokerCallback: callbackUri,
+    }, { execAz: args => {
+      if (args[0] === 'account') return ok(JSON.stringify({
+        id: changed.id ?? config.subscriptionId, tenantId: changed.tenantId ?? config.tenantId,
+      }));
+      if (args[0] === 'ad') return ok(JSON.stringify({
+        ...application, id: changed.objectId ?? applicationObjectId, appId: changed.appId ?? clientId,
+      }));
+      writes += 1;
+      return ok();
+    } }), /changed|exact upstream/);
+    assert.equal(writes, 0);
+  }
+  assert.throws(() => registerPublicBrokerCallback(plan, {
+    ...config, registerBrokerCallback: true, confirmBrokerCallback: callbackUri,
+  }, { execAz: args => {
+    if (args[0] === 'account') return ok(JSON.stringify({ id: config.subscriptionId, tenantId: config.tenantId }));
+    if (args[0] === 'ad') return ok(JSON.stringify(application));
+    return run(process.execPath, ['-e',
+      'process.stderr.write("403 Authorization_RequestDenied password=synthetic-sensitive-fixture-value");process.exit(1)'],
+    { check: false, projectJson: value => value });
+  } }), error => error.message.includes('403 Authorization_RequestDenied') &&
+    !error.message.includes('synthetic-sensitive-fixture-value'));
 });
 
 test('guarded bootstrap uses normal user kubeconfig, managed certificates in both namespaces, and no app mutation', () => {

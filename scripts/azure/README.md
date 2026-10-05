@@ -114,8 +114,24 @@ controller, backend, and namespace references must match.
 The callback plan reads only the selected application's `publicClient.redirectUris`.
 It reports `noop` for an existing exact `/signin-oidc` URI.
 Otherwise, it reports an append that preserves all existing public redirect URIs.
-It never changes the application or its Web redirect URIs.
-The operator must obtain separate approval for an application change.
+Ordinary routing setup never changes the application.
+The plan names the selected tenant, client ID, application object ID, exact
+Graph URI, public platform, and callback URI.
+
+After separate approval, `--register-identity-broker-callback` requests an append.
+It also requires `--confirm-identity-broker-callback <exact-route-callback-uri>`.
+Both options require `--bootstrap-identity-routing` and `--execute`.
+The confirmation must match the URI derived from the admitted route.
+The installer rechecks the selected tenant and subscription.
+It reads the existing application again at the write boundary.
+Client and object identity must match the plan.
+An existing callback returns `noop` without a PATCH.
+Otherwise, the PATCH changes only `publicClient.redirectUris`.
+It preserves all current public redirects, Web and SPA redirects, client mode,
+roles, and unrelated application properties.
+The installer reads the application again to verify the append.
+Native permission errors remain explicit and redacted.
+It never grants permissions, creates an application, or creates a client secret.
 
 A routing receipt sets `routingConfigured: true` and `runtimeVerified: false`.
 It is not runtime acceptance.

@@ -60,6 +60,10 @@ The base workload policy remains unchanged.
 The upstream callback remains `/signin-oidc`.
 A corrected callback registration requires separate approval after route
 hostname, DNS, and TLS verification.
+The installer defaults to a read-only callback plan.
+Its separate registration option requires confirmation of the exact callback URI.
+It fresh-reads the selected tenant and application before a public-only append.
+An existing exact URI remains a no-op.
 A route receipt does not prove a running Broker.
 The separate readiness option requires successful trusted HTTPS responses
 from both health endpoints at the observed Gateway IP.
