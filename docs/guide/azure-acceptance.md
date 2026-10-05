@@ -72,8 +72,9 @@ The verifier compares the image with its exact build source.
 It compares native deployment receipts with their own source, input hash,
 resource IDs, and deployment scope.
 An AKS-only receipt never becomes a full-foundation receipt.
-Probe version `0.0.1` requires this explicit separation in its target and
-native receipt. The old `0.0` image remains unchanged.
+The corrected initial Probe `0.0.0` requires this explicit separation in its
+target and native receipt. The previous image and publication evidence remain
+available by digest. Only the existing tag receives an explicitly approved one-time replacement.
 Legacy tag-count, inherited NRMS policy-origin, provider-generated resource
 inventory, and historical receipt audits are not required acceptance steps.
 
