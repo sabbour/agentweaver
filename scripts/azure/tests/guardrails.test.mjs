@@ -132,7 +132,37 @@ test('populated post-deployment inventory admits exact roots, untagged children,
 test('the same populated layout reaches plan, redeploy and configuration acceptance, never runtime success', () => {
   const dependencies = () => ({ sourceResolver: () => source, execAz: fakeAzure(postDeploymentAzure) });
   assert.equal(plan({ ...fixture, postgresEntraAdminObjectId: 'unreviewed-caller' }, dependencies()).status, 0);
-  assert.equal(deploy({ ...fixture, execute: true }, dependencies()).executed, true);
+  const aksSource = {
+    ...source,
+    scope: 'aks-only',
+    template: 'infra/bicep/aks-redeploy.bicep',
+    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
+    operatorObjectId: fixture.operatorObjectId,
+    postgresEntraAdminObjectId: undefined,
+  };
+  const aksOnlyAzure = {
+    ...postDeploymentAzure,
+    create: { status: 0, stderr: '', stdout: JSON.stringify({
+      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/aw-v1-p0-aks-${source.sha.slice(0, 12)}`,
+      properties: { provisioningState: 'Succeeded', outputs: {
+        sourceSha: deploymentOutputs.sourceSha,
+        sourceTree: deploymentOutputs.sourceTree,
+        sourceHash: deploymentOutputs.sourceHash,
+        clusterId: deploymentOutputs.clusterId,
+        clusterName: deploymentOutputs.clusterName,
+        controlPlanePrincipalId: deploymentOutputs.controlPlanePrincipalId,
+        operatorRoleAssignmentId: deploymentOutputs.operatorRoleAssignmentId,
+        oidcIssuerUrl: deploymentOutputs.oidcIssuerUrl,
+      } },
+    }) },
+  };
+  assert.equal(deploy({
+    ...fixture,
+    template: aksSource.template,
+    parametersFile: aksSource.parametersFile,
+    operatorObjectId: aksSource.operatorObjectId,
+    execute: true,
+  }, { sourceResolver: () => aksSource, execAz: fakeAzure(aksOnlyAzure) }).executed, true);
   const report = runAcceptance({ ...fixture, deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}` }, dependencies());
   assert.ok(!report.checks.some(check => check.name === 'target-and-source'));
   assert.equal(report.checks.find(check => check.name === 'target-inventory').status, 'passed');
@@ -235,13 +265,46 @@ test('generated NIC admission requires reciprocal approved endpoint and exact su
 
 test('module names remain exact while old source-derived deployment history is non-blocking', () => {
   const outer = postDeploymentInventory.find(resource => resource.name === `aw-v1-p0-${source.sha.slice(0, 12)}`);
+  const scopedOuter = {
+    id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/aw-v1-p0-aks-${source.sha.slice(0, 12)}`,
+    type: 'Microsoft.Resources/deployments',
+    name: `aw-v1-p0-aks-${source.sha.slice(0, 12)}`,
+  };
   const module = postDeploymentInventory.find(resource => resource.name === 'aw-v1-p0-network');
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({
     resources: [{ ...module, name: 'arbitrary', id: module.id.replace(module.name, 'arbitrary') }],
   })), /unexpected/);
   const calls = [];
   assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure({ resources: [outer] }, calls)));
+  assert.doesNotThrow(() => guardAzureTarget({ ...fixture, ...source, scope: 'aks-only' },
+    fakeAzure({ resources: [scopedOuter] })));
   assert.ok(!calls.some(args => args[0] === 'deployment' && args.includes('show')));
+});
+
+test('AKS-only admission requires all three existing workload-identity bindings unchanged', () => {
+  const config = { ...fixture, ...source, scope: 'aks-only', postgresEntraAdminObjectId: undefined };
+  assert.doesNotThrow(() => guardAzureTarget(config, fakeAzure()));
+  for (const federatedCredentials of [
+    { 'identity-broker-workload-identity': {
+      status: 1, stdout: '', stderr: '(ResourceNotFound) Credential was not found.',
+    } },
+    { 'identity-broker-workload-identity': {
+      status: 0, stdout: JSON.stringify({
+        issuer: 'https://old.example.invalid/issuer/',
+        subject: 'system:serviceaccount:agentweaver-v1-p0:wrong',
+        audiences: ['api://AzureADTokenExchange'],
+      }), stderr: '',
+    } },
+    { 'identity-broker-workload-identity': {
+      status: 0, stdout: JSON.stringify({
+        issuer: 'https://old.example.invalid/issuer/',
+        subject: 'system:serviceaccount:agentweaver-v1-p0:identity-broker',
+        audiences: ['api://AzureADTokenExchange', 'extra'],
+      }), stderr: '',
+    } },
+  ]) {
+    assert.throws(() => guardAzureTarget(config, fakeAzure({ federatedCredentials })), /workload identity credential/);
+  }
 });
 
 test('role assignments must have the exact reviewed parent scope and ARM GUID', () => {

@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
-import { guardAzureTarget } from './lib/guardrails.mjs';
+import { guardAzureTarget, resolveClusterAdminRoleAssignmentName } from './lib/guardrails.mjs';
 import { buildDeployArgs, cliConfig, cliOptions } from './deploy.mjs';
 
 export function buildWhatIfArgs(options) {
@@ -17,11 +17,14 @@ export function buildWhatIfArgs(options) {
 
 export function plan(config, { execAz = runAz, sourceResolver = resolveSource } = {}) {
   const source = sourceResolver(config);
-  const { group } = guardAzureTarget({ ...config, ...source }, execAz);
+  const { group, execAz: boundAz } = guardAzureTarget({ ...config, ...source }, execAz);
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
     throw new Error('Source parameter ownership differs from the actual target.');
   }
+  const operatorRoleAssignmentName =
+    resolveClusterAdminRoleAssignmentName({ ...config, ...source }, boundAz);
   return execAz(buildWhatIfArgs({ resourceGroup: config.resourceGroup, ...source,
+    operatorRoleAssignmentName,
     sourceSha: source.sha, subscription: config.subscriptionId }), { check: false });
 }
 

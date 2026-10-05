@@ -62,10 +62,13 @@ a dedicated-environment layout: native Bicep modules under `infra/bicep/`
 Vault, Blob storage, Azure Monitor, least-privilege per-service identities), a
 Kustomize base under `deploy/k8s/base/`, and dependency-free Node CLI tooling
 under `scripts/azure/` for read-only plan, confirmed exact-SHA deployment, and
-optional acceptance evidence collection. Source definitions are not deployment
-or runtime proof; the approved target's deployment and smoke acceptance are
-tracked separately in [#1812](https://github.com/sabbour/agentweaver/issues/1812)
-and [#1814](https://github.com/sabbour/agentweaver/issues/1814). See
+optional acceptance evidence collection. The full foundation template is for
+an approved initial deployment; an AKS-only path updates an existing cluster
+and its workload-identity federation without redeploying external P0 resources.
+Source definitions are not deployment or runtime proof; the approved target's
+deployment and smoke acceptance are tracked separately in
+[#1812](https://github.com/sabbour/agentweaver/issues/1812) and
+[#1814](https://github.com/sabbour/agentweaver/issues/1814). See
 [Azure infrastructure tooling](scripts/azure/README.md) for the guardrails.
 
 The [P0 Foundation Probe story](docs/specs/1784-foundation-probe.md) adds an

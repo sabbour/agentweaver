@@ -14,8 +14,14 @@ param tags object
 @description('Subnet resource ID the node pool attaches to.')
 param nodeSubnetId string
 
-@description('Microsoft Entra tenant for managed authentication. Operator access requires separate approved Azure RBAC assignments.')
+@description('Microsoft Entra tenant for managed authentication.')
 param tenantId string
+
+@description('Microsoft Entra object ID of the approved Kubernetes cluster administrator.')
+param operatorObjectId string
+
+@description('Exact role-assignment name resolved by guarded tooling for the approved operator.')
+param operatorRoleAssignmentName string
 
 @description('Kubernetes version. Leave empty to use the AKS default supported version.')
 param kubernetesVersion string = ''
@@ -31,6 +37,7 @@ param appRoutingDnsZoneResourceIds array = []
 
 var clusterName = '${namePrefix}-aks'
 var networkContributorRoleId = '4d97b98b-1d4f-4787-a291-c67834d212e7'
+var aksRbacClusterAdminRoleId = 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b'
 var managedDefaultDomainRequested = empty(appRoutingDnsZoneResourceIds)
 
 resource existingVnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
@@ -131,9 +138,20 @@ resource controlPlaneNetworkRole 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
+resource operatorClusterAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: operatorRoleAssignmentName
+  scope: aks
+  properties: {
+    principalId: operatorObjectId
+    principalType: 'User'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', aksRbacClusterAdminRoleId)
+  }
+}
+
 output controlPlanePrincipalId string = aks.identity.principalId
 output clusterId string = aks.id
 output clusterName string = aks.name
+output operatorRoleAssignmentId string = operatorClusterAdminRole.id
 output oidcIssuerUrl string = aks.properties.oidcIssuerProfile.issuerURL
 output kubeletIdentityObjectId string = aks.properties.identityProfile.kubeletidentity.objectId
 output appRoutingIdentity object = {

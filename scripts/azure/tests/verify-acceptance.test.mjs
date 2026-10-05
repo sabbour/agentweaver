@@ -119,6 +119,24 @@ test('acceptance receipt reader rejects missing tree, wrong deployment ID and cr
   assert.equal(checkDeployedSha({ ...fixture, ...source }, fakeAzure({ create })).status, 'blocked');
 });
 
+test('acceptance rejects an AKS-only source-bound deployment receipt as a full-foundation receipt', () => {
+  const valid = { id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
+    properties: { provisioningState: 'Succeeded', outputs: {
+      sourceSha: { value: source.sha },
+      sourceTree: { value: source.sourceTree },
+      sourceHash: { value: source.sourceHash },
+      clusterId: { value: observedCluster.id },
+      clusterName: { value: 'aw-v1-p0-aks' },
+      operatorRoleAssignmentId: { value: `${observedCluster.id}/providers/Microsoft.Authorization/roleAssignments/abc` },
+      oidcIssuerUrl: { value: 'https://issuer.example/' },
+    } } };
+  const result = checkDeployedSha({ ...fixture, ...source }, fakeAzure({
+    create: { status: 0, stdout: JSON.stringify(valid) },
+  }));
+  assert.equal(result.status, 'blocked');
+  assert.match(result.reason, /AKS-only deployment receipt is not a full-foundation receipt/);
+});
+
 test('issuer and exact subject/issuer/audience configuration never imply verified token exchange', () => {
   const check = { ...fixture, clusterName: 'aw-v1-p0-aks', identityChecks: [{
     identityName: 'aw-v1-p0-id-foundation-probe', federatedCredentialName: 'foundation-probe-workload-identity',

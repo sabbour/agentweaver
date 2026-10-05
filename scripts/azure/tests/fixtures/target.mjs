@@ -1,13 +1,17 @@
+import { armGuid, AKS_RBAC_CLUSTER_ADMIN_ROLE_ID, AKS_NETWORK_CONTRIBUTOR_ROLE_ID } from '../../lib/guardrails.mjs';
+
 export const ids = {
   subscriptionId: '11111111-1111-1111-1111-111111111111',
   allowedSubscriptionId: '11111111-1111-1111-1111-111111111111',
   tenantId: '22222222-2222-2222-2222-222222222222',
   allowedTenantId: '22222222-2222-2222-2222-222222222222',
+  operatorObjectId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
 };
 export const tags = { 'agentweaver:environment': 'v1-p0', 'agentweaver:managed-by': 'bicep',
   'agentweaver:owner': 'team', 'agentweaver:cost-center': 'p0' };
 export const source = { sha: 'a'.repeat(40), sourceTree: 'c'.repeat(40), sourceHash: 'b'.repeat(64), branch: 'candidate',
   template: 'infra/bicep/main.bicep', parametersFile: 'infra/bicep/parameters/approved.json',
+  operatorObjectId: ids.operatorObjectId,
   owner: 'team', costCenter: 'p0', scope: 'infrastructure-only',
   location: 'eastus2euap', monitorLocation: 'eastus2',
   postgresEntraAdminObjectId: '33333333-3333-3333-3333-333333333333',
@@ -18,8 +22,15 @@ export const fixture = { ...ids, resourceGroup: 'aw-v1-p0', repoRoot: process.cw
   template: source.template, parametersFile: source.parametersFile, expectedSha: source.sha,
   deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}`,
   groupId: `/subscriptions/${ids.subscriptionId}/resourceGroups/aw-v1-p0` };
+export const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`;
+export const operatorRoleAssignmentName =
+  armGuid(clusterId, ids.operatorObjectId, AKS_RBAC_CLUSTER_ADMIN_ROLE_ID);
+export const subnetId = `${fixture.groupId}/providers/Microsoft.Network/virtualNetworks/aw-v1-p0-vnet/subnets/aks`;
+export const subnetRoleAssignmentName =
+  armGuid(subnetId, clusterId, AKS_NETWORK_CONTRIBUTOR_ROLE_ID);
 export const deploymentOutputs = {
   sourceSha: { value: source.sha }, sourceTree: { value: source.sourceTree }, sourceHash: { value: source.sourceHash },
+  operatorRoleAssignmentId: { value: `${clusterId}/providers/Microsoft.Authorization/roleAssignments/${operatorRoleAssignmentName}` },
   aksClusterName: { value: 'aw-v1-p0-aks' }, storageAccountName: { value: 'awv1p0blob' },
   aksControlPlanePrincipalId: { value: '66666666-6666-6666-6666-666666666666' },
   appRoutingDomain: { value: { managedDefaultRequested: true, domainName: 'test-only.invalid' } },
@@ -27,6 +38,10 @@ export const deploymentOutputs = {
     resourceId: `/subscriptions/${ids.subscriptionId}/resourceGroups/MC_aw-v1-p0_eastus2/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-aks-app-routing`,
     clientId: '77777777-7777-7777-7777-777777777777', objectId: '88888888-8888-8888-8888-888888888888',
   } },
+  clusterName: { value: 'aw-v1-p0-aks' },
+  clusterId: { value: `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks` },
+  controlPlanePrincipalId: { value: '66666666-6666-4666-8666-666666666666' },
+  oidcIssuerUrl: { value: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/' },
   monitorWorkspaceId: { value: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
   foundationProbeIdentity: { value: {
     name: 'foundation-probe', resourceId: `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-foundation-probe`,
@@ -82,15 +97,43 @@ export function fakeAzure(overrides = {}, calls = []) {
       return { ...result, stdout: JSON.stringify(options.projectJson(JSON.parse(result.stdout))) };
     };
     calls.push(args);
+    if (args[0] === 'role' && args[1] === 'assignment' && args[2] === 'list') {
+      return overrides.operatorAssignments ?? ok([]);
+    }
+    if (args[0] === 'resource' && args[1] === 'show') {
+      const id = args[args.indexOf('--ids') + 1];
+      if (id?.toLowerCase().includes('/providers/microsoft.authorization/roleassignments/')) {
+        if (id.toLowerCase() ===
+          `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`.toLowerCase()) {
+          return overrides.networkRoleAssignment ?? {
+            status: 1, stdout: '', stderr: '(RoleAssignmentNotFound) The role assignment does not exist.',
+          };
+        }
+        if (id.toLowerCase().startsWith(
+          `${clusterId}/providers/Microsoft.Authorization/roleAssignments/`.toLowerCase())) {
+          const name = id.split('/').at(-1);
+          return overrides.details?.[id] ?? overrides.operatorRoleAssignment ?? ok({
+            id, name, type: 'Microsoft.Authorization/roleAssignments',
+            properties: {
+              scope: clusterId,
+              principalId: ids.operatorObjectId,
+              principalType: 'User',
+              roleDefinitionId: `/subscriptions/${ids.subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/${AKS_RBAC_CLUSTER_ADMIN_ROLE_ID}`,
+            },
+          });
+        }
+        return project(overrides.detailResult ?? ok(overrides.details?.[id]));
+      }
+      return project(overrides.detailResult ?? ok(overrides.details?.[id]));
+    }
+    if (args[0] === 'role' && args[1] === 'assignment' && args[2] === 'delete') {
+      return overrides.roleAssignmentDelete ?? ok({});
+    }
     if (args[0] === 'rest') return overrides.clusterResult ?? ok(observedCluster);
     if (args[0] === 'account') return overrides.accountResult ?? ok(overrides.account ??
       { id: ids.subscriptionId, tenantId: ids.tenantId, state: 'Enabled' });
     if (args[0] === 'group') return overrides.groupResult ?? ok({ id: fixture.groupId, name: 'aw-v1-p0',
       tags, ...overrides.group });
-    if (args[0] === 'resource' && args[1] === 'show') {
-      const id = args[args.indexOf('--ids') + 1];
-      return project(overrides.detailResult ?? ok(overrides.details?.[id]));
-    }
     if (args[0] === 'resource') return project(overrides.resourceResult ?? ok(overrides.resources ?? []));
     if (args[0] === 'policy' && args[1] === 'state') {
       return project(overrides.policyStateResult ?? ok(overrides.policyStates ?? []));
@@ -103,14 +146,38 @@ export function fakeAzure(overrides = {}, calls = []) {
       return project(overrides.deploymentOperationsResult ?? ok(overrides.deploymentOperations ?? []));
     }
     if (args[2] === 'what-if') return overrides.whatIf ?? ok({ changes: [] });
-    if (args[0] === 'deployment') return project(overrides.create ?? ok({
-      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
-      properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } }));
-    if (args[0] === 'aks') return overrides.issuerResult ?? {
+    if (args[0] === 'deployment') {
+      const outputs = structuredClone(deploymentOutputs);
+      const name = args[args.indexOf('--name') + 1];
+      const roleName = args.find(value => value.startsWith('operatorRoleAssignmentName='))?.split('=')[1];
+      outputs.operatorRoleAssignmentId.value =
+        `${clusterId}/providers/Microsoft.Authorization/roleAssignments/${roleName}`;
+      return project(overrides.create ?? ok({
+        id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${name}`,
+        properties: { provisioningState: 'Succeeded', outputs },
+      }));
+    }
+    if (args[0] === 'aks' && args[1] === 'show' && args.includes('--query')) return overrides.issuerResult ?? {
       status: 0,
       stdout: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
       stderr: '',
     };
+    if (args[0] === 'aks' && args[1] === 'show') return overrides.aksShow ?? {
+      status: 1, stdout: '', stderr: '(ResourceNotFound) Managed cluster was not found.',
+    };
+    if (args[0] === 'ad' && args[1] === 'sp' && args[2] === 'show') return overrides.servicePrincipal ??
+      { status: 1, stdout: '', stderr: `ERROR: Resource '${args[args.indexOf('--id') + 1]}' does not exist.` };
+    if (args[0] === 'identity' && args[1] === 'federated-credential' && args[2] === 'show') {
+      const credentialName = args[args.indexOf('--name') + 1];
+      const service = credentialName.replace(/-workload-identity$/, '');
+      const response = overrides.federatedCredentials?.[credentialName] ??
+        (service === 'foundation-probe' ? overrides.federationResult : undefined);
+      return response ?? ok({
+        issuer: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
+        subject: `system:serviceaccount:agentweaver-v1-p0:${service}`,
+        audiences: ['api://AzureADTokenExchange'],
+      });
+    }
     if (args[0] === 'identity') return overrides.federationResult ?? ok({
       issuer: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
       subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',

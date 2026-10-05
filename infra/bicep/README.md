@@ -1,13 +1,15 @@
 # Dedicated Azure P0 definitions
 
-This directory defines infrastructure. It is not a deployed environment.
-No Azure provisioning, secret reads, permission changes, or cost-bearing operation
-occurred for this change.
+These files define infrastructure; their presence does not prove that resources,
+permissions, or workloads are deployed.
 
 `main.bicep` composes a dedicated VNet, AKS with a public API endpoint and OIDC/workload identity,
 Entra-only PostgreSQL, Key Vault, Blob, and Azure Monitor.
 Key Vault and Blob have Private Endpoints and private DNS.
 PostgreSQL has a delegated subnet and private DNS.
+`aks-redeploy.bicep` is a separate, narrow update for an existing P0 foundation.
+It updates only AKS and the three existing workload-identity federated credentials;
+it does not redeploy the VNet, data services, private DNS, or monitoring.
 
 The P0 parameter example keeps the VNet, AKS, PostgreSQL, Key Vault, Blob, and
 their private endpoints in `eastus2euap`. Its required `monitorLocation` places
@@ -45,13 +47,28 @@ Run the local compiler:
 
 ```powershell
 az bicep build --file infra\bicep\main.bicep --stdout
+az bicep build --file infra\bicep\aks-redeploy.bicep --stdout
 ```
 
 This command requires no Azure login.
 The parameter examples contain placeholders and are not deploy-ready.
 The deployment tooling accepts tracked reviewed JSON parameters, not arbitrary
-files or caller-supplied source templates.
+files or caller-supplied source templates. The dedicated AKS update uses
+`aks-redeploy.bicep` with `parameters/p0-aks-redeploy.approved.json`; use the
+full `main.bicep` composition only for an approved initial deployment into an
+empty managed-resource target.
 It injects exact `sourceSha` and `sourceHash` parameters and reads matching outputs.
+
+Both deployment paths require the approved operator's Entra object ID as an
+explicit CLI input; it is not committed in a parameter file. AKS receives the
+built-in Azure Kubernetes Service RBAC Cluster Admin role at the exact cluster
+resource scope. The role assignment is permanent and is reused only when the
+principal, role, and scope match exactly. The update path gets the issuer URL
+from the created AKS resource and updates only the existing probe, broker, and
+migration federated credentials. Their ServiceAccount subjects and
+`api://AzureADTokenExchange` audience remain unchanged. The guard verifies all
+three existing records before deployment and blocks if one is missing or has
+different bindings.
 
 ## Identity and PostgreSQL
 
