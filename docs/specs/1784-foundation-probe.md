@@ -66,6 +66,15 @@ the target. The JWT claims must have the exact target issuer,
 `api://AzureADTokenExchange` audience. The Azure SDK operations then use the
 explicit `WorkloadIdentityCredential`; no alternate credential is attempted.
 
+The acceptance egress policy permits ingestion and private Logs queries separately.
+The input installer verifies the owned AMPLS endpoint and reciprocal NIC.
+Its API member must match the dedicated private DNS A record and subnet.
+Only the observed private `/32` receives Logs TCP port 443 access.
+DNS permits `api.loganalytics.io`, `api.monitor.azure.com`, and
+`api.privatelink.monitor.azure.com` without wildcards.
+An endpoint outside the approved private resources blocks installation.
+The manifest's private-IP placeholder must use this observed address, not a public fallback.
+
 ## Runtime checks and evidence
 
 Before resource operations, the probe validates

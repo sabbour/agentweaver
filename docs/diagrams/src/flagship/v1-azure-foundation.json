@@ -177,7 +177,7 @@
     { "from": "monitor", "to": "acceptance-consumer" },
     { "from": "vnet", "to": "keyvault", "label": "KV PE attachment" },
     { "from": "vnet", "to": "blob", "label": "Blob PE attachment" },
-    { "from": "vnet", "to": "monitor", "label": "in-VNet AMPLS PE" },
+    { "from": "vnet", "to": "monitor", "label": "AMPLS PE; private Logs /32" },
     { "from": "job", "to": "keyvault", "label": "secret probe" },
     { "from": "job", "to": "blob", "label": "object-store round trip" },
     { "from": "job", "to": "postgres", "label": "Entra-authenticated probe effects" }

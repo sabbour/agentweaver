@@ -25,6 +25,9 @@ spec:
               - matchName: CHANGEME-storage-account.blob.core.windows.net
               - matchName: CHANGEME-monitor-ingestion-host.in.applicationinsights.azure.com
               - matchName: CHANGEME-postgres-server.postgres.database.azure.com
+              - matchName: api.loganalytics.io
+              - matchName: api.monitor.azure.com
+              - matchName: api.privatelink.monitor.azure.com
     - toFQDNs:
         - matchName: login.microsoftonline.com
         - matchName: CHANGEME-vault-name.vault.azure.net
@@ -44,4 +47,10 @@ spec:
       toPorts:
         - ports:
             - port: "5432"
+              protocol: TCP
+    - toCIDR:
+        - CHANGEME-observed-ampls-api-private-ip/32
+      toPorts:
+        - ports:
+            - port: "443"
               protocol: TCP

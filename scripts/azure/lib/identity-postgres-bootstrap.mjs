@@ -73,16 +73,21 @@ async function stopProcess(child) {
   }
 }
 
-export function startIdentityPostgresPortForward({ kubeconfig, podName, localPort, namespace }, {
+export function startIdentityPostgresPortForward({ kubeconfig, podName, localPort, namespace, keyVault = false }, {
   spawnProcess = spawn,
   startupTimeoutMs = 30_000,
 } = {}) {
+  if (keyVault !== false && keyVault !== true)
+    throw new Error('Key Vault port-forward mode must be an explicit boolean.');
+  if (keyVault && (localPort !== 15443 || namespace !== NAMESPACE))
+    throw new Error('Key Vault port-forward requires the exact P0 namespace and loopback port 15443.');
+  const remotePort = keyVault ? 8443 : POSTGRES_PORT;
   const child = spawnProcess('kubectl', [
     '--kubeconfig', kubeconfig,
     'port-forward',
     '--address', '127.0.0.1',
     `pod/${podName}`,
-    `${localPort}:${POSTGRES_PORT}`,
+    `${localPort}:${remotePort}`,
     '--namespace', namespace,
   ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
 
@@ -104,7 +109,7 @@ export function startIdentityPostgresPortForward({ kubeconfig, podName, localPor
     };
     const onOutput = chunk => {
       output = (output + chunk.toString()).slice(-2_000);
-      if (!settled && output.includes(`Forwarding from 127.0.0.1:${localPort} -> ${POSTGRES_PORT}`)) {
+      if (!settled && output.includes(`Forwarding from 127.0.0.1:${localPort} -> ${remotePort}`)) {
         if (typeof child.pid !== 'number') {
           void fail(new Error('PostgreSQL port-forward did not expose an owned process ID.'));
           return;

@@ -291,7 +291,12 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     'CHANGEME-storage-account.blob.core.windows.net',
     'CHANGEME-monitor-ingestion-host.in.applicationinsights.azure.com',
     'CHANGEME-postgres-server.postgres.database.azure.com',
+    'api.loganalytics.io',
+    'api.monitor.azure.com',
+    'api.privatelink.monitor.azure.com',
   ]) assert.ok(probeEgress.includes(host));
+  assert.match(probeEgress, /toCIDR:\s+- CHANGEME-observed-ampls-api-private-ip\/32/);
+  assert.doesNotMatch(probeEgress, /matchPattern|0\.0\.0\.0\/0/);
   const probeJob = probeOverlay.split('---').find(document =>
     document.includes('kind: Job') && document.includes('name: foundation-probe'));
   assert.ok(probeJob);
