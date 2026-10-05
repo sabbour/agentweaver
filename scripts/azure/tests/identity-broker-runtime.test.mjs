@@ -46,6 +46,21 @@ const resourceKeys = {
   defaultdomaincertificate: 'certificate', gateway: 'gateway', httproute: 'route', backendtlspolicy: 'backendPolicy',
 };
 
+test('Deployment hashing normalizes only an equal explicit deprecated ServiceAccount alias', () => {
+  const desired = { kind: 'Deployment', spec: { strategy: { type: 'Recreate' },
+    template: { spec: { serviceAccountName: 'identity-broker', containers: [] } } } };
+  const actual = structuredClone(desired);
+  actual.spec.template.spec.serviceAccount = 'identity-broker';
+  assert.equal(brokerObjectHash(actual), brokerObjectHash(desired));
+  for (const alias of ['foreign', '', null]) {
+    actual.spec.template.spec.serviceAccount = alias;
+    assert.notEqual(brokerObjectHash(actual), brokerObjectHash(desired));
+  }
+  actual.spec.template.spec.serviceAccount = 'identity-broker';
+  delete actual.spec.template.spec.serviceAccountName;
+  assert.notEqual(brokerObjectHash(actual), brokerObjectHash(desired));
+});
+
 function gatewayRouting(host = hostname) {
   const state = routing(host);
   state.gateway.metadata.namespace = 'agentweaver-v1-gateway';

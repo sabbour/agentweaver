@@ -3,6 +3,7 @@ extern alias AzureIdentity;
 using Azure.Core;
 using Npgsql;
 using Microsoft.Extensions.Configuration;
+using System.Text.RegularExpressions;
 using AzureCliCredential = AzureIdentity::Azure.Identity.AzureCliCredential;
 
 namespace Agentweaver.Identity.Broker;
@@ -162,7 +163,91 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         }
 
         await VerifyStateAsync(adminConnection, connectionString, options, cancellationToken).ConfigureAwait(false);
+        var databaseConnectionString = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            Database = options.DatabaseName,
+        }.ConnectionString;
+        await using var databaseSource = CreateDataSource(databaseConnectionString, options.PostgresHost);
+        await using var databaseConnection = await databaseSource.OpenConnectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var grantsApplied = await ApplyRuntimeGrantsIfMigratedAsync(databaseConnection,
+            options.RuntimeRole, options.MigrationRole, cancellationToken).ConfigureAwait(false);
+        Console.WriteLine(grantsApplied
+            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=9 historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
+            : "IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING migrationHistory=absent");
         Console.WriteLine($"IDENTITY_POSTGRES_BOOTSTRAP_OK database={options.DatabaseName} schema=identity_broker");
+    }
+
+    internal static async Task<bool> ApplyRuntimeGrantsIfMigratedAsync(
+        NpgsqlConnection connection,
+        string runtimeRole,
+        string migrationRole,
+        CancellationToken cancellationToken = default)
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await using (var history = new NpgsqlCommand(
+            "SELECT to_regclass('identity_broker.__ef_migrations_history') IS NOT NULL", connection, transaction))
+        {
+            if (await history.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                return false;
+        }
+
+        await using var resource = typeof(IdentityBrokerPostgresBootstrapCommand).Assembly.GetManifestResourceStream(
+            "Agentweaver.Identity.Broker.postgres-identity-runtime-grants.sql")
+            ?? throw new InvalidOperationException("The canonical Identity runtime grants are missing.");
+        using var text = new StreamReader(resource);
+        var definition = await text.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        var tables = Regex.Matches(definition, @"'identity_broker', '([A-Za-z_]+)'")
+            .Select(match => match.Groups[1].Value).Distinct(StringComparer.Ordinal).ToArray();
+        var statements = Regex.Matches(definition, @"SELECT format\([\s\S]*?\) \\gexec")
+            .Select(match => match.Value.Replace(" \\gexec", "", StringComparison.Ordinal)).ToArray();
+        if (tables.Length != 10 || !tables.Contains("__ef_migrations_history", StringComparer.Ordinal) ||
+            statements.Length != 8)
+            throw new InvalidOperationException("The canonical Identity runtime grant contract is malformed.");
+
+        await using (var ownership = new NpgsqlCommand("""
+            SELECT count(*) = 10
+            FROM pg_catalog.pg_class relation
+            JOIN pg_catalog.pg_namespace schema ON schema.oid = relation.relnamespace
+            JOIN pg_catalog.pg_roles owner ON owner.oid = relation.relowner
+            WHERE schema.nspname = 'identity_broker' AND relation.relname = ANY(@tables)
+              AND relation.relkind = 'r' AND owner.rolname = @migrationRole
+            """, connection, transaction))
+        {
+            ownership.Parameters.AddWithValue("tables", tables);
+            ownership.Parameters.AddWithValue("migrationRole", migrationRole);
+            if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException("The exact post-migration tables are missing or have a different owner.");
+        }
+
+        foreach (var sql in statements)
+        {
+            await using var format = new NpgsqlCommand(
+                sql.Replace(":'runtime_role'", "@runtimeRole", StringComparison.Ordinal), connection, transaction);
+            format.Parameters.AddWithValue("runtimeRole", runtimeRole);
+            var grant = await format.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string
+                ?? throw new InvalidOperationException("A canonical runtime grant did not resolve.");
+            await ExecuteAsync(connection, transaction, grant, cancellationToken).ConfigureAwait(false);
+        }
+        foreach (var table in tables)
+        {
+            var history = table == "__ef_migrations_history";
+            await using var readback = new NpgsqlCommand("""
+                SELECT has_table_privilege(@runtimeRole, @relation, 'SELECT')
+                  AND has_table_privilege(@runtimeRole, @relation, 'INSERT') = @dml
+                  AND has_table_privilege(@runtimeRole, @relation, 'UPDATE') = @dml
+                  AND has_table_privilege(@runtimeRole, @relation, 'DELETE') = @dml
+                  AND NOT has_table_privilege(@runtimeRole, @relation, 'TRUNCATE,REFERENCES,TRIGGER')
+                  AND NOT has_schema_privilege(@runtimeRole, 'identity_broker', 'CREATE')
+                """, connection, transaction);
+            readback.Parameters.AddWithValue("runtimeRole", runtimeRole);
+            readback.Parameters.AddWithValue("relation", $"identity_broker.{QuoteIdentifier(table)}");
+            readback.Parameters.AddWithValue("dml", !history);
+            if (await readback.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException("The exact Identity runtime table privileges did not read back.");
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     private static NpgsqlDataSource CreateDataSource(string connectionString, string postgresHost)

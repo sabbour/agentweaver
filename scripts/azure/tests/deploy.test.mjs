@@ -145,10 +145,16 @@ test('runtime and Probe inputs are separately default-off and plans never invoke
       sourceResolver: () => source, execAz: fakeAzure(), bootstrapNamespace() { steps.push('namespace'); },
       initializeIdentityBrokerState() { steps.push('state'); },
       alignIdentityBrokerHostname() { steps.push('alignment'); },
+      initializeIdentityPostgres(config) {
+        steps.push('runtime-grants');
+        assert.equal(config.runtimePrincipalObjectId, deploymentOutputs.identityBrokerRuntimeIdentity.value.principalObjectId);
+        assert.equal(config.migrationPrincipalObjectId, deploymentOutputs.identityBrokerMigrationIdentity.value.principalObjectId);
+        return { database: 'agentweaver', schema: 'identity_broker' };
+      },
       initializeIdentityBrokerRuntime() { steps.push('runtime'); },
       initializeFoundationProbeInputs() { steps.push('probe'); },
     });
-    assert.deepEqual(steps, ['namespace', 'alignment', 'state', 'runtime', 'probe']);
+    assert.deepEqual(steps, ['namespace', 'alignment', 'state', 'runtime-grants', 'runtime', 'probe']);
     await assert.rejects(deploy({ ...fixture, brokerImage: runtime.brokerImage }), /require --bootstrap/);
 });
 
@@ -165,6 +171,36 @@ test('dry-run never invokes namespace or PostgreSQL bootstrap, even when request
   assert.equal(result.bootstrapIdentityPostgres, true);
   assert.equal(namespaceCalled, false);
   assert.equal(postgresCalled, false);
+});
+
+test('runtime phase cannot reuse the earlier initial PostgreSQL bootstrap receipt', async () => {
+    const steps = [];
+    const initialReceipt = { phase: 'initial', runtimeGrants: 'pending' };
+    const runtimeReceipt = { phase: 'runtime', runtimeGrants: 'applied' };
+    const result = await deploy({
+      ...fixture, execute: true, bootstrapIdentityPostgres: true,
+      bootstrapIdentityBrokerState: true, bootstrapIdentityBrokerRuntime: true,
+      upstreamClientId: ids.subscriptionId, acceptanceRunId: ids.subscriptionId,
+      acceptanceRedirectUri: 'http://127.0.0.1:18641/callback',
+      brokerImage: 'ghcr.io/sabbour/agentweaver.identity.broker@sha256:' + 'a'.repeat(64),
+    }, {
+      sourceResolver: () => source, execAz: fakeAzure(),
+      bootstrapNamespace() { steps.push('namespace'); },
+      initializeIdentityPostgres(config) {
+        assert.equal(config.runtimePrincipalObjectId,
+          deploymentOutputs.identityBrokerRuntimeIdentity.value.principalObjectId);
+        assert.equal(config.migrationPrincipalObjectId,
+          deploymentOutputs.identityBrokerMigrationIdentity.value.principalObjectId);
+        const initial = !steps.includes('initial-postgres');
+        steps.push(initial ? 'initial-postgres' : 'runtime-grants');
+        return initial ? initialReceipt : runtimeReceipt;
+      },
+      initializeIdentityBrokerState() { steps.push('state'); },
+      initializeIdentityBrokerRuntime() { steps.push('runtime'); return { configurationOnly: true }; },
+    });
+    assert.deepEqual(steps, ['namespace', 'initial-postgres', 'state', 'runtime-grants', 'runtime']);
+    assert.equal(result.receipt.identityPostgresBootstrap, initialReceipt);
+    assert.equal(result.receipt.identityPostgresRuntimeBootstrap, runtimeReceipt);
 });
 
 test('Identity routing is default-off with explicit placement, policy, and public client inputs', async () => {

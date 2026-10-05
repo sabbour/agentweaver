@@ -167,6 +167,64 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
         Assert.Contains("can SET ROLE", rejected.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AppliesCanonicalRuntimeGrantsOnlyAfterMigrationAndPreservesHistoryReadOnly()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        var suffix = Guid.NewGuid().ToString("N");
+        var runtime = "runtime_" + suffix;
+        var migration = "migration_" + suffix;
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using (var roles = new NpgsqlCommand($"""
+            CREATE ROLE {QuoteIdentifier(runtime)} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+            CREATE ROLE {QuoteIdentifier(migration)} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+            CREATE SCHEMA identity_broker AUTHORIZATION {QuoteIdentifier(migration)};
+            """, connection))
+            await roles.ExecuteNonQueryAsync();
+        Assert.False(await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
+            connection, runtime, migration));
+        var tables = new[] {
+            "broker_users", "pending_authorizations", "secret_grant_heads", "secret_grant_revisions",
+            "secret_grant_operations", "OpenIddictApplications", "OpenIddictAuthorizations",
+            "OpenIddictScopes", "OpenIddictTokens", "__ef_migrations_history",
+        };
+        foreach (var table in tables)
+        {
+            await using var create = new NpgsqlCommand($"""
+                CREATE TABLE identity_broker.{QuoteIdentifier(table)} (id integer);
+                ALTER TABLE identity_broker.{QuoteIdentifier(table)} OWNER TO {QuoteIdentifier(migration)};
+                """, connection);
+            await create.ExecuteNonQueryAsync();
+        }
+        for (var attempt = 0; attempt < 2; attempt++)
+            Assert.True(await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
+                connection, runtime, migration));
+        await using (var useRuntime = new NpgsqlCommand($"SET ROLE {QuoteIdentifier(runtime)}", connection))
+            await useRuntime.ExecuteNonQueryAsync();
+        await using (var permitted = new NpgsqlCommand("""
+            SELECT * FROM identity_broker.__ef_migrations_history;
+            INSERT INTO identity_broker."OpenIddictScopes" VALUES (1);
+            UPDATE identity_broker."OpenIddictScopes" SET id = 2;
+            DELETE FROM identity_broker."OpenIddictScopes";
+            """, connection))
+            await permitted.ExecuteNonQueryAsync();
+        await using (var forbidden = new NpgsqlCommand(
+            "INSERT INTO identity_broker.__ef_migrations_history VALUES (1)", connection))
+        {
+            var error = await Assert.ThrowsAsync<PostgresException>(() => forbidden.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, error.SqlState);
+        }
+        await using (var reset = new NpgsqlCommand("RESET ROLE", connection))
+            await reset.ExecuteNonQueryAsync();
+        await using (var foreignOwner = new NpgsqlCommand(
+            $"ALTER TABLE identity_broker.broker_users OWNER TO {QuoteIdentifier(runtime)}", connection))
+            await foreignOwner.ExecuteNonQueryAsync();
+        var ownershipError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(connection, runtime, migration));
+        Assert.Contains("different owner", ownershipError.Message, StringComparison.Ordinal);
+    }
+
     private static IConfiguration Configuration(
         string connectionString,
         Guid? runtimePrincipal = null,

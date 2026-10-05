@@ -192,6 +192,21 @@ objects from existing source manifests. Existing objects must match the
 source configuration and remain unchanged.
 It creates no Entra application, client secret, or permission grant.
 
+Before runtime installation, this option invokes the guarded Identity PostgreSQL
+bootstrap with the exact native runtime and migration principals.
+After migration, the bootstrap applies the existing canonical grants to nine
+explicit tables and grants SELECT-only access to the migration history.
+It rejects missing tables, a different table owner, or unexpected privileges.
+Without migration history, it reports pending grants and does not apply them.
+Read-only bootstrap verification never applies grants.
+The runtime phase invokes the bootstrap again even when initial PostgreSQL
+setup already produced a receipt.
+It never substitutes an earlier pending-grants receipt for the runtime check.
+
+Deployment comparison ignores the deprecated Pod `serviceAccount` alias only
+when it equals the explicit, nonempty `serviceAccountName`.
+A different alias or a missing explicit name remains a configuration mismatch.
+
 The runtime issuer comes from the independently observed owned route spec.
 This is intended configuration even when the Gateway is not programmed.
 The receipt reports `configurationOnly: true` and `runtimeVerified: false`.
@@ -223,7 +238,13 @@ run-owned PostgreSQL transport.
 The operator uses Entra authentication through loopback with `VerifyFull`.
 The Probe runtime role has access only to its `foundation_probe` fixture.
 It has no schema creation rights or access to `identity_broker`.
-Partial state or a different principal blocks the operation.
+Principal registration and mapping verification use the `postgres` database.
+Schema creation and fixture migrations use one transaction in `agentweaver`.
+The two database phases are not atomic together.
+After a fixture failure, a retry can reuse only the exact non-admin service
+principal with the expected role attributes.
+A schema without its role, a different principal, or unsafe privileges blocks
+the operation.
 The receipt reports fixture setup, not a successful Probe run.
 Temporary transport resources are removed by exact name and ownership.
 

@@ -160,6 +160,15 @@ principal must apply it before a real run. The role's existing outbox/inbox
 permissions remain governed by the approved PostgreSQL runtime-grants
 procedure; no blanket table grant is introduced here.
 
+The guarded operator fixture registers the exact Probe service principal in
+`postgres`, where Azure PostgreSQL exposes its Entra principal functions.
+It applies the canonical effects and embedded persistence migrations in one
+transaction in `agentweaver`.
+Principal registration and fixture creation are separate database phases.
+A retry after fixture failure verifies the exact existing non-admin principal
+and safe role attributes before it creates a missing schema.
+Different principal mappings or incompatible fixture state block the operation.
+
 ## Acceptance consumer and validation
 
 The in-pod output is only one evidence source. The external acceptance consumer

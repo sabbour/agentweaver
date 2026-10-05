@@ -328,6 +328,15 @@ schema creation, or role/database administration. The normal Identity host
 checks the schema and applied migrations and never runs migrations or
 provisions a database role.
 
+The guarded installer embeds this canonical runtime-grants file in the
+operator bootstrap command.
+After migration, the command verifies ownership of ten explicit tables and
+applies nine-table DML plus history SELECT in one transaction.
+Missing migration history produces a pending-grants marker without mutations.
+The default-off Broker runtime installer invokes this bootstrap before
+installation.
+Read-only bootstrap verification remains non-mutating.
+
 The current `PostgresOutbox.MigrateAsync` creates a schema and migration tables.
 It must run with the migration principal before runtime proof.
 Existing outbox/inbox migrations do not create the probe's domain-effect table.

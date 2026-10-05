@@ -24,4 +24,8 @@
     <ProjectReference Include="..\..\..\packages\Agentweaver.Identity\Agentweaver.Identity.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Secrets.AzureKeyVault\Agentweaver.Secrets.AzureKeyVault.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\infra\bicep\postgres-identity-runtime-grants.sql"
+                      LogicalName="Agentweaver.Identity.Broker.postgres-identity-runtime-grants.sql" />
+  </ItemGroup>
 </Project>
