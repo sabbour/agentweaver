@@ -106,6 +106,10 @@ export function checkDeployedSha({
         outputs?.sourceHash?.value !== sourceHash) {
       return blocked(name, 'No successful deployment with matching Bicep source outputs.');
     }
+    if (outputs?.clusterName?.value && !outputs?.foundationProbeIdentity?.value &&
+        !outputs?.foundationResources?.value) {
+      return blocked(name, 'The AKS-only deployment receipt is not a full-foundation receipt for acceptance.');
+    }
     return configured(name, { deployedSha: expectedSha, sourceTree, sourceHash, deploymentId: deployment.id,
       scope: 'infrastructure-only', servicesDeployed: false,
       ...readFoundationOutputs(outputs, { resourceGroup, subscriptionId, appRoutingDnsZoneResourceIds }) });

@@ -15,14 +15,21 @@ test('isFullSha accepts exactly 40 lowercase hex characters', () => {
 function sourceFixture(overrides = {}) {
   const root = process.cwd();
   const selectedSha = overrides.config?.expectedSha ?? source.sha;
-  const template = 'infra/bicep/main.bicep';
-  const parameterPath = 'infra/bicep/parameters/approved.json';
-  const parameterValues = { namePrefix: { value: 'aw-v1-p0' },
-    tenantId: { value: ids.tenantId }, owner: { value: 'team' }, costCenter: { value: 'p0' },
-    location: { value: source.location }, monitorLocation: { value: source.monitorLocation },
-    postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId },
-    postgresEntraAdminPrincipalName: { value: source.postgresEntraAdminPrincipalName },
-    postgresEntraAdminPrincipalType: { value: source.postgresEntraAdminPrincipalType } };
+  const template = overrides.config?.template ?? 'infra/bicep/main.bicep';
+  const aksOnly = template === 'infra/bicep/aks-redeploy.bicep';
+  const parameterPath = overrides.config?.parametersFile ?? (aksOnly
+    ? 'infra/bicep/parameters/p0-aks-redeploy.approved.json'
+    : 'infra/bicep/parameters/approved.json');
+  const parameterValues = aksOnly
+    ? { namePrefix: { value: 'aw-v1-p0' }, tenantId: { value: ids.tenantId },
+      owner: { value: 'team' }, costCenter: { value: 'p0' }, location: { value: source.location },
+      appRoutingDnsZoneResourceIds: { value: [] } }
+    : { namePrefix: { value: 'aw-v1-p0' },
+      tenantId: { value: ids.tenantId }, owner: { value: 'team' }, costCenter: { value: 'p0' },
+      location: { value: source.location }, monitorLocation: { value: source.monitorLocation },
+      postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId },
+      postgresEntraAdminPrincipalName: { value: source.postgresEntraAdminPrincipalName },
+      postgresEntraAdminPrincipalType: { value: source.postgresEntraAdminPrincipalType } };
   Object.assign(parameterValues, overrides.parameterValues);
   if (!overrides.omitZones) parameterValues.appRoutingDnsZoneResourceIds = { value: overrides.zoneIds ?? [] };
   const parameters = JSON.stringify({ parameters: parameterValues });
@@ -74,7 +81,26 @@ test('exact source hashes tracked reviewed inputs and binds JSON parameters to t
   assert.equal(receipt.postgresEntraAdminObjectId, source.postgresEntraAdminObjectId);
   assert.equal(receipt.postgresEntraAdminPrincipalName, source.postgresEntraAdminPrincipalName);
   assert.equal(receipt.postgresEntraAdminPrincipalType, 'User');
+  assert.equal(receipt.operatorObjectId, fixture.operatorObjectId);
   assert.deepEqual(receipt.appRoutingDnsZoneResourceIds, []);
+});
+
+test('AKS-only source accepts only its reviewed template and parameter file', () => {
+  const { config, deps } = sourceFixture({ config: { template: 'infra/bicep/aks-redeploy.bicep' } });
+  const receipt = resolveSource(config, deps);
+  assert.equal(receipt.scope, 'aks-only');
+  assert.equal(receipt.template.endsWith('aks-redeploy.bicep'), true);
+  assert.equal(receipt.parametersFile.endsWith('p0-aks-redeploy.approved.json'), true);
+  assert.equal(receipt.operatorObjectId, fixture.operatorObjectId);
+
+  for (const overrides of [
+    { config: { template: 'infra/bicep/aks-redeploy.bicep', parametersFile: 'infra/bicep/parameters/approved.json' } },
+    { config: { operatorObjectId: undefined } },
+    { config: { operatorObjectId: 'not-a-guid' } },
+  ]) {
+    const invalid = sourceFixture({ config: { template: 'infra/bicep/aks-redeploy.bicep', ...overrides.config } });
+    assert.throws(() => resolveSource(invalid.config, invalid.deps));
+  }
 });
 
 test('acceptance pins an ancestor deployment source separately from the reviewed verifier HEAD', () => {

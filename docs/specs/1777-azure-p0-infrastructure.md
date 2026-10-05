@@ -1,7 +1,7 @@
 # Story: Dedicated Azure P0 infrastructure
 
 **Issue:** [#1777](https://github.com/sabbour/agentweaver/issues/1777).
-**Status:** Definitions and offline validation only. No deployed acceptance.
+**Status:** Source definitions and validation tooling; no completed P0 smoke acceptance.
 
 ## Scope
 
@@ -21,9 +21,9 @@ egress. Identity runtime and migration have their own separate UAMIs and
 federated ServiceAccounts. No Azure resource, principal, PostgreSQL role, or
 Kubernetes workload was created by these source definitions.
 
-No live provisioning, secret reads, permission changes, bootstrap, deployment,
-or cleanup occurred. Future cloud operations require separate explicit approval
-for the dedicated target and each owned write effect.
+The source definitions do not provision resources or prove runtime behavior.
+Cloud operations require separate explicit approval for the dedicated target
+and each owned write effect.
 
 ## Dedicated target
 
@@ -70,8 +70,18 @@ region; no cross-region database subnet is created.
 
 The tooling requires a clean full HEAD commit equal to the locally fetched
 admitted `origin/v1` tip. An unreviewed descendant does not pass.
-It accepts only tracked `infra/bicep/main.bicep` and
-tracked JSON parameters beneath `infra/bicep/parameters`.
+It accepts only tracked `infra/bicep/main.bicep` or
+`infra/bicep/aks-redeploy.bicep` and their dedicated tracked JSON parameters
+beneath `infra/bicep/parameters`. Use the full foundation template only for an
+approved initial deployment into an empty managed-resource target. The
+AKS-only template updates an existing cluster and its three workload-identity
+federated credentials without redeploying external data, network, DNS, or
+monitoring resources.
+Select the AKS-only route with `--template infra\bicep\aks-redeploy.bicep` and
+`--parameters infra\bicep\parameters\p0-aks-redeploy.approved.json`.
+Both `plan.mjs` and `deploy.mjs` require the approved `--operator-object-id`;
+the deploy guard requires a clean HEAD equal to the fetched admitted
+`origin/v1` tip rather than a caller-supplied expected SHA.
 Untracked, ignored, changed, outside-repository, and 0.x inputs fail closed.
 The source hash covers all tracked infrastructure inputs.
 The existing dependency-free release validator checks manifest compatibility.
@@ -90,6 +100,18 @@ The returned receipt binds the successful deployment ID, subscription,
 tenant, resource group, source SHA, Git tree SHA, and input hash.
 The Git tree SHA has 40 hexadecimal characters.
 It is not the 64-character SHA-256 infrastructure input hash.
+
+Both deployment paths require the approved operator's Entra object ID as an
+explicit input. They create or reuse only the built-in Azure Kubernetes
+Service RBAC Cluster Admin assignment for that principal at the exact AKS
+resource scope. The grant is permanent and is never broadened or removed by
+the tooling. The AKS-only template reads the issuer URL from the cluster and
+updates exactly the existing probe, broker, and migration federated
+credentials, preserving their ServiceAccount subjects and
+`api://AzureADTokenExchange` audience. The guard requires all three credentials
+to exist with those bindings before deployment. Its deployment receipt is
+scoped evidence, not the full-foundation receipt required by the Foundation
+Probe consumer.
 
 The `foundationProbeIdentity` output selects the principal by service name, not parallel-array order.
 It contains `name`, `resourceId`, `clientId`, `principalObjectId`, `namespace`, and `serviceAccount`.
@@ -116,10 +138,10 @@ Digest format checks alone cannot prove a running pod.
 
 AKS exposes a public API endpoint and uses managed Entra authentication with
 Azure RBAC; local accounts are disabled. A public FQDN on a private API does
-not meet this requirement. The tenant comes from the exact reviewed parameters.
-Operator access still requires separately approved scoped Kubernetes
-permissions; this template defines no operator grants or local administrator
-fallback.
+not meet this requirement. The tenant comes from the exact reviewed parameters. The operator object ID
+must be explicitly approved; the template grants only the built-in AKS
+Cluster Admin role at the cluster resource scope. It does not enable local
+accounts or grant Azure permissions at resource-group or subscription scope.
 
 AKS enables ACNS security and leaves ACNS observability disabled. This
 security-only setting supports the #1784 FQDN-filtering work; it does not

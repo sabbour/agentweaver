@@ -10,6 +10,8 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(template.parameters.sourceTree.type, 'string');
   assert.equal(template.parameters.sourceHash.type, 'string');
   assert.equal(template.parameters.monitorLocation.type, 'string');
+  assert.equal(template.parameters.operatorObjectId.type, 'string');
+  assert.equal(template.parameters.operatorRoleAssignmentName.type, 'string');
   assert.deepEqual(template.parameters.postgresEntraAdminPrincipalType.allowedValues, [
     'User', 'Group', 'ServicePrincipal',
   ]);
@@ -90,6 +92,17 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.ok(!aksDeployment.dependsOn.some(dependency => dependency.includes("{0}-identity")));
   assert.equal(assignment.name,
     "[guid(parameters('nodeSubnetId'), resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), variables('networkContributorRoleId'))]");
+  const operatorRole = aks.resources.find(resource =>
+    resource.name === "[parameters('operatorRoleAssignmentName')]");
+  assert.ok(operatorRole);
+  assert.equal(operatorRole.scope,
+    "[resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName'))]");
+  assert.equal(operatorRole.properties.principalId, "[parameters('operatorObjectId')]");
+  assert.equal(operatorRole.properties.principalType, 'User');
+  assert.equal(operatorRole.properties.roleDefinitionId,
+    "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksRbacClusterAdminRoleId'))]");
+  assert.equal(aks.variables.aksRbacClusterAdminRoleId, 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b');
+  assert.match(aks.outputs.operatorRoleAssignmentId.value, /operatorRoleAssignmentName/);
   const identityDeployment = template.resources.find(resource =>
     resource.name === "[format('{0}-identity', parameters('namePrefix'))]");
   const identities = identityDeployment.properties.template;
@@ -177,9 +190,21 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   for (const field of [
     'appRoutingIdentity', 'appRoutingDomain', 'foundationProbeIdentity',
     'identityBrokerRuntimeIdentity', 'identityBrokerMigrationIdentity', 'foundationResources', 'sourceTree',
+    'operatorRoleAssignmentId',
   ]) {
     assert.ok(template.outputs[field]);
   }
+  const aksOnly = JSON.parse(runAz([
+    'bicep', 'build', '--file', 'infra/bicep/aks-redeploy.bicep', '--stdout',
+  ]).stdout);
+  assert.equal(aksOnly.parameters.operatorObjectId.type, 'string');
+  assert.equal(aksOnly.parameters.operatorRoleAssignmentName.type, 'string');
+  assert.ok(aksOnly.outputs.operatorRoleAssignmentId);
+  assert.ok(aksOnly.outputs.oidcIssuerUrl);
+  assert.deepEqual(aksOnly.resources.map(resource => resource.name), [
+    "[format('{0}-aks', parameters('namePrefix'))]",
+    "[format('{0}-workload-identity-federation', parameters('namePrefix'))]",
+  ]);
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/base']).stdout;
   assert.match(rendered, /kind: ServiceAccount/);
   assert.match(rendered, /foundation-probe/);

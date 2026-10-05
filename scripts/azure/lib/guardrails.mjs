@@ -25,6 +25,16 @@ const PRIVATE_DNS_ZONES = [
 ];
 const NRMS_NSG_NAME = 'NRMS-gxlttooqhupscaw-v1-p0-vnet';
 const FAILURE_ANOMALIES_NAME = 'Failure Anomalies - aw-v1-p0-appi';
+export const AKS_RBAC_ADMIN_ROLE_ID = '3498e952-d568-435e-9b2c-8d77e338d7f7';
+export const AKS_RBAC_CLUSTER_ADMIN_ROLE_ID = 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b';
+export const AKS_NETWORK_CONTRIBUTOR_ROLE_ID = '4d97b98b-1d4f-4787-a291-c67834d212e7';
+const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const ROLE_ASSIGNMENT_API_VERSION = '2022-04-01';
+const AKS_WORKLOAD_IDENTITIES = [
+  ['foundation-probe', 'foundation-probe-workload-identity'],
+  ['identity-broker', 'identity-broker-workload-identity'],
+  ['identity-broker-migration', 'identity-broker-migration-workload-identity'],
+];
 
 export function assertDedicatedTarget(name, kind = 'resource group') {
   if (typeof name !== 'string' || !DEDICATED_NAME_PATTERN.test(name)) {
@@ -208,13 +218,166 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
 }
 
 // ARM guid() uses UUID v5 with this namespace and hyphen-joined arguments.
-function armGuid(...values) {
+export function armGuid(...values) {
   const namespace = Buffer.from('11fb06fb712d4ddd98c7e71bbd588830', 'hex');
   const bytes = createHash('sha1').update(namespace).update(values.join('-')).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export function resolveClusterAdminRoleAssignmentName({ resourceGroup, subscriptionId, operatorObjectId }, execAz) {
+  if (!GUID_PATTERN.test(operatorObjectId ?? '')) throw new Error('Kubernetes operator object ID is invalid.');
+  const clusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
+  const roleDefinitionId =
+    `/subscriptions/${subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/${AKS_RBAC_CLUSTER_ADMIN_ROLE_ID}`;
+  const result = execAz(['role', 'assignment', 'list', '--scope', clusterId, '-o', 'json'], { check: false });
+  if (result.status !== 0) throw new Error(`AKS operator role lookup failed: ${result.stderr}`);
+  let assignments;
+  try {
+    assignments = JSON.parse(result.stdout);
+  } catch {
+    throw new Error('AKS operator role lookup returned malformed JSON.');
+  }
+  if (!Array.isArray(assignments)) throw new Error('AKS operator role lookup did not return a list.');
+  const matches = assignments.filter(assignment =>
+    assignment?.principalId?.toLowerCase() === operatorObjectId.toLowerCase() &&
+    assignment?.roleDefinitionId?.toLowerCase() === roleDefinitionId.toLowerCase());
+  if (matches.length > 1) throw new Error('Duplicate AKS Cluster Admin assignments exist for the selected operator.');
+  if (matches.length === 0) return armGuid(clusterId, operatorObjectId, AKS_RBAC_CLUSTER_ADMIN_ROLE_ID);
+  const [assignment] = matches;
+  if (assignment.principalType !== 'User' ||
+      assignment.scope?.toLowerCase() !== clusterId.toLowerCase() ||
+      !GUID_PATTERN.test(assignment.name ?? '') ||
+      assignment.id?.toLowerCase() !==
+        `${clusterId}/providers/Microsoft.Authorization/roleAssignments/${assignment.name}`.toLowerCase()) {
+    throw new Error('The existing AKS Cluster Admin assignment is not the exact operator-scoped assignment.');
+  }
+  return assignment.name;
+}
+
+function readRoleAssignment(assignmentId, execAz) {
+  return execAz(['resource', 'show', '--ids', assignmentId, '--api-version', ROLE_ASSIGNMENT_API_VERSION, '-o', 'json'],
+    { check: false });
+}
+
+export function verifyClusterAdminRoleAssignment({ resourceGroup, subscriptionId, operatorObjectId }, assignmentName, execAz) {
+  if (!GUID_PATTERN.test(assignmentName ?? '') || !GUID_PATTERN.test(operatorObjectId ?? '')) {
+    throw new Error('AKS Cluster Admin assignment name or operator object ID is invalid.');
+  }
+  const clusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
+  const assignmentId = `${clusterId}/providers/Microsoft.Authorization/roleAssignments/${assignmentName}`;
+  const roleDefinitionId =
+    `/subscriptions/${subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/${AKS_RBAC_CLUSTER_ADMIN_ROLE_ID}`;
+  const result = readRoleAssignment(assignmentId, execAz);
+  if (result.status !== 0) throw new Error(`AKS Cluster Admin assignment verification failed: ${result.stderr}`);
+  let assignment;
+  try {
+    assignment = JSON.parse(result.stdout);
+  } catch {
+    throw new Error('AKS Cluster Admin assignment verification returned malformed JSON.');
+  }
+  if (assignment?.id?.toLowerCase() !== assignmentId.toLowerCase() ||
+      assignment?.name?.toLowerCase() !== assignmentName.toLowerCase() ||
+      assignment?.properties?.scope?.toLowerCase() !== clusterId.toLowerCase() ||
+      assignment?.properties?.principalId?.toLowerCase() !== operatorObjectId.toLowerCase() ||
+      assignment?.properties?.principalType !== 'User' ||
+      assignment?.properties?.roleDefinitionId?.toLowerCase() !== roleDefinitionId.toLowerCase()) {
+    throw new Error('AKS Cluster Admin assignment does not match the exact approved user, built-in role and cluster scope.');
+  }
+  return assignmentId;
+}
+
+export function findDanglingAksSubnetRoleAssignment({ resourceGroup, subscriptionId }, execAz) {
+  const clusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
+  const subnetId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/virtualNetworks/${resourceGroup}-vnet/subnets/aks`;
+  const assignmentName = armGuid(subnetId, clusterId, AKS_NETWORK_CONTRIBUTOR_ROLE_ID);
+  const assignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${assignmentName}`;
+  const assignmentResult = readRoleAssignment(assignmentId, execAz);
+  if (assignmentResult.status !== 0) {
+    if (/\((?:RoleAssignmentNotFound|ResourceNotFound)\)|\b404\b/i.test(assignmentResult.stderr)) return undefined;
+    throw new Error(`Exact AKS subnet role lookup failed: ${assignmentResult.stderr}`);
+  }
+  let assignment;
+  try {
+    assignment = JSON.parse(assignmentResult.stdout);
+  } catch {
+    throw new Error('Exact AKS subnet role lookup returned malformed JSON.');
+  }
+  const expectedRole =
+    `/subscriptions/${subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/${AKS_NETWORK_CONTRIBUTOR_ROLE_ID}`;
+  const properties = assignment?.properties;
+  if (assignment?.id?.toLowerCase() !== assignmentId.toLowerCase() ||
+      assignment?.name?.toLowerCase() !== assignmentName.toLowerCase() ||
+      properties?.scope?.toLowerCase() !== subnetId.toLowerCase() ||
+      properties?.roleDefinitionId?.toLowerCase() !== expectedRole.toLowerCase() ||
+      properties?.principalType !== 'ServicePrincipal' ||
+      !GUID_PATTERN.test(properties?.principalId ?? '')) {
+    throw new Error('The exact AKS subnet assignment does not match the reviewed Network Contributor binding.');
+  }
+  const clusterResult = execAz(['aks', 'show', '--resource-group', resourceGroup, '--name', `${resourceGroup}-aks`, '-o', 'json'],
+    { check: false });
+  let clusterPrincipalId;
+  if (clusterResult.status === 0) {
+    let cluster;
+    try {
+      cluster = JSON.parse(clusterResult.stdout);
+    } catch {
+      throw new Error('AKS lookup returned malformed JSON while checking the subnet role.');
+    }
+    if (cluster?.id?.toLowerCase() !== clusterId.toLowerCase() ||
+        !GUID_PATTERN.test(cluster?.identity?.principalId ?? '')) {
+      throw new Error('AKS identity does not match the exact target while checking the subnet role.');
+    }
+    clusterPrincipalId = cluster.identity.principalId;
+    if (clusterPrincipalId.toLowerCase() === properties.principalId.toLowerCase()) return undefined;
+  } else if (!/\(ResourceNotFound\)/i.test(clusterResult.stderr)) {
+    throw new Error(`AKS lookup failed while checking the subnet role: ${clusterResult.stderr}`);
+  }
+  const principalResult = execAz(['ad', 'sp', 'show', '--id', properties.principalId, '-o', 'json'], { check: false });
+  if (principalResult.status === 0) {
+    let principal;
+    try {
+      principal = JSON.parse(principalResult.stdout);
+    } catch {
+      throw new Error('The AKS subnet role principal lookup returned malformed JSON.');
+    }
+    if (principal?.id?.toLowerCase() !== properties.principalId.toLowerCase()) {
+      throw new Error('The AKS subnet role principal lookup returned a different service principal.');
+    }
+    throw new Error(clusterPrincipalId
+      ? 'The prior AKS subnet role principal still exists; refusing to replace its assignment automatically.'
+      : 'The cluster is absent but its subnet role principal still exists; refusing to remove the assignment automatically.');
+  }
+  const notFound = new RegExp(`Resource ['"]?${properties.principalId}['"]? does not exist`, 'i');
+  if (!notFound.test(principalResult.stderr)) {
+    throw new Error(`The AKS subnet role principal could not be verified as deleted: ${principalResult.stderr}`);
+  }
+  return assignmentId;
+}
+
+function assertExistingAksFederatedCredentials({ resourceGroup }, execAz) {
+  for (const [service, credentialName] of AKS_WORKLOAD_IDENTITIES) {
+    const result = execAz(['identity', 'federated-credential', 'show', '--name', credentialName,
+      '--identity-name', `${resourceGroup}-id-${service}`, '--resource-group', resourceGroup, '-o', 'json'],
+    { check: false });
+    if (result.status !== 0) {
+      throw new Error(`Existing AKS workload identity credential lookup failed for ${credentialName}: ${result.stderr}`);
+    }
+    let credential;
+    try {
+      credential = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(`Existing AKS workload identity credential ${credentialName} returned malformed JSON.`);
+    }
+    const subject = `system:serviceaccount:agentweaver-v1-p0:${service}`;
+    if (typeof credential?.issuer !== 'string' || !credential.issuer.startsWith('https://') ||
+        credential.subject !== subject || !Array.isArray(credential.audiences) ||
+        credential.audiences.length !== 1 || credential.audiences[0] !== 'api://AzureADTokenExchange') {
+      throw new Error(`Existing AKS workload identity credential ${credentialName} has unexpected bindings.`);
+    }
+  }
 }
 
 // Shared by plan, deploy and acceptance. A caller's ID is not account evidence.
@@ -319,7 +482,8 @@ export function guardAzureTarget(config, execAz) {
   if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.postgresEntraAdminObjectId ?? '')) {
     child('microsoft.dbforpostgresql/flexibleservers/administrators', `${resourceGroup}-pg/${config.postgresEntraAdminObjectId}`);
   }
-  for (const name of ['network', 'aks', 'keyvault', 'storage', 'monitor', 'postgres', 'identity']) {
+  for (const name of ['network', 'aks', 'keyvault', 'storage', 'monitor', 'postgres', 'identity',
+    'workload-identity-federation']) {
     child('microsoft.resources/deployments', `${resourceGroup}-${name}`);
   }
   const identityId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', `${resourceGroup}-id-foundation-probe`);
@@ -359,6 +523,9 @@ export function guardAzureTarget(config, execAz) {
   const readResource = (id, projectJson) => jsonResult(boundAz(['resource', 'show', '--ids', id, '-o', 'json'],
     { check: false, ...(projectJson ? { projectJson } : {}) }), 'Resource relationship lookup');
   const seen = new Set();
+  const operatorClusterRoleAssignments = new Set();
+  const operatorRoleAssignmentPrefix = `${aksId}/providers/Microsoft.Authorization/roleAssignments/`.toLowerCase();
+  let observedPostgresAdministrator;
   for (const resource of resources) {
     if (typeof resource.id !== 'string' || !resource.id.toLowerCase().startsWith(`${groupId.toLowerCase()}/providers/`)) {
       throw new Error('Resource inventory contains a resource outside the exact dedicated group.');
@@ -368,6 +535,40 @@ export function guardAzureTarget(config, execAz) {
     if (seen.has(id)) throw new Error('Resource inventory contains a duplicate ID.');
     seen.add(id);
     const expected = expectedIds.get(id);
+    if (type === 'microsoft.authorization/roleassignments' &&
+        resource.id.toLowerCase().startsWith(operatorRoleAssignmentPrefix)) {
+      const role = readResource(resource.id);
+      const roleId = role.properties?.roleDefinitionId?.split('/').at(-1)?.toLowerCase();
+      const allowedRoles = new Set([AKS_RBAC_ADMIN_ROLE_ID, AKS_RBAC_CLUSTER_ADMIN_ROLE_ID]);
+      const semanticKey = `${role.properties?.principalId?.toLowerCase()}:${roleId}`;
+      const expectedId = `${aksId}/providers/Microsoft.Authorization/roleAssignments/${resource.name}`;
+      if (!GUID_PATTERN.test(config.operatorObjectId ?? '') ||
+          !sameId(role.id, resource.id) || role.type?.toLowerCase() !== type ||
+          role.name?.toLowerCase() !== resource.name?.toLowerCase() ||
+          !GUID_PATTERN.test(resource.name ?? '') || !sameId(resource.id, expectedId) ||
+          !sameId(role.properties?.scope, aksId) ||
+          !sameId(role.properties?.principalId, config.operatorObjectId) ||
+          role.properties?.principalType !== 'User' || !allowedRoles.has(roleId)) {
+        throw new Error('AKS cluster role assignment is outside the exact approved operator and built-in role scopes.');
+      }
+      if (operatorClusterRoleAssignments.has(semanticKey)) {
+        throw new Error('Duplicate permanent AKS operator role assignments exist for the same role.');
+      }
+      operatorClusterRoleAssignments.add(semanticKey);
+      continue;
+    }
+    if (!expected && config.scope === 'aks-only' &&
+        type === 'microsoft.dbforpostgresql/flexibleservers/administrators') {
+      const parentId = `${resourceId('Microsoft.DBforPostgreSQL/flexibleServers', `${resourceGroup}-pg`)}/administrators/`;
+      const principalObjectId = resource.id.slice(parentId.length);
+      if (observedPostgresAdministrator || !GUID_PATTERN.test(principalObjectId) ||
+          !sameId(resource.id, `${parentId}${principalObjectId}`) ||
+          resource.name?.toLowerCase() !== `${resourceGroup}-pg/${principalObjectId}`.toLowerCase()) {
+        throw new Error('Existing PostgreSQL administrator is not the single exact P0 server binding.');
+      }
+      observedPostgresAdministrator = principalObjectId;
+      continue;
+    }
     if (type === 'microsoft.network/networkinterfaces' &&
         sameId(resource.id, resourceId('Microsoft.Network/networkInterfaces', resource.name))) {
       const nic = readResource(resource.id);
@@ -393,7 +594,7 @@ export function guardAzureTarget(config, execAz) {
     // Top-level deployment records are control-plane history, not deployed resources.
     if (!expected && type === 'microsoft.resources/deployments' &&
         typeof resource.name === 'string' && resource.name.startsWith(`${resourceGroup}-`) &&
-        /^[0-9a-f]{12}$/.test(resource.name.slice(resourceGroup.length + 1)) &&
+        /^(?:[0-9a-f]{12}|aks-[0-9a-f]{12})$/.test(resource.name.slice(resourceGroup.length + 1)) &&
         sameId(resource.id, resourceId('Microsoft.Resources/deployments', resource.name))) {
       continue;
     }
@@ -469,5 +670,6 @@ export function guardAzureTarget(config, execAz) {
       throw new Error('Custom App Routing DNS zone is not the exact existing zone resource.');
     }
   }
-  return { execAz: boundAz, group, inventoryEvidence };
+  if (config.scope === 'aks-only') assertExistingAksFederatedCredentials({ resourceGroup, subscriptionId }, boundAz);
+  return { execAz: boundAz, group, inventoryEvidence, resources };
 }

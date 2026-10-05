@@ -27,6 +27,15 @@ SHA/tree/input hash. A public API endpoint is required:
 `apiServerAccessProfile.enablePrivateCluster` must be `false`. A publicly
 resolvable FQDN on a private cluster does not satisfy this requirement.
 
+For an existing P0 foundation, use the guarded AKS-only update path. It updates
+the cluster and three existing workload-identity federation records without
+redeploying PostgreSQL, Key Vault, Blob, VNet, private DNS, or Monitor. Supply
+the approved operator's Entra object ID explicitly. The deployment creates or
+reuses a permanent Azure Kubernetes Service RBAC Cluster Admin assignment at
+the exact AKS resource scope; it does not grant broader Azure scope or remove
+that assignment. Its scoped receipt is not a full-foundation receipt and
+cannot be used by the Foundation Probe acceptance collector.
+
 The AKS API uses managed Entra authentication and Azure RBAC, with local
 accounts disabled. PostgreSQL, Key Vault, Blob, VNet/private endpoints, and
 Monitor retain their approved target and region placement.

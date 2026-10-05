@@ -12,6 +12,7 @@ Run these commands from the repository root:
 ```powershell
 npm run test:azure
 az bicep build --file infra\bicep\main.bicep --stdout
+az bicep build --file infra\bicep\aks-redeploy.bicep --stdout
 kubectl kustomize deploy\k8s\base
 npm run release:validate
 npm run test:release
@@ -114,8 +115,12 @@ root tags and old resource-operation metadata are not deployment blockers.
 
 The source must be a clean full HEAD commit equal to the locally fetched
 admitted `origin/v1` tip. Unreviewed descendants fail closed.
-Only the tracked main template and tracked JSON parameters
-under `infra/bicep/parameters` are supported.
+Only the tracked `main.bicep` and `aks-redeploy.bicep` templates and their
+dedicated tracked JSON parameter files under `infra/bicep/parameters` are
+supported. Use `main.bicep` only for an approved initial deployment into an
+empty managed-resource target. Use the AKS-only template for an existing P0
+foundation; it does not redeploy the VNet, PostgreSQL, Key Vault, Blob, private
+DNS, or Monitor resources.
 The checked-in examples contain placeholders and cannot run.
 The selected JSON parameters must bind prefix, tenant, owner, and cost center.
 The input hash covers all tracked infrastructure files.
@@ -129,26 +134,55 @@ source. The report keeps `candidate.verifierSha` separate from the deployed
 `candidate.sourceSha`, so a docs-only verifier advance does not rewrite the
 provenance of an already deployed artifact.
 
+Both deployment modes require `--operator-object-id` with the approved
+operator's Entra object ID. The tooling resolves a deterministic assignment
+name and creates or reuses only that principal's built-in Azure Kubernetes
+Service RBAC Cluster Admin assignment at the exact AKS resource scope. This
+permanent grant is not removed or broadened to resource-group or subscription
+scope. The existing subnet Network Contributor assignment is retained; it is
+removed only when its exact deterministic binding is proven to reference a
+deleted cluster principal, and otherwise the operation fails closed.
+
+The AKS-only template reads the issuer URL from the deployed cluster and
+updates exactly the three existing P0 workload-identity federated credentials.
+It preserves their ServiceAccount subjects and
+`api://AzureADTokenExchange` audience. The guard requires all three credentials
+to exist with those exact bindings; missing or changed credentials block before
+deployment. Its source-bound receipt covers only the AKS update and is not a
+full-foundation receipt for the Foundation Probe acceptance collector.
+
 After separate approval, the operator command shape is:
 
 ```powershell
-node scripts\azure\deploy.mjs --resource-group aw-v1-p0 --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id>
+node scripts\azure\deploy.mjs --resource-group aw-v1-p0 --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id> --operator-object-id <operator-user-object-guid>
+```
+
+The default template is `infra\bicep\main.bicep`; it is for an approved initial
+deployment into an empty managed-resource target. To update an existing P0
+foundation, select the dedicated template and parameter file explicitly:
+
+```powershell
+node scripts\azure\deploy.mjs --resource-group aw-v1-p0 --template infra\bicep\aks-redeploy.bicep --parameters infra\bicep\parameters\p0-aks-redeploy.approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id> --operator-object-id <operator-user-object-guid>
 ```
 
 Without `--execute`, this command produces an offline infrastructure summary.
 It makes no Azure call.
-`plan.mjs` uses the same arguments for a guarded live read-only what-if.
-`deploy.mjs --execute` performs the guarded what-if before Incremental create.
+For either template, `plan.mjs` accepts the same selection and target
+arguments for a guarded live read-only what-if. `deploy.mjs --execute` performs
+the guarded what-if before Incremental create. The source guard requires a
+clean HEAD equal to the fetched admitted `origin/v1` tip; deployment does not
+accept a caller-selected `--expected-sha`.
 Bicep source parameters and outputs bind the receipt to exact reviewed inputs.
 No unsupported deployment tags occur.
 
 ## Acceptance
 
-`verify-acceptance.mjs` accepts the same source/target arguments, plus
-`--expected-sha` and `--deployment-name`. It always checks the exact source-bound
-deployment, target ownership, observed AKS security settings, and exact
-workload-identity federation configuration. Those configuration checks do not
-prove that a Job ran or exchanged a token.
+`verify-acceptance.mjs` accepts the full-foundation source/target arguments,
+including the operator object ID, plus `--expected-sha` and `--deployment-name`.
+It always checks the exact source-bound full-foundation deployment, target
+ownership, observed AKS security settings, and exact workload-identity
+federation configuration. It rejects an AKS-only deployment receipt. These
+configuration checks do not prove that a Job ran or exchanged a token.
 
 Successful deployment outputs include `foundationProbeIdentity` and `foundationResources`.
 The tooling checks their exact dedicated resource IDs, endpoints, namespace, ServiceAccount, and workspace GUID.

@@ -70,6 +70,11 @@ var keyVaultCertificateUserRoleId = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 var logAnalyticsReaderRoleId = '73c42c96-874c-492b-b04d-ab87d138a893'
 var monitoringMetricsPublisherRoleId = '3913510d-42f4-4e42-8a64-420c390055eb'
+var federationServices = [for service in services: {
+  name: service.name
+  namespace: service.namespace
+  serviceAccountName: service.serviceAccountName
+}]
 
 resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = [
   for service in services: {
@@ -79,19 +84,17 @@ resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31
   }
 ]
 
-resource federatedCredentials 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = [
-  for (service, i) in services: {
-    parent: identities[i]
-    name: '${service.name}-workload-identity'
-    properties: {
-      issuer: oidcIssuerUrl
-      subject: 'system:serviceaccount:${service.namespace}:${service.serviceAccountName}'
-      audiences: [
-        'api://AzureADTokenExchange'
-      ]
-    }
+module federatedCredentials 'workload-identity-federation.bicep' = {
+  name: '${namePrefix}-workload-identity-federation'
+  params: {
+    namePrefix: namePrefix
+    oidcIssuerUrl: oidcIssuerUrl
+    services: federationServices
   }
-]
+  dependsOn: [
+    identities
+  ]
+}
 
 resource existingKeyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: last(split(keyVaultId, '/'))

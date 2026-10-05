@@ -38,7 +38,8 @@ export function resolveCleanHead(cwd, { execGit = runGit } = {}) {
   return { sha, branch };
 }
 
-export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId, expectedSha },
+export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId, expectedSha,
+  operatorObjectId: rawOperatorObjectId },
   { execGit = runGit, compareGitShow = gitShowMatches, readFile = readFileSync,
     realpath = realpathSync, validateRelease = validateFile } = {}) {
   const { sha: headSha, branch } = resolveCleanHead(repoRoot, { execGit });
@@ -69,7 +70,9 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     return { absolute, local };
   }
   const inputTemplate = trackedPath(template);
-  if (inputTemplate.local !== 'infra/bicep/main.bicep') throw new Error('Only the reviewed v1 main template is supported.');
+  if (!['infra/bicep/main.bicep', 'infra/bicep/aks-redeploy.bicep'].includes(inputTemplate.local)) {
+    throw new Error('Only the reviewed v1 foundation or AKS redeployment template is supported.');
+  }
   const parameters = trackedPath(parametersFile);
   if (!/^infra\/bicep\/parameters\/[^/]+\.json$/.test(parameters.local)) {
     throw new Error('Use tracked Azure JSON parameters beneath infra/bicep/parameters.');
@@ -94,30 +97,50 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   }
   const document = JSON.parse(readFile(parameters.absolute, 'utf8'));
   const values = document.parameters;
+  if (!GUID_PATTERN.test(rawOperatorObjectId ?? '')) {
+    throw new Error('An explicit Kubernetes operator object ID is required.');
+  }
+  const operatorObjectId = rawOperatorObjectId.toLowerCase();
   const location = values?.location?.value;
-  const monitorLocation = values?.monitorLocation?.value;
-  const postgresEntraAdminObjectId = values?.postgresEntraAdminObjectId?.value;
-  const postgresEntraAdminPrincipalName = values?.postgresEntraAdminPrincipalName?.value;
-  const postgresEntraAdminPrincipalType = values?.postgresEntraAdminPrincipalType?.value;
-  if (values?.namePrefix?.value !== resourceGroup || values?.tenantId?.value !== tenantId ||
-      !values?.owner?.value || !values?.costCenter?.value ||
+  const namePrefix = values?.namePrefix?.value;
+  const parameterTenantId = values?.tenantId?.value;
+  const owner = values?.owner?.value;
+  const costCenter = values?.costCenter?.value;
+  if (namePrefix !== resourceGroup || parameterTenantId !== tenantId ||
+      typeof owner !== 'string' || !owner.trim() ||
+      typeof costCenter !== 'string' || !costCenter.trim() ||
       typeof location !== 'string' || !location.trim() ||
-      typeof monitorLocation !== 'string' || !monitorLocation.trim() ||
-      location.toLowerCase() === monitorLocation.toLowerCase() ||
-      !GUID_PATTERN.test(postgresEntraAdminObjectId ?? '') ||
-      typeof postgresEntraAdminPrincipalName !== 'string' || !postgresEntraAdminPrincipalName.trim() ||
-      !POSTGRES_ADMIN_TYPES.has(postgresEntraAdminPrincipalType) ||
       /unassigned|CHANGEME|00000000-0000/i.test(JSON.stringify(document))) {
-    throw new Error('Parameters must bind the target, separate Monitor region, and supported PostgreSQL Entra administrator without placeholders.');
+    throw new Error('Parameters must bind the dedicated target, tenant, region, owner and cost center without placeholders.');
+  }
+  const scope = inputTemplate.local === 'infra/bicep/main.bicep' ? 'infrastructure-only' : 'aks-only';
+  let monitorLocation;
+  let postgresEntraAdminObjectId;
+  let postgresEntraAdminPrincipalName;
+  let postgresEntraAdminPrincipalType;
+  if (scope === 'infrastructure-only') {
+    monitorLocation = values?.monitorLocation?.value;
+    postgresEntraAdminObjectId = values?.postgresEntraAdminObjectId?.value;
+    postgresEntraAdminPrincipalName = values?.postgresEntraAdminPrincipalName?.value;
+    postgresEntraAdminPrincipalType = values?.postgresEntraAdminPrincipalType?.value;
+    if (typeof monitorLocation !== 'string' || !monitorLocation.trim() ||
+        location.toLowerCase() === monitorLocation.toLowerCase() ||
+        !GUID_PATTERN.test(postgresEntraAdminObjectId ?? '') ||
+        typeof postgresEntraAdminPrincipalName !== 'string' || !postgresEntraAdminPrincipalName.trim() ||
+        !POSTGRES_ADMIN_TYPES.has(postgresEntraAdminPrincipalType)) {
+      throw new Error('Foundation parameters must specify a separate Monitor region and supported PostgreSQL Entra administrator.');
+    }
+  } else if (parameters.local !== 'infra/bicep/parameters/p0-aks-redeploy.approved.json') {
+    throw new Error('AKS-only redeployment requires its exact reviewed P0 parameter file.');
   }
   const appRoutingDnsZoneResourceIds = validateAppRoutingDnsZoneResourceIds(
     values.appRoutingDnsZoneResourceIds?.value, subscriptionId,
   );
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
   return { sha, verifierSha: headSha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
-    parametersFile: parameters.absolute, owner: values.owner.value, costCenter: values.costCenter.value,
+    parametersFile: parameters.absolute, owner, costCenter, operatorObjectId,
     location, monitorLocation, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
     postgresEntraAdminPrincipalType,
     appRoutingDnsZoneResourceIds,
-    scope: 'infrastructure-only' };
+    scope };
 }
