@@ -126,22 +126,22 @@ export function deploy(config, {
       operatorRoleAssignmentId: verifiedOperatorRoleAssignmentId,
       appRoutingDomain: outputs.appRoutingDomain?.value,
     };
-    try {
-      assertSourceUnchanged();
-      bootstrapNamespace({
-        resourceGroup: config.resourceGroup,
-        subscriptionId: config.subscriptionId,
-        repoRoot: config.repoRoot,
-        clusterName: deploymentReceipt.clusterName,
-      });
-    } catch (error) {
-      throw new Error(`AKS infrastructure deployment succeeded, but namespace-only bootstrap failed: ${error.message}`);
-    }
   } else {
     deploymentReceipt = {
       ...readFoundationOutputs(outputs, { ...config, ...source }),
       operatorRoleAssignmentId: verifiedOperatorRoleAssignmentId,
     };
+  }
+  try {
+    assertSourceUnchanged();
+    bootstrapNamespace({
+      resourceGroup: config.resourceGroup,
+      subscriptionId: config.subscriptionId,
+      repoRoot: config.repoRoot,
+      clusterName: `${config.resourceGroup}-aks`,
+    });
+  } catch (error) {
+    throw new Error(`Infrastructure deployment succeeded, but namespace-only bootstrap failed: ${error.message}`);
   }
   return { ...summary, executed: true, receipt: { scope: source.scope, sourceSha: source.sha,
     sourceTree: source.sourceTree, sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,

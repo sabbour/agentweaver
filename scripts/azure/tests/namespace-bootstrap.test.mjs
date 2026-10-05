@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { dirname, isAbsolute } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { bootstrapP0Namespace } from '../lib/namespace-bootstrap.mjs';
 
 const target = {
@@ -24,6 +24,13 @@ const namespace = {
 };
 const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
 const denied = stderr => ({ status: 1, stdout: '', stderr });
+
+function fakeKubelogin(calls = []) {
+  return (args, options) => {
+    calls.push({ args, options });
+    return ok();
+  };
+}
 
 function fakeKubernetes({
   authorization = () => ok('yes\n'),
@@ -48,6 +55,7 @@ function kubeconfigPath(calls) {
 
 test('AKS bootstrap uses normal user credentials and applies then reads back only the P0 namespace', () => {
   const azureCalls = [];
+  const kubeloginCalls = [];
   const waits = [];
   const { calls, execKubectl } = fakeKubernetes({
     authorization: (() => {
@@ -71,6 +79,7 @@ test('AKS bootstrap uses normal user credentials and applies then reads back onl
       azureCalls.push({ args, options });
       return ok();
     },
+    execKubelogin: fakeKubelogin(kubeloginCalls),
     execKubectl,
     pause: milliseconds => waits.push(milliseconds),
   });
@@ -82,14 +91,41 @@ test('AKS bootstrap uses normal user credentials and applies then reads back onl
   assert.equal(azureCalls[0].args[azureCalls[0].args.indexOf('--subscription') + 1], target.subscriptionId);
   assert.equal(azureCalls[0].args[azureCalls[0].args.indexOf('--name') + 1], target.clusterName);
   assert.ok(isAbsolute(kubeconfigPath(calls)));
+  assert.deepEqual(kubeloginCalls[0].args.slice(0, 3), ['convert-kubeconfig', '--login', 'azurecli']);
+  assert.equal(kubeloginCalls[0].args[kubeloginCalls[0].args.indexOf('--kubeconfig') + 1],
+    azureCalls[0].args[azureCalls[0].args.indexOf('--file') + 1]);
+  assert.ok(!azureCalls[0].args.includes('--admin'));
   assert.deepEqual(waits, [5_000, 5_000]);
   const applyCalls = calls.filter(({ args }) => args.includes('apply'));
   assert.equal(applyCalls.length, 1);
   assert.equal(applyCalls[0].args[applyCalls[0].args.indexOf('--filename') + 1],
-    `${target.repoRoot}\\deploy\\k8s\\base\\namespace.yaml`);
+    join(target.repoRoot, 'deploy', 'k8s', 'base', 'namespace.yaml'));
   assert.ok(calls.every(({ args }) => args[args.indexOf('--kubeconfig') + 1] === kubeconfigPath(calls)));
   assert.ok(calls.every(({ args }) => !args.includes('-f') || args.includes('apply')));
   assert.equal(existsSync(dirname(kubeconfigPath(calls))), false);
+});
+
+test('namespace bootstrap fails explicitly and cleans up if Azure CLI login conversion fails', () => {
+  const azureCalls = [];
+  const kubeloginCalls = [];
+  const { calls, execKubectl } = fakeKubernetes();
+  assert.throws(() => bootstrapP0Namespace(target, {
+    execAz: (args, options) => {
+      azureCalls.push({ args, options });
+      return ok();
+    },
+    execKubelogin: (args, options) => {
+      kubeloginCalls.push({ args, options });
+      return denied('kubelogin conversion failed');
+    },
+    execKubectl,
+    pause() {},
+  }), /Could not configure AKS kubeconfig to use the signed-in Azure CLI identity: kubelogin conversion failed/);
+  const kubeconfig = kubeloginCalls[0].args[kubeloginCalls[0].args.indexOf('--kubeconfig') + 1];
+  assert.equal(azureCalls[0].args[azureCalls[0].args.indexOf('--file') + 1], kubeconfig);
+  assert.ok(!azureCalls[0].args.includes('--admin'));
+  assert.equal(calls.length, 0);
+  assert.equal(existsSync(dirname(kubeconfig)), false);
 });
 
 test('namespace bootstrap stops before apply when scoped namespace permissions remain denied', () => {
@@ -99,6 +135,7 @@ test('namespace bootstrap stops before apply when scoped namespace permissions r
   });
   assert.throws(() => bootstrapP0Namespace(target, {
     execAz: () => ok(),
+    execKubelogin: fakeKubelogin(),
     execKubectl,
     pause: milliseconds => waits.push(milliseconds),
   }), /permissions did not become available within 12 attempts \(patch namespace\/agentweaver-v1-p0/);
@@ -113,6 +150,7 @@ test('namespace bootstrap reports an apply/create denial without attempting read
   });
   assert.throws(() => bootstrapP0Namespace(target, {
     execAz: () => ok(),
+    execKubelogin: fakeKubelogin(),
     execKubectl,
     pause() {},
   }), /Could not apply the namespace-only manifest .*Forbidden/);
@@ -128,6 +166,7 @@ test('namespace bootstrap bounds denied readback and always removes its temporar
   });
   assert.throws(() => bootstrapP0Namespace(target, {
     execAz: () => ok(),
+    execKubelogin: fakeKubelogin(),
     execKubectl,
     pause: milliseconds => waits.push(milliseconds),
   }), /readback did not converge within 12 attempts \(namespace readback: .*Forbidden/);

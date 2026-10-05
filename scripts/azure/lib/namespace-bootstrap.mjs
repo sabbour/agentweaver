@@ -54,7 +54,8 @@ function assertNamespaceReadback(result) {
 export function bootstrapP0Namespace({
   resourceGroup, subscriptionId, repoRoot = process.cwd(), clusterName,
 }, {
-  execAz = runAz, execKubectl = (args, options) => run('kubectl', args, options), pause = wait,
+  execAz = runAz, execKubelogin = (args, options) => run('kubelogin', args, options),
+  execKubectl = (args, options) => run('kubectl', args, options), pause = wait,
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'agentweaver-p0-kubeconfig-'));
   const kubeconfig = join(directory, 'config');
@@ -66,6 +67,11 @@ export function bootstrapP0Namespace({
       '--subscription', subscriptionId, '--file', kubeconfig,
     ], { check: false, timeout: COMMAND_TIMEOUT_MS });
     assertCommand(credentials, 'Could not get user-authenticated AKS credentials');
+
+    const conversion = execKubelogin([
+      'convert-kubeconfig', '--login', 'azurecli', '--kubeconfig', kubeconfig,
+    ], { check: false, timeout: COMMAND_TIMEOUT_MS });
+    assertCommand(conversion, 'Could not configure AKS kubeconfig to use the signed-in Azure CLI identity');
 
     const baseArgs = ['--kubeconfig', kubeconfig];
     let authorized = false;
