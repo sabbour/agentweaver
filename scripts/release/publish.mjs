@@ -6,10 +6,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateFile } from './validate.mjs';
 import { componentImageRepository } from './pack.mjs';
+import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`manual publication: ${message}`); };
 const repositoryPathPattern = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
+const initialProbeTarget = 'ghcr.io/sabbour/agentweaver-foundation-probe:0.0.0';
+const initialProbeDigest = 'sha256:452be7e284ee6c33814fcedcf1d7c98f98384d09ea7239ad851f9cb316727c9a';
+const initialProbeClaim = 'agentweaver-publication/initial-foundation-probe-0.0.0-replacement';
 
 function command(bin, args, input) {
   const result = spawnSync(bin, args, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -41,6 +45,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   writeFileSync: writeReceipt = writeFileSync,
   packagesOnly = false,
   foundationProbeOnly = false,
+  confirmFoundationProbeInitialReplacement,
 } = {}) {
   if (!confirmed || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) fail('explicit confirmation and exact source SHA are required');
   if (packagesOnly && foundationProbeOnly) fail('package-only and Foundation Probe-only publication are mutually exclusive');
@@ -61,6 +66,20 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     ? manifest.components.filter((component) => component.kind !== 'service')
     : manifest.components;
   if (components.length === 0) fail('the selected composition has no components to publish');
+  const replaceInitialProbe = confirmFoundationProbeInitialReplacement !== undefined;
+  if (replaceInitialProbe && (!foundationProbeOnly || packagesOnly || components.length !== 1 ||
+      components[0].id !== 'Agentweaver.FoundationProbe' || components[0].version !== '0.0.0' ||
+      confirmFoundationProbeInitialReplacement !== sourceSha ||
+      env.GITHUB_REPOSITORY !== 'sabbour/agentweaver' || env.RELEASE_REGISTRY !== 'ghcr.io/sabbour')) {
+    fail('initial Probe replacement requires only the approved Probe 0.0.0, exact source confirmation, and existing repository target');
+  }
+  if (replaceInitialProbe && git('rev-parse', 'refs/remotes/origin/v1') !== sourceSha) {
+    fail('initial Probe replacement requires the exact admitted origin/v1 source');
+  }
+  if (!replaceInitialProbe && components.some(component =>
+    component.id === 'Agentweaver.FoundationProbe' && component.version === '0.0.0')) {
+    fail('the initial Probe tag cannot be published without its separately confirmed one-time replacement');
+  }
   if (!Array.isArray(provenance.components) || provenance.components.length !== components.length ||
       provenance.components.some((record, index) => {
         const component = components[index];
@@ -117,6 +136,27 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     if (body) args.push('--input', '-');
     return JSON.parse(run('gh', args, body ? JSON.stringify(body) : undefined));
   };
+  const readDescriptor = reference => {
+    const descriptor = JSON.parse(run('docker', ['buildx', 'imagetools', 'inspect', reference,
+      '--format', '{{json .Manifest}}']));
+    if (!/^sha256:[a-f0-9]{64}$/.test(descriptor?.digest ?? '') || descriptor.schemaVersion !== 2) {
+      fail('native Probe manifest descriptor is missing or malformed');
+    }
+    return descriptor;
+  };
+  let previousProbeIndex;
+  if (replaceInitialProbe) {
+    const replacementPrior = api('GET', `git/matching-refs/tags/${initialProbeClaim}/`);
+    if (!Array.isArray(replacementPrior) || replacementPrior.length !== 0) {
+      fail('the single-use initial Probe replacement was already claimed or its state is ambiguous');
+    }
+    previousProbeIndex = readDescriptor(initialProbeTarget);
+    if (previousProbeIndex.digest !== initialProbeDigest ||
+        previousProbeIndex.mediaType !== 'application/vnd.oci.image.index.v1+json' ||
+        !Array.isArray(previousProbeIndex.manifests) || previousProbeIndex.manifests.length === 0) {
+      fail('initial Probe tag drifted from the exact approved old index; refusing replacement');
+    }
+  }
   const prior = api('GET', `git/matching-refs/tags/${namespace}/`);
   if (!Array.isArray(prior) || prior.length !== 0) {
     fail('durable publication claim/result already exists or is ambiguous; inspect remote state before any retry');
@@ -130,8 +170,13 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     schemaVersion: 1, sourceSha, provenanceSha256: hash(readFileSync(path.join(directory, 'provenance.json'))),
     planned, status: 'partial', published: [],
   };
-  const createRecord = (name, record) => {
-    const tag = `${namespace}/${name}`;
+  if (replaceInitialProbe) receipt.initialProbeReplacement = {
+    target: initialProbeTarget, previousIndex: previousProbeIndex, sourceSha,
+    userConfirmedBaselineOverride: true,
+    guard: 'single-use-claim-and-fresh-native-index',
+  };
+  const createRecord = (name, record, recordNamespace = namespace) => {
+    const tag = `${recordNamespace}/${name}`;
     const message = JSON.stringify(record);
     const object = api('POST', 'git/tags', { tag, message, object: sourceSha, type: 'commit' });
     if (!/^[a-f0-9]{40}$/.test(object?.sha ?? '') || object.tag !== tag || object.message !== message ||
@@ -145,6 +190,10 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     }
     return object.sha;
   };
+  if (replaceInitialProbe) {
+    receipt.initialProbeReplacement.claimSha = createRecord('claim',
+      { ...receipt, status: 'claimed' }, initialProbeClaim);
+  }
   receipt.claimSha = createRecord('claim', { ...receipt, status: 'claimed' });
   let publicationError;
   try {
@@ -157,11 +206,42 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         const local = `${componentImageRepository(component.id)}:${component.version}`;
         const remote = `${imageRepositories.get(component.id)}:${component.version}`;
         run('docker', ['load', '--input', file]);
+        if (replaceInitialProbe) {
+          const config = JSON.parse(run('docker', ['inspect', '--format', '{{json .Config}}', local]));
+          const source = resolveProbeImageSource({ repoRoot: root });
+          if (remote !== initialProbeTarget || source.sourceSha !== sourceSha ||
+              config.User !== '10001:10001' ||
+              JSON.stringify(config.Entrypoint) !== JSON.stringify(['dotnet', 'Agentweaver.FoundationProbe.dll']) ||
+              config.Labels?.['org.opencontainers.image.revision'] !== sourceSha ||
+              config.Labels?.['io.agentweaver.source-tree'] !== source.sourceTree ||
+              config.Labels?.['io.agentweaver.infrastructure-source-hash'] !== source.sourceHash ||
+              config.Labels?.['org.opencontainers.image.version'] !== '0.0.0') {
+            fail('prepared Probe image does not match the corrected source, binary baseline, and image contract');
+          }
+        }
         run('docker', ['tag', local, remote]);
+        if (replaceInitialProbe && readDescriptor(initialProbeTarget).digest !== initialProbeDigest) {
+          fail('initial Probe tag changed before push; refusing concurrent replacement');
+        }
         run('docker', ['push', remote]);
         const digests = JSON.parse(run('docker', ['inspect', '--format', '{{json .RepoDigests}}', remote]));
         const digest = digests.find((value) => value.startsWith(`${imageRepositories.get(component.id)}@sha256:`));
         if (!digest || !/@sha256:[a-f0-9]{64}$/.test(digest)) fail(`registry did not return an immutable digest for ${component.id}`);
+        if (replaceInitialProbe) {
+          const current = readDescriptor(initialProbeTarget);
+          if (current.digest === initialProbeDigest || digest !== `${imageRepositories.get(component.id)}@${current.digest}`) {
+            fail('corrected Probe tag did not resolve to the actual new published manifest');
+          }
+          receipt.initialProbeReplacement.newDigest = current.digest;
+          const retained = readDescriptor(`${imageRepositories.get(component.id)}@${initialProbeDigest}`);
+          if (retained.digest !== initialProbeDigest) fail('the original Probe index is not retained by digest');
+          for (const manifest of previousProbeIndex.manifests) {
+            if (readDescriptor(`${imageRepositories.get(component.id)}@${manifest.digest}`).digest !== manifest.digest) {
+              fail('an original Probe platform manifest is not retained by digest');
+            }
+          }
+          receipt.initialProbeReplacement.originalIndexAndPlatformsRetained = true;
+        }
         receipt.published.push({ id: component.id, version: component.version, kind: 'image', image: digest, archiveSha256: artifact.sha256 });
       }
     }
@@ -174,6 +254,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     const failures = [];
     try {
       createRecord('result', receipt);
+      if (replaceInitialProbe) createRecord('result', receipt, initialProbeClaim);
     } catch (receiptError) {
       failures.push(receiptError);
     }
@@ -194,10 +275,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     const args = process.argv.slice(2);
     const [manifest, output, sourceSha] = args;
+    const replacementIndex = args.indexOf('--confirm-foundation-probe-initial-replacement');
+    if (replacementIndex >= 0 && !/^[a-f0-9]{40}$/.test(args[replacementIndex + 1] ?? '')) {
+      fail('the one-time initial Probe replacement requires its exact source SHA confirmation');
+    }
     publishArtifacts(manifest, output, sourceSha, {
       confirmed: args.includes('--confirm-publication'),
       packagesOnly: args.includes('--packages-only'),
       foundationProbeOnly: args.includes('--foundation-probe-only'),
+      confirmFoundationProbeInitialReplacement: replacementIndex >= 0 ? args[replacementIndex + 1] : undefined,
     });
     console.log('Manual artifact publication completed; see publication.json. No platform release or deployment was performed.');
   } catch (error) {

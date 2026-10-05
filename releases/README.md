@@ -9,7 +9,7 @@ It pins eight independently versioned .NET foundation NuGet packages:
 The current package baseline for all eight is `0.0.0`.
 `Agentweaver.Identity.Broker` uses service baseline `0.0.0`; it is not one
 of the NuGet packages.
-`Agentweaver.FoundationProbe` has a separate image component at `0.0.1`.
+`Agentweaver.FoundationProbe` has a separate initial image component at `0.0.0`.
 The manifest uses the `service` artifact kind for its executable container.
 The Probe remains acceptance-only, not a product service.
 Its exact `tools/Agentweaver.FoundationProbe` project path is the sole tools
@@ -25,7 +25,25 @@ Use `--foundation-probe-only` with both preparation and publication to select
 only this image. This option cannot combine with `--packages-only`.
 Selection does not change the full manifest hash or permit artifact substitution.
 It does not rebuild or publish the Broker image or eight NuGet packages.
-The existing `0.0` image and eight NuGet baselines remain unchanged.
+The user-confirmed initial Probe replacement is one exception to immutable tags.
+Only `ghcr.io/sabbour/agentweaver-foundation-probe:0.0.0` can replace its exact
+approved old index once. The expected old digest is
+`sha256:452be7e284ee6c33814fcedcf1d7c98f98384d09ea7239ad851f9cb316727c9a`.
+Publication requires `--foundation-probe-only`, normal publication confirmation,
+and `--confirm-foundation-probe-initial-replacement <admitted-source-sha>`.
+The clean source must match `origin/v1`. The new image must match its source,
+baseline version, numeric user, and execution command.
+A separate permanent single-use claim prevents cooperating concurrent writers.
+The publisher checks the native old index again immediately before push.
+Registry tag updates are not conditional transactions; an unobserved external
+write between that check and push cannot be excluded by Docker.
+Any observed drift blocks publication. The additive replacement receipt records
+the old index, actual new digest, source, and user-confirmed baseline exception.
+The original index and platform manifests must remain readable by digest.
+Historical claims and receipts are never changed or removed.
+The pending patch records future ordinary release intent. No release plan or
+version bump runs for this initial replacement.
+The Broker and eight NuGet baselines remain unchanged.
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.

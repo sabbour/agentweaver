@@ -53,7 +53,7 @@ test('the checked-in draft composition has a valid shape and references', () => 
 test('the acceptance-only Probe is tracked as its exact image artifact, not an arbitrary tools project', () => {
   const probe = fixture.components.find(component => component.id === 'Agentweaver.FoundationProbe');
   assert.equal(probe.kind, 'service');
-  assert.equal(probe.version, '0.0.1');
+  assert.equal(probe.version, '0.0.0');
   assert.equal(probe.project, 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj');
   assert.throws(() => check(edit(manifest => {
     manifest.components.find(component => component.id === probe.id).project = 'tools/Other/Other.csproj';

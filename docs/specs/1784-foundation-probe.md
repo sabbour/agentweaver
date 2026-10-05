@@ -2,7 +2,7 @@
 
 **Issue:** [#1784](https://github.com/sabbour/agentweaver/issues/1784).
 **Prerequisite:** [#1777 dedicated Azure P0 infrastructure](1777-azure-p0-infrastructure.md).
-**Status:** The immutable `0.0.0` image baseline is published. The separate `0.0.1` artifact tracks the deployment-provenance repair. Source and publication do not prove a successful runtime acceptance Job.
+**Status:** The corrected initial image keeps version `0.0.0`. A separately confirmed one-time replacement of the existing `0.0.0` tag must preserve the previous image by digest. Source and publication do not prove a successful runtime acceptance Job.
 
 ## Scope and boundaries
 
