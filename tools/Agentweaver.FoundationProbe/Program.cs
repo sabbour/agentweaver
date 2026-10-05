@@ -95,7 +95,8 @@ internal static class Program
             });
             await using var operations = new AzureProbeOperations(target, credential, tokenFile!);
             var services = new ServiceCollection()
-                .AddAgentweaverAzureMonitorTelemetry("foundation-probe", connectionString, credential)
+                .AddAgentweaverAzureMonitorTelemetry("foundation-probe", connectionString, credential,
+                    configureTracing: ConfigureTracing)
                 .BuildServiceProvider();
             try
             {
@@ -116,4 +117,7 @@ internal static class Program
             Console.CancelKeyPress -= cancelHandler;
         }
     }
+
+    internal static void ConfigureTracing(TracerProviderBuilder tracing)
+        => tracing.SetSampler(new AlwaysOnSampler());
 }

@@ -111,7 +111,7 @@
       "type": "message",
       "from": "aks",
       "to": "verifier",
-      "label": "Native receipt from the completed probe",
+      "label": "Native receipt: AlwaysOn span; unrecorded span blocks fixture operations",
       "line": "dashed",
       "arrow": "open"
     },

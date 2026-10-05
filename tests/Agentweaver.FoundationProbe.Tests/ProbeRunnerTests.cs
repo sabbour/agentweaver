@@ -1,12 +1,56 @@
 using System.Diagnostics;
+using System.IO.Compression;
+using System.Net;
+using System.Text.Json;
 using Agentweaver.FoundationProbe;
 using Agentweaver.Telemetry;
+using Agentweaver.Telemetry.AzureMonitor;
+using Azure.Core.Pipeline;
+using Microsoft.Extensions.DependencyInjection;
+using OpenTelemetry.Trace;
 using Xunit;
 
 namespace Agentweaver.FoundationProbe.Tests;
 
 public sealed class ProbeRunnerTests
 {
+    [Fact]
+    public async Task HostSamplingExportsTheExactProbeRequestEnvelopeWithoutNetwork()
+    {
+        var handler = new EnvelopeHandler();
+        using var client = new HttpClient(handler);
+        await using var services = new ServiceCollection()
+            .AddAgentweaverAzureMonitorTelemetry("foundation-probe",
+                "InstrumentationKey=00000000-0000-0000-0000-000000000001;IngestionEndpoint=https://example.invalid/",
+                configureExporter: options =>
+                {
+                    options.Transport = new HttpClientTransport(client);
+                    options.Retry.MaxRetries = 0;
+                    options.DisableOfflineStorage = true;
+                },
+                configureTracing: Program.ConfigureTracing)
+            .BuildServiceProvider();
+        var tracer = services.GetRequiredService<TracerProvider>();
+        var target = ProbeFixtures.Target();
+        var runner = new ProbeRunner(new FakeOperations(target), () => tracer.ForceFlush(),
+            () => new string('e', 32));
+
+        var receipt = await runner.RunAsync(target, ProbeFixtures.Source, ProbeFixtures.Identity(target),
+            ProbeFixtures.MonitorConfiguration(target), CancellationToken.None);
+
+        var envelope = Assert.Single(handler.Envelopes, item =>
+            item.GetProperty("data").GetProperty("baseType").GetString() == "RequestData");
+        var data = envelope.GetProperty("data").GetProperty("baseData");
+        Assert.Equal(receipt.Telemetry.Name, data.GetProperty("name").GetString());
+        Assert.Equal(receipt.Telemetry.SpanId, data.GetProperty("id").GetString());
+        Assert.Equal(receipt.Telemetry.TraceId, envelope.GetProperty("tags").GetProperty("ai.operation.id").GetString());
+        Assert.Equal(receipt.Telemetry.StartedAt, envelope.GetProperty("time").GetDateTimeOffset());
+        var properties = data.GetProperty("properties");
+        Assert.Equal(receipt.SourceSha, properties.GetProperty("probe.source_sha").GetString());
+        Assert.Equal(receipt.SourceTree, properties.GetProperty("probe.source_tree").GetString());
+        Assert.Equal(receipt.Nonce, properties.GetProperty("probe.nonce").GetString());
+    }
+
     [Fact]
     public async Task SuccessfulProbeBindsFreshNonceProviderPinsAndMonitorCompatibleActivity()
     {
@@ -53,6 +97,31 @@ public sealed class ProbeRunnerTests
         Assert.Equal(new string('e', 32), stopped.GetTagItem("probe.nonce"));
         Assert.Equal("Admitted", receipt.Postgres.InboxDisposition);
         Assert.True(receipt.Blob.CleanupConfirmed);
+    }
+
+    [Fact]
+    public async Task UnrecordedActivityFailsBeforeAnyResourceOperationOrFlush()
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == TelemetrySignals.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+        };
+        ActivitySource.AddActivityListener(listener);
+        var target = ProbeFixtures.Target();
+        var operations = new FakeOperations(target);
+        var flushed = false;
+        var runner = new ProbeRunner(operations, () => flushed = true);
+
+        var failure = await Assert.ThrowsAsync<ProbeException>(() =>
+            runner.RunAsync(target, ProbeFixtures.Source, ProbeFixtures.Identity(target),
+                ProbeFixtures.MonitorConfiguration(target), CancellationToken.None));
+
+        Assert.Equal("telemetry_activity_not_recorded", failure.Code);
+        Assert.Equal(0, operations.SecretCalls);
+        Assert.Equal(0, operations.BlobCalls);
+        Assert.Equal(0, operations.PostgresCalls);
+        Assert.False(flushed);
     }
 
     [Fact]
@@ -130,6 +199,39 @@ public sealed class ProbeRunnerTests
         };
         ActivitySource.AddActivityListener(listener);
         return listener;
+    }
+
+    private sealed class EnvelopeHandler : HttpMessageHandler
+    {
+        public List<JsonElement> Envelopes { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.Equal("example.invalid", request.RequestUri!.Host);
+            await using var stream = await request.Content!.ReadAsStreamAsync(cancellationToken);
+            using var gzip = request.Content.Headers.ContentEncoding.Contains("gzip")
+                ? new GZipStream(stream, CompressionMode.Decompress, leaveOpen: true) : null;
+            using var reader = new StreamReader(gzip is null ? stream : gzip);
+            var content = await reader.ReadToEndAsync(cancellationToken);
+            if (content.TrimStart().StartsWith('['))
+            {
+                using var document = JsonDocument.Parse(content);
+                Envelopes.AddRange(document.RootElement.EnumerateArray().Select(item => item.Clone()));
+            }
+            else
+            {
+                foreach (var line in content.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    using var document = JsonDocument.Parse(line);
+                    Envelopes.Add(document.RootElement.Clone());
+                }
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"itemsReceived\":1,\"itemsAccepted\":1,\"errors\":[]}"),
+            };
+        }
     }
 
     private sealed class FakeOperations(ProbeTarget target) : IProbeOperations
