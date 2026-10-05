@@ -74,8 +74,16 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' = {
       }
     }
     ingressProfile: {
+      gatewayAPI: {
+        installation: 'Standard'
+      }
       webAppRouting: {
         enabled: true
+        gatewayAPIImplementations: {
+          appRoutingIstio: {
+            mode: 'Enabled'
+          }
+        }
         dnsZoneResourceIds: empty(appRoutingDnsZoneResourceIds) ? null : appRoutingDnsZoneResourceIds
         defaultDomain: {
           enabled: managedDefaultDomainRequested

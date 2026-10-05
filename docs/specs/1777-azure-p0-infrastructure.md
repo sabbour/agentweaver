@@ -238,8 +238,43 @@ certificate resource.
 
 The Application Routing addon remains enabled. Its default nginx controller
 type is `None`. The source has no nginx controller, IngressClass, Ingress
-resource, replacement controller, gateway, or route. This setting does not
-remove an existing controller. No live Azure activation or deployment occurred.
+resource, or replacement controller. This setting does not remove an existing
+controller. The template enables the managed Gateway API installation with
+`installation: 'Standard'` and the native Application Routing implementation
+with `appRoutingIstio.mode: 'Enabled'`.
+The `approuting-istio` class identifies Azure's managed implementation.
+It does not select an Istio API or install a service-mesh addon.
+
+The separate `--bootstrap-identity-routing` installer option is default-off.
+It requires an explicit dedicated Gateway namespace, enforcement policy, and
+upstream public application client ID. Namespace security approval remains separate.
+The P0 namespace stays restricted. An existing Gateway namespace must have
+the exact approved ownership and policy labels.
+The installer never weakens an existing namespace policy.
+
+Native `DefaultDomainCertificate` resources supply managed TLS Secrets in
+the Gateway and Broker namespaces.
+The installer derives the initial `agentweaver` hostname from the certificate's status.
+It applies native v1 Gateway and HTTPRoute resources, BackendTLSPolicy,
+and exact namespace/Gateway-label ingress to the HTTPS Broker.
+The listener admits only the P0 namespace's routes.
+No custom DNS zone, additional role, mesh resource, or injection is necessary.
+The installer derives the issuer and native `/signin-oidc` callback only
+after current-generation Gateway and route conditions pass.
+
+The public callback operation is a read-only append/no-op plan.
+It preserves every existing public redirect URI and never changes Web URIs.
+The optional readiness check requires ordinary DNS and trusted HTTPS responses
+from both Broker health endpoints at the Gateway's observed IP.
+Routing configuration alone reports `runtimeVerified: false`.
+It is not evidence of deployed acceptance.
+
+The managed Gateway currently lacks the seccomp profile required by restricted
+Pod Security. AKS's customization webhook rejects security-context overrides.
+Live placement requires a separately approved compatible namespace policy.
+The source does not waive this blocker or authorize a policy downgrade.
+See [the routing operator interface](../../scripts/azure/README.md#application-routing-source-setting)
+for its inputs and evidence boundary.
 
 The installed Bicep compiler reports BCP081 because it has no type metadata for
 this preview API. The offline build still compiles the template.

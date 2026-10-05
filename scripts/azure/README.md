@@ -65,11 +65,71 @@ These role assignments use the exact zone scope and the identity object ID.
 The existing vault grants Key Vault Certificate User to that same identity.
 The Bicep template defines no DNS record or certificate resource.
 
-The template keeps Application Routing enabled and sets the default nginx
-controller type to `None`. This setting stops AKS from creating its default
-controller. The source contains no nginx controller, IngressClass, Ingress
-resource, replacement controller, or route. It does not remove an existing
-controller.
+The template enables the managed Gateway API installation with
+`installation: 'Standard'` and the Application Routing Istio implementation
+with `mode: 'Enabled'`. The Gateway class is `approuting-istio`.
+The template keeps the default nginx controller type at `None`.
+It contains no nginx controller, IngressClass, or Ingress resource.
+It does not remove an existing controller.
+
+The separate candidate manifests under `deploy/k8s/routing/identity-broker`
+define a managed certificate, HTTPS Gateway, HTTPRoute, and BackendTLSPolicy.
+They are not part of ordinary namespace bootstrap.
+The managed certificate supplies a wildcard domain through its status.
+The route uses `agentweaver` as its single-label prefix, not the zone root.
+The public issuer must match the hostname on the admitted route.
+
+The Gateway requires a namespace policy compatible with its managed pods.
+AKS currently rejects a Gateway customization that sets a pod or container
+security context. Its published
+[customization allow-list](https://learn.microsoft.com/azure/aks/istio-gateway-api#deployment-customization-allow-list-fields)
+does not include these fields.
+A managed pod without an explicit seccomp profile cannot satisfy the P0
+namespace's `restricted` policy.
+This incompatibility blocks routing acceptance.
+The source does not authorize a policy downgrade or a change to managed
+Deployments. A different namespace requires separate approval and scoped
+route attachment, certificate references, and network rules.
+
+The installer has a separate default-off `--bootstrap-identity-routing` option.
+It requires explicit `--identity-gateway-namespace agentweaver-v1-gateway`,
+`--identity-gateway-security-policy <approved-policy>`, and
+`--identity-upstream-client-id <public-client-guid>` inputs.
+The policy must be `restricted` or `baseline`. Neither value is a default.
+These flags do not constitute approval.
+An existing namespace must have matching ownership and policy labels.
+The installer refuses to change its policy.
+The P0 namespace retains restricted enforcement, audit, and warning labels.
+
+After namespace setup, this option creates the approved dedicated Gateway
+namespace and native managed certificates in both namespaces.
+It applies only the Gateway, HTTPRoute, BackendTLSPolicy, and narrow Cilium
+ingress policy. It adds no mesh addon, Istio API resource, injection label,
+custom DNS zone, role assignment, application registration, or signing key.
+It waits for the Gateway and route conditions with bounded commands.
+The installer reads the public issuer from the admitted route hostname.
+Current-generation conditions and exact certificate, listener, parent,
+controller, backend, and namespace references must match.
+
+The callback plan reads only the selected application's `publicClient.redirectUris`.
+It reports `noop` for an existing exact `/signin-oidc` URI.
+Otherwise, it reports an append that preserves all existing public redirect URIs.
+It never changes the application or its Web redirect URIs.
+The operator must obtain separate approval for an application change.
+
+A routing receipt sets `routingConfigured: true` and `runtimeVerified: false`.
+It is not runtime acceptance.
+After the Broker starts with the approved issuer and required runtime inputs,
+`--verify-identity-broker-readiness` also checks `/health/live` and `/health/ready`.
+Both requests use ordinary DNS, trusted HTTPS, and the Gateway's observed IP.
+No insecure TLS, DNS override, or redirect following is permitted.
+Failure prevents a successful installer receipt.
+The installer does not create the Broker's runtime ConfigMap, signing Secret,
+key-ring PVC, OAuth registrations, or runtime Deployment.
+Its receipt supplies `runtimeConfigInputs.IdentityBroker__Issuer` and
+`runtimeConfigInputs.IdentityBroker__ExternalProvider__ClientId` for the approved
+runtime ConfigMap. These inputs do not include a client secret.
+The receipt explicitly reports `runtimeConfigMutationExecuted: false`.
 
 The AKS `azureKeyvaultSecretsProvider` addon is enabled. Secret rotation uses
 `enableSecretRotation: 'true'` and `rotationPollInterval: '2m'`. Both values

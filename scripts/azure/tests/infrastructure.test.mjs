@@ -57,6 +57,10 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(cluster.properties.disableLocalAccounts, true);
   assert.equal(cluster.properties.apiServerAccessProfile.enablePrivateCluster, false);
   assert.equal(cluster.properties.ingressProfile.webAppRouting.enabled, true);
+  assert.deepEqual(cluster.properties.ingressProfile.gatewayAPI, { installation: 'Standard' });
+  assert.deepEqual(cluster.properties.ingressProfile.webAppRouting.gatewayAPIImplementations, {
+    appRoutingIstio: { mode: 'Enabled' },
+  });
   assert.equal(cluster.properties.ingressProfile.webAppRouting.nginx.defaultIngressControllerType, 'None');
   assert.match(cluster.properties.ingressProfile.webAppRouting.dnsZoneResourceIds, /appRoutingDnsZoneResourceIds/);
   assert.equal(cluster.properties.ingressProfile.webAppRouting.defaultDomain.enabled,
@@ -283,6 +287,52 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.match(probeJob, /runAsNonRoot: true/);
   assert.match(probeJob, /runAsUser: 10001/);
   assert.match(probeJob, /runAsGroup: 10001/);
+});
+
+test('separate routing candidate preserves native managed certificates and HTTPS to the Broker', () => {
+  const rendered = run('kubectl', ['kustomize', 'deploy/k8s/routing/identity-broker']).stdout;
+  const documents = rendered.split('---').filter(document => document.trim());
+  assert.equal(documents.length, 7);
+  function document(kind, namespace = 'agentweaver-v1-p0') {
+    const value = documents.find(item => item.includes(`kind: ${kind}\n`) &&
+      item.includes(`namespace: ${namespace}\n`));
+    assert.ok(value, `Missing ${kind}`);
+    assert.match(value, /name: identity-broker/);
+    return value;
+  }
+  const certificate = document('DefaultDomainCertificate');
+  assert.match(certificate, /apiVersion: approuting\.kubernetes\.azure\.com\/v1alpha1/);
+  assert.match(certificate, /target:\s+secret: identity-broker-tls/);
+  const gatewayCertificate = document('DefaultDomainCertificate', 'CHANGEME-GATEWAY-NAMESPACE');
+  assert.match(gatewayCertificate, /target:\s+secret: identity-broker-tls/);
+  const gateway = document('Gateway', 'CHANGEME-GATEWAY-NAMESPACE');
+  assert.match(gateway, /gatewayClassName: approuting-istio/);
+  assert.match(gateway, /hostname: CHANGEME-MANAGED-HOST/);
+  assert.match(gateway, /port: 443/);
+  assert.match(gateway, /protocol: HTTPS/);
+  assert.match(gateway, /certificateRefs:\s+- kind: Secret\s+name: identity-broker-tls/);
+  assert.match(gateway, /mode: Terminate/);
+  assert.match(gateway, /namespaces:\s+from: Selector/);
+  assert.match(gateway, /kubernetes\.io\/metadata\.name: agentweaver-v1-p0/);
+  const route = document('HTTPRoute');
+  assert.match(route, /parentRefs:\s+- name: identity-broker\s+namespace: CHANGEME-GATEWAY-NAMESPACE\s+sectionName: https/);
+  assert.match(route, /hostnames:\s+- CHANGEME-MANAGED-HOST/);
+  assert.match(route, /backendRefs:\s+- name: identity-broker\s+port: 443/);
+  const backend = document('BackendTLSPolicy');
+  assert.match(backend, /apiVersion: gateway\.networking\.k8s\.io\/v1/);
+  assert.match(backend, /kind: Service\s+name: identity-broker\s+sectionName: https/);
+  assert.match(backend, /hostname: CHANGEME-MANAGED-HOST/);
+  assert.match(backend, /wellKnownCACertificates: System/);
+  const ingress = document('CiliumNetworkPolicy');
+  assert.match(ingress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(ingress, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
+  assert.match(ingress, /port: "8443"/);
+  assert.match(rendered, /pod-security\.kubernetes\.io\/enforce: CHANGEME-GATEWAY-POLICY/);
+  assert.doesNotMatch(rendered, /kind: (Deployment|Ingress|IngressClass)\n|parametersRef:|tls\.key:|tls\.crt:|fromEntities:|0\.0\.0\.0\/0/);
+  const namespace = readFileSync('deploy/k8s/base/namespace.yaml', 'utf8');
+  for (const mode of ['enforce', 'audit', 'warn']) {
+    assert.match(namespace, new RegExp(`pod-security\\.kubernetes\\.io/${mode}: restricted`));
+  }
 });
 
 test('Monitor defines five DNS zones and PE depends on both associations; KV/Blob PEs remain', () => {

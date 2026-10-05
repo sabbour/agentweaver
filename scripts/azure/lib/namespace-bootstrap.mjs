@@ -51,11 +51,10 @@ function assertNamespaceReadback(result) {
     : undefined;
 }
 
-export function bootstrapP0Namespace({
-  resourceGroup, subscriptionId, repoRoot = process.cwd(), clusterName,
-}, {
+export function withP0UserKubeconfig({
+  resourceGroup, subscriptionId, clusterName,
+}, action, {
   execAz = runAz, execKubelogin = (args, options) => run('kubelogin', args, options),
-  execKubectl = (args, options) => run('kubectl', args, options), pause = wait,
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'agentweaver-p0-kubeconfig-'));
   const kubeconfig = join(directory, 'config');
@@ -73,7 +72,31 @@ export function bootstrapP0Namespace({
     ], { check: false, timeout: COMMAND_TIMEOUT_MS });
     assertCommand(conversion, 'Could not configure AKS kubeconfig to use the signed-in Azure CLI identity');
 
-    const baseArgs = ['--kubeconfig', kubeconfig];
+    receipt = action(['--kubeconfig', kubeconfig]);
+  } catch (error) {
+    failure = error;
+  }
+
+  try {
+    rmSync(directory, { recursive: true, force: true });
+  } catch (cleanupError) {
+    const cleanupMessage = redact(cleanupError.message);
+    if (failure) {
+      throw new Error(`${failure.message}; temporary kubeconfig cleanup failed: ${cleanupMessage}`);
+    }
+    throw new Error(`Temporary kubeconfig cleanup failed: ${cleanupMessage}`);
+  }
+  if (failure) throw failure;
+  return receipt;
+}
+
+export function bootstrapP0Namespace({
+  resourceGroup, subscriptionId, repoRoot = process.cwd(), clusterName,
+}, {
+  execAz = runAz, execKubelogin = (args, options) => run('kubelogin', args, options),
+  execKubectl = (args, options) => run('kubectl', args, options), pause = wait,
+} = {}) {
+  return withP0UserKubeconfig({ resourceGroup, subscriptionId, clusterName }, baseArgs => {
     let authorized = false;
     let authorizationFailure = '';
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -99,6 +122,7 @@ export function bootstrapP0Namespace({
       { check: false, timeout: COMMAND_TIMEOUT_MS });
     assertCommand(apply, `Could not apply the namespace-only manifest ${manifest}`);
 
+    let receipt;
     let readbackFailure = '';
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       const result = execKubectl([...baseArgs, 'get', 'namespace', NAMESPACE, '-o', 'json'],
@@ -113,19 +137,6 @@ export function bootstrapP0Namespace({
     if (!receipt) {
       throw new Error(`P0 namespace readback did not converge within ${MAX_ATTEMPTS} attempts (${readbackFailure}).`);
     }
-  } catch (error) {
-    failure = error;
-  }
-
-  try {
-    rmSync(directory, { recursive: true, force: true });
-  } catch (cleanupError) {
-    const cleanupMessage = redact(cleanupError.message);
-    if (failure) {
-      throw new Error(`${failure.message}; temporary kubeconfig cleanup failed: ${cleanupMessage}`);
-    }
-    throw new Error(`Temporary kubeconfig cleanup failed: ${cleanupMessage}`);
-  }
-  if (failure) throw failure;
-  return receipt;
+    return receipt;
+  }, { execAz, execKubelogin });
 }

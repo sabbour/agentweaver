@@ -1,0 +1,20 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: identity-broker-gateway-ingress
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: identity-broker
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: identity-broker
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: CHANGEME-GATEWAY-NAMESPACE
+            k8s:gateway.networking.k8s.io/gateway-name: identity-broker
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP

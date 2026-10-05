@@ -44,6 +44,17 @@ test('redact is a no-op on plain text', () => {
   assert.equal(redact('plain status message'), 'plain status message');
 });
 
+test('preserving non-secret projected identifiers is explicit and cannot expose omitted credentials', () => {
+  const hostname = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const value = { hostname, password: SENSITIVE_FIXTURE_VALUE };
+  const result = run(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(JSON.stringify(value))})`], {
+    projectJson: input => ({ hostname: input.hostname }), preserveProjectedJson: true,
+  });
+  assert.deepEqual(JSON.parse(result.stdout), { hostname });
+  assert.ok(!result.stdout.includes(SENSITIVE_FIXTURE_VALUE));
+  assert.throws(() => run(process.execPath, [], { preserveProjectedJson: true }), /requires an explicit/);
+});
+
 test('git source comparison preserves redacted-looking bytes without exposing them', () => {
   const fixture = readFileSync(join(FIXTURES_DIR, 'source-redaction.txt'));
   const text = fixture.toString('utf8');

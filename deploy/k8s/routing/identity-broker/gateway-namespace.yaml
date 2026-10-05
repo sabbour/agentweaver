@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: CHANGEME-GATEWAY-NAMESPACE
+  labels:
+    agentweaver.io/environment: v1-p0
+    agentweaver.io/managed-by: kustomize
+    agentweaver.io/workload: identity-broker-gateway
+    pod-security.kubernetes.io/enforce: CHANGEME-GATEWAY-POLICY
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

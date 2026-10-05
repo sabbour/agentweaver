@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: identity-broker
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: identity-broker
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: identity-broker
+      sectionName: https
+  validation:
+    hostname: CHANGEME-MANAGED-HOST
+    wellKnownCACertificates: System
