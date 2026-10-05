@@ -152,6 +152,20 @@ Kestrel listens with HTTPS on port 8443, and the Service exposes port 443 as
 runtime and migration image references require the operator's approved
 immutable registry digest; the checked-in sentinel is not deployable.
 
+The separate routing candidate uses native AKS-managed Gateway API resources.
+Its managed certificate supplies the `agentweaver` hostname within the AKS
+wildcard domain, not the DNS zone root.
+BackendTLSPolicy keeps HTTPS between the Gateway and Kestrel.
+It validates the backend certificate with system trust and the route hostname.
+The guarded installer derives the issuer and `/signin-oidc` callback from the
+current admitted HTTPRoute.
+It plans only a public-platform append or no-op and never writes the application.
+Explicit Gateway placement and security-policy inputs require separate approval.
+The existing P0 namespace remains restricted.
+Routing configuration does not prove a running Broker.
+The optional readiness gate requires trusted HTTPS and ordinary DNS for both
+health endpoints. See [the operator interface](../../scripts/azure/README.md#application-routing-source-setting).
+
 The Dockerfile uses repository-root context and root build properties.
 The image pins SDK `10.0.302-noble` independently of the host SDK in `global.json`.
 Restore uses `--locked-mode`. Build uses `--no-restore`.

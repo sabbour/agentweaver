@@ -5,6 +5,7 @@ import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
 import { bootstrapP0Namespace } from './lib/namespace-bootstrap.mjs';
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
+import { assertIdentityRoutingPlacement, bootstrapIdentityRouting } from './lib/identity-broker-routing.mjs';
 import {
   AKS_RBAC_CLUSTER_ADMIN_ROLE_ID,
   armGuid,
@@ -40,10 +41,20 @@ export function buildDeployArgs({
 export async function deploy(config, {
   execAz = runAz, sourceResolver = resolveSource, bootstrapNamespace = bootstrapP0Namespace,
   initializeIdentityPostgres = bootstrapIdentityPostgres,
+  initializeIdentityRouting = bootstrapIdentityRouting,
 } = {}) {
   assertDedicatedTarget(config.resourceGroup);
   assertSubscription(config.subscriptionId, config.allowedSubscriptionId);
   assertTenant(config.tenantId, config.allowedTenantId);
+  if (config.bootstrapIdentityRouting) {
+    assertIdentityRoutingPlacement(config);
+    if (!GUID_PATTERN.test(config.upstreamClientId ?? '')) {
+      throw new Error('Identity routing requires the exact upstream public application client ID.');
+    }
+  } else if (config.gatewayNamespace || config.gatewaySecurityPolicy || config.upstreamClientId ||
+      config.verifyBrokerReadiness) {
+    throw new Error('Identity routing inputs require the separate --bootstrap-identity-routing option.');
+  }
   const source = sourceResolver(config);
   const deploymentName = `${config.resourceGroup}-${source.scope === 'aks-only' ? 'aks-' : ''}${source.sha.slice(0, 12)}`;
   const clusterId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${config.resourceGroup}-aks`;
@@ -51,7 +62,13 @@ export async function deploy(config, {
   let args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source, operatorRoleAssignmentName,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName });
   const summary = { ...source, resourceGroup: config.resourceGroup, deploymentName, args, executed: false,
-    bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres) };
+    bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres),
+    bootstrapIdentityRouting: Boolean(config.bootstrapIdentityRouting),
+    ...(config.bootstrapIdentityRouting ? { identityRoutingPlan: {
+      gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
+      upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
+      appRegistrationMutation: false,
+    } } : {}) };
   if (!config.execute) return summary;
   const { execAz: boundAz, group, resources } = guardAzureTarget({ ...config, ...source }, execAz);
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
@@ -175,10 +192,26 @@ export async function deploy(config, {
       throw new Error(`Infrastructure deployment succeeded, but Identity PostgreSQL bootstrap failed: ${error.message}`);
     }
   }
+  let identityRouting;
+  if (config.bootstrapIdentityRouting) {
+    try {
+      assertSourceUnchanged();
+      identityRouting = await initializeIdentityRouting({
+        repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
+        subscriptionId: config.subscriptionId, tenantId: config.tenantId,
+        clusterName: `${config.resourceGroup}-aks`,
+        gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
+        upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
+      });
+    } catch (error) {
+      throw new Error(`Infrastructure deployment succeeded, but Identity routing bootstrap failed: ${error.message}`);
+    }
+  }
   return { ...summary, executed: true, receipt: { scope: source.scope, sourceSha: source.sha,
     sourceTree: source.sourceTree, sourceHash: source.sourceHash, subscriptionId: config.subscriptionId, tenantId: config.tenantId,
     resourceGroup: config.resourceGroup, deploymentName, deploymentId: deployment.id,
     ...(identityPostgresBootstrap ? { identityPostgresBootstrap } : {}),
+    ...(identityRouting ? { identityRouting } : {}),
     ...deploymentReceipt } };
 }
 
@@ -188,7 +221,12 @@ export function cliConfig(values) {
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
     operatorObjectId: values['operator-object-id'],
     allowStaleAksSubnetRoleCleanup: values['allow-stale-aks-subnet-role-cleanup'],
-    bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false };
+    bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
+    bootstrapIdentityRouting: values['bootstrap-identity-routing'] ?? false,
+    gatewayNamespace: values['identity-gateway-namespace'],
+    gatewaySecurityPolicy: values['identity-gateway-security-policy'],
+    upstreamClientId: values['identity-upstream-client-id'],
+    verifyBrokerReadiness: values['verify-identity-broker-readiness'] ?? false };
 }
 
 export const cliOptions = {
@@ -198,6 +236,11 @@ export const cliOptions = {
   'operator-object-id': { type: 'string' },
   'allow-stale-aks-subnet-role-cleanup': { type: 'boolean', default: false },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },
+  'bootstrap-identity-routing': { type: 'boolean', default: false },
+  'identity-gateway-namespace': { type: 'string' },
+  'identity-gateway-security-policy': { type: 'string' },
+  'identity-upstream-client-id': { type: 'string' },
+  'verify-identity-broker-readiness': { type: 'boolean', default: false },
   execute: { type: 'boolean', default: false },
 };
 

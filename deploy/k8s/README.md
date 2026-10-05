@@ -6,9 +6,10 @@ runtime `ServiceAccount`, and scoped Cilium egress. It also contains the
 acceptance-only `foundation-probe` ServiceAccount. The separate migration
 Job is not included in the base and does not run during ordinary host startup.
 
-There is no public Ingress, Gateway, or ingress controller in these manifests.
-AKS Application Routing remains configured with its default NGINX controller
-type set to `None`. The Identity Service is cluster-internal.
+The base contains no public Ingress or Gateway.
+The separate candidate routing manifests use the native `approuting-istio`
+Gateway class. AKS keeps its default NGINX controller type at `None`.
+The Identity Service remains a ClusterIP Service.
 
 ## Layout
 
@@ -19,6 +20,7 @@ type set to `None`. The Identity Service is cluster-internal.
 | `base/serviceaccounts/foundation-probe-sa.yaml` | Reserved identity for the #1784 acceptance-only Job. |
 | `base/identity-broker/` | Identity runtime ServiceAccount, HTTPS Deployment, ClusterIP Service, and narrow Cilium policy. |
 | `migrations/identity-broker/` | Separate migration ServiceAccount, one-shot Job, and PostgreSQL/token egress policy. |
+| `routing/identity-broker/` | Explicit Gateway namespace/policy, native certificates, HTTPS Gateway, HTTPRoute, backend TLS policy, and narrow Broker ingress. |
 | `acceptance/foundation-probe/` | #1784 executable Job and its own scoped egress overlay. |
 
 The runtime listens with HTTPS on port 8443. Its ClusterIP Service exposes
@@ -27,6 +29,40 @@ same-namespace pods labeled `agentweaver.io/identity-client: "true"`.
 It permits DNS, Entra token exchange, the configured upstream OIDC hosts,
 the exact PostgreSQL host, and the exact Key Vault host. The migration policy
 permits DNS, Entra token exchange, and PostgreSQL only.
+
+## Managed routing candidate
+
+`DefaultDomainCertificate` supplies an AKS-managed wildcard certificate and
+the `identity-broker-tls` Secret in each namespace.
+The Gateway terminates public HTTPS on port 443.
+The HTTPRoute targets the Broker Service on port 443.
+BackendTLSPolicy requires HTTPS to Kestrel and validates its certificate
+with system trust and the exact route hostname.
+`CHANGEME-MANAGED-HOST` requires the `agentweaver` prefix within the certificate's
+reported wildcard domain.
+The zone root is not a service hostname.
+
+These manifests do not prove DNS, TLS, or a running Broker.
+The P0 namespace retains its `restricted` policy.
+The current managed Gateway pod lacks the seccomp profile that this policy
+requires. AKS rejects security-context overrides through its Gateway
+customization ConfigMap.
+Gateway acceptance remains blocked until an approved compatible placement exists.
+No namespace policy downgrade or direct managed-Deployment patch is authorized.
+`CHANGEME-GATEWAY-NAMESPACE` and `CHANGEME-GATEWAY-POLICY` require explicit approved inputs.
+The guarded installer supports only the dedicated `agentweaver-v1-gateway`
+namespace with an explicitly selected `restricted` or `baseline` enforcement policy.
+Neither policy is a default. Existing ownership and policy must match.
+The Gateway listener admits routes only from `agentweaver-v1-p0`.
+The Broker ingress rule admits HTTPS on port 8443 only from that namespace's
+pods with the exact generated Gateway label.
+The base workload policy remains unchanged.
+The upstream callback remains `/signin-oidc`.
+A corrected callback registration requires separate approval after route
+hostname, DNS, and TLS verification.
+A route receipt does not prove a running Broker.
+The separate readiness option requires successful trusted HTTPS responses
+from both health endpoints at the observed Gateway IP.
 
 ## Required operator inputs
 
@@ -114,6 +150,7 @@ definitions non-deployable until approved environment inputs are supplied.
 ```powershell
 kubectl kustomize deploy\k8s\base
 kubectl kustomize deploy\k8s\migrations\identity-broker
+kubectl kustomize deploy\k8s\routing\identity-broker
 kubectl kustomize deploy\k8s\acceptance\foundation-probe
 ```
 

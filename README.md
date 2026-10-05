@@ -77,6 +77,16 @@ Ordinary `--execute` does not run this setup. The Identity broker supports
 upstream authorization-code login with PKCE and no required client secret.
 An upstream client secret is optional for explicitly configured confidential clients.
 
+Native AKS-managed Gateway routing has a separate default-off
+`--bootstrap-identity-routing` option.
+It requires explicit approved Gateway placement, security policy, and public-client inputs.
+It derives the issuer and `/signin-oidc` callback from the admitted native route.
+The callback operation is a read-only append/no-op plan.
+The P0 namespace remains restricted.
+Routing configuration is not runtime acceptance.
+The optional readiness check requires ordinary DNS and trusted HTTPS for both
+Broker health endpoints.
+
 The [P0 Foundation Probe story](docs/specs/1784-foundation-probe.md) adds an
 acceptance-only .NET workload Job, source-bound image receipt, and ownership-safe
 Key Vault, Blob, PostgreSQL, and Azure Monitor checks. Its default CLI plan is

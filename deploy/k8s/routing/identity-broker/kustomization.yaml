@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gateway-namespace.yaml
+  - gateway-certificate.yaml
+  - gateway-ingress.yaml
+  - default-domain-certificate.yaml
+  - gateway.yaml
+  - httproute.yaml
+  - backend-tls-policy.yaml

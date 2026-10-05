@@ -53,6 +53,52 @@ test('dry-run never invokes namespace or PostgreSQL bootstrap, even when request
   assert.equal(postgresCalled, false);
 });
 
+test('Identity routing is default-off with explicit placement, policy, and public client inputs', async () => {
+  assert.equal(cliOptions['bootstrap-identity-routing'].default, false);
+  assert.equal(cliConfig({}).bootstrapIdentityRouting, false);
+  assert.equal(cliOptions['identity-gateway-namespace'].default, undefined);
+  assert.equal(cliOptions['identity-gateway-security-policy'].default, undefined);
+  assert.equal(cliOptions['verify-identity-broker-readiness'].default, false);
+  const routing = { bootstrapIdentityRouting: true, gatewayNamespace: 'agentweaver-v1-gateway',
+    gatewaySecurityPolicy: 'baseline', upstreamClientId: ids.subscriptionId };
+  const result = await deploy({ ...fixture, ...routing }, {
+    sourceResolver: () => source,
+    execAz: () => { throw new Error('dry-run cloud call'); },
+    initializeIdentityRouting: () => { throw new Error('dry-run routing mutation'); },
+  });
+  assert.equal(result.executed, false);
+  assert.equal(result.identityRoutingPlan.gatewaySecurityPolicy, 'baseline');
+  assert.equal(result.identityRoutingPlan.appRegistrationMutation, false);
+  await assert.rejects(deploy({ ...fixture, bootstrapIdentityRouting: true }), /requires explicit/);
+  await assert.rejects(deploy({ ...fixture, gatewaySecurityPolicy: 'baseline' }), /require the separate/);
+});
+
+test('guarded routing runs after namespace setup, without PostgreSQL or application mutation', async () => {
+  const steps = [];
+  const routing = { bootstrapIdentityRouting: true, gatewayNamespace: 'agentweaver-v1-gateway',
+    gatewaySecurityPolicy: 'baseline', upstreamClientId: ids.subscriptionId };
+  const result = await deploy({ ...fixture, ...routing, execute: true }, {
+    sourceResolver: () => source, execAz: fakeAzure(),
+    bootstrapNamespace: () => steps.push('namespace'),
+    initializeIdentityPostgres: () => { throw new Error('unexpected migration/bootstrap'); },
+    initializeIdentityRouting: config => {
+      steps.push('routing');
+      assert.equal(config.gatewayNamespace, routing.gatewayNamespace);
+      assert.equal(config.gatewaySecurityPolicy, routing.gatewaySecurityPolicy);
+      assert.equal(config.upstreamClientId, routing.upstreamClientId);
+      assert.equal(config.subscriptionId, ids.subscriptionId);
+      assert.equal(config.verifyBrokerReadiness, false);
+      return { routingConfigured: true, runtimeVerified: false };
+    },
+  });
+  assert.deepEqual(steps, ['namespace', 'routing']);
+  assert.equal(result.receipt.identityRouting.runtimeVerified, false);
+  await assert.rejects(deploy({ ...fixture, ...routing, execute: true }, {
+    sourceResolver: () => source, execAz: fakeAzure(), bootstrapNamespace() {},
+    initializeIdentityRouting: () => { throw new Error('Gateway not Programmed'); },
+  }), /Identity routing bootstrap failed: Gateway not Programmed/);
+});
+
 test('deployment checks real account, group and resources, then what-if before create', async () => {
   const calls = [];
   const bootstrapCalls = [];

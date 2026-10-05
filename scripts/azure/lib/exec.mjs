@@ -109,9 +109,14 @@ function spawnPlatformSafe(command, args, spawnOptions) {
  * syntax). Returns { status, stdout, stderr } with stdout and stderr
  * redacted. Throws a redacted error when `check` is true (default) and the
  * process exits non-zero or fails to spawn.
+ * `preserveProjectedJson` retains exact identifiers only after an explicit
+ * projection excludes credential-bearing fields. Ordinary output stays redacted.
  */
 export function run(command, args, options = {}) {
-  const { check = true, cwd, env, input, timeout, projectJson } = options;
+  const { check = true, cwd, env, input, timeout, projectJson, preserveProjectedJson = false } = options;
+  if (preserveProjectedJson && typeof projectJson !== 'function') {
+    throw new TypeError('Preserving projected JSON requires an explicit non-secret field projection.');
+  }
   const result = spawnPlatformSafe(command, args, {
     cwd,
     env,
@@ -136,7 +141,7 @@ export function run(command, args, options = {}) {
       const projected = projectJson(JSON.parse(result.stdout ?? ''));
       const serialized = JSON.stringify(projected);
       if (typeof serialized !== 'string') throw new Error('projection is not JSON serializable');
-      stdout = redact(serialized);
+      stdout = preserveProjectedJson ? serialized : redact(serialized);
     } catch {
       throw new Error(`${command} JSON output could not be safely projected.`);
     }

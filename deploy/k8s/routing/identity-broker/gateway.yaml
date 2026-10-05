@@ -1,0 +1,25 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: identity-broker
+  namespace: CHANGEME-GATEWAY-NAMESPACE
+  labels:
+    agentweaver.io/service: identity-broker
+spec:
+  gatewayClassName: approuting-istio
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: CHANGEME-MANAGED-HOST
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: identity-broker-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentweaver-v1-p0

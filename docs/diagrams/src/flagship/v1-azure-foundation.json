@@ -10,7 +10,7 @@
     {
       "id": "aks",
       "label": "AKS",
-      "subLabel": "Public API; Cilium; OIDC/workload identity; App Routing Preview; NGINX None",
+      "subLabel": "Public API; Cilium; OIDC; native managed Gateway API; NGINX None",
       "icon": "server",
       "library": "azure",
       "shape": "image;image=img/lib/azure2/containers/Kubernetes_Services.svg;imageAspect=1",
@@ -26,8 +26,8 @@
     },
     {
       "id": "default-domain",
-      "label": "App Routing domain",
-      "subLabel": "Empty zone IDs request Azure's defaultDomain; custom zones disable it",
+      "label": "Managed route and TLS",
+      "subLabel": "Native certificate; agentweaver route; explicit Gateway placement",
       "icon": "network",
       "fluentIcon": "network",
       "badge": { "text": "Preview", "tone": "marigold" }
@@ -141,9 +141,9 @@
     "canvasWidth": 1360,
     "canvasHeight": 1450,
     "nodes": [
-      { "id": "aks", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "AKS", "subLabel": "Public API; Cilium; OIDC/workload identity; App Routing Preview; NGINX None" } },
+      { "id": "aks", "type": "card", "position": { "x": 500, "y": 80 }, "data": { "label": "AKS", "subLabel": "Public API; Cilium; OIDC; native managed Gateway API; NGINX None" } },
       { "id": "vnet", "type": "card", "position": { "x": 80, "y": 80 }, "data": { "label": "Dedicated VNet", "subLabel": "Separate AKS-node, delegated PostgreSQL, and private-endpoint subnets" } },
-      { "id": "default-domain", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "App Routing domain", "subLabel": "Empty zone IDs request Azure's defaultDomain; custom zones disable it" } },
+      { "id": "default-domain", "type": "card", "position": { "x": 500, "y": 310 }, "data": { "label": "Managed route and TLS", "subLabel": "Native certificate; agentweaver route; explicit Gateway placement" } },
       { "id": "routing-identity", "type": "card", "position": { "x": 860, "y": 310 }, "data": { "label": "App Routing identity", "subLabel": "AKS-generated resourceId, clientId, and objectId" } },
       { "id": "custom-zones", "type": "card", "position": { "x": 860, "y": 540 }, "data": { "label": "Optional existing DNS zones", "subLabel": "1–5 public/private IDs; roles scoped to each exact zone" } },
       { "id": "postgres", "type": "card", "position": { "x": 80, "y": 310 }, "data": { "label": "Azure Database for PostgreSQL", "subLabel": "Entra-only; private network" } },

@@ -1,0 +1,10 @@
+apiVersion: approuting.kubernetes.azure.com/v1alpha1
+kind: DefaultDomainCertificate
+metadata:
+  name: identity-broker
+  namespace: CHANGEME-GATEWAY-NAMESPACE
+  labels:
+    agentweaver.io/service: identity-broker
+spec:
+  target:
+    secret: identity-broker-tls
