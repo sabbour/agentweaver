@@ -33,8 +33,19 @@ test('stale subnet-role cleanup requires a separate explicit CLI authorization',
 
 test('deployment checks real account, group and resources, then what-if before create', () => {
   const calls = [];
-  const result = deploy({ ...fixture, execute: true }, { sourceResolver: () => source, execAz: fakeAzure({}, calls) });
+  const bootstrapCalls = [];
+  const result = deploy({ ...fixture, execute: true }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({}, calls),
+    bootstrapNamespace: options => bootstrapCalls.push(options),
+  });
   assert.equal(result.executed, true);
+  assert.deepEqual(bootstrapCalls, [{
+    resourceGroup: fixture.resourceGroup,
+    subscriptionId: ids.subscriptionId,
+    repoRoot: fixture.repoRoot,
+    clusterName: 'aw-v1-p0-aks',
+  }]);
   assert.equal(result.receipt.sourceHash, source.sourceHash);
   assert.equal(result.receipt.sourceTree, source.sourceTree);
   assert.equal(result.receipt.foundationProbeIdentity.principalObjectId,
@@ -135,6 +146,31 @@ test('scoped redeploy resolves and reuses the exact existing Cluster Admin assig
   assert.equal(calls.filter(args => args[0] === 'deployment' && args[2] === 'create').length, 1);
 });
 
+test('full-foundation and AKS-only deployments report namespace bootstrap failure after infrastructure success', () => {
+  const aksSource = {
+    ...source,
+    scope: 'aks-only',
+    template: 'infra/bicep/aks-redeploy.bicep',
+    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
+  };
+  const scenarios = [
+    { config: fixture, source },
+    {
+      config: { ...fixture, template: aksSource.template, parametersFile: aksSource.parametersFile },
+      source: aksSource,
+    },
+  ];
+  for (const scenario of scenarios) {
+    const calls = [];
+    assert.throws(() => deploy({ ...scenario.config, execute: true }, {
+      sourceResolver: () => scenario.source,
+      execAz: fakeAzure({}, calls),
+      bootstrapNamespace: () => { throw new Error('RBAC denied'); },
+    }), /Infrastructure deployment succeeded, but namespace-only bootstrap failed: RBAC denied/);
+    assert.ok(calls.some(args => args[0] === 'deployment' && args[2] === 'create'));
+  }
+});
+
 test('default execute refuses a proven dangling subnet role without deleting it', () => {
   const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
   const stale = {
@@ -182,6 +218,7 @@ test('only an exact dangling subnet Network Contributor assignment is removed wi
       aksShow: { status: 1, stdout: '', stderr: '(ResourceNotFound) Managed cluster was not found.' },
       servicePrincipal: { status: 1, stdout: '', stderr: `ERROR: Resource '${stale.properties.principalId}' does not exist.` },
     }, calls),
+    bootstrapNamespace() {},
   });
   const remove = calls.find(args => args[0] === 'role' && args[1] === 'assignment' && args[2] === 'delete');
   assert.ok(remove);

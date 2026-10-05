@@ -111,12 +111,13 @@ credentials, preserving their ServiceAccount subjects and
 `api://AzureADTokenExchange` audience. The guard requires all three credentials
 to exist with those bindings before deployment. Its deployment receipt is
 scoped evidence, not the full-foundation receipt required by the Foundation
-Probe consumer. After an AKS-only deployment, the CLI uses the signed-in
-user's normal `az aks get-credentials` context (never `--admin`) to apply only
-`deploy/k8s/base/namespace.yaml`. It waits a bounded time for the exact
-namespace create/get/patch permissions and readback, then removes the temporary
-kubeconfig. Bootstrap failure is reported even if the infrastructure update
-already succeeded; no other workload manifest is applied.
+Probe consumer. After a successful full-foundation or AKS-only deployment, the
+CLI uses the signed-in user's normal `az aks get-credentials` context (never
+`--admin`) and converts the temporary kubeconfig to `--login azurecli`. It
+applies only `deploy/k8s/base/namespace.yaml`, waits a bounded time for the
+exact namespace create/get/patch permissions and readback, then removes the
+temporary kubeconfig. Bootstrap failure is reported even if the infrastructure
+update already succeeded; no other workload manifest is applied.
 
 The `foundationProbeIdentity` output selects the principal by service name, not parallel-array order.
 It contains `name`, `resourceId`, `clientId`, `principalObjectId`, `namespace`, and `serviceAccount`.

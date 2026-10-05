@@ -178,14 +178,15 @@ accept a caller-selected `--expected-sha`.
 Bicep source parameters and outputs bind the receipt to exact reviewed inputs.
 No unsupported deployment tags occur.
 
-After a successful AKS-only deployment, the command also bootstraps only
-`deploy\k8s\base\namespace.yaml`. It uses the signed-in user's
-`az aks get-credentials` context without `--admin`, stores kubeconfig in a
-temporary directory, waits a bounded time for create/get/patch authorization,
-applies the namespace manifest, and verifies the P0 namespace and required
-labels. It removes the temporary kubeconfig on success or failure. A bootstrap
-failure is reported even if the infrastructure deployment already succeeded;
-the command never falls back to an admin kubeconfig or applies other manifests.
+After a successful full-foundation or AKS-only deployment, the command also
+bootstraps only `deploy\k8s\base\namespace.yaml`. It uses the signed-in user's
+`az aks get-credentials` context without `--admin`, converts the temporary
+kubeconfig to `--login azurecli`, waits a bounded time for create/get/patch
+authorization, applies the namespace manifest, and verifies the P0 namespace
+and required labels. It removes the temporary kubeconfig on success or failure.
+A bootstrap failure is reported even if the infrastructure deployment already
+succeeded; the command never falls back to an admin kubeconfig or applies other
+manifests.
 
 ## Acceptance
 
