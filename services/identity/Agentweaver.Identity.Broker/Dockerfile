@@ -23,6 +23,7 @@ COPY services/identity/Agentweaver.Identity.Broker/ services/identity/Agentweave
 COPY packages/Agentweaver.Abstractions/ packages/Agentweaver.Abstractions/
 COPY packages/Agentweaver.Identity/ packages/Agentweaver.Identity/
 COPY packages/Agentweaver.Secrets.AzureKeyVault/ packages/Agentweaver.Secrets.AzureKeyVault/
+COPY infra/bicep/postgres-identity-runtime-grants.sql infra/bicep/
 RUN dotnet build services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj \
     --configuration Release --no-restore
 RUN dotnet publish services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj \

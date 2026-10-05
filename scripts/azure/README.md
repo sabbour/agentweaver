@@ -199,6 +199,8 @@ explicit tables and grants SELECT-only access to the migration history.
 It rejects missing tables, a different table owner, or unexpected privileges.
 Without migration history, it reports pending grants and does not apply them.
 Read-only bootstrap verification never applies grants.
+The Broker container build copies only the canonical runtime-grants SQL file
+into the build stage for this embedded resource.
 The runtime phase invokes the bootstrap again even when initial PostgreSQL
 setup already produced a receipt.
 It never substitutes an earlier pending-grants receipt for the runtime check.
