@@ -37,6 +37,49 @@ test('Probe principal registration and validation use postgres before the transa
   assert.match(source, /if \(!schemaExists\)[\s\S]*CREATE SCHEMA foundation_probe/);
 });
 
+test('TCP proxy preserves PostgreSQL defaults and admits only the explicit fixed Key Vault target', () => {
+  const source = readFileSync('tools/IdentityPostgresTcpProxy/Program.cs', 'utf8');
+  assert.match(source, /const int postgresPort = 5432/);
+  assert.match(source, /const string vaultHost = "aw-v1-p0-kv\.vault\.azure\.net"/);
+  assert.match(source, /args\.Length == 2 && args\[0\] == "--key-vault" && args\[1\] == vaultHost/);
+  assert.match(source, /EndsWith\("\.postgres\.database\.azure\.com"/);
+  assert.match(source, /targetPort = keyVault \? 443 : postgresPort/);
+  assert.match(source, /listenPort = keyVault \? 8443 : postgresPort/);
+  assert.match(source, /ConnectAsync\(targetHost, targetPort\)/);
+});
+
+test('Key Vault loopback forwarding rejects wrong ports, namespaces, and implicit modes before spawning', () => {
+  const options = { kubeconfig: 'owned', podName: 'owned', localPort: 15443,
+    namespace: 'agentweaver-v1-p0', keyVault: true };
+  const deps = { spawnProcess() { assert.fail('Invalid route must not spawn.'); } };
+  for (const invalid of [
+    { localPort: 15432 }, { localPort: '15443' }, { namespace: 'foreign' },
+    { keyVault: 'true' }, { keyVault: null },
+  ]) assert.throws(() => startIdentityPostgresPortForward({ ...options, ...invalid }, deps), /Key Vault/);
+});
+
+test('Key Vault loopback forwarding uses only 15443:8443 and stops its owned process', async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.pid = 9877;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => { child.exitCode = 0; child.emit('exit', 0); return true; };
+  let invocation;
+  const pending = startIdentityPostgresPortForward({
+    kubeconfig: 'owned', podName: 'owned-kv', localPort: 15443,
+    namespace: 'agentweaver-v1-p0', keyVault: true,
+  }, { spawnProcess: (_command, args) => { invocation = args; return child; } });
+  child.stderr.write('Forwarding from 127.0.0.1:15443 -> 8443\n');
+  const forward = await pending;
+  assert.ok(invocation.includes('15443:8443'));
+  assert.ok(invocation.includes('127.0.0.1'));
+  assert.equal(forward.pid, 9877);
+  await forward.stop();
+  assert.equal(child.exitCode, 0);
+});
+
 function dependencies({ dotnetResult, alterPodOwner = false } = {}) {
   const calls = [];
   const resources = new Map();

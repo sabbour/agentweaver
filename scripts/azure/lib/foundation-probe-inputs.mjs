@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
+import { foundationProbeEgress } from './foundation-probe-egress.mjs';
 
 const NAMESPACE = 'agentweaver-v1-p0';
 const OPTIONS = { check: false, timeout: 35_000 };
@@ -59,6 +60,25 @@ export function bootstrapFoundationProbeInputs(config, {
     throw new Error('Probe Monitor component does not provide the exact native installation configuration.');
   }
   const secretValueHash = hash(connectionString);
+  const ingestionEndpoint = connectionString.split(';').find(value => value.startsWith('IngestionEndpoint='))?.slice(18);
+  const ingestionUrl = new URL(ingestionEndpoint);
+  if (ingestionUrl.protocol !== 'https:' || ingestionUrl.port || ingestionUrl.username || ingestionUrl.password ||
+      ingestionUrl.pathname !== '/' || ingestionUrl.search || ingestionUrl.hash) {
+    throw new Error('Probe ingestion endpoint must use ordinary HTTPS without overrides.');
+  }
+  const endpoint = azure(['network', 'private-endpoint', 'show', '--resource-group', config.resourceGroup,
+    '--name', 'aw-v1-p0-ampls-pe', '--subscription', config.subscriptionId, '-o', 'json'], value => value);
+  const nicId = endpoint.networkInterfaces?.[0]?.id;
+  if (typeof nicId !== 'string' ||
+      !nicId.toLowerCase().startsWith(`${prefix}Microsoft.Network/networkInterfaces/aw-v1-p0-ampls-pe.nic.`.toLowerCase())) {
+    throw new Error('Probe AMPLS NIC is outside the exact dedicated endpoint.');
+  }
+  const nic = azure(['network', 'nic', 'show', '--ids', nicId, '--subscription', config.subscriptionId, '-o', 'json'],
+    value => value);
+  const record = azure(['network', 'private-dns', 'record-set', 'a', 'show', '--resource-group', config.resourceGroup,
+    '--zone-name', 'privatelink.monitor.azure.com', '--name', 'api',
+    '--subscription', config.subscriptionId, '-o', 'json'], value => value);
+  const egress = foundationProbeEgress(config, { endpoint, nic, record, ingestionHost: ingestionUrl.hostname });
   try {
     return withKubeconfig(config, base => {
       const args = [...base, '--namespace', NAMESPACE, '--request-timeout=30s'];
@@ -102,6 +122,46 @@ export function bootstrapFoundationProbeInputs(config, {
       }
       if (serviceAccount) assertServiceAccount(serviceAccount);
       if (monitor) assertMonitor(monitor);
+      function readPolicy() {
+        const result = execKubectl([...args, 'get', 'ciliumnetworkpolicies',
+          '--field-selector', 'metadata.name=foundation-probe-egress', '-o', 'json'],
+        { ...OPTIONS, preserveProjectedJson: true, projectJson: value => {
+          if (!Array.isArray(value.items) || value.items.length > 1) throw new Error('Unexpected Probe policy lookup.');
+          const object = value.items[0];
+          return object ? { apiVersion: object.apiVersion, kind: object.kind,
+            metadata: object.metadata, spec: object.spec } : null;
+        } });
+        if (result.status !== 0) throw new Error(`Probe policy read failed: ${redact(result.stderr)}`);
+        return JSON.parse(result.stdout);
+      }
+      const policy = readPolicy();
+      const equal = (left, right) => JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+      function canonical(value) {
+        if (Array.isArray(value)) return value.map(canonical);
+        return value && typeof value === 'object'
+          ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+      }
+      if (policy && (policy.apiVersion !== 'cilium.io/v2' || policy.kind !== 'CiliumNetworkPolicy' ||
+          policy.metadata?.name !== 'foundation-probe-egress' || policy.metadata.namespace !== NAMESPACE ||
+          !policy.metadata.uid || !policy.metadata.resourceVersion ||
+          !equal(policy.spec, egress.baseline) && !equal(policy.spec, egress.spec))) {
+        throw new Error('Existing Probe policy differs from the admitted exact baseline; refusing replacement.');
+      }
+      const policyChanged = !policy || !equal(policy.spec, egress.spec);
+      if (policyChanged) {
+        const manifest = { apiVersion: 'cilium.io/v2', kind: 'CiliumNetworkPolicy',
+          metadata: policy?.metadata ?? { name: 'foundation-probe-egress', namespace: NAMESPACE }, spec: egress.spec };
+        const result = execKubectl([...args, policy ? 'replace' : 'create', '--filename', '-', '-o', 'name'],
+          { ...OPTIONS, input: JSON.stringify(manifest) });
+        if (result.status !== 0) throw new Error(`Probe policy write failed: ${redact(result.stderr)}`);
+      }
+      const policyReadback = readPolicy();
+      if (policyReadback?.metadata?.name !== 'foundation-probe-egress' ||
+          policyReadback.metadata.namespace !== NAMESPACE || !policyReadback.metadata.uid ||
+          policy && policyReadback.metadata.uid !== policy.metadata.uid ||
+          !equal(policyReadback.spec, egress.spec)) {
+        throw new Error('Probe policy readback differs from the exact private Logs egress.');
+      }
       if (!serviceAccount) {
         const manifest = readFileSync(join(config.repoRoot ?? process.cwd(), 'deploy', 'k8s', 'base',
           'serviceaccounts', 'foundation-probe-sa.yaml'), 'utf8')
@@ -125,6 +185,9 @@ export function bootstrapFoundationProbeInputs(config, {
       return {
         namespace: NAMESPACE, serviceAccount: { name: 'foundation-probe', created: !serviceAccount },
         monitor: { name: 'foundation-probe-monitor', created: !monitor, appInsightsResourceId: component.id },
+        egress: { name: 'foundation-probe-egress', changed: policyChanged,
+          logsHost: egress.logsHost, privateAddress: egress.privateAddress,
+          endpointId: egress.endpointId, nicId: egress.nicId, recordId: egress.recordId },
         runtimeVerified: false,
       };
     });

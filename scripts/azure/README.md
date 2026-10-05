@@ -230,6 +230,14 @@ management API and creates the missing `foundation-probe-monitor` Secret.
 The service-owned connection string stays in process memory and Kubernetes
 stdin. Receipts contain only resource metadata.
 An existing different Secret or ServiceAccount blocks replacement.
+The installer also admits exact Logs query DNS names in the Probe egress policy.
+It reads the owned AMPLS endpoint, reciprocal NIC, API member, and private DNS record.
+All must identify the same private address in the dedicated subnet.
+Only that observed `/32` address receives TCP port 443 access.
+Logs queries have no public-address or wildcard FQDN allowance.
+The installer creates a missing policy or replaces the exact prior five-name policy.
+Replacement retains its UID and uses its resource version to reject concurrent changes.
+A different policy blocks replacement. The installer checks the resulting policy.
 This option does not create a vault writer role, resolve a latest secret
 version, bootstrap PostgreSQL, or claim that a Probe Job succeeded.
 
@@ -386,6 +394,16 @@ its port-forward process, and deletes its temporary local files. It does not
 create a public route, app registration, secret, or Azure role assignment.
 Ordinary `--execute` does not run this initializer. A failed bootstrap or
 transport cleanup is reported and is not converted into a successful receipt.
+
+The existing TCP proxy also accepts the explicit
+`--key-vault aw-v1-p0-kv.vault.azure.net` mode for an approved private route check.
+It relays TCP from port 8443 to that fixed vault on port 443.
+The loopback forward requires port 15443 and the P0 namespace.
+The PostgreSQL argument and port 5432 remain unchanged.
+The proxy receives encrypted TLS bytes, not an operator credential.
+The local SDK must keep the real vault URI, SNI, and system certificate validation.
+This mode does not grant access or create, read, or delete a secret.
+Fixture writes and soft deletion need separate approval and owned cleanup evidence.
 
 ## Acceptance
 
