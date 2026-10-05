@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runAz, run } from '../lib/exec.mjs';
 
+test('Broker container includes the canonical embedded runtime grants before its build', () => {
+  const dockerfile = readFileSync('services/identity/Agentweaver.Identity.Broker/Dockerfile', 'utf8');
+  const project = readFileSync('services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj', 'utf8');
+  const copy = 'COPY infra/bicep/postgres-identity-runtime-grants.sql infra/bicep/';
+  assert.ok(project.includes('infra\\bicep\\postgres-identity-runtime-grants.sql'));
+  assert.ok(dockerfile.includes(copy));
+  assert.ok(dockerfile.indexOf(copy) <
+    dockerfile.indexOf('RUN dotnet build services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj'));
+  assert.ok(!dockerfile.includes('COPY infra/ infra/'));
+});
+
 test('Bicep compilation and Kustomize rendering require no credentials or live target', () => {
   const bicep = runAz(['bicep', 'build', '--file', 'infra/bicep/main.bicep', '--stdout']);
   const template = JSON.parse(bicep.stdout);
