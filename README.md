@@ -81,7 +81,9 @@ Native AKS-managed Gateway routing has a separate default-off
 `--bootstrap-identity-routing` option.
 It requires explicit approved Gateway placement, security policy, and public-client inputs.
 It derives the issuer and `/signin-oidc` callback from the admitted native route.
-The callback operation is a read-only append/no-op plan.
+The callback operation defaults to a read-only append/no-op plan.
+An append requires separate explicit registration and exact-URI confirmation options.
+An existing URI remains a no-op.
 The P0 namespace remains restricted.
 Routing configuration is not runtime acceptance.
 The optional readiness check requires ordinary DNS and trusted HTTPS for both

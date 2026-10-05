@@ -159,7 +159,11 @@ BackendTLSPolicy keeps HTTPS between the Gateway and Kestrel.
 It validates the backend certificate with system trust and the route hostname.
 The guarded installer derives the issuer and `/signin-oidc` callback from the
 current admitted HTTPRoute.
-It plans only a public-platform append or no-op and never writes the application.
+It defaults to a read-only public-platform append or no-op plan.
+An append requires separate explicit registration and exact-URI confirmation.
+It fresh-reads the exact tenant and existing application before the write.
+It patches only public redirects and preserves all other application properties.
+An existing exact callback remains a no-op.
 Explicit Gateway placement and security-policy inputs require separate approval.
 The existing P0 namespace remains restricted.
 Routing configuration does not prove a running Broker.

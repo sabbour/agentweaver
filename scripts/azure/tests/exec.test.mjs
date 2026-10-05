@@ -55,6 +55,19 @@ test('preserving non-secret projected identifiers is explicit and cannot expose 
   assert.throws(() => run(process.execPath, [], { preserveProjectedJson: true }), /requires an explicit/);
 });
 
+test('failed projected command preserves native permission diagnostics, redacts secrets, and omits raw stdout', () => {
+  const args = ['-e', `process.stderr.write("403 Forbidden password=${SENSITIVE_FIXTURE_VALUE}");process.exit(1)`];
+  const options = { projectJson: () => { throw new Error('projection must not run on failure'); },
+    preserveProjectedJson: true };
+  const result = run(process.execPath, args, { ...options, check: false });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /403 Forbidden/);
+  assert.ok(!result.stderr.includes(SENSITIVE_FIXTURE_VALUE));
+  assert.throws(() => run(process.execPath, args, options), error =>
+    error.message.includes('403 Forbidden') && !error.message.includes(SENSITIVE_FIXTURE_VALUE));
+});
+
 test('git source comparison preserves redacted-looking bytes without exposing them', () => {
   const fixture = readFileSync(join(FIXTURES_DIR, 'source-redaction.txt'));
   const text = fixture.toString('utf8');

@@ -262,8 +262,14 @@ No custom DNS zone, additional role, mesh resource, or injection is necessary.
 The installer derives the issuer and native `/signin-oidc` callback only
 after current-generation Gateway and route conditions pass.
 
-The public callback operation is a read-only append/no-op plan.
+The public callback operation defaults to a read-only append/no-op plan.
 It preserves every existing public redirect URI and never changes Web URIs.
+An append requires separate explicit registration and exact-URI confirmation options.
+The installer rechecks the selected tenant and existing application's client
+and object IDs at the write boundary.
+It patches only the fresh public redirect list.
+An existing exact callback remains a no-op.
+Permission errors never trigger grants, application creation, or client-secret creation.
 The optional readiness check requires ordinary DNS and trusted HTTPS responses
 from both Broker health endpoints at the Gateway's observed IP.
 Routing configuration alone reports `runtimeVerified: false`.

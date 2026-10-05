@@ -51,8 +51,14 @@ export async function deploy(config, {
     if (!GUID_PATTERN.test(config.upstreamClientId ?? '')) {
       throw new Error('Identity routing requires the exact upstream public application client ID.');
     }
+    if (config.registerBrokerCallback && !config.confirmBrokerCallback) {
+      throw new Error('Callback registration requires --confirm-identity-broker-callback with the exact route-derived URI.');
+    }
+    if (config.confirmBrokerCallback && !config.registerBrokerCallback) {
+      throw new Error('Callback confirmation requires --register-identity-broker-callback.');
+    }
   } else if (config.gatewayNamespace || config.gatewaySecurityPolicy || config.upstreamClientId ||
-      config.verifyBrokerReadiness) {
+      config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback) {
     throw new Error('Identity routing inputs require the separate --bootstrap-identity-routing option.');
   }
   const source = sourceResolver(config);
@@ -67,6 +73,8 @@ export async function deploy(config, {
     ...(config.bootstrapIdentityRouting ? { identityRoutingPlan: {
       gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
       upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
+      appRegistrationMutationRequested: Boolean(config.registerBrokerCallback),
+      callbackConfirmation: config.confirmBrokerCallback,
       appRegistrationMutation: false,
     } } : {}) };
   if (!config.execute) return summary;
@@ -202,6 +210,7 @@ export async function deploy(config, {
         clusterName: `${config.resourceGroup}-aks`,
         gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
         upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
+        registerBrokerCallback: Boolean(config.registerBrokerCallback), confirmBrokerCallback: config.confirmBrokerCallback,
       });
     } catch (error) {
       throw new Error(`Infrastructure deployment succeeded, but Identity routing bootstrap failed: ${error.message}`);
@@ -226,7 +235,9 @@ export function cliConfig(values) {
     gatewayNamespace: values['identity-gateway-namespace'],
     gatewaySecurityPolicy: values['identity-gateway-security-policy'],
     upstreamClientId: values['identity-upstream-client-id'],
-    verifyBrokerReadiness: values['verify-identity-broker-readiness'] ?? false };
+    verifyBrokerReadiness: values['verify-identity-broker-readiness'] ?? false,
+    registerBrokerCallback: values['register-identity-broker-callback'] ?? false,
+    confirmBrokerCallback: values['confirm-identity-broker-callback'] };
 }
 
 export const cliOptions = {
@@ -241,6 +252,8 @@ export const cliOptions = {
   'identity-gateway-security-policy': { type: 'string' },
   'identity-upstream-client-id': { type: 'string' },
   'verify-identity-broker-readiness': { type: 'boolean', default: false },
+  'register-identity-broker-callback': { type: 'boolean', default: false },
+  'confirm-identity-broker-callback': { type: 'string' },
   execute: { type: 'boolean', default: false },
 };
 

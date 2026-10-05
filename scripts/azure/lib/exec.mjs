@@ -132,6 +132,13 @@ export function run(command, args, options = {}) {
     throw new Error(`Failed to start ${command}: ${redact(result.error.message)}`);
   }
 
+  if (projectJson !== undefined && result.status !== 0) {
+    if (check) {
+      throw new Error(`${command} exited with status ${result.status}: ${stderr || 'operation failed; raw JSON output was omitted'}`);
+    }
+    return { status: result.status, stdout: '', stderr };
+  }
+
   let stdout;
   if (projectJson === undefined) {
     stdout = redact(result.stdout ?? '');
